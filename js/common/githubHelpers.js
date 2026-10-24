@@ -89,6 +89,27 @@ function _headPrefixScore(ref) {
     return 0;
 }
 
+// gh-1226 (CRAP ratchet): pure splits of _scorePR — pinned by the
+// findPRForTicket/findMergedPRForTicket characterization tests.
+
+// Bounded digit-run bonus: the key's numeric part appearing in the normalized
+// title (+40) and head branch (+30), only for keys with a 3+ digit part.
+function _numericPartBonus(title, branch, numericPart) {
+    var bonus = 0;
+    if (numericPart && numericPart.length >= 3) {
+        if (_containsBoundedNumber(title, numericPart)) bonus += 40;
+        if (_containsBoundedNumber(branch, numericPart)) bonus += 30;
+    }
+    return bonus;
+}
+
+// Smaller, more focused PRs score higher: 25 - changed_files/10, floored at 0.
+// A missing changed_files count contributes nothing.
+function _changedFilesBonus(changedFiles) {
+    if (typeof changedFiles !== 'number') return 0;
+    return Math.max(0, 25 - Math.floor(changedFiles / 10));
+}
+
 function _scorePR(pr, normalizedKey, numericPart) {
     var title = _normalizeForMatch(pr.title);
     var branch = _normalizeForMatch(pr.head && pr.head.ref);
@@ -97,10 +118,7 @@ function _scorePR(pr, normalizedKey, numericPart) {
     if (title.indexOf(normalizedKey) !== -1) score += 100;
     if (branch.indexOf(normalizedKey) !== -1) score += 80;
 
-    if (numericPart && numericPart.length >= 3) {
-        if (_containsBoundedNumber(title, numericPart)) score += 40;
-        if (_containsBoundedNumber(branch, numericPart)) score += 30;
-    }
+    score += _numericPartBonus(title, branch, numericPart);
 
     // Only apply preference bonuses/penalties when the PR actually matches the ticket.
     if (score === 0) return 0;
@@ -109,10 +127,7 @@ function _scorePR(pr, normalizedKey, numericPart) {
 
     if (_isBotAuthor(pr.user || pr.author)) score -= 50;
 
-    var changedFiles = pr.changed_files;
-    if (typeof changedFiles === 'number') {
-        score += Math.max(0, 25 - Math.floor(changedFiles / 10));
-    }
+    score += _changedFilesBonus(pr.changed_files);
 
     return score;
 }
@@ -200,9 +215,18 @@ function _rankCandidates(candidates) {
     });
 }
 
+// gh-1226 (CRAP ratchet): merged-PR ranking — score desc, then the most
+// recently merged PR wins a tie (the ordering findMergedPRForTicket always had).
+function _rankMergedCandidates(candidates) {
+    candidates.sort(function(a, b) {
+        if (b.score !== a.score) return b.score - a.score;
+        return new Date(b.pr.merged_at).getTime() - new Date(a.pr.merged_at).getTime();
+    });
+}
+
 // Project prSearchFn hook — non-fatal: a hook result wins, a missing hook or
 // a failed one yields null (the caller keeps the ranked top candidate).
-function _applyPrSearchHook(candidates, ticketKey, options) {
+function _applyPrSearchHook(candidates, ticketKey, options, logLabel) {
     if (typeof options.prSearchFn !== 'function') return null;
     try {
         var hookResult = options.prSearchFn(
@@ -211,7 +235,7 @@ function _applyPrSearchHook(candidates, ticketKey, options) {
             options
         );
         if (hookResult) {
-            console.log('Project prSearchFn selected PR #' + hookResult.number + ':', hookResult.title);
+            console.log('Project prSearchFn selected ' + logLabel + ' #' + hookResult.number + ':', hookResult.title);
             return hookResult;
         }
     } catch (hookErr) {
@@ -245,7 +269,7 @@ function findPRForTicket(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt, op
 
         _rankCandidates(candidates);
 
-        var hooked = _applyPrSearchHook(candidates, ticketKey, form.options);
+        var hooked = _applyPrSearchHook(candidates, ticketKey, form.options, 'PR');
         if (hooked) return hooked;
 
         console.log('Selected open PR #' + candidates[0].pr.number + ':', candidates[0].pr.title);
@@ -273,44 +297,24 @@ function findMergedPRForTicket(scm, ticketKey, options) {
         var closedPRs = scm.listPrs('closed') || [];
         console.log('Found', closedPRs.length, 'closed PRs');
 
-        var normalizedKey = _normalizeForMatch(ticketKey);
-        var numericPart = _extractNumericPart(ticketKey);
-        var candidates = [];
-
-        for (var i = 0; i < closedPRs.length; i++) {
-            var pr = closedPRs[i];
-            if (!pr.merged_at) continue;
-            var score = _scorePR(pr, normalizedKey, numericPart);
-            if (score > 0) {
-                candidates.push({ pr: pr, score: score });
-            }
-        }
+        // gh-1226 (CRAP ratchet): only actually-MERGED PRs whose title or head
+        // branch carries the ticket key — the same filter + _scorePR scan the
+        // former inline loop ran, via the shared _scoredCandidates helper.
+        var candidates = _scoredCandidates(
+            closedPRs.filter(function(pr) { return !!pr.merged_at; }),
+            _normalizeForMatch(ticketKey),
+            _extractNumericPart(ticketKey)
+        );
 
         if (candidates.length === 0) {
             console.warn('No merged PR found for ticket', ticketKey);
             return null;
         }
 
-        candidates.sort(function(a, b) {
-            if (b.score !== a.score) return b.score - a.score;
-            return new Date(b.pr.merged_at).getTime() - new Date(a.pr.merged_at).getTime();
-        });
+        _rankMergedCandidates(candidates);
 
-        if (typeof options.prSearchFn === 'function') {
-            try {
-                var hookResult = options.prSearchFn(
-                    candidates.map(function(c) { return c.pr; }),
-                    ticketKey,
-                    options
-                );
-                if (hookResult) {
-                    console.log('Project prSearchFn selected merged PR #' + hookResult.number + ':', hookResult.title);
-                    return hookResult;
-                }
-            } catch (hookErr) {
-                console.warn('prSearchFn hook failed (non-fatal):', hookErr);
-            }
-        }
+        var hooked = _applyPrSearchHook(candidates, ticketKey, options, 'merged PR');
+        if (hooked) return hooked;
 
         console.log('Found merged PR #' + candidates[0].pr.number + ':', candidates[0].pr.title);
         return candidates[0].pr;
@@ -973,24 +977,100 @@ function buildViolationsBlock(violations) {
     return ciViolations.buildViolationsMarkdown(violations);
 }
 
-function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt) {
-    var scm = null;
-    var owner, repo, headSha, inputFolder, jenkinsBasePath, diffText;
+// ── gh-1226 (CRAP ratchet): pure/IO splits of detectFailedChecks ─────────────
+// Each helper keeps the exact calls, order, logs and fallback semantics of the
+// inline block it replaces — pinned by the detectFailedChecks suites above.
 
+// Calling-convention split: (scm, headSha, inputFolder[, jenkinsBasePath[, diffText]])
+// vs the legacy (owner, repo, headSha, inputFolder[, ...]) form.
+function _detectFailedCheckArgs(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt) {
     if (_isScm(scmOrOwner)) {
-        scm = scmOrOwner;
-        headSha = repoOrHeadSha;
-        inputFolder = headShaOrInputFolder;
-        jenkinsBasePath = inputFolderOpt;
-        diffText = diffTextOpt;
-    } else {
-        owner = scmOrOwner;
-        repo = repoOrHeadSha;
-        headSha = headShaOrInputFolder;
-        inputFolder = inputFolderOpt;
-        jenkinsBasePath = jenkinsBasePathOpt;
-        diffText = diffTextOpt;
+        return {
+            scm: scmOrOwner,
+            owner: null,
+            repo: null,
+            headSha: repoOrHeadSha,
+            inputFolder: headShaOrInputFolder,
+            jenkinsBasePath: inputFolderOpt,
+            diffText: diffTextOpt
+        };
     }
+    return {
+        scm: null,
+        owner: scmOrOwner,
+        repo: repoOrHeadSha,
+        headSha: headShaOrInputFolder,
+        inputFolder: inputFolderOpt,
+        jenkinsBasePath: jenkinsBasePathOpt,
+        diffText: diffTextOpt
+    };
+}
+
+// Commit check-runs for the head — scm-object form first, legacy github_* form
+// otherwise. Returns null ONLY when the SCM explicitly reports no check runs:
+// the caller exits silently, exactly as before (no "No CI checks" log).
+function _fetchCommitCheckRuns(scm, owner, repo, headSha) {
+    if (scm) {
+        var rawResult = scm.getCommitCheckRuns(headSha);
+        if (rawResult === null) return null;
+        return parseCheckRunsResult(rawResult);
+    }
+    return parseCheckRunsResult(github_get_commit_check_runs({
+        workspace: owner,
+        repository: repo,
+        commitSha: headSha
+    }));
+}
+
+// Per-check markdown sections + the concatenated full logs (gh-1045 contract:
+// every failed check resolves to logs OR a loud reason in entry.sections).
+function _failedCheckSectionsMarkdown(entries) {
+    var mdBody = '';
+    var fullLogContent = '';
+
+    entries.forEach(function(entry) {
+        var check = entry.check;
+        mdBody += '## ❌ ' + check.name + '\n\n';
+        mdBody += '- **Conclusion**: ' + check.conclusion + '\n';
+        if (check.details_url) {
+            mdBody += '- **Details**: ' + check.details_url + '\n';
+        }
+        mdBody += '\n';
+
+        // gh-1045: every failed check resolves to logs OR a loud reason —
+        // a silently missing log is what sent the #423 rework legs in blind.
+        mdBody += entry.sections.md;
+        fullLogContent += entry.sections.full;
+    });
+
+    return { mdBody: mdBody, fullLogContent: fullLogContent };
+}
+
+// gh-1045: the full log is written FIRST, whenever failed checks exist
+// (fetched logs + per-check error markers) — and ci_failures.md may
+// reference it only when the write actually succeeded. Never advertise
+// a file that was not written.
+function _tryWriteFullLog(inputFolder, fullLogContent) {
+    try {
+        file_write({ path: inputFolder + '/ci_failures_full.log', content: fullLogContent });
+        console.log('✅ Wrote ci_failures_full.log');
+        return true;
+    } catch (writeErr) {
+        console.warn('Could not write ci_failures_full.log (non-fatal):',
+            writeErr && writeErr.message ? writeErr.message : String(writeErr));
+        return false;
+    }
+}
+
+function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt) {
+    var args = _detectFailedCheckArgs(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt);
+    var scm = args.scm;
+    var owner = args.owner;
+    var repo = args.repo;
+    var headSha = args.headSha;
+    var inputFolder = args.inputFolder;
+    var jenkinsBasePath = args.jenkinsBasePath;
+    var diffText = args.diffText;
 
     try {
         if (!headSha) {
@@ -1000,23 +1080,12 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
         console.log('Checking CI status for commit:', headSha.substring(0, 8) + '...');
 
-        var rawResult;
-        if (scm) {
-            rawResult = scm.getCommitCheckRuns(headSha);
-            if (rawResult === null) {
-                return [];
-            }
-        } else {
-            rawResult = github_get_commit_check_runs({
-                workspace: owner,
-                repository: repo,
-                commitSha: headSha
-            });
+        var checkRuns = _fetchCommitCheckRuns(scm, owner, repo, headSha);
+        if (checkRuns === null) {
+            return [];
         }
 
-        var checkRuns = parseCheckRunsResult(rawResult);
-
-        if (!checkRuns || !checkRuns.length) {
+        if (!checkRuns.length) {
             console.log('No CI checks found for commit');
             return [];
         }
@@ -1043,37 +1112,9 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
         // zero extracted violations (unknown log shape, I3) nothing changes.
         var violations = extractViolationsFromEntries(entries, diffText);
 
-        var mdBody = '';
-        var fullLogContent = '';
+        var sections = _failedCheckSectionsMarkdown(entries);
 
-        entries.forEach(function(entry) {
-            var check = entry.check;
-            mdBody += '## ❌ ' + check.name + '\n\n';
-            mdBody += '- **Conclusion**: ' + check.conclusion + '\n';
-            if (check.details_url) {
-                mdBody += '- **Details**: ' + check.details_url + '\n';
-            }
-            mdBody += '\n';
-
-            // gh-1045: every failed check resolves to logs OR a loud reason —
-            // a silently missing log is what sent the #423 rework legs in blind.
-            mdBody += entry.sections.md;
-            fullLogContent += entry.sections.full;
-        });
-
-        // gh-1045: the full log is written FIRST, whenever failed checks exist
-        // (fetched logs + per-check error markers) — and ci_failures.md may
-        // reference it only when the write actually succeeded. Never advertise
-        // a file that was not written.
-        var fullLogWritten = false;
-        try {
-            file_write({ path: inputFolder + '/ci_failures_full.log', content: fullLogContent });
-            fullLogWritten = true;
-            console.log('✅ Wrote ci_failures_full.log');
-        } catch (writeErr) {
-            console.warn('Could not write ci_failures_full.log (non-fatal):',
-                writeErr && writeErr.message ? writeErr.message : String(writeErr));
-        }
+        var fullLogWritten = _tryWriteFullLog(inputFolder, sections.fullLogContent);
 
         // gh-1119: the full uncapped violation list lands in ci_violations.json
         // (E2) — best-effort, a write failure never costs the leg its table.
@@ -1081,7 +1122,7 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
         var md = buildCiFailuresHeader(failedChecks, headSha, fullLogWritten) +
                  buildViolationsBlock(violations) +
-                 mdBody +
+                 sections.mdBody +
                  buildCiFailuresResolutionSection(fullLogWritten);
 
         file_write({ path: inputFolder + '/ci_failures.md', content: md });

@@ -95,6 +95,21 @@ function _labelNames(raw) {
 }
 
 /**
+ * gh-1226 (CRAP ratchet): pure status resolution shared by hasStage —
+ * the flat normalized view ({ status }) wins, then the Jira-shaped view
+ * ({ fields: { status: { name } } }); anything else resolves to null.
+ * Read-only: never touches tools, ticket labels or config.
+ */
+function _ticketStatusOf(ticket) {
+    var fields = ticket.fields || {};
+    if (ticket.status !== undefined && ticket.status !== null) return ticket.status;
+    if (fields.status && fields.status.name !== undefined && fields.status.name !== null) {
+        return fields.status.name;
+    }
+    return null;
+}
+
+/**
  * One author candidate → its display name, or null when the candidate carries
  * none: plain strings win as-is; objects are read as Jira (displayName),
  * GitHub (login) or ADO (uniqueName) identities.
@@ -275,6 +290,46 @@ function resolveProjectConfig(params) {
 function _resolveEffectiveConfig(config, customParams) {
     if (config) return config;
     return _loadConfigSafe({ customParams: customParams || {} });
+}
+
+// ── gh-1226 (CRAP ratchet): pure adoCreateWithFields helpers ─────────────────
+// Same parse/split/fallback behaviour as the former inline blocks — pinned by
+// the createTicketWithFields characterization tests.
+
+// The four field keys adoCreateWithFields consumes itself; everything else in
+// the caller's JSON is forwarded verbatim as extra ADO fields.
+function _adoReservedFieldKey(k) {
+    return k === 'workItemType' || k === 'System.WorkItemType' || k === 'title' || k === 'System.Title';
+}
+
+function _adoRemainingFields(f) {
+    var rest = {};
+    Object.keys(f).forEach(function (k) {
+        if (!_adoReservedFieldKey(k)) rest[k] = f[k];
+    });
+    return rest;
+}
+
+// Accepts a pre-serialized fields JSON string or an object (null → {}); the
+// workItemType/title pair is read from both the generic and the ADO names.
+function _splitAdoFields(fieldsJson) {
+    var f = (typeof fieldsJson === 'string') ? JSON.parse(fieldsJson) : (fieldsJson || {});
+    return {
+        type: f.workItemType || f['System.WorkItemType'],
+        title: f.title || f['System.Title'],
+        rest: _adoRemainingFields(f)
+    };
+}
+
+// Created-key extraction from the raw tool answer: a parsed { key } string
+// wins, then a numeric id, then the shared extractTicketKey fallback.
+function _adoCreatedKey(raw) {
+    var parsed = _parseJson(raw);
+    if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.key === 'string') return parsed.key;
+        if (parsed.id != null) return String(parsed.id);
+    }
+    return extractTicketKey(raw);
 }
 
 function createTracker(config, customParams) {
@@ -627,23 +682,12 @@ function createTracker(config, customParams) {
     }
 
     function adoCreateWithFields(project, fieldsJson) {
-        var f = (typeof fieldsJson === 'string') ? JSON.parse(fieldsJson) : (fieldsJson || {});
-        var type = f.workItemType || f['System.WorkItemType'];
-        var title = f.title || f['System.Title'];
-        if (!type || !title) {
+        var split = _splitAdoFields(fieldsJson);
+        if (!split.type || !split.title) {
             throw new Error('trackers: createTicketWithFields on ado needs workItemType and title (ADO field names)');
         }
-        var rest = {};
-        Object.keys(f).forEach(function (k) {
-            if (k !== 'workItemType' && k !== 'System.WorkItemType' && k !== 'title' && k !== 'System.Title') rest[k] = f[k];
-        });
-        var raw = ado_create_work_item(withAdoFormat({ project: adoProjectFor(project), workItemType: type, title: title, fieldsJson: JSON.stringify(rest) }));
-        var parsed = _parseJson(raw);
-        if (parsed && typeof parsed === 'object') {
-            if (typeof parsed.key === 'string') return parsed.key;
-            if (parsed.id != null) return String(parsed.id);
-        }
-        return extractTicketKey(raw);
+        var raw = ado_create_work_item(withAdoFormat({ project: adoProjectFor(project), workItemType: split.type, title: split.title, fieldsJson: JSON.stringify(split.rest) }));
+        return _adoCreatedKey(raw);
     }
 
     // ── github provider (canonical github_* issue tools; Dart runtime) ────
@@ -1382,10 +1426,7 @@ function createTracker(config, customParams) {
     function hasStage(ticket, stageKey, statusName) {
         if (!ticket) return false;
         var fields = ticket.fields || {};
-        var status = (ticket.status !== undefined && ticket.status !== null)
-            ? ticket.status
-            : (fields.status && fields.status.name !== undefined && fields.status.name !== null
-                ? fields.status.name : null);
+        var status = _ticketStatusOf(ticket);
         if (statusName !== undefined && status === statusName) return true;
         if (stageFallback !== 'label') return false;
         return _labelNames(ticket.labels || fields.labels || []).indexOf(_stageLabel(stageKey)) !== -1;
