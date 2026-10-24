@@ -64,6 +64,41 @@ function dirOf(filePath) {
     return idx >= 0 ? filePath.substring(0, idx + 1) : '';
 }
 
+/** The inheritance marker: a parent block with a path, within the depth guard. */
+function hasParentRef(agentJson, depth) {
+    return Boolean(agentJson && agentJson.parent && agentJson.parent.path) && depth <= 10;
+}
+
+/** Accept both "params.cliPrompts" and bare "cliPrompts". */
+function directiveKey(fieldPath) {
+    var key = fieldPath;
+    if (key.indexOf('params.') === 0) {
+        key = key.substring('params.'.length);
+    }
+    return key;
+}
+
+/** Parent-first array concat; non-array sides contribute nothing. */
+function arrayOrEmpty(value) {
+    return Array.isArray(value) ? value : [];
+}
+
+/** merged[key] = parent items + child items (parent items prepended). */
+function applyMergeDirective(merged, parentParams, childParams, fieldPath) {
+    var key = directiveKey(fieldPath);
+    merged[key] = arrayOrEmpty(parentParams[key]).concat(arrayOrEmpty(childParams[key]));
+}
+
+/** Apply every path in parent.merge; a missing/invalid merge block applies nothing. */
+function applyMergeDirectives(merged, agentJson, parentParams, childParams) {
+    var mergeFields = (agentJson.parent.merge && Array.isArray(agentJson.parent.merge))
+        ? agentJson.parent.merge : [];
+
+    mergeFields.forEach(function(fieldPath) {
+        applyMergeDirective(merged, parentParams, childParams, fieldPath);
+    });
+}
+
 /**
  * Recursively resolve parent inheritance for an agent JSON config.
  *
@@ -79,7 +114,7 @@ function resolveParentMerge(agentJson, agentPath, depth) {
     depth = depth || 0;
     var childParams = (agentJson && agentJson.params) ? agentJson.params : {};
 
-    if (!agentJson || !agentJson.parent || !agentJson.parent.path || depth > 10) {
+    if (!hasParentRef(agentJson, depth)) {
         return childParams;
     }
 
@@ -96,20 +131,8 @@ function resolveParentMerge(agentJson, agentPath, depth) {
     // Deep-merge: parent as base, child overrides
     var merged = configLoader.deepMerge(parentParams, childParams);
 
-    // Apply merge directives — merge = parent items prepended before child items
-    var mergeFields = (agentJson.parent.merge && Array.isArray(agentJson.parent.merge))
-        ? agentJson.parent.merge : [];
-
-    mergeFields.forEach(function(fieldPath) {
-        // Accept both "params.cliPrompts" and bare "cliPrompts"
-        var key = fieldPath;
-        if (key.indexOf('params.') === 0) {
-            key = key.substring('params.'.length);
-        }
-        var parentArr = Array.isArray(parentParams[key]) ? parentParams[key] : [];
-        var childArr  = Array.isArray(childParams[key])  ? childParams[key]  : [];
-        merged[key] = parentArr.concat(childArr);
-    });
+    // Apply merge directives
+    applyMergeDirectives(merged, agentJson, parentParams, childParams);
 
     return merged;
 }
@@ -453,6 +476,12 @@ module.exports = {
     extractAgentName: extractAgentName,
     resolveConfigFile: resolveConfigFile,
     resolveParentMerge: resolveParentMerge,
+    // gh-122: extracted parent-merge helpers, exported for unit tests.
+    hasParentRef: hasParentRef,
+    directiveKey: directiveKey,
+    arrayOrEmpty: arrayOrEmpty,
+    applyMergeDirective: applyMergeDirective,
+    applyMergeDirectives: applyMergeDirectives,
     resolveConfluenceTrackerOverride: resolveConfluenceTrackerOverride,
     buildEncodedConfig: buildEncodedConfig,
     resolveProjectKey: resolveProjectKey,
