@@ -196,6 +196,36 @@ function buildRow(o) {
 
 // ── merge + retention (pure) — the jq program ────────────────────────────────
 
+// Corrupt shapes degrade to {} exactly like the `jq empty` guard.
+function objectOrEmpty(cur) {
+    return (cur && typeof cur === 'object' && !Array.isArray(cur)) ? cur : {};
+}
+
+// Existing keys in insertion order, with `key` appended when absent.
+function orderedKeysOf(src, key) {
+    var ordered = [];
+    var seen = {};
+    for (var k in src) {
+        if (Object.prototype.hasOwnProperty.call(src, k) && !seen[k]) {
+            seen[k] = true;
+            ordered.push(k);
+        }
+    }
+    if (!seen[key]) ordered.push(key);
+    return ordered;
+}
+
+// Rows at/after the cutoff (Z stamps sort as strings), tail-capped at
+// ROW_KEEP. Non-row shapes drop.
+function retainedRowsOf(rows, cutoff) {
+    var kept = [];
+    for (var j = 0; j < rows.length; j++) {
+        var r = rows[j];
+        if (r && typeof r === 'object' && String(r.at || '') >= cutoff) kept.push(r);
+    }
+    return kept.slice(-ROW_KEEP);
+}
+
 /**
  * `.[$key] = ((.[$key] // []) + [$row])
  *  | with_entries(.value |= (map(select((.at // "") >= $cutoff)) | .[-40:]))
@@ -206,27 +236,14 @@ function buildRow(o) {
  * shapes degrade to {} exactly like the `jq empty` guard.
  */
 function mergeTokenRows(cur, key, row, cutoff) {
-    var src = (cur && typeof cur === 'object' && !Array.isArray(cur)) ? cur : {};
+    var src = objectOrEmpty(cur);
     var next = {};
-    var ordered = [];
-    var seen = {};
-    for (var k in src) {
-        if (Object.prototype.hasOwnProperty.call(src, k) && !seen[k]) {
-            seen[k] = true;
-            ordered.push(k);
-        }
-    }
-    if (!seen[key]) ordered.push(key);
+    var ordered = orderedKeysOf(src, key);
     for (var i = 0; i < ordered.length; i++) {
         var kk = ordered[i];
         var rows = src[kk] || [];
         if (kk === key) rows = rows.concat([row]);
-        var kept = [];
-        for (var j = 0; j < rows.length; j++) {
-            var r = rows[j];
-            if (r && typeof r === 'object' && String(r.at || '') >= cutoff) kept.push(r);
-        }
-        kept = kept.slice(-ROW_KEEP);
+        var kept = retainedRowsOf(rows, cutoff);
         if (kept.length > 0) next[kk] = kept;
     }
     return next;
@@ -384,6 +401,101 @@ function tryExec(exec, command) {
     try { exec({ command: command }); return true; } catch (e) { return false; }
 }
 
+// io defaults: a no-op sleep and a no-op log; every capturer rides along so
+// the whole shaped io can flow into putTokenContents unchanged.
+function publishIoOf(io) {
+    io = io || {};
+    return {
+        exec: io.exec,
+        read: io.read,
+        write: io.write,
+        del: io.del,
+        sleepMs: io.sleepMs || function () {},
+        log: io.log || function () {}
+    };
+}
+
+// Target defaults: repo, factory-data branch, fa-tokens path, 3 attempts.
+function publishTargetOf(opts) {
+    return {
+        repo: opts.repo || '',
+        branch: opts.dataBranch || DEFAULT_DATA_BRANCH,
+        path: opts.dataPath || DEFAULT_DATA_PATH,
+        attempts: opts.attempts || DEFAULT_ATTEMPTS
+    };
+}
+
+// The retention clock: the pinned now (tests), else the live clock.
+function publishClockOf(opts) {
+    return opts.now ? opts.now : new Date();
+}
+
+// Run output text: a missing reader or an unreadable file both degrade to ''
+// — the `[ ! -s "${RUN_OUTPUT}" ]` skip signal.
+function readRunOutputText(read, path) {
+    if (typeof read !== 'function') return '';
+    try { return String(read(path) || ''); } catch (e) { return ''; }
+}
+
+// The skip contract: a warning line, then the skipped result shape. The
+// bad-anchor skip keeps the already-resolved leg (undefined → null).
+function skipPublish(log, reason, warning, leg) {
+    log('::warning::' + warning);
+    return { status: 'skipped', reason: reason, key: null, leg: leg || null, row: null, attempts: 0 };
+}
+
+// Zero input+output ledger sums — the no-ledger skip signal.
+function isZeroLedger(sums) {
+    return sums.input === 0 && sums.output === 0;
+}
+
+// Existing-file sha probe; a literal 'Not Found' body (like a throw) means
+// first publish — no sha.
+function fetchBranchSha(exec, repo, path, branch) {
+    var sha = '';
+    try { sha = execOut(exec, contentsShaCommand(repo, path, branch)); }
+    catch (e) { sha = ''; } // first publish — the file is absent
+    return sha.indexOf('Not Found') !== -1 ? '' : sha;
+}
+
+// Branch body probe; a throw or an unparseable body merges from {} (the
+// `jq empty` guard).
+function fetchBranchBody(exec, repo, path, branch) {
+    try {
+        return JSON.parse(execOut(exec, contentsBodyCommand(repo, path, branch)) || '{}');
+    } catch (e) { return {}; }
+}
+
+// One GET-sha → merge → PUT cycle: true when the PUT landed, false on
+// conflict (the caller refetches and retries).
+function putTokenRowAttempt(io, target, now, attempt, key, leg, row, cutoff) {
+    var sha = fetchBranchSha(io.exec, target.repo, target.path, target.branch);
+    var cur = fetchBranchBody(io.exec, target.repo, target.path, target.branch);
+    var next = mergeTokenRows(cur, key, row, cutoff);
+    return putTokenContents(io, target.repo, target.path, now, attempt, {
+        branch: target.branch,
+        message: 'leg tokens — ' + key + ' ' + leg + ' [skip ci]',
+        json: JSON.stringify(next),
+        sha: sha
+    });
+}
+
+// Up to `target.attempts` cycles; a conflicting PUT refetches and retries
+// (sh backoff: sleep attempt*2s between attempts, never after the last).
+// Returns the terminal publish outcome.
+function putRowWithRetries(io, target, now, key, leg, row, cutoff, log, sleepMs) {
+    for (var attempt = 1; attempt <= target.attempts; attempt++) {
+        if (putTokenRowAttempt(io, target, now, attempt, key, leg, row, cutoff)) {
+            return { status: 'published', attempts: attempt };
+        }
+        log('token publish attempt ' + attempt + ' conflicted — refetching');
+        if (attempt < target.attempts) sleepMs(attempt * 2000); // sh: sleep $((attempt * 2))
+    }
+    log('::warning::token publish gave up after ' + target.attempts +
+        ' attempts (concurrent writes) — rows are decorative, next legs retry');
+    return { status: 'gave-up', attempts: target.attempts };
+}
+
 /**
  * Publish one leg's token-usage row.
  *
@@ -401,50 +513,34 @@ function tryExec(exec, command) {
  */
 function publishTokenUsage(opts, io) {
     opts = opts || {};
-    io = io || {};
-    var exec = io.exec;
-    var read = io.read;
-    var sleepMs = io.sleepMs || function () {};
-    var log = io.log || function () {};
-    var attempts = opts.attempts || DEFAULT_ATTEMPTS;
-    var repo = opts.repo || '';
-    var branch = opts.dataBranch || DEFAULT_DATA_BRANCH;
-    var path = opts.dataPath || DEFAULT_DATA_PATH;
-    var now = opts.now ? opts.now : new Date();
-    var result = { status: 'skipped', reason: null, key: null, leg: null, row: null, attempts: 0 };
+    var ioOf = publishIoOf(io);
+    var log = ioOf.log;
+    var sleepMs = ioOf.sleepMs;
+    var target = publishTargetOf(opts);
+    var now = publishClockOf(opts);
 
     // 1) run output — `[ ! -s "${RUN_OUTPUT}" ]` → skip
-    var text = '';
-    if (typeof read === 'function') {
-        try { text = String(read(opts.runOutput) || ''); } catch (e) { text = ''; }
-    }
+    var text = readRunOutputText(ioOf.read, opts.runOutput);
     if (!text) {
-        result.reason = 'no-run-output';
-        log('::warning::no run output captured — skipping token publish');
-        return result;
+        return skipPublish(log, 'no-run-output', 'no run output captured — skipping token publish');
     }
 
     // 2) sums — zero in+out → skip
     var sums = parseFaTokensLedger(text);
-    if (sums.input === 0 && sums.output === 0) {
-        result.reason = 'no-ledger';
-        log('::warning::no fa-tokens ledger line in run output — skipping token publish');
-        return result;
+    if (isZeroLedger(sums)) {
+        return skipPublish(log, 'no-ledger', 'no fa-tokens ledger line in run output — skipping token publish');
     }
 
     // 3) leg from the runner-config basename (rework recovery)
     var leg = resolveLeg(opts.configPath, opts.kind);
-    result.leg = leg;
 
     // 4) anchor → key
     var key = resolveAnchorKey(opts.anchor);
     if (!key) {
-        result.reason = 'bad-anchor';
-        log('::warning::unrecognized anchor \'' + String(opts.anchor || '') +
-            '\' — skipping token publish');
-        return result;
+        return skipPublish(log, 'bad-anchor',
+            'unrecognized anchor \'' + String(opts.anchor || '') +
+            '\' — skipping token publish', leg);
     }
-    result.key = key;
 
     // 5) row (printf field order)
     var row = buildRow({
@@ -455,7 +551,6 @@ function publishTokenUsage(opts, io) {
         cacheRead: sums.cacheRead,
         model: sums.model
     });
-    result.row = row;
     log('leg tokens: ' + key + ' ' + leg +
         ' prompt=' + sums.input +
         ' completion=' + sums.output +
@@ -463,40 +558,19 @@ function publishTokenUsage(opts, io) {
         ' model=' + (sums.model || 'none'));
 
     // 6) bootstrap the data branch (422 already-exists is the normal case)
-    tryExec(exec, bootstrapBranchCommand(repo, branch));
+    tryExec(ioOf.exec, bootstrapBranchCommand(target.repo, target.branch));
 
     // 7) up to N attempts: refetch sha+body, merge, PUT — conflicts refetch
-    var cutoff = cutoffIso(now);
-    for (var attempt = 1; attempt <= attempts; attempt++) {
-        var sha = '';
-        try { sha = execOut(exec, contentsShaCommand(repo, path, branch)); }
-        catch (e) { sha = ''; } // first publish — the file is absent
-        if (sha.indexOf('Not Found') !== -1) sha = '';
-        var cur = {};
-        try {
-            cur = JSON.parse(execOut(exec, contentsBodyCommand(repo, path, branch)) || '{}');
-        } catch (e2) { cur = {}; } // `jq empty` guard — corrupt body → {}
-        var next = mergeTokenRows(cur, key, row, cutoff);
-        var ok = putTokenContents(io, repo, path, now, attempt, {
-            branch: branch,
-            message: 'leg tokens — ' + key + ' ' + leg + ' [skip ci]',
-            json: JSON.stringify(next),
-            sha: sha
-        });
-        if (ok) {
-            result.status = 'published';
-            result.reason = null;
-            result.attempts = attempt;
-            return result;
-        }
-        result.attempts = attempt;
-        log('token publish attempt ' + attempt + ' conflicted — refetching');
-        if (attempt < attempts) sleepMs(attempt * 2000); // sh: sleep $((attempt * 2))
-    }
-    result.status = 'gave-up';
-    log('::warning::token publish gave up after ' + attempts +
-        ' attempts (concurrent writes) — rows are decorative, next legs retry');
-    return result;
+    var outcome = putRowWithRetries(ioOf, target, now, key, leg, row,
+        cutoffIso(now), log, sleepMs);
+    return {
+        status: outcome.status,
+        reason: null,
+        key: key,
+        leg: leg,
+        row: row,
+        attempts: outcome.attempts
+    };
 }
 
 module.exports = {
@@ -507,6 +581,9 @@ module.exports = {
     utcStampZ: utcStampZ,
     cutoffIso: cutoffIso,
     buildRow: buildRow,
+    objectOrEmpty: objectOrEmpty,
+    orderedKeysOf: orderedKeysOf,
+    retainedRowsOf: retainedRowsOf,
     mergeTokenRows: mergeTokenRows,
     shellQuote: shellQuote,
     base64EncodeUtf8: base64EncodeUtf8,
@@ -519,6 +596,16 @@ module.exports = {
     contentsPutCommand: contentsPutCommand,
     tryPutViaInputFile: tryPutViaInputFile,
     putTokenContents: putTokenContents,
+    publishIoOf: publishIoOf,
+    publishTargetOf: publishTargetOf,
+    publishClockOf: publishClockOf,
+    readRunOutputText: readRunOutputText,
+    skipPublish: skipPublish,
+    isZeroLedger: isZeroLedger,
+    fetchBranchSha: fetchBranchSha,
+    fetchBranchBody: fetchBranchBody,
+    putTokenRowAttempt: putTokenRowAttempt,
+    putRowWithRetries: putRowWithRetries,
     publishTokenUsage: publishTokenUsage,
     ROW_KEEP: ROW_KEEP,
     DEFAULT_WINDOW_DAYS: DEFAULT_WINDOW_DAYS,
