@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-24T14:04:47.491Z",
+  "ticketKey": "gh-1227",
+  "headSha": "448e6e52bdf9dbd167b7dbcf1fdee529b133f1ee",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:f0e2e4d2f62a3e33",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:463a75fab4fc013c",
+      "size": 9691
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:82a2774db2968b84",
+      "size": 4444
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:a822f9ee91a4c273",
+      "size": 2343
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:2030ad5407086a42",
+      "size": 960
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:451efaaec9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:f2c635a39bb1acd0",
+      "size": 2294
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:6dd4b2f8c9fbfc37",
+      "size": 2216
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6v42EZ",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/dfManager.js:361",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `crap` quality gate is red on this head — branch is one gh-1225 behind `main` (baseline moved under it)**\n\nThe `crap` check failed on this exact head (`7eac9902`) — [Quality run 40099334484](https://github.com/IstiN/dmtools-agents/actions/runs/40099334484), step *crap4js ratchet*, exit 2:\n\n```\nREGRESSION  js/common/tokenUsageComment.js::postTokenUsageComments: 10 -> 12.8\nNEW > 8  js/aiTeammateTokenUsageReporter.js::extractFaPayload: 13.2\nNEW > 8  js/aiTeammateTokenUsageReporter.js::calculateDurationSeconds: 15.4\nNEW > 8  js/aiTeammateTokenUsageReporter.js::downloadRunLogs: 15.5\nNEW > 8  js/factory/mark_job_done_publish.js::action: 12.1\nNEW > 8  js/factory/token_usage.js::extractFaPayload: 15.3\nNEW > 8  js/factory/token_usage.js::parseFaTokensLedger: 12.1\n1 regression(s), 6 new over threshold, 10 improvement(s), 0 removed\n```\n\n**Attribution — none of these files is touched by this PR.** The diff only touches `js/agentWorkflowGraph.js`, `js/dfManager.js`, `js/factoryState.js` + 3 test files; the branch's merge-base with `main` is `dc1305d3` (PR is `BEHIND`). What actually happened, from the two gate runs on the same commit:\n\n- 13:32 `pull_request` run: **passed** — `baseline: 217 functions` → `0 regression(s), 0 new over threshold, 10 improvement(s)`.\n- **13:42:22** — PR #1237 (gh-1225 token-usage CRAP rework) merged to `main`; its main-side ratchet dropped the six functions it fixed, so the released baseline shrank to **211 functions**.\n- 13:42:59 re-dispatched run on this unchanged head: fetched the 211-baseline, so the branch's **pre-gh-1225 copies** of those files now measure as regressions/NEW-over-threshold.\n\nSince the baseline is a strict ratchet (CRAP may only decrease), any branch that lags `main` after a fixing merge fails exactly this way.\n\n**Fix — mechanical, no change to this PR's own code:**\n\n```bash\ngit merge main   # brings in 6c6f6f28 (gh-1225 refactors + their new tests)\ngit push         # Quality re-runs; the tree then measures like main's green 13:46–13:47 runs\n```\n\nFor the record, both runs confirm the PR's own claims: its diff contributes **0 regressions and exactly the advertised 10 improvements** (all nine gh-1227 targets + `buildContext`), and the coverage suite step was green (`7022 passed, 0 failed`) even in the failed run. Only the branch freshness gate needs to close."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v42Fg",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/dfManager.js:387",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `approvedPrMergeGapAnomaly` — the two anomaly payloads duplicate five of seven fields**\n\nThe `clean/mergeable` and `dirty/behind` branches build near-identical objects (`ticketKey`, `prNumber`, `prUrl`, `mergeState` are copy-pasted). A shared base keeps future field additions single-site:\n\n```javascript\nfunction approvedPrMergeGapAnomaly(key, number, pr, state, hasApproval) {\n    if (!hasApproval) return null;\n    var base = { ticketKey: key, prNumber: number, prUrl: prUrl(pr), mergeState: state };\n    if (state === 'clean' || state === 'mergeable') {\n        return Object.assign(base, {\n            type: 'approved-pr-not-merged',\n            severity: 'blocking',\n            safeAction: 'trigger-sm-retry-merge',\n            message: 'PR is approved and clean but still open.'\n        });\n    }\n    if (state === 'dirty' || state === 'behind') {\n        return Object.assign(base, {\n            type: 'approved-pr-not-mergeable',\n            severity: 'warning',\n            safeAction: state === 'behind' ? 'request-branch-update' : null,\n            message: 'PR is approved but not currently mergeable.'\n        });\n    }\n    return null;\n}\n```\n\nPolish-only: the duplication is carried over faithfully from the pre-extraction inline code, behavior is identical, and the characterization tests already pin both shapes — no need to hold the merge for it (`Object.assign` is already used in production `js/` files, so it is GraalJS/repo-idiomatic)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:1f0fe55c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `crap` quality gate is red on this head — branch is one gh-1225 behind `main` (baseline moved under it)**\n\nThe `crap` check failed on this exact head (`7eac9902`) — [Quality run 40099334484](https://github.com/IstiN/dmtools-agents/actions/runs/40099334484), step *crap4js ratchet*, exit 2:\n\n```\nREGRESSION  js/common/tokenUsageComment.js::postTokenUsageComments: 10 -> 12.8\nNEW > 8  js/aiTeammateTokenUsageReporter.js::extractFaPayload: 13.2\nNEW > 8  js/aiTeammateTokenUsageReporter.js::calculateDurationSeconds: 15.4\nNEW > 8  js/aiTeammateTokenUsageReporter.js::downloadRunLogs: 15.5\nNEW > 8  js/factory/mark_job_done_publish.js::action: 12.1\nNEW > 8  js/factory/token_usage.js::extractFaPayload: 15.3\nNEW > 8  js/factory/token_usage.js::parseFaTokensLedger: 12.1\n1 regression(s), 6 new over threshold, 10 improvement(s), 0 removed\n```\n\n**Attribution — none of these files is touched by this PR.** The diff only touches `js/agentWorkflowGraph.js`, `js/dfManager.js`, `js/factoryState.js` + 3 test files; the branch's merge-base with `main` is `dc1305d3` (PR is `BEHIND`). What actually happened, from the two gate runs on the same commit:\n\n- 13:32 `pull_request` run: **passed** — `baseline: 217 functions` → `0 regression(s), 0 new over threshold, 10 improvement(s)`.\n- **13:42:22** — PR #1237 (gh-1225 token-usage CRAP rework) merged to `main`; its main-side ratchet dropped the six functions it fixed, so the released baseline shrank to **211 functions**.\n- 13:42:59 re-dispatched run on this unchanged head: fetched the 211-baseline, so the branch's **pre-gh-1225 copies** of those files now measure as regressions/NEW-over-threshold.\n\nSince the baseline is a strict ratchet (CRAP may only decrease), any branch that lags `main` after a fixing merge fails exactly this way.\n\n**Fix — mechanical, no change to this PR's own code:**\n\n```bash\ngit merge main   # brings in 6c6f6f28 (gh-1225 refactors + their new tests)\ngit push         # Quality re-runs; the tree then measures like main's green 13:46–13:47 runs\n```\n\nFor the record, both runs confirm the PR's own claims: its diff contributes **0 regressions and exactly the advertised 10 improvements** (all nine gh-1227 targets + `buildContext`), and the coverage suite step was green (`7022 passed, 0 failed`) even in the failed run. Only the branch freshness gate needs to close."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:8bcf7082",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `approvedPrMergeGapAnomaly` — the two anomaly payloads duplicate five of seven fields**\n\nThe `clean/mergeable` and `dirty/behind` branches build near-identical objects (`ticketKey`, `prNumber`, `prUrl`, `mergeState` are copy-pasted). A shared base keeps future field additions single-site:\n\n```javascript\nfunction approvedPrMergeGapAnomaly(key, number, pr, state, hasApproval) {\n    if (!hasApproval) return null;\n    var base = { ticketKey: key, prNumber: number, prUrl: prUrl(pr), mergeState: state };\n    if (state === 'clean' || state === 'mergeable') {\n        return Object.assign(base, {\n            type: 'approved-pr-not-merged',\n            severity: 'blocking',\n            safeAction: 'trigger-sm-retry-merge',\n            message: 'PR is approved and clean but still open.'\n        });\n    }\n    if (state === 'dirty' || state === 'behind') {\n        return Object.assign(base, {\n            type: 'approved-pr-not-mergeable',\n            severity: 'warning',\n            safeAction: state === 'behind' ? 'request-branch-update' : null,\n            message: 'PR is approved but not currently mergeable.'\n        });\n    }\n    return null;\n}\n```\n\nPolish-only: the duplication is carried over faithfully from the pre-extraction inline code, behavior is identical, and the characterization tests already pin both shapes — no need to hold the merge for it (`Object.assign` is already used in production `js/` files, so it is GraalJS/repo-idiomatic)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:61a7dacd",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The refactoring itself is excellent — CI confirms the diff contributes 0 regressions and exactly the 10 advertised CRAP improvements (all nine gh-1227 targets + `buildContext`), with 81 new characterization/unit tests and a green suite (`7022 passed, 0 failed`). The PR cannot merge only because the `crap` quality gate went red on the head after PR #1237 (gh-1225) landed on `main` and ratcheted the rolling baseline down (217 → 211 functions) while this branch was still one merge behind it.\n\n**Key Issues**:\n- 🚨 **BLOCKING (1)** — red `crap` gate on `7eac9902`: `1 regression(s), 6 new over threshold` — all six/seven flagged functions live in files this PR never touched (`tokenUsageComment`, `aiTeammateTokenUsageReporter`, `factory/token_usage`, `factory/mark_job_done_publish`); the branch's pre-gh-1225 copies simply lost their baseline entries. Fix is mechanical: merge `main` (`6c6f6f28`), push, let Quality re-run.\n- 💡 SUGGESTION (1) — `dfManager.approvedPrMergeGapAnomaly` duplicates five payload fields across its two branches; fold into a shared base.\n\n**Next Steps**:\n1. `git merge main && git push` on `ai/gh-1227` — the tree then measures like main's green 13:46–13:47 Quality runs; no code change needed in this PR's scope.\n2. Re-dispatch the Quality gate and confirm `crap` is green before re-attempting the machine merge.\n3. Optionally apply the `approvedPrMergeGapAnomaly` payload dedup (polish, non-blocking)."
+    }
+  ]
+}
