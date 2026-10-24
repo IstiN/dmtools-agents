@@ -21,6 +21,11 @@
 # Coverage comes from the unit suite run in the same job (instrumented tree), so the
 # ratchet is evaluated with the unit-test results of the head.
 #
+# Duplication gate (gh-1251): a second, independent hard gate fails PRs and main when
+# any production JS file (js/ + ci/, js/unit-tests/** excluded) exceeds 1% duplicated
+# lines (crap4js duplicates, token-level clone detection). Its clones-mode report also
+# feeds the README `duplication` endpoint badge published from the same run.
+#
 # Tool pin: IstiN/crap4js by commit SHA (fork of vabhzw17eg2qu4m9-bit/crap4js v0.15.0 +
 # --baseline / --update-baseline, pipe-safe exit). Installed from GitHub — the npm 'crap4js'
 # package is an unrelated third-party project.
@@ -159,6 +164,14 @@ jobs:
           if grep -q '^improved ' "$RUNNER_TEMP/crap.txt"; then echo "improved=true" >> "$GITHUB_OUTPUT"; fi
           exit $code
 
+      - name: Duplication gate (production JS duplicated lines <= 1%)
+        # Hard gate for PRs and main: any production JS file (js/ + ci/) with
+        # more than 1% duplicated lines fails the run. js/unit-tests/** is
+        # excluded — test fixtures legitimately repeat shapes. The badge step
+        # below reparses the same measurement for the README endpoint.
+        run: |
+          "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" duplicates --threshold 1 --exclude "js/unit-tests/**" js ci
+
       - name: Update the released baseline (main only — ratchets down, never up)
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (steps.ratchet.outcome == 'success' || steps.baseline.outputs.present != 'true')
         env:
@@ -211,6 +224,9 @@ jobs:
             -o "$RUNNER_TEMP/crap4dart-linux-x64" && chmod +x "$RUNNER_TEMP/crap4dart-linux-x64"
           "$RUNNER_TEMP/crap4dart-linux-x64" check --only similarity --format json > "$RUNNER_TEMP/md-similarity-check.json" 2>/dev/null || true
           "$RUNNER_TEMP/crap4dart-linux-x64" similarity --jaccard 0.01 --containment 0.01 --format json > "$RUNNER_TEMP/md-similarity-all.json" 2>/dev/null || true
+          # clones-mode report carries the project-wide duplicated-line percentage
+          # in its summary line; the gate itself runs (and may fail) earlier.
+          "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" duplicates --report clones --exclude "js/unit-tests/**" js ci > "$RUNNER_TEMP/duplication.txt" 2>/dev/null || true
           node - <<'JS'
           const fs = require('fs'), path = require('path');
           const tmp = process.env.RUNNER_TEMP, thr = Number(process.env.CRAP_THRESHOLD);
@@ -249,7 +265,22 @@ jobs:
           const mdMsg = mdPairs === 0 ? `max ${maxPct}% (0 over 50%)` : `max ${maxPct}% (${mdPairs} over 50%)`;
           const mdColor = mdPairs > 0 ? 'red' : maxJaccard <= 0.35 ? 'brightgreen' : maxJaccard <= 0.45 ? 'green' : 'yellow';
           w('md-similarity.json', 'md similarity', mdMsg, mdColor);
-          console.log(`badges: max=${max} over=${over} coverage=${pct}%`);
+          let dupPct = null, dupGroups = 0;
+          try {
+            const dupReport = fs.readFileSync(path.join(tmp, 'duplication.txt'), 'utf8');
+            const dupLines = dupReport.split('\n');
+            for (const l of dupLines) {
+              const m = l.match(/(\d+(?:\.\d+)?)% duplicated lines\s*$/);
+              if (m) dupPct = parseFloat(m[1]);
+              const g = l.match(/^(\d+) clone groups/);
+              if (g) dupGroups = parseInt(g[1], 10);
+            }
+          } catch (_) {}
+          if (dupPct !== null) {
+            const dupColor = dupPct < 1.0 ? 'brightgreen' : dupPct < 2.0 ? 'green' : dupPct < 5.0 ? 'yellow' : dupPct < 10.0 ? 'orange' : 'red';
+            w('duplication.json', 'duplication', `${dupPct}% (${dupGroups} groups)`, dupColor);
+          }
+          console.log(`badges: max=${max} over=${over} coverage=${pct}% duplication=${dupPct}%`);
           JS
           cd "$RUNNER_TEMP/badges"
           git init -q && git checkout -q -b badges
