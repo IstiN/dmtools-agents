@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-24T22:21:50.477Z",
+  "ticketKey": "gh-1249",
+  "headSha": "ba89094bdbc05d735022a28ae7338d54dc42f358",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:00bb0719a253651e",
+      "size": 653
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:23ff6a257daae588",
+      "size": 199
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:584e2d207cdaf3ad",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:ab5218347848844c",
+      "size": 23372
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:ce13a22bbe69215f",
+      "size": 113
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:fe6db88e98820083",
+      "size": 3577
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:7eed40bef4b17114",
+      "size": 517
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:812b19c7c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:3e0a2a9b500a4446",
+      "size": 2872
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:4464e96620bccb4c",
+      "size": 2789
+    }
+  },
+  "comments": [
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:9ab70169",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: PR title names `aiTeammateTokenUsageReporter.js`, but the diff never touches it**\n\nThe title (and the gh-1249 ticket it closes) promises dedup of `smAgent.js`, `autoStart.js`, **aiTeammateTokenUsageReporter.js**, `pushReworkChanges.js`, `recover*`, and `retryMergePR.js`. The actual diff (30 files, verified via `git diff --stat origin/main...HEAD`) covers all of those except `aiTeammateTokenUsageReporter.js` — that file is unchanged, and neither the description's \"What changed\" nor the architecture diagram mentions it.\n\nNot a blocker for the code itself, but the ticket will be closed by this PR while one of its named targets was never addressed. Please either:\n\n- retitle the PR / adjust the ticket scope to match what landed, and file a follow-up for the reporter, or\n- confirm the reporter was already deduped elsewhere (e.g. by gh-1244's `tokenUsageComment.postTokenUsageSafely` — if so, a one-line note in the PR description would close the loop)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:ab332774",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `pushReworkChanges.js` still carries its own `findPRForTicket` — the next dedup target**\n\nThis PR deduplicated the three verbatim `findPRForTicket` copies into `prLookup.findOpenPrForTicket`, but `pushReworkChanges.js:266` still has its own `findPRForTicket(scm, ticketKey)` whose plain-key path repeats the same `scm.listPrs('open')` + title/branch substring scan that now lives in `js/common/prLookup.js`.\n\nOnly the `pr-N` pseudo-key branch (PR-anchored direct get-by-number, githubSource #544) genuinely justifies divergence — and even that could live in `prLookup` so there is one canonical lookup family. Two caveats if you do merge them:\n\n- The failure contracts differ: this copy posts the greppable `PR-LOOKUP-FAILED:` marker (its `PR_LOOKUP_FAILED_PREFIX` contract) instead of prLookup's fail-closed `console.error('Failed to list PRs:')` + null. Keep the marker behavior for this caller.\n- It uses `openPRs.filter(...)` without an `Array.isArray` guard on the non-pseudo-key path — prLookup's `Array.isArray(prList) ? prList : []` coercion is strictly safer; adopting it would be a small robustness win.\n\nFine as a follow-up wave — flagging so the remaining clone doesn't get forgotten when gh-1249 is closed as done."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:06845253",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `autoStart.parseWorkflowRuns` remains a third parse flavor — consider delegating to the shared one**\n\n`js/common/workflowRuns.js` now owns `parseWorkflowRuns` (handles both `{workflow_runs}` and `{runs}` envelopes, silent `[]` on bad JSON), and `smAgent.js` fully delegates to it. `autoStart.js:15` still keeps its own inline copy which (a) only unwraps `workflow_runs` — a `{runs}` envelope payload silently reads as `[]` here but parses correctly in the SM path, so the two flavors can drift on real payloads — and (b) logs `autoStart: failed to parse workflow runs:` on bad JSON, a warn the shared copy deliberately omits.\n\nThe module docstring justifies keeping per-caller parse flavors, but the smallest unification would be `autoStart` calling `workflowRunsModule.parseWorkflowRuns` and adding its own warn wrapper around it, e.g.:\n\n```javascript\nfunction parseWorkflowRuns(raw) {\n    var runs = workflowRunsModule.parseWorkflowRuns(raw);\n    if (raw && !runs.length && typeof raw === 'string') {\n        console.warn('autoStart: failed to parse workflow runs: invalid JSON');\n    }\n    return runs;\n}\n```\n\n(Exact warn trigger may need a richer check to stay byte-compatible with the current log line — verify against `test_autoStart.js` expectations.)\n\nTwo smaller notes folded in:\n- The fan-out warn format changed from `autoStart: could not list queued workflow runs: <err>` to `autoStart: could not list workflow runs (queued): <err>` (`eachActiveStatusRun` reorders status into the parenthesis). I grepped — nothing in `js/`, `ci/`, or `scripts/` matches the old string, so this is log-only and safe; just note it for any operator runbooks.\n- `run_workflowRuns.json` was added but the two sibling suites (`test_prLookup.js`, `test_labelList.js`) have no `run_prLookup.json` / `run_labelList.json`, unlike most other suites. All three are in `run_all.json`, so CI is covered — only the single-suite convenience runner is missing."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:602245ac",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Confirmed — the loop is now closed without retitling:\n\n- **What the remaining debt actually is**: `aiTeammateTokenUsageReporter.js` is untouched by this PR (0 diff lines), and its pinned duplication (`duplication-baseline.json`: 2.35%, 45 lines) consists entirely of **internal self-clones** — the `buildUsageCsv`/`buildAttemptsCsv` CSV-builder pair (`:430-434 ↔ :446-449`, `:456-468 ↔ :962-974`) plus one more 5-line self-pair (`:1206-1210 ↔ :1240-1244`). These are same-file clones, not the cross-file copy-paste family gh-1249 deduplicated (`workflowRuns`/`prLookup`/`labelList` prologs), so the gh-1244-era `tokenUsageComment.postRunTokenUsageSafely` transport unification never covered them — the reviewer's alternative hypothesis doesn't apply to this file.\n- **Action taken**: filed follow-up **#1262** (deduplicate the reporter's internal self-clones: extract the shared CSV-row serialization, drop under the 1% gate, prune the baseline pin) and added a **Scope note** to the PR description recording exactly this, so gh-1249 closes honestly while the reporter debt stays tracked."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:b34dbc1c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Done — the remaining clone is gone, with both caveats honored:\n\n- **Delegation**: `pushReworkChanges.findPRForTicket` now routes the plain-key path through `prLookup.findOpenPrForTicket` (one shared `scm.listPrs('open')` + title/head-branch substring scan in `js/common/prLookup.js`). Only the `pr-N` pseudo-key branch keeps its local `ghHelpers.findPRForTicket` get-by-number path (githubSource #544), which genuinely justifies divergence.\n- **Marker contract kept**: the greppable `PR-LOOKUP-FAILED:` contract was never in the scan — it is owned by the caller (`requirePrForTicket`), which fires on `null` exactly as before. Verified by the pre-existing loud-failure suites plus two new characterization tests (`js/unit-tests/test_pushReworkChanges.js` → suite *\"findPRForTicket delegates to prLookup (gh-1249)\"*).\n- **Robustness win adopted**: prLookup's `Array.isArray(prList) ? prList : []` coercion replaces the old unguarded `openPRs.filter(...)` — a `null` provider payload now fails closed to the marker instead of dying on a `TypeError` (pinned by a dedicated test). The `console.warn('No open PR found for ticket', …)` diagnostic is preserved on the no-match path; provider errors surface via prLookup's own `'Failed to list PRs:'` line (no test pinned the old `'Failed to find PR:'` text — verified by grep).\n- All 9 pushReworkChanges test require-maps (7 in `test_pushReworkChanges.js`, 2 in `test_reworkCustomParams.js`) updated for the new `./common/prLookup.js` dependency; 239 tests pass."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:4b220d57",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "All three points addressed:\n\n- **Parse delegation**: `autoStart.parseWorkflowRuns` is now a thin wrapper over `workflowRunsModule.parseWorkflowRuns` (single home for array | `{workflow_runs}` | `{runs}` envelopes). The `{runs}` envelope no longer silently reads as `[]` here — the drift with the smAgent path is eliminated. Deliberate behavior change, pinned by a new test (`{ runs }` envelope on string and object payloads).\n- **Warn contract byte-compatible**: autoStart keeps ONLY its own semantics on top — a malformed JSON **string** warns `autoStart: failed to parse workflow runs:` and returns `[]`; valid/empty payloads (`'{\"workflow_runs\":[]}'`, `'{\"runs\":[]}'`, `null`) stay silent. Verified against `test_autoStart.js` (all gh-1242 parse cases unchanged and green) plus a new warn-scope characterization test that asserts exactly one warn for bad JSON and zero warns for valid empties. (Degenerate non-list JSON strings like `'null'` no longer warn — they now delegate to the shared silent-`[]` path; these are not real `listWorkflowRuns` payloads.)\n- **Fan-out warn format**: noted — the `(status)` parenthesis reorder in `eachActiveStatusRun` is log-only; the reviewer's grep confirmed nothing in `js/`, `ci/`, or `scripts/` matches the old string, so no runbook impact.\n- **Convenience runners added**: `js/unit-tests/run_prLookup.json` and `js/unit-tests/run_labelList.json`, mirroring `run_workflowRuns.json` (all three suites were already in `run_all.json`, so CI coverage was complete).\n\n75 autoStart tests pass (3 new)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:8f2a4b0a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head f561dbaffb9de103b2ae158f21023035175c64ff — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:4ff5ed38",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1256\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:4ad09a0e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `8b0972fcb00d604379bcff30872fa89c0d080c2d`) Rework re-queued (linked issue #1249 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:b5d7a29f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — gh-1249\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:285e9fef",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — APPROVE\n\n**Summary**: Well-executed dedup. The three new `js/common/` modules (`workflowRuns.js`, `prLookup.js`, `labelList.js`) are faithful single homes for the extracted helpers — I verified each removal hunk against the new implementation (parse/envelope shapes, `gh api` probe payloads via `parseProbeResult` ≡ `mcpParse`, newest-first ordering, token swap/restore, thread/comment envelope unwrapping) and found no behavioral drift; the gh-1244 `postTokenUsageSafely` re-point after the merge conflict is signature-correct. Full unit suite per `run_all.json`: **7413 passed, 1 failed** — the failure is the pre-existing, env-dependent `sessionDelta UT-3 AC3` flake (passes 24/0 with `env -u FA_SESSION_ROOT -u COPILOT_HOME`), unrelated to this change. New suites (`test_workflowRuns.js`, `test_prLookup.js`, `test_labelList.js`) cover the extracted contracts including throw/fail-closed paths.\n\n**Key Issues**: None blocking. Three suggestions: (1) PR title lists `aiTeammateTokenUsageReporter.js` but the diff never touches it — retitle or land it as a follow-up so gh-1249 closes honestly; (2) `pushReworkChanges.js` still carries its own `findPRForTicket` — only the `pr-N` pseudo-key branch justifies divergence; (3) `autoStart.parseWorkflowRuns` remains a third parse flavor that silently drops `{runs}` envelopes and its warn-log format changed slightly.\n\n**Next Steps**:\n1. Merge as-is (suggestions are non-blocking).\n2. Optionally retitle the PR / file a follow-up for `aiTeammateTokenUsageReporter.js` before closing gh-1249."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:9ff37436",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Validation CI went red on the head — merge aborted, rework re-queued. (linked issue #1249 re-armed) (approval latch kept — no re-review after fixes)\n🔴 red head 8a2d5b0908111698defd0ea687ff75673a17378c — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:8c6cf1f3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `aac5d82a0cb52cf28f031afbd3abdfbf54c83787`) Rework re-queued (linked issue #1249 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:501c5a01",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "✅ Rework finished. `pr_approved` is sticky (approved once — never re-reviewed): the new head re-validates and merges directly."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:85234727",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head ba89094bdbc05d735022a28ae7338d54dc42f358 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    }
+  ]
+}
