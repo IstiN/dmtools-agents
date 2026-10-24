@@ -220,7 +220,7 @@ function loadModule(path, requireFn, mocks) {
  */
 function makeRequire(moduleMap) {
     return function(id) {
-        if (moduleMap[id]) return moduleMap[id];
+        if (moduleMap[id]) return withTrackerHolderCompat(moduleMap[id]);
 
         // Match by basename (e.g. './config.js' → 'config.js' → 'config')
         var base = id;
@@ -228,12 +228,41 @@ function makeRequire(moduleMap) {
         if (slash !== -1) base = id.substring(slash + 1);
         var noExt = base.replace(/\.js$/, '');
 
-        if (moduleMap[base]) return moduleMap[base];
-        if (moduleMap[noExt]) return moduleMap[noExt];
-        if (moduleMap['./' + base]) return moduleMap['./' + base];
+        if (moduleMap[base]) return withTrackerHolderCompat(moduleMap[base]);
+        if (moduleMap[noExt]) return withTrackerHolderCompat(moduleMap[noExt]);
+        if (moduleMap['./' + base]) return withTrackerHolderCompat(moduleMap['./' + base]);
 
         throw new Error('makeRequire: module not found: ' + id);
     };
+}
+
+/**
+ * gh-1244 compat: production modules build their lazy tracker holder from
+ * trackersModule.createTrackerHolder() at load time. Trackers-module mocks
+ * written before gh-1244 provide only createTracker; extend them with the
+ * canonical holder semantics (lazy create via the mock's own createTracker,
+ * cached instance, reset on re-init) so every mock keeps matching the real
+ * js/common/trackers.js contract.
+ */
+function withTrackerHolderCompat(mock) {
+    if (mock && typeof mock === 'object' && typeof mock.createTracker === 'function' &&
+        typeof mock.createTrackerHolder !== 'function') {
+        mock.createTrackerHolder = function () {
+            var ctx = { config: null, customParams: {} };
+            var inst = null;
+            return {
+                initTracker: function (config, customParams) {
+                    ctx = { config: config || null, customParams: customParams || {} };
+                    inst = null;
+                },
+                getTracker: function () {
+                    if (!inst) inst = mock.createTracker(ctx.config, ctx.customParams);
+                    return inst;
+                }
+            };
+        };
+    }
+    return mock;
 }
 
 /**

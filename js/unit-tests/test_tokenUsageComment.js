@@ -455,3 +455,78 @@ suite('tokenUsageComment — postTokenUsageComments edge branches (gh-1225)', fu
         assert.contains(calls[0][1], '[a]: {"total_tokens":5}');
     });
 });
+
+suite('tokenUsageComment.postTokenUsageSafely (gh-124)', function() {
+
+    function usageFileMocks(posted, commentImpl) {
+        return {
+            file_read: function(opts) {
+                if (opts.path === 'outputs/token_usage_files.json') {
+                    return JSON.stringify(['outputs/story_solution_usage.json']);
+                }
+                if (opts.path === 'outputs/story_solution_usage.json') {
+                    return JSON.stringify({ provider: 'kimi', total_tokens: 123 });
+                }
+                return null;
+            },
+            jira_post_comment: function(args) {
+                posted.push(args);
+                if (commentImpl) return commentImpl(args);
+            }
+        };
+    }
+
+    test('params form posts with params.initiator and customParamsOf(params)', function() {
+        var posted = [];
+        var mod = loadTokenUsageComment(usageFileMocks(posted));
+
+        mod.postTokenUsageSafely('TS-1', { initiator: 'user-1', jobParams: { customParams: { trackerProvider: 'jira' } } });
+
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].key, 'TS-1');
+        assert.contains(posted[0].comment, '[story_solution]:');
+        assert.contains(posted[0].comment, 'Initiator: [~accountid:user-1]');
+    });
+
+    test('overrides win: explicit initiator and tracker are used, params may be null', function() {
+        var posted = [];
+        var mod = loadTokenUsageComment(usageFileMocks(posted));
+        var fakeTracker = {
+            provider: function() { return 'jira'; },
+            postComment: function(key, comment) {
+                posted.push({ key: key, comment: comment });
+            }
+        };
+
+        mod.postTokenUsageSafely('TS-2', { initiator: 'user-from-params' }, { initiator: 'user-override', tracker: fakeTracker });
+
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].key, 'TS-2');
+        assert.contains(posted[0].comment, 'Initiator: [~accountid:user-override]');
+        assert.notContains(posted[0].comment, 'user-from-params');
+    });
+
+    test('never throws: a posting failure is logged and swallowed', function() {
+        var mod = loadTokenUsageComment(usageFileMocks([], function() {
+            throw new Error('provider down');
+        }));
+
+        var threw = false;
+        try {
+            mod.postTokenUsageSafely('TS-3', { initiator: 'user-1' });
+        } catch (e) {
+            threw = true;
+        }
+        assert.notOk(threw, 'postTokenUsageSafely must not propagate provider failures');
+    });
+
+    test('tolerates null params and missing overrides (posting still works)', function() {
+        var posted = [];
+        var mod = loadTokenUsageComment(usageFileMocks(posted));
+
+        mod.postTokenUsageSafely('TS-4', null);
+
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].key, 'TS-4');
+    });
+});
