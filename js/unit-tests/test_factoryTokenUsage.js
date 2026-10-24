@@ -821,7 +821,9 @@ suite('factoryTokenUsage — balanced-payload scan helpers (gh-1225)', function 
   test('jsonPayloadEndFrom returns the index of the closing brace', function () {
     var text = 'x {"a":"} still string"} tail';
     var open = text.indexOf('{');
-    assert.equal(tuModule.jsonPayloadEndFrom(text, open), text.indexOf('"}') + 1);
+    // the object's closing brace, not the '}' inside the string value
+    assert.equal(tuModule.jsonPayloadEndFrom(text, open), text.lastIndexOf('}'));
+    assert.equal(text.lastIndexOf('}'), 23);
   });
 
   test('jsonPayloadEndFrom: escaped backslash does not close the string; escaped quote neither', function () {

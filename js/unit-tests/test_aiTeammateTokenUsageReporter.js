@@ -2758,3 +2758,167 @@ suite('aiTeammateTokenUsageReporter — buildRowsFromCache (gh-1193)', function(
         assert.deepEqual(reporter.buildRowsFromCache({}), { rows: [], attemptRows: [] });
     });
 });
+
+// ── gh-1225 — CRAP gaps: extractFaPayload branches, calculateDurationSeconds
+// field matrix, and the downloadRunLogs per-job fallback path.
+
+suite('aiTeammateTokenUsageReporter — extractFaPayload branches (gh-1225)', function() {
+
+    test('marker without a following brace → null', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.extractFaPayload('fa-tokens: no brace here'), null);
+        assert.equal(reporter.extractFaPayload('fa-tokens:'), null);
+    });
+
+    test('no marker at all → null', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.extractFaPayload('an ordinary log line'), null);
+        assert.equal(reporter.extractFaPayload(''), null);
+    });
+
+    test('escaped backslash and escaped quote inside a string value survive the balanced scan', function() {
+        var reporter = loadReporter();
+        var payload = reporter.extractFaPayload('x fa-tokens: {"say":"a\\\\b \\"c}done","input":1}');
+        assert.equal(payload, '{"say":"a\\\\b \\"c}done","input":1}');
+    });
+
+    test('braces inside string values do not open/close the payload; unterminated → null', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.extractFaPayload('fa-tokens: {"m":"}{ \\" {","output":5}'),
+            '{"m":"}{ \\" {","output":5}');
+        assert.equal(reporter.extractFaPayload('fa-tokens: {"input":99'), null);
+    });
+
+    test('parseTokensLine keeps preferring the fa ledger over the CLI shapes for escaped payloads', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('fa-tokens: {"sessionId":"s","segment":2,"input":30,"output":4,"cacheRead":2,"source":"reported"}');
+        assert.equal(parsed.readTokens, 30);
+        assert.equal(parsed.faSessionId, 's');
+        assert.equal(parsed.faSegment, 2);
+    });
+});
+
+suite('aiTeammateTokenUsageReporter — calculateDurationSeconds field matrix (gh-1225)', function() {
+
+    test('snake_case run fields', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.calculateDurationSeconds({
+            run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:30Z'
+        }), 90);
+    });
+
+    test('camelCase run fields', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.calculateDurationSeconds({
+            runStartedAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:02:00Z'
+        }), 120);
+    });
+
+    test('started_at / completed_at fallbacks', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.calculateDurationSeconds({
+            started_at: '2026-06-01T00:00:00Z', completed_at: '2026-06-01T00:03:00Z'
+        }), 180);
+        assert.equal(reporter.calculateDurationSeconds({
+            startedAt: '2026-06-01T00:00:00Z', completedAt: '2026-06-01T00:04:00Z'
+        }), 240);
+    });
+
+    test('created_at / createdAt fallback for the start', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.calculateDurationSeconds({
+            created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:05:00Z'
+        }), 300);
+        assert.equal(reporter.calculateDurationSeconds({
+            createdAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:06:00Z'
+        }), 360);
+    });
+
+    test('missing / null / empty run → 0', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.calculateDurationSeconds(null), 0);
+        assert.equal(reporter.calculateDurationSeconds(undefined), 0);
+        assert.equal(reporter.calculateDurationSeconds({}), 0);
+    });
+
+    test('unparseable dates → 0', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.calculateDurationSeconds({ run_started_at: 'nope', updated_at: '2026-06-01T00:01:00Z' }), 0);
+        assert.equal(reporter.calculateDurationSeconds({ run_started_at: '2026-06-01T00:00:00Z', updated_at: 'also nope' }), 0);
+    });
+
+    test('end before start → 0', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.calculateDurationSeconds({
+            run_started_at: '2026-06-01T00:02:00Z', updated_at: '2026-06-01T00:00:00Z'
+        }), 0);
+    });
+});
+
+suite('aiTeammateTokenUsageReporter — downloadRunLogs per-job fallback (gh-1225)', function() {
+
+    function loadJobsReporter(jobLogs, overrides) {
+        var globals = Object.assign({
+            file_write: function() {},
+            github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
+            github_get_workflow_run_jobs: function() {
+                return JSON.stringify({ jobs: [
+                    { id: 11 }, { databaseId: 12 }, {}, { id: 13 }
+                ] });
+            },
+            github_get_job_logs: function(args) {
+                var id = String(args.jobId);
+                return jobLogs[id] !== undefined ? jobLogs[id] : '';
+            }
+        }, overrides || {});
+        return loadModule('js/aiTeammateTokenUsageReporter.js',
+            makeRequire({
+                './configLoader.js': { loadProjectConfig: function() { return { repository: { owner: 'IstiN', repo: 'trackstate' } }; } },
+                './common/teammateEventDedup.js': dedupModule,
+                './factory/token_usage.js': tokenUsageModule
+            }),
+            globals);
+    }
+
+    test('without the run-logs global, logs come from per-job downloads joined with newlines', function() {
+        var reporter = loadJobsReporter({
+            '11': '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100',
+            '12': '[INFO] CommandLineUtils - Tokens    ↑ 500 • ↓ 50 • 10 (cached)',
+            '13': '{"result":"[INFO] CommandLineUtils - Tokens    ↑ 250 • ↓ 25"}'
+        });
+        var fetched = [];
+        var state = {
+            rows: [], attemptRows: [], cache: { version: 1, entries: {} },
+            downloadedLogs: 0, cacheHits: 0, stoppedByDownloadLimit: false, verbose: false, cachePath: 'cache.json'
+        };
+        reporter.processRunLogs({ workspace: 'IstiN', repository: 'trackstate' },
+            { id: 9, run_number: 1, created_at: '2026-06-01T00:00:00Z', html_url: 'https://example.test/run/9' },
+            '9', { title: 'agents/x.json : TS-1 : TS-1', configFile: 'agents/x.json', agent: 'x', ticketKey: 'TS-1' },
+            60, '1m 0s', state, { useCache: false, cacheWriteEvery: 25, logDownloadSleepMs: 0, maxLogDownloads: null });
+
+        assert.equal(state.downloadedLogs, 1);
+        assert.equal(state.rows.length, 1);
+        // joined chunk reads: 1000 + 500 + 250
+        assert.equal(state.rows[0].readTokens, 1750);
+        assert.equal(state.rows[0].writeTokens, 175);
+        assert.equal(state.rows[0].cachedTokens, 10);
+    });
+
+    test('a JSON run-logs payload from the run-logs global unwraps through result/logs', function() {
+        var reporter = loadReporter({
+            github_get_workflow_run_logs: function() {
+                return JSON.stringify({ result: { logs: '[INFO] CommandLineUtils - Tokens    ↑ 700 • ↓ 70' } });
+            }
+        });
+        var state = {
+            rows: [], attemptRows: [], cache: { version: 1, entries: {} },
+            downloadedLogs: 0, cacheHits: 0, stoppedByDownloadLimit: false, verbose: false, cachePath: 'cache.json'
+        };
+        reporter.processRunLogs({ workspace: 'IstiN', repository: 'trackstate' },
+            { id: 5, run_number: 1, created_at: '2026-06-01T00:00:00Z', html_url: 'https://example.test/run/5' },
+            '5', { title: 'agents/x.json : TS-1 : TS-1', configFile: 'agents/x.json', agent: 'x', ticketKey: 'TS-1' },
+            60, '1m 0s', state, { useCache: false, cacheWriteEvery: 25, logDownloadSleepMs: 0, maxLogDownloads: null });
+        assert.equal(state.rows.length, 1);
+        assert.equal(state.rows[0].readTokens, 700);
+    });
+});
