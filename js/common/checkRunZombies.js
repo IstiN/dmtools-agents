@@ -319,25 +319,70 @@ function placeholders(checkRuns, nowMs, opts) {
  * @returns [{name, runId, id, reason: 'orphan-run-concluded'}]
  *          id = the check-run id (null when the API payload carried none)
  */
+// ── orphanedRunChecks: per-check-run decision helpers (gh-1085 style) ───────
+//
+// The partition verdict for ONE check-run is computed by the small pure
+// helpers below; orphanedRunChecks() only tunes the knobs, iterates and
+// collects. Same decision tree as before extraction, same fail-safes.
+
+// Lag from the owning run's end (updated_at, created_at fallback) to the
+// probe; null when unparseable (never proof of a grace case).
+function concludedRunLag(state, now) {
+    var endTs = Date.parse(state.updated_at || state.created_at || '');
+    return isNaN(endTs) ? null : now - endTs;
+}
+
+// Inside the propagation grace the conclusion is still landing — a lag is
+// only an orphan proof once it is non-negative AND past the grace.
+function lagInsideGrace(lag, graceMs) {
+    return lag !== null && lag >= 0 && lag <= graceMs;
+}
+
+// The orphan record: the audit identity the caller PATCH-concludes (gh-857).
+function orphanRecordOf(cr, runId) {
+    return { name: (cr && cr.name) || null, runId: runId,
+             id: (cr && cr.id !== undefined && cr.id !== null) ? cr.id : null,
+             reason: 'orphan-run-concluded' };
+}
+
+// The gh-865 generalized rule: a PENDING check-run whose OWNING RUN
+// CONCLUDED (any conclusion, past the propagation grace) is orphaned.
+// ACTIVE owners are untouched (AC2), a completed run without a conclusion
+// is odd — fail safe toward live (classify parity).
+function orphanVerdictFor(cr, runId, state, now, graceMs) {
+    if (String(state.status || '').toLowerCase() !== 'completed') return null;   // ACTIVE — AC2, untouched
+    if (!state.conclusion) return null;              // completed w/o conclusion — odd, fail safe (classify parity)
+    if (lagInsideGrace(concludedRunLag(state, now), graceMs)) return null;       // propagation lag
+    return orphanRecordOf(cr, runId);
+}
+
+// Resolve the owning run; null means "nothing to classify here" — probe
+// errors fail SAFE toward live (retry next tick), exactly like classify.
+function resolvedOwnerState(runId, resolveRun) {
+    if (typeof resolveRun !== 'function') return null;
+    try { return resolveRun(runId); } catch (e) { return null; }
+}
+
+// One check-run's orphan verdict: pending + run-linked + concluded owner
+// past the grace. Everything else stays out of this detector's domain —
+// settled checks are evidence, link-less stamps belong to the placeholder
+// detector (gh-852), an absent owner is the 'no-run' zombie's cure (AC3).
+function orphanCheckVerdict(cr, resolveRun, now, graceMs) {
+    if (!isPendingCheckRun(cr)) return null;
+    var runId = runIdOf(cr);
+    if (runId === null) return null;
+    var state = resolvedOwnerState(runId, resolveRun);
+    if (!state) return null;
+    return orphanVerdictFor(cr, runId, state, now, graceMs);
+}
+
 function orphanedRunChecks(checkRuns, resolveRun, nowMs, opts) {
     var out = [];
     var graceMs = _num(opts, 'runConcludedGraceMinutes', DEFAULT_RUN_CONCLUDED_GRACE_MINUTES) * 60 * 1000;
     var now = typeof nowMs === 'number' ? nowMs : Date.now();
     (checkRuns || []).forEach(function (cr) {
-        if (!isPendingCheckRun(cr)) return;
-        var runId = runIdOf(cr);
-        if (runId === null || typeof resolveRun !== 'function') return;
-        var state = null;
-        try { state = resolveRun(runId); } catch (e) { return; }   // fail safe — retry next tick
-        if (state === null || state === undefined) return;          // absent — the 'no-run' zombie's cure
-        if (String(state.status || '').toLowerCase() !== 'completed') return;   // ACTIVE — AC2, untouched
-        if (!state.conclusion) return;              // completed w/o conclusion — odd, fail safe (classify parity)
-        var endTs = Date.parse(state.updated_at || state.created_at || '');
-        var lag = isNaN(endTs) ? null : now - endTs;
-        if (lag !== null && lag >= 0 && lag <= graceMs) return;     // propagation lag — the conclusion is landing
-        out.push({ name: (cr && cr.name) || null, runId: runId,
-                   id: (cr && cr.id !== undefined && cr.id !== null) ? cr.id : null,
-                   reason: 'orphan-run-concluded' });
+        var verdict = orphanCheckVerdict(cr, resolveRun, now, graceMs);
+        if (verdict) out.push(verdict);
     });
     return out;
 }
@@ -497,6 +542,12 @@ module.exports = {
     isPlaceholderShape: isPlaceholderShape,
     placeholders: placeholders,
     orphanedRunChecks: orphanedRunChecks,
+    orphanCheckVerdict: orphanCheckVerdict,
+    orphanVerdictFor: orphanVerdictFor,
+    orphanRecordOf: orphanRecordOf,
+    concludedRunLag: concludedRunLag,
+    lagInsideGrace: lagInsideGrace,
+    resolvedOwnerState: resolvedOwnerState,
     conclusionForOutcome: conclusionForOutcome,
     openCycle: openCycle,
     closePlaceholderCycle: closePlaceholderCycle,
