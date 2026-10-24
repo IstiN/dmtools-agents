@@ -98,57 +98,92 @@ function syncCodegraph(workspace) {
     }
 }
 
-function action(params) {
-    try {
-        var actualParams = params.ticket ? params : (params.jobParams || params);
-        // In the real Teammate execution path customParams live under jobParams
-        // (JavaScriptExecutor.withJobContext puts jobParams/ticket/response at top level);
-        // keep the top-level fallback for direct/JSRunner invocations.
-        var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
 
-        // 1. Preserve existing preCliJSAction behavior by chaining.
-        var chained = customParams.chainedPreCliJSAction;
-        if (chained) {
-            try {
-                // Paths in agent JSONs are relative to agents/js/.
-                var chainedModule = require('./' + chained);
-                if (chainedModule && typeof chainedModule.action === 'function') {
-                    console.log('preCliSnapshotSetup: chaining ' + chained);
-                    var chainedResult = chainedModule.action(params);
-                    if (chainedResult === false) {
-                        console.warn('preCliSnapshotSetup: chained action returned false — aborting');
-                        return false;
-                    }
-                }
-            } catch (chainError) {
-                console.warn('preCliSnapshotSetup: chained action failed (non-fatal):', chainError.message || chainError);
+// ---------------------------------------------------------------------------
+// Pure decision helpers (gh-1197) — extracted from action so each stays small
+// and directly unit-testable; no git/SCM calls here.
+// ---------------------------------------------------------------------------
+
+function resolveActualParams(params) {
+    return params.ticket ? params : (params.jobParams || params);
+}
+
+function resolveCustomParams(params, actualParams) {
+    // In the real Teammate execution path customParams live under jobParams
+    // (JavaScriptExecutor.withJobContext puts jobParams/ticket/response at top level);
+    // keep the top-level fallback for direct/JSRunner invocations.
+    return (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
+}
+
+/**
+ * Chains the agent's original preCliJSAction (customParams.chainedPreCliJSAction).
+ * Returns false only when the chained action signalled an abort; any other
+ * outcome (no chain configured, module missing, module without action, chain
+ * threw, chain succeeded) lets the snapshot setup continue.
+ */
+function runChainedAction(chained, params) {
+    if (!chained) return undefined;
+    try {
+        // Paths in agent JSONs are relative to agents/js/.
+        var chainedModule = require('./' + chained);
+        if (chainedModule && typeof chainedModule.action === 'function') {
+            console.log('preCliSnapshotSetup: chaining ' + chained);
+            var chainedResult = chainedModule.action(params);
+            if (chainedResult === false) {
+                console.warn('preCliSnapshotSetup: chained action returned false — aborting');
+                return false;
             }
         }
+    } catch (chainError) {
+        console.warn('preCliSnapshotSetup: chained action failed (non-fatal):', chainError.message || chainError);
+    }
+    return undefined;
+}
 
-        // 2. Resolve config. snapshotBranch is filled by snapshotBranchResolverFnPath if configured.
-        // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
-        // real Teammate execution path) so snapshotBranchResolverFnPath can key off the
-        // ticket's fixVersion — see configLoader.js for details.
+function resolveSnapshotBranch(config) {
+    // snapshotBranch is filled by snapshotBranchResolverFnPath if configured.
+    var snapshotBranch = config.git && config.git.snapshotBranch;
+    if (!snapshotBranch) {
+        console.log('preCliSnapshotSetup: no snapshotBranch configured — nothing to do');
+        return null;
+    }
+    return snapshotBranch;
+}
+
+function resolveTargetWorkingDir(config) {
+    var targetRepo = config.customParams && config.customParams.targetRepository;
+    var workingDir = targetRepo && targetRepo.workingDir;
+    if (!workingDir) {
+        console.log('preCliSnapshotSetup: no targetRepository.workingDir — skipping checkout');
+        return null;
+    }
+    return workingDir;
+}
+
+function action(params) {
+    try {
+        var actualParams = resolveActualParams(params);
+        var customParams = resolveCustomParams(params, actualParams);
+
+        // 1. Preserve existing preCliJSAction behavior by chaining.
+        if (runChainedAction(customParams.chainedPreCliJSAction, params) === false) {
+            return false;
+        }
+
+        // 2. Resolve config. paramsForConfigLoad re-attaches params.ticket (sibling of
+        // jobParams in the real Teammate execution path) so snapshotBranchResolverFnPath
+        // can key off the ticket's fixVersion — see configLoader.js for details.
         var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
-        var snapshotBranch = config.git && config.git.snapshotBranch;
-        if (!snapshotBranch) {
-            console.log('preCliSnapshotSetup: no snapshotBranch configured — nothing to do');
-            return true;
-        }
-
-        var targetRepo = config.customParams && config.customParams.targetRepository;
-        var workingDir = targetRepo && targetRepo.workingDir;
-        if (!workingDir) {
-            console.log('preCliSnapshotSetup: no targetRepository.workingDir — skipping checkout');
-            return true;
-        }
+        var snapshotBranch = resolveSnapshotBranch(config);
+        if (!snapshotBranch) return true;
 
         // 3. Align the dependency checkout with the snapshot branch.
+        var workingDir = resolveTargetWorkingDir(config);
+        if (!workingDir) return true;
         checkoutSnapshotBranch(workingDir, snapshotBranch);
 
         // 4. Refresh codegraph index so BA/SA/discovery agents see the aligned snapshot.
-        var workspace = config.workingDir || '.';
-        syncCodegraph(workspace);
+        syncCodegraph(config.workingDir || '.');
 
         return true;
     } catch (error) {

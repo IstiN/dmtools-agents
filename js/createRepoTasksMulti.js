@@ -334,65 +334,119 @@ function postSummaryComment(tracker, saKey, comment) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Action-phase helpers (gh-1197) — each decision or fetch of the original
+// action body, small and directly unit-testable; same tracker/file calls in
+// the same order as before.
+// ---------------------------------------------------------------------------
+
+function extractSaKey(params) {
+    var saKey = params.ticket && params.ticket.key;
+    if (!saKey) {
+        return { error: 'No ticket key in params' };
+    }
+    return { saKey: saKey };
+}
+
+function resolveTaskOptions(params) {
+    var customParams = params.customParams || (params.jobParams && params.jobParams.customParams) || {};
+    return {
+        customParams: customParams,
+        blocksRelationship: customParams.blocksRelationship || 'Blocks',
+        blockedStatus:      customParams.blockedStatus      || 'Blocked',
+        ticketLabels:       customParams.labels             || ['development']
+    };
+}
+
+function resolveSaTicketContext(tracker, saKey) {
+    // Fetch the SA ticket to get description + parent
+    var saTicket = tracker.getIssue(saKey, ['description', 'summary', 'parent']);
+    var saFields = saTicket && saTicket.fields ? saTicket.fields : saTicket;
+    var description = saFields.description ? saFields.description.toString() : '';
+
+    // Resolve parent key
+    var parentInfo = saFields.parent;
+    var parentKey = parentInfo && typeof parentInfo === 'object' ? parentInfo.key : null;
+    return { description: description, parentKey: parentKey };
+}
+
+function resolveParentSummary(tracker, parentKey) {
+    // Fetch parent summary
+    var parentTicket = tracker.getIssue(parentKey, ['summary']);
+    var parentFields = parentTicket && parentTicket.fields ? parentTicket.fields : parentTicket;
+    return (parentFields.summary || parentKey).toString();
+}
+
+function requireAffectedRepos(description, saKey) {
+    var repos = parseAffectedRepos(description);
+    if (repos.length === 0) {
+        return { error: 'No affected repos found in ' + saKey + ' — ensure writeSolutionAndLabels ran first' };
+    }
+    return { repos: repos };
+}
+
+function repoNamesCsv(repos) {
+    return repos.map(function(r) { return typeof r === 'string' ? r : r.name; }).join(', ');
+}
+
+function describeTaskPlan(repos, tasks) {
+    return 'Flattened into ' + tasks.length + ' task(s) across ' + repoNamesCsv(repos);
+}
+
+function postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome) {
+    // Post summary comment on the SA ticket
+    if (outcome.created.length > 0 || outcome.skipped.length > 0) {
+        postSummaryComment(tracker, saKey, buildSummaryComment(outcome.created, outcome.skipped, baseUrl));
+    }
+}
+
 function action(params) {
     try {
-        var saKey = params.ticket && params.ticket.key;
-        if (!saKey) {
-            return { success: false, error: 'No ticket key in params' };
+        var saInfo = extractSaKey(params);
+        if (saInfo.error) {
+            return { success: false, error: saInfo.error };
         }
+        var saKey = saInfo.saKey;
 
         console.log('createRepoTasksMulti: processing SA ticket ' + saKey);
 
-        var customParams = params.customParams || (params.jobParams && params.jobParams.customParams) || {};
-        var blocksRelationship = customParams.blocksRelationship || 'Blocks';
-        var blockedStatus      = customParams.blockedStatus      || 'Blocked';
-        var ticketLabels       = customParams.labels             || ['development'];
+        var options = resolveTaskOptions(params);
 
-        var tracker = trackersModule.createTracker(resolveProjectConfig(params), customParams);
-        var saTicket = tracker.getIssue(saKey, ['description', 'summary', 'parent']);
-        var saFields = saTicket && saTicket.fields ? saTicket.fields : saTicket;
-        var description = saFields.description ? saFields.description.toString() : '';
-
-        var parentInfo = saFields.parent;
-        var parentKey = parentInfo && typeof parentInfo === 'object' ? parentInfo.key : null;
-        if (!parentKey) {
+        var tracker = trackersModule.createTracker(resolveProjectConfig(params), options.customParams);
+        var saContext = resolveSaTicketContext(tracker, saKey);
+        if (!saContext.parentKey) {
             return { success: false, error: 'SA ticket ' + saKey + ' has no parent ticket' };
         }
-        console.log('Parent ticket: ' + parentKey);
+        console.log('Parent ticket: ' + saContext.parentKey);
 
-        var parentTicket = tracker.getIssue(parentKey, ['summary']);
-        var parentFields = parentTicket && parentTicket.fields ? parentTicket.fields : parentTicket;
-        var parentSummary = (parentFields.summary || parentKey).toString();
+        var parentSummary = resolveParentSummary(tracker, saContext.parentKey);
 
-        var repos = parseAffectedRepos(description);
-        if (repos.length === 0) {
-            return { success: false, error: 'No affected repos found in ' + saKey + ' — ensure writeSolutionAndLabels ran first' };
+        var reposInfo = requireAffectedRepos(saContext.description, saKey);
+        if (reposInfo.error) {
+            return { success: false, error: reposInfo.error };
         }
+        var repos = reposInfo.repos;
 
         var tasks = buildTaskPlan(repos);
-        console.log('Flattened into ' + tasks.length + ' task(s) across ' +
-            repos.map(function(r) { return typeof r === 'string' ? r : r.name; }).join(', '));
+        console.log(describeTaskPlan(repos, tasks));
 
         var baseUrl = getJiraBaseUrl();
-        var projectKey = parentKey.split('-')[0];
+        var projectKey = saContext.parentKey.split('-')[0];
 
         // Load existing Sub-tasks under the parent to avoid duplicates
-        var existingSummaries = loadExistingSummaries(tracker, parentKey);
+        var existingSummaries = loadExistingSummaries(tracker, saContext.parentKey);
 
-        var outcome = createSubTasks(tracker, tasks, projectKey, parentKey, saKey, baseUrl, ticketLabels, existingSummaries);
+        var outcome = createSubTasks(tracker, tasks, projectKey, saContext.parentKey, saKey, baseUrl, options.ticketLabels, existingSummaries);
 
         // Wire dependencies: blocker Blocks dependent + move dependent to Blocked status
-        wireDependencies(tracker, outcome.created, outcome.taskKeyMap, blocksRelationship, blockedStatus);
+        wireDependencies(tracker, outcome.created, outcome.taskKeyMap, options.blocksRelationship, options.blockedStatus);
 
-        // Post summary comment on the SA ticket
-        if (outcome.created.length > 0 || outcome.skipped.length > 0) {
-            postSummaryComment(tracker, saKey, buildSummaryComment(outcome.created, outcome.skipped, baseUrl));
-        }
+        postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome);
 
         var successCount = outcome.created.filter(function(c) { return !c.error; }).length;
         return {
             success: true,
-            message: 'Created ' + successCount + ' Sub-task(s) under ' + parentKey + ', skipped ' + outcome.skipped.length,
+            message: 'Created ' + successCount + ' Sub-task(s) under ' + saContext.parentKey + ', skipped ' + outcome.skipped.length,
             created: successCount,
             skipped: outcome.skipped.length
         };
@@ -418,6 +472,14 @@ if (typeof module !== 'undefined' && module.exports) {
         loadExistingSummaries: loadExistingSummaries,
         createSubTasks: createSubTasks,
         wireDependencies: wireDependencies,
-        postSummaryComment: postSummaryComment
+        postSummaryComment: postSummaryComment,
+        extractSaKey: extractSaKey,
+        resolveTaskOptions: resolveTaskOptions,
+        resolveSaTicketContext: resolveSaTicketContext,
+        resolveParentSummary: resolveParentSummary,
+        requireAffectedRepos: requireAffectedRepos,
+        repoNamesCsv: repoNamesCsv,
+        describeTaskPlan: describeTaskPlan,
+        postOutcomeSummaryComment: postOutcomeSummaryComment
     };
 }
