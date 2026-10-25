@@ -2718,6 +2718,75 @@ suite('aiTeammateTokenUsageReporter — groupBy (gh-1193)', function() {
     });
 });
 
+suite('aiTeammateTokenUsageReporter — dedup helpers (gh-1262)', function() {
+
+    test('serializeCsv writes a header row and one quoted row per item (2+ items)', function() {
+        var reporter = loadReporter();
+        var csv = reporter.serializeCsv(['a', 'b'], [
+            { a: 'x', b: 'plain' },
+            { a: 'has "quote", and, comma', b: null }
+        ]);
+
+        assert.equal(csv, 'a,b\nx,plain\n"has ""quote"", and, comma",\n');
+    });
+
+    test('newZeroedSignalCounters returns independent all-zero tallies', function() {
+        var reporter = loadReporter();
+        var first = reporter.newZeroedSignalCounters();
+        var second = reporter.newZeroedSignalCounters();
+
+        assert.deepEqual(Object.keys(first).sort(), [
+            'cachedTokens', 'durationRuns', 'durationSeconds', 'feedbackLoopCount',
+            'rateLimitRetryCount', 'rateLimitRuns', 'readTokens',
+            'reasoningTokens', 'requests', 'resumedRuns', 'samples', 'timeoutCount',
+            'timeoutRuns', 'writeTokens'
+        ]);
+        first.requests = 5;
+        first.durationRuns = 1;
+        assert.equal(second.requests, 0);
+        assert.equal(second.durationRuns, 0);
+    });
+
+    test('newGroupBucket layers key and runs over the zeroed counters', function() {
+        var reporter = loadReporter();
+        var bucket = reporter.newGroupBucket('TS-1');
+
+        assert.equal(bucket.key, 'TS-1');
+        assert.equal(bucket.runs, 0);
+        assert.equal(bucket.requests, 0);
+        assert.equal(bucket.durationSeconds, 0);
+    });
+
+    test('runIdentityFields maps snake and camel run payloads', function() {
+        var reporter = loadReporter();
+        var snake = reporter.runIdentityFields({
+            id: 42,
+            run_number: 7,
+            created_at: '2026-06-01T00:00:00Z',
+            run_started_at: '2026-06-01T00:00:30Z',
+            conclusion: 'success'
+        });
+        assert.deepEqual(snake, {
+            runId: '42',
+            runNumber: 7,
+            createdAt: '2026-06-01T00:00:00Z',
+            day: '2026-06-01',
+            conclusion: 'success'
+        });
+
+        var camel = reporter.runIdentityFields({
+            databaseId: 43,
+            runNumber: 8,
+            createdAt: '2026-06-02T00:00:00Z',
+            runStartedAt: '2026-06-02T00:00:00Z'
+        });
+        assert.equal(camel.runId, '43');
+        assert.equal(camel.runNumber, 8);
+        assert.equal(camel.day, '2026-06-02');
+        assert.equal(camel.conclusion, '');
+    });
+});
+
 suite('aiTeammateTokenUsageReporter — buildRowsFromCache (gh-1193)', function() {
 
     test('row entries collect, noUsage/error/empty entries drop, sorts apply', function() {

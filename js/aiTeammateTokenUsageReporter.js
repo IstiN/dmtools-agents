@@ -426,11 +426,7 @@ function buildCsv(rows) {
         'feedbackLoopCount', 'rateLimitRetryCount', 'rateLimitDetected', 'timeoutCount',
         'source', 'url'
     ];
-    var out = [headers.join(',')];
-    rows.forEach(function(row) {
-        out.push(headers.map(function(key) { return toCsvValue(row[key]); }).join(','));
-    });
-    return out.join('\n') + '\n';
+    return serializeCsv(headers, rows);
 }
 
 function buildAttemptsCsv(attemptRows) {
@@ -442,17 +438,23 @@ function buildAttemptsCsv(attemptRows) {
         'readTokens', 'writeTokens', 'cachedTokens', 'reasoningTokens',
         'rawTokensLine', 'source', 'url'
     ];
+    return serializeCsv(headers, attemptRows);
+}
+
+// Shared CSV-row serialization for the report builders: emits the header row
+// followed by one toCsvValue-escaped row per item, newline-terminated.
+function serializeCsv(headers, rows) {
     var out = [headers.join(',')];
-    attemptRows.forEach(function(row) {
+    rows.forEach(function(row) {
         out.push(headers.map(function(key) { return toCsvValue(row[key]); }).join(','));
     });
     return out.join('\n') + '\n';
 }
 
-function newGroupBucket(key) {
+// Zero-initialized per-run signal counters shared by the group buckets and
+// the report summary totals.
+function newZeroedSignalCounters() {
     return {
-        key: key,
-        runs: 0,
         requests: 0,
         readTokens: 0,
         writeTokens: 0,
@@ -468,6 +470,10 @@ function newGroupBucket(key) {
         durationSeconds: 0,
         durationRuns: 0
     };
+}
+
+function newGroupBucket(key) {
+    return Object.assign({ key: key, runs: 0 }, newZeroedSignalCounters());
 }
 
 // Sums the per-row token/request counters into the bucket.
@@ -958,22 +964,7 @@ function downloadRunLogs(custom, run) {
 }
 
 function buildSummary(rows, totalRuns) {
-    var totals = {
-        requests: 0,
-        readTokens: 0,
-        writeTokens: 0,
-        cachedTokens: 0,
-        reasoningTokens: 0,
-        samples: 0,
-        resumedRuns: 0,
-        feedbackLoopCount: 0,
-        rateLimitRetryCount: 0,
-        rateLimitRuns: 0,
-        timeoutCount: 0,
-        timeoutRuns: 0,
-        durationSeconds: 0,
-        durationRuns: 0
-    };
+    var totals = newZeroedSignalCounters();
     rows.forEach(function(row) {
         Object.keys(totals).forEach(function(key) {
             totals[key] += row[key] || 0;
@@ -1203,15 +1194,27 @@ function cacheOnlyReport(paths) {
     return { success: true, cacheOnly: true, csvPath: paths.csvPath, attemptsCsvPath: paths.attemptsCsvPath, jsonPath: paths.jsonPath, htmlPath: paths.htmlPath, summary: summaryFromCache };
 }
 
-function buildUsageRow(run, meta, durationSeconds, duration, usage) {
+// Run-identity fields shared by the aggregate and per-attempt row builders.
+function runIdentityFields(run) {
     return {
         runId: String(firstDefined(run.id, run.databaseId)),
         runNumber: firstDefined(run.run_number, run.runNumber, ''),
         createdAt: firstDefined(run.created_at, run.createdAt, ''),
+        day: isoDay(firstDefined(run.created_at, run.createdAt, run.run_started_at, run.runStartedAt)),
+        conclusion: firstDefined(run.conclusion, '')
+    };
+}
+
+function buildUsageRow(run, meta, durationSeconds, duration, usage) {
+    var identity = runIdentityFields(run);
+    return {
+        runId: identity.runId,
+        runNumber: identity.runNumber,
+        createdAt: identity.createdAt,
         startedAt: firstDefined(run.run_started_at, run.runStartedAt, ''),
         updatedAt: firstDefined(run.updated_at, run.updatedAt, ''),
-        day: isoDay(firstDefined(run.created_at, run.createdAt, run.run_started_at, run.runStartedAt)),
-        conclusion: firstDefined(run.conclusion, ''),
+        day: identity.day,
+        conclusion: identity.conclusion,
         agent: meta.agent,
         ticketKey: meta.ticketKey,
         configFile: meta.configFile,
@@ -1238,12 +1241,13 @@ function buildUsageRow(run, meta, durationSeconds, duration, usage) {
 }
 
 function buildAttemptRow(run, meta, durationSeconds, duration, usage, attempt) {
+    var identity = runIdentityFields(run);
     return {
-        runId: String(firstDefined(run.id, run.databaseId)),
-        runNumber: firstDefined(run.run_number, run.runNumber, ''),
-        createdAt: firstDefined(run.created_at, run.createdAt, ''),
-        day: isoDay(firstDefined(run.created_at, run.createdAt, run.run_started_at, run.runStartedAt)),
-        conclusion: firstDefined(run.conclusion, ''),
+        runId: identity.runId,
+        runNumber: identity.runNumber,
+        createdAt: identity.createdAt,
+        day: identity.day,
+        conclusion: identity.conclusion,
         durationSeconds: durationSeconds,
         duration: duration,
         agent: meta.agent,
@@ -1853,6 +1857,7 @@ if (typeof module !== 'undefined' && module.exports) {
         collectRunsForWindow: collectRunsForWindow,
         buildCsv: buildCsv,
         buildAttemptsCsv: buildAttemptsCsv,
+        serializeCsv: serializeCsv,
         buildSummary: buildSummary,
         buildHtml: buildHtml,
         reportPayloadOf: reportPayloadOf,
@@ -1880,6 +1885,7 @@ if (typeof module !== 'undefined' && module.exports) {
         cacheOnlyReport: cacheOnlyReport,
         buildUsageRow: buildUsageRow,
         buildAttemptRow: buildAttemptRow,
+        runIdentityFields: runIdentityFields,
         buildCacheSummaryInfo: buildCacheSummaryInfo,
         writeReportOutputs: writeReportOutputs,
         getCachedRunState: getCachedRunState,
@@ -1887,6 +1893,7 @@ if (typeof module !== 'undefined' && module.exports) {
         processRunLogs: processRunLogs,
         collectUsageRows: collectUsageRows,
         newGroupBucket: newGroupBucket,
+        newZeroedSignalCounters: newZeroedSignalCounters,
         addRowTokensToGroup: addRowTokensToGroup,
         addRowSignalsToGroup: addRowSignalsToGroup,
         addRowTimeoutsToGroup: addRowTimeoutsToGroup,
