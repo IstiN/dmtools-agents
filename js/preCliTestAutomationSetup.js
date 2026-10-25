@@ -11,7 +11,9 @@ const { GIT_CONFIG, STATUSES } = require('./config.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackerHolder = require('./common/trackerHolder.js').create(require('./common/trackers.js'));
+// gh-1261: the canonical lazy holder lives in common/trackers.js (createTrackerHolder);
+// the require-free twin (common/trackerHolder.js, gh-1247) was folded into it.
+var trackerHolder = require('./common/trackers.js').createTrackerHolder();
 function initTracker(config, customParams) {
     trackerHolder.initTracker(config, customParams);
 }

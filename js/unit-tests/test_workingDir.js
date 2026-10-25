@@ -451,7 +451,6 @@ function loadPreCliTestAutomation(workingDir) {
             './config.js': configModule,
             './common/pullRequest.js': PR_HELPER_REAL,
             'branchSetup.js': loadModule('js/common/branchSetup.js', null, _m),
-            'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './fetchLinkedBugsToInput.js': { action: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
@@ -533,7 +532,6 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                 './common/pullRequest.js': PR_HELPER_REAL,
                 './fetchLinkedBugsToInput.js': { action: function() {} },
                 'branchSetup.js': loadModule('js/common/branchSetup.js', null, _m),
-                'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './common/commentMarkup.js': commentMarkupModule,
         }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 cli_execute_command: mockCli,
@@ -589,7 +587,6 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
                 'branchSetup.js': loadModule('js/common/branchSetup.js', null, _m),
-                'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
                 './fetchLinkedBugsToInput.js': { action: function() {} }
             ,
             './common/commentMarkup.js': commentMarkupModule,
