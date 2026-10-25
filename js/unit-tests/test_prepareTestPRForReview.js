@@ -1,6 +1,5 @@
 function d4TrackersWith(mocks) {
     return loadModule('js/common/trackers.js', makeRequire({
-                                                             'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
     }), mocks || {});
@@ -31,7 +30,6 @@ function loadPrepareTestPRForReview(mocks) {
     var freshConfigLoader = loadModule(
         'js/configLoader.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
-                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return scmMock; } }
         }),
@@ -41,7 +39,6 @@ function loadPrepareTestPRForReview(mocks) {
     var prHelper = loadModule(
         'js/common/pullRequest.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
-                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './config.js': configModule,
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -65,7 +62,6 @@ function loadPrepareTestPRForReview(mocks) {
     return loadModule(
         'js/prepareTestPRForReview.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
-                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './config.js': configModule,
             './configLoader.js': freshConfigLoader,
             './common/githubHelpers.js': githubHelpers,

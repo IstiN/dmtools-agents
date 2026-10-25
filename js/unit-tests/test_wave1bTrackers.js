@@ -7,7 +7,6 @@ function trackersWithMocks(mocks) {
     return loadModule(
         'js/common/trackers.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
-                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             '../config.js': configModule,
             './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
         }),
@@ -21,7 +20,6 @@ function jiraBoom(name) {
 
 function loadRecoverStuck(mocks, scm) {
     return loadModule('js/recoverStuckDevelopment.js', makeRequire({
-                                                                     'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
         './common/trackerSession.js': loadModule('js/common/trackerSession.js',
             makeRequire({ './trackers.js': trackersWithMocks(mocks) }), {}),
         './configLoader.js': {
@@ -78,7 +76,6 @@ function loadEnhanceSD(mocks) {
         '../config.js': configModule
     }));
     return loadModule('js/enhanceSDAPIDescriptionAndAssess.js', makeRequire({
-                                                                              'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
         './common/jiraHelpers.js': { extractTicketKey: function(k) { return k; } },
         './config.js': configModule,
         './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
@@ -140,7 +137,6 @@ suite('enhanceSDAPIDescriptionAndAssess: tracker layer', function() {
 function loadPreCliTest(mocks) {
     var cfg = { git: { baseBranch: 'main', branchPrefix: 'ai' }, jira: {} };
     return loadModule('js/preCliTestAutomationSetup.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
-                                                                       'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
         './configLoader.js': { loadProjectConfig: function() { return cfg; } },
         './common/pullRequest.js': {},
         './config.js': configModule,

@@ -1530,6 +1530,12 @@ function createTrackerFromParams(params) {
  * getTracker() and discards the cached instance on re-init, exactly like the
  * previous module-level _trackerCtx/_trackerInst singletons.
  *
+ * gh-1261: this is now the ONLY implementation. The require-free twin
+ * js/common/trackerHolder.js (gh-1247, injected trackersModule for require-map-free
+ * unit tests) was folded into this factory — its two consumers
+ * (preCliTestAutomationSetup.js, prepareTestPRForReview.js) migrated back, and
+ * its duplication-baseline pin was dropped.
+ *
  * Call sites destructure once at module top level:
  *   var trackerHolder = trackersModule.createTrackerHolder();
  *   var initTracker = trackerHolder.initTracker;

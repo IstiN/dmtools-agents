@@ -32,11 +32,6 @@
       "pct": 3.27,
       "lines": 19
     },
-    "js/common/trackerHolder.js": {
-      "pct": 10.91,
-      "lines": 6,
-      "note": "gh-1261: deliberate coexistence clone with js/common/trackers.js::createTrackerHolder (require-free design); consolidate in gh-1261, then unpin."
-    },
     "js/common/trackers.js": {
       "pct": 1.15,
       "lines": 18
