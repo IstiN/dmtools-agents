@@ -4,10 +4,6 @@
   "tool": "crap4js duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci (IstiN/crap4js@83ee6201)",
   "note": "Pre-existing duplicated-line debt pinned by the gh-1251 ratchet gate. Regression = a pinned file gained ABSOLUTE duplicated lines (pct shifts from file shrinkage are informational, not failures). Regeneration is part of every gh-1244..gh-1250 dedup ticket DoD: after merging such a PR, run the tool on the merged head and rewrite \"pinned\" with each reported file { pct, lines }, where lines = recoverDupLines(pct, <file line count>).",
   "pinned": {
-    "js/aiTeammateTokenUsageReporter.js": {
-      "pct": 2.35,
-      "lines": 45
-    },
     "js/checkBugTestsPassed.js": {
       "pct": 1.72,
       "lines": 7

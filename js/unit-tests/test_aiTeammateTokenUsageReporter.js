@@ -2737,7 +2737,7 @@ suite('aiTeammateTokenUsageReporter — dedup helpers (gh-1262)', function() {
 
         assert.deepEqual(Object.keys(first).sort(), [
             'cachedTokens', 'durationRuns', 'durationSeconds', 'feedbackLoopCount',
-            'rateLimitDetected', 'rateLimitRetryCount', 'rateLimitRuns', 'readTokens',
+            'rateLimitRetryCount', 'rateLimitRuns', 'readTokens',
             'reasoningTokens', 'requests', 'resumedRuns', 'samples', 'timeoutCount',
             'timeoutRuns', 'writeTokens'
         ]);

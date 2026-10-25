@@ -1259,7 +1259,7 @@ function buildAttemptRow(run, meta, durationSeconds, duration, usage, attempt) {
         rawTokensLine: firstDefined(attempt.rawTokensLine, ''),
         source: firstDefined(attempt.source, ''),
         url: firstDefined(run.html_url, run.htmlUrl, '')
-    };
+    });
 }
 
 function buildCacheSummaryInfo(options, paths, state) {
@@ -1848,6 +1848,7 @@ if (typeof module !== 'undefined' && module.exports) {
         collectRunsForWindow: collectRunsForWindow,
         buildCsv: buildCsv,
         buildAttemptsCsv: buildAttemptsCsv,
+        serializeCsv: serializeCsv,
         buildSummary: buildSummary,
         buildHtml: buildHtml,
         reportPayloadOf: reportPayloadOf,
@@ -1875,6 +1876,7 @@ if (typeof module !== 'undefined' && module.exports) {
         cacheOnlyReport: cacheOnlyReport,
         buildUsageRow: buildUsageRow,
         buildAttemptRow: buildAttemptRow,
+        runIdentityFields: runIdentityFields,
         buildCacheSummaryInfo: buildCacheSummaryInfo,
         writeReportOutputs: writeReportOutputs,
         getCachedRunState: getCachedRunState,
@@ -1882,6 +1884,7 @@ if (typeof module !== 'undefined' && module.exports) {
         processRunLogs: processRunLogs,
         collectUsageRows: collectUsageRows,
         newGroupBucket: newGroupBucket,
+        newZeroedSignalCounters: newZeroedSignalCounters,
         addRowTokensToGroup: addRowTokensToGroup,
         addRowSignalsToGroup: addRowSignalsToGroup,
         addRowTimeoutsToGroup: addRowTimeoutsToGroup,
