@@ -473,10 +473,7 @@ function newZeroedSignalCounters() {
 }
 
 function newGroupBucket(key) {
-    var bucket = newZeroedSignalCounters();
-    bucket.key = key;
-    bucket.runs = 0;
-    return bucket;
+    return Object.assign({ key: key, runs: 0 }, newZeroedSignalCounters());
 }
 
 // Sums the per-row token/request counters into the bucket.
@@ -1209,9 +1206,15 @@ function runIdentityFields(run) {
 }
 
 function buildUsageRow(run, meta, durationSeconds, duration, usage) {
-    return Object.assign(runIdentityFields(run), {
+    var identity = runIdentityFields(run);
+    return {
+        runId: identity.runId,
+        runNumber: identity.runNumber,
+        createdAt: identity.createdAt,
         startedAt: firstDefined(run.run_started_at, run.runStartedAt, ''),
         updatedAt: firstDefined(run.updated_at, run.updatedAt, ''),
+        day: identity.day,
+        conclusion: identity.conclusion,
         agent: meta.agent,
         ticketKey: meta.ticketKey,
         configFile: meta.configFile,
@@ -1234,11 +1237,17 @@ function buildUsageRow(run, meta, durationSeconds, duration, usage) {
         timeoutCount: firstDefined(usage.timeoutCount, 0),
         source: firstDefined(usage.source, ''),
         url: firstDefined(run.html_url, run.htmlUrl, '')
-    });
+    };
 }
 
 function buildAttemptRow(run, meta, durationSeconds, duration, usage, attempt) {
-    return Object.assign(runIdentityFields(run), {
+    var identity = runIdentityFields(run);
+    return {
+        runId: identity.runId,
+        runNumber: identity.runNumber,
+        createdAt: identity.createdAt,
+        day: identity.day,
+        conclusion: identity.conclusion,
         durationSeconds: durationSeconds,
         duration: duration,
         agent: meta.agent,
@@ -1259,7 +1268,7 @@ function buildAttemptRow(run, meta, durationSeconds, duration, usage, attempt) {
         rawTokensLine: firstDefined(attempt.rawTokensLine, ''),
         source: firstDefined(attempt.source, ''),
         url: firstDefined(run.html_url, run.htmlUrl, '')
-    });
+    };
 }
 
 function buildCacheSummaryInfo(options, paths, state) {
