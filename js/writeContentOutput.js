@@ -222,6 +222,35 @@ function postTokenUsageStep(ticketKey, initiatorId, tracker) {
     }
 }
 
+var MAX_FAILURE_ERROR_LENGTH = 500;
+
+function truncateErrorText(text) {
+    var str = String(text || '');
+    return str.length > MAX_FAILURE_ERROR_LENGTH
+        ? str.slice(0, MAX_FAILURE_ERROR_LENGTH) + '...'
+        : str;
+}
+
+function buildFailureCommentText(errorMsg) {
+    return 'h3. ❌ Content Output Failed\n\n' + truncateErrorText(errorMsg);
+}
+
+/** Post a failure comment on the ticket (non-fatal, gh-1269). */
+function postFailureComment(tracker, ticketKey, errorMsg) {
+    try {
+        tracker.postComment(ticketKey, buildFailureCommentText(errorMsg));
+    } catch (e) {
+        console.warn('Failed to post failure comment:', e);
+    }
+}
+
+/** Report failure comment (#1269) + token usage (#1270) before returning a step failure. */
+function finalizeFailure(failureResult, ticketKey, initiatorId, tracker) {
+    postFailureComment(tracker, ticketKey, failureResult.error);
+    postTokenUsageStep(ticketKey, initiatorId, tracker);
+    return failureResult;
+}
+
 // ---------------------------------------------------------------------------
 // Main action
 // ---------------------------------------------------------------------------
@@ -245,22 +274,22 @@ function action(params) {
 
     var content = readResponseContent(ticketKey, (projectConfig && projectConfig.workingDir) || null);
     if (content === null) {
-        return { success: false, error: 'outputs/response.md is empty' };
+        return finalizeFailure({ success: false, error: 'outputs/response.md is empty' }, ticketKey, initiatorId, tracker);
     }
 
     var result = { success: true, ticketKey: ticketKey, target: cfg.target };
 
     // 1. Jira field (default behavior)
     var stepResult = writeJiraFieldStep(result, cfg, ticketKey, content, tracker);
-    if (stepResult !== result) return stepResult;
+    if (stepResult !== result) return finalizeFailure(stepResult, ticketKey, initiatorId, tracker);
 
     // 2. Confluence page
     stepResult = publishConfluenceStep(result, cfg, ticketKey, summary, content, tracker);
-    if (stepResult !== result) return stepResult;
+    if (stepResult !== result) return finalizeFailure(stepResult, ticketKey, initiatorId, tracker);
 
     // 3. Follow-up action: chained script or built-in assign-for-review
     stepResult = runFollowUpStep(params, cfg, ticketKey, initiatorId, wipLabel, result, tracker);
-    if (stepResult !== result) return stepResult;
+    if (stepResult !== result) return finalizeFailure(stepResult, ticketKey, initiatorId, tracker);
 
     // 4. Token usage comments
     postTokenUsageStep(ticketKey, initiatorId, tracker);
@@ -286,6 +315,10 @@ if (typeof module !== 'undefined' && module.exports) {
         normalizeThenActionPath: normalizeThenActionPath,
         runThenAction: runThenAction,
         runFollowUpStep: runFollowUpStep,
-        postTokenUsageStep: postTokenUsageStep
+        postTokenUsageStep: postTokenUsageStep,
+        truncateErrorText: truncateErrorText,
+        buildFailureCommentText: buildFailureCommentText,
+        postFailureComment: postFailureComment,
+        finalizeFailure: finalizeFailure
     };
 }
