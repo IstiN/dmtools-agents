@@ -88,3 +88,30 @@ suite('config.truncateSummary', function() {
         assert.equal(config.JIRA_SUMMARY_MAX_LENGTH, 255);
     });
 });
+
+suite('config.exports', function() {
+    test('does not export dead/internal constants DEFAULT_CONFLUENCE and MODULE_PREFIXES', function() {
+        assert.equal(config.DEFAULT_CONFLUENCE, undefined);
+        assert.equal(config.MODULE_PREFIXES, undefined);
+    });
+
+    test('exports SOLUTION_DESIGN_MODULES with expected module prefixes and labels', function() {
+        assert.equal(Array.isArray(config.SOLUTION_DESIGN_MODULES), true);
+        assert.equal(config.SOLUTION_DESIGN_MODULES.length, 3);
+        assert.deepEqual(config.SOLUTION_DESIGN_MODULES[0], {
+            flag: 'core',
+            prefix: '[SD CORE]',
+            label: config.LABELS.SD_CORE
+        });
+        assert.deepEqual(config.SOLUTION_DESIGN_MODULES[1], {
+            flag: 'api',
+            prefix: '[SD API]',
+            label: config.LABELS.SD_API
+        });
+        assert.deepEqual(config.SOLUTION_DESIGN_MODULES[2], {
+            flag: 'ui',
+            prefix: '[SD UI]',
+            label: config.LABELS.SD_UI
+        });
+    });
+});
