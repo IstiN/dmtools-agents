@@ -259,6 +259,47 @@ suite('createSolutionDesignTicketsAndAssignForReview.action — success', functi
         mod.action(makeParams({ core: false, api: false, ui: false, description: 'd' }));
         assert.deepEqual(tracker._createTrackerArgs, [null, { keep: true }]);
     });
+
+    test('default blank baseUrl omits browse links; configured jira.baseUrl renders smart-link and summary links (gh-1266)', function() {
+        function loadWithProjectConfig(tracker, projectConfig) {
+            return loadModule(
+                'js/createSolutionDesignTicketsAndAssignForReview.js',
+                makeRequire({
+                    './common/jiraHelpers.js': {
+                        assignForReview: function() { return { success: true }; },
+                        extractTicketKey: function(r) { return (r && r.key) || (typeof r === 'string' ? r : null); }
+                    },
+                    './config.js': configModule,
+                    './configLoader.js': Object.assign({}, configLoaderModule, {
+                        loadProjectConfig: function() { return projectConfig; }
+                    }),
+                    './common/trackers.js': { createTracker: function() { return tracker; } }
+                }),
+                {}
+            );
+        }
+
+        // 1. Default (blank baseUrl)
+        var trackerBlank = makeTrackerMock();
+        var modBlank = loadWithProjectConfig(trackerBlank, { jira: { baseUrl: '' } });
+        modBlank.action(makeParams({ core: true, api: false, ui: false, description: 'Core analysis' }));
+        var blankDesc = trackerBlank._calls.created[0].description;
+        var blankComment = trackerBlank._calls.comments[0][1];
+        assert.contains(blankDesc, 'Details are in PROJ-1 \n\n');
+        assert.notContains(blankDesc, 'dmtools.atlassian.net');
+        assert.notContains(blankDesc, '/browse/');
+        assert.contains(blankComment, '* PROJ-101 - [SD CORE] My summary');
+        assert.notContains(blankComment, 'dmtools.atlassian.net');
+
+        // 2. Configured jira.baseUrl
+        var trackerCfg = makeTrackerMock();
+        var modCfg = loadWithProjectConfig(trackerCfg, { jira: { baseUrl: 'https://jira.example.com/' } });
+        modCfg.action(makeParams({ core: true, api: false, ui: false, description: 'Core analysis' }));
+        var cfgDesc = trackerCfg._calls.created[0].description;
+        var cfgComment = trackerCfg._calls.comments[0][1];
+        assert.contains(cfgDesc, 'Details are in [PROJ-1|https://jira.example.com/browse/PROJ-1|smart-link] \n\n');
+        assert.contains(cfgComment, '* [PROJ-101|https://jira.example.com/browse/PROJ-101] - [SD CORE] My summary');
+    });
 });
 
 // ── action — invalid AI response ──────────────────────────────────────────────

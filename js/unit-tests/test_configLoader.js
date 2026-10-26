@@ -2423,3 +2423,60 @@ suite('configLoader.mergeProjectConfig full-replacement contract (gh-122)', func
     });
 
 });
+
+// ── gh-1266: resolveJiraBaseUrl & formatJiraTicketLink ───────────────────────
+
+suite('configLoader.resolveJiraBaseUrl and formatJiraTicketLink (gh-1266)', function() {
+
+    test('DEFAULTS define blank jira.baseUrl and tracker.baseUrl', function() {
+        assert.equal(configLoaderModule.DEFAULTS.jira.baseUrl, '');
+        assert.equal(configLoaderModule.DEFAULTS.tracker.baseUrl, '');
+    });
+
+    test('resolveJiraBaseUrl precedence: tracker.baseUrl > jira.baseUrl > JIRA_BASE_PATH env > blank', function() {
+        assert.equal(configLoaderModule.resolveJiraBaseUrl(null), '');
+        assert.equal(configLoaderModule.resolveJiraBaseUrl({}), '');
+        assert.equal(
+            configLoaderModule.resolveJiraBaseUrl({ jira: { baseUrl: 'https://jira.example.com///' } }),
+            'https://jira.example.com'
+        );
+        assert.equal(
+            configLoaderModule.resolveJiraBaseUrl({
+                jira: { baseUrl: 'https://jira.example.com' },
+                tracker: { baseUrl: 'https://tracker.example.com/' }
+            }),
+            'https://tracker.example.com'
+        );
+
+        // Env fallback and non-GraalJS catch path
+        var envLoader = loadModule('js/configLoader.js', makeRequire({ './config.js': configModule }), {
+            java: { lang: { System: { getenv: function(k) { return k === 'JIRA_BASE_PATH' ? ' https://env.example.com/ ' : null; } } } }
+        });
+        assert.equal(envLoader.resolveJiraBaseUrl({}), 'https://env.example.com');
+
+        var throwLoader = loadModule('js/configLoader.js', makeRequire({ './config.js': configModule }), {
+            java: null
+        });
+        assert.equal(throwLoader.resolveJiraBaseUrl({}), '');
+    });
+
+    test('formatJiraTicketLink returns bare key when baseUrl is blank, and Jira browse link when configured', function() {
+        assert.equal(configLoaderModule.formatJiraTicketLink('PROJ-42', ''), 'PROJ-42');
+        assert.equal(configLoaderModule.formatJiraTicketLink('PROJ-42', null, true), 'PROJ-42');
+        assert.equal(configLoaderModule.formatJiraTicketLink('PROJ-42', {}), 'PROJ-42');
+        assert.equal(
+            configLoaderModule.formatJiraTicketLink('PROJ-42', 'https://jira.example.com/'),
+            '[PROJ-42|https://jira.example.com/browse/PROJ-42]'
+        );
+        assert.equal(
+            configLoaderModule.formatJiraTicketLink('PROJ-42', { jira: { baseUrl: 'https://jira.example.com/' } }, true),
+            '[PROJ-42|https://jira.example.com/browse/PROJ-42|smart-link]'
+        );
+        assert.equal(
+            configLoaderModule.formatJiraTicketLink('PROJ-42', { tracker: { baseUrl: 'https://tracker.example.com' } }),
+            '[PROJ-42|https://tracker.example.com/browse/PROJ-42]'
+        );
+    });
+
+});
+
