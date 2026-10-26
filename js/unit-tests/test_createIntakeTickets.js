@@ -17,7 +17,7 @@ function loadIntake(mocks, projectConfig) {
     return loadModule('js/createIntakeTickets.js', makeRequire({
         './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
         './config.js': configModule,
-        './configLoader.js': { loadProjectConfig: function() { return projectConfig || {}; } },
+        './configLoader.js': Object.assign({}, configLoaderModule, { loadProjectConfig: function() { return projectConfig || {}; } }),
         './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), mocks),
@@ -252,6 +252,23 @@ suite('createIntakeTickets: full intake flow', function() {
         var r = mod.action({ initiator: 'acc1', metadata: {} });
         assert.equal(r.success, false);
         assert.contains(r.error, "'key'");
+    });
+
+    test('default blank baseUrl omits browse link syntax; configured jira.baseUrl renders browse links (gh-1266)', function() {
+        var recBlank = intakeRecorder();
+        var stories = [{ tempId: 'e1', type: 'Epic', summary: 'Epic one', description: 'outputs/d.md' }];
+        var modBlank = loadIntake(intakeFiles(stories, recBlank.jiraMocks()), {});
+        modBlank.action({ ticket: { key: 'P-1' }, initiator: 'acc1', metadata: {} });
+        var blankComment = recBlank.calls.filter(function(c) { return c[0] === 'comment'; })[0][1].comment;
+        assert.contains(blankComment, '* P-100 (Epic) - Epic one');
+        assert.notContains(blankComment, 'dmtools.atlassian.net');
+        assert.notContains(blankComment, '/browse/');
+
+        var recCfg = intakeRecorder();
+        var modCfg = loadIntake(intakeFiles(stories, recCfg.jiraMocks()), { jira: { baseUrl: 'https://jira.example.com/' } });
+        modCfg.action({ ticket: { key: 'P-1' }, initiator: 'acc1', metadata: {} });
+        var cfgComment = recCfg.calls.filter(function(c) { return c[0] === 'comment'; })[0][1].comment;
+        assert.contains(cfgComment, '* [P-100|https://jira.example.com/browse/P-100] (Epic) - Epic one');
     });
 });
 

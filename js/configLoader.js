@@ -36,6 +36,7 @@ var DEFAULTS = {
     },
 
     jira: {
+        baseUrl: '',
         project: '',
         parentTicket: '',
         statuses: DEFAULT_CONFIG.STATUSES,
@@ -139,6 +140,10 @@ var DEFAULTS = {
     scm: {
         provider: 'github',  // 'github' | 'gitlab' | 'ado' — source control provider for PR/MR operations
         jenkinsBasePath: ''  // Optional: base URL of Jenkins instance for fetching failed-check logs in pr_rework
+    },
+
+    tracker: {
+        baseUrl: ''          // Optional: base URL of the issue tracker instance for browse links
     }
 };
 
@@ -1273,6 +1278,40 @@ function resolveInstructions(agentName, defaultInstructions, config, agentCliPro
     };
 }
 
+// ── Jira / Tracker browse base URL & link formatting (gh-1266) ──────────────
+
+function _readJiraBasePathEnv() {
+    try {
+        var val = java.lang.System.getenv('JIRA_BASE_PATH');
+        return val ? String(val).trim() : '';
+    } catch (e) {
+        return '';
+    }
+}
+
+/**
+ * Resolve the Jira/tracker browse base URL (without trailing slash).
+ * Precedence: config.tracker.baseUrl -> config.jira.baseUrl -> JIRA_BASE_PATH env -> ''.
+ */
+function resolveJiraBaseUrl(config) {
+    var raw = _sectionOf(config, 'tracker').baseUrl || _sectionOf(config, 'jira').baseUrl || _readJiraBasePathEnv();
+    return String(raw || '').trim().replace(/\/+$/, '');
+}
+
+/**
+ * Format a Jira markup link (`[KEY|baseUrl/browse/KEY]` or with `|smart-link`),
+ * or return the bare ticketKey when baseUrl is empty/unconfigured.
+ * `baseUrlOrConfig` may be a resolved baseUrl string or a projectConfig object.
+ */
+function formatJiraTicketLink(ticketKey, baseUrlOrConfig, smartLink) {
+    var base = (baseUrlOrConfig && typeof baseUrlOrConfig === 'object')
+        ? resolveJiraBaseUrl(baseUrlOrConfig)
+        : String(baseUrlOrConfig || '').trim().replace(/\/+$/, '');
+    if (!base) return ticketKey;
+    var suffix = smartLink ? '|smart-link' : '';
+    return '[' + ticketKey + '|' + base + '/browse/' + ticketKey + suffix + ']';
+}
+
 // ── Exports ──────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -1300,6 +1339,8 @@ module.exports = {
     resolvePRTargetBranch: resolvePRTargetBranch,
     resolveDefaultWorkflowRef: resolveDefaultWorkflowRef,
     resolveConfluenceUrls: resolveConfluenceUrls,
+    resolveJiraBaseUrl: resolveJiraBaseUrl,
+    formatJiraTicketLink: formatJiraTicketLink,
     resolveInstructions: resolveInstructions,
     resolveBaseInstructions: resolveBaseInstructions,
     collectAdditionalInstructions: collectAdditionalInstructions,

@@ -18,6 +18,10 @@ function resolveProjectConfig(params) {
     return configLoader ? configLoader.loadProjectConfig(params) : null;
 }
 
+function formatTicketLink(ticketKey, projectConfig, smartLink) {
+    return configLoader ? configLoader.formatJiraTicketLink(ticketKey, projectConfig, smartLink) : ticketKey;
+}
+
 
 /**
  * Create solution design subtasks based on module analysis
@@ -27,14 +31,15 @@ function resolveProjectConfig(params) {
  * @param {string} parentSummary - Parent ticket summary for naming
  * @returns {Array} Array of created ticket information
  */
-function createSolutionDesignTickets(moduleAnalysis, parentKey, parentSummary) {
+function createSolutionDesignTickets(moduleAnalysis, parentKey, parentSummary, projectConfig) {
     const projectKey = parentKey.split('-')[0];
     const createdTickets = [];
+    const parentRef = formatTicketLink(parentKey, projectConfig, true);
     
     SOLUTION_DESIGN_MODULES.forEach(function(module) {
         if (moduleAnalysis[module.flag]) {
             const summary = module.prefix + ' ' + parentSummary;
-            const description = 'Details are in [' + parentKey + '|https://dmtools.atlassian.net/browse/' + parentKey + '|smart-link] \n\n' +
+            const description = 'Details are in ' + parentRef + ' \n\n' +
                                '*Module Analysis:* ' + moduleAnalysis.description;
             
             try {
@@ -90,7 +95,7 @@ function createSolutionDesignTickets(moduleAnalysis, parentKey, parentSummary) {
  * @param {Object} moduleAnalysis - Module analysis results
  * @param {Array} createdTickets - Array of created tickets
  */
-function postSummaryComment(parentKey, moduleAnalysis, createdTickets) {
+function postSummaryComment(parentKey, moduleAnalysis, createdTickets, projectConfig) {
     try {
         const successfulTickets = createdTickets.filter(function(ticket) { return ticket.success; });
         const failedTickets = createdTickets.filter(function(ticket) { return !ticket.success; });
@@ -105,7 +110,7 @@ function postSummaryComment(parentKey, moduleAnalysis, createdTickets) {
         if (successfulTickets.length > 0) {
             comment += '*Created Solution Design Tickets:*\n';
             successfulTickets.forEach(function(ticket) {
-                comment += '* [' + ticket.key + '|https://dmtools.atlassian.net/browse/' + ticket.key + '] - ' + ticket.summary + '\n';
+                comment += '* ' + formatTicketLink(ticket.key, projectConfig) + ' - ' + ticket.summary + '\n';
             });
             comment += '\n';
         }
@@ -266,7 +271,8 @@ function action(params) {
         const ticketKey = params.ticket.key;
         const ticketSummary = params.ticket.fields.summary;
         const initiatorId = params.initiator;
-        initTracker(resolveProjectConfig(params), (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+        const projectConfig = resolveProjectConfig(params);
+        initTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         // Dynamically generate WIP label from contextId
         const wipLabel = resolveWipLabel(params);
 
@@ -279,10 +285,10 @@ function action(params) {
         }
 
         // Create solution design tickets based on analysis
-        const createdTickets = createSolutionDesignTickets(moduleAnalysis, ticketKey, ticketSummary);
+        const createdTickets = createSolutionDesignTickets(moduleAnalysis, ticketKey, ticketSummary, projectConfig);
 
         // Post summary comment with analysis results
-        postSummaryComment(ticketKey, moduleAnalysis, createdTickets);
+        postSummaryComment(ticketKey, moduleAnalysis, createdTickets, projectConfig);
 
         // Add solution design label
         addSolutionDesignCreatedLabel(ticketKey);

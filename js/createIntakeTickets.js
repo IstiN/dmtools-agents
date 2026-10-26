@@ -268,7 +268,7 @@ function buildGithubFinalComment(results, aiComment, planned) {
  * @param {string} aiComment - AI-generated comment from outputs/comment.md
  * @returns {string} Full comment for Jira
  */
-function buildFinalComment(results, aiComment) {
+function buildFinalComment(results, aiComment, projectConfig) {
     var comment = aiComment + '\n\n';
     comment += 'h3. *Created Tickets*\n\n';
 
@@ -279,7 +279,7 @@ function buildFinalComment(results, aiComment) {
         comment += '_No tickets were created (stories.json was empty)._\n';
     } else {
         successes.forEach(function(r) {
-            comment += '* [' + r.key + '|https://dmtools.atlassian.net/browse/' + r.key + '] (' + r.type + ') - ' + r.summary + '\n';
+            comment += '* ' + configLoader.formatJiraTicketLink(r.key, projectConfig) + ' (' + r.type + ') - ' + r.summary + '\n';
         });
 
         if (failures.length > 0) {
@@ -336,6 +336,7 @@ function initActionContext(params, projectConfig, customParams) {
             ? params.metadata.contextId + '_wip'
             : null,
         github: tracker.provider() === 'github',
+        projectConfig: projectConfig,
         planCfg: issuePlan.resolvePlanningConfig(projectConfig, customParams),
         children: {}
     };
@@ -672,7 +673,7 @@ function postFinalComment(ctx, results, planned) {
     try {
         var finalComment = ctx.github
             ? buildGithubFinalComment(results, readCommentFile(ctx), planned)
-            : buildFinalComment(results, readCommentFile(ctx));
+            : buildFinalComment(results, readCommentFile(ctx), ctx.projectConfig);
         tracker.postComment(ctx.ticketKey, finalComment);
         console.log('Posted intake analysis comment to ' + ctx.ticketKey);
     } catch (commentError) {
