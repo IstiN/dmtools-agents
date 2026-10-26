@@ -159,6 +159,22 @@ suite('contentOutput lib', function() {
         assert.equal(r.length, 4);
     });
 
+    test('gh-1268: writeToTrackerField with an ado tracker maps "Acceptance Criteria" to Microsoft.VSTS.Common.AcceptanceCriteria', function() {
+        var adoCalls = [];
+        var mocks = {
+            ado_update_field: function(a) { adoCalls.push(a); },
+            jira_update_field: function() { throw new Error('jira_update_field must not be called'); }
+        };
+        var lib = loadContentOutputLib(mocks);
+        var tracker = loadTrackersWc(mocks).createTracker(null, { trackerProvider: 'ado' });
+        lib.writeToTrackerField('2010283', 'Acceptance Criteria', '# AC\n\n- item 1', 'replace', tracker);
+        assert.equal(adoCalls.length, 1);
+        assert.equal(String(adoCalls[0].id), '2010283');
+        assert.equal(adoCalls[0].field, 'Microsoft.VSTS.Common.AcceptanceCriteria');
+        assert.equal(adoCalls[0].value, '# AC\n\n- item 1');
+        assert.equal(adoCalls[0].format, 'markdown');
+    });
+
     test('publishPage creates a page when none exists', function() {
         var created = null;
         var synced = null;
@@ -957,6 +973,25 @@ suite('writeContentOutput uses the configured tracker for the field write (agent
         assert.equal(result.success, true, JSON.stringify(result));
         assert.equal(adoCalls.length, 1);
         assert.equal(adoCalls[0].field, 'Microsoft.VSTS.Common.AcceptanceCriteria');
+    });
+
+    test('gh-1268: ado provider with field="Acceptance Criteria" maps display name to Microsoft.VSTS.Common.AcceptanceCriteria', function() {
+        var adoCalls = [];
+        var mocks = {
+            __outputs: { 'response.md': 'Criteria text' },
+            ado_update_field: function(a) { adoCalls.push(a); },
+            jira_update_field: function() { throw new Error('jira_update_field must not be called on an ADO run'); }
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            ticket: { key: '2010283', fields: { summary: 's' } },
+            customParams: { trackerProvider: 'ado', contentOutput: { target: 'jira_field', field: 'Acceptance Criteria' } }
+        }));
+        assert.equal(result.success, true, JSON.stringify(result));
+        assert.equal(adoCalls.length, 1);
+        assert.equal(adoCalls[0].id, '2010283');
+        assert.equal(adoCalls[0].field, 'Microsoft.VSTS.Common.AcceptanceCriteria');
+        assert.equal(adoCalls[0].value, 'Criteria text');
     });
 
     test('jira (default) is unchanged: still jira_update_field', function() {
