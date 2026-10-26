@@ -1252,3 +1252,152 @@ suite('writeContentOutput — wiki target + tracker-agnostic notify (gh-1112)', 
         assert.contains(result.error, 'Confluence publish failed:');
     });
 });
+
+suite('writeContentOutput — failure comment and token usage on failure (gh-1269, gh-1270)', function() {
+
+    test('truncateErrorText leaves short strings unchanged and truncates >500 chars', function() {
+        var mod = loadWriteContentOutput({});
+        assert.equal(mod.truncateErrorText('short error'), 'short error');
+        assert.equal(mod.truncateErrorText(null), '');
+        var longStr = new Array(520).join('x');
+        var truncated = mod.truncateErrorText(longStr);
+        assert.equal(truncated.length, 503);
+        assert.ok(truncated.indexOf('...') === 500);
+    });
+
+    test('field write failure posts error comment via tracker.postComment and posts token usage', function() {
+        var comments = [];
+        var tokenCalls = [];
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() { throw new Error('field write exploded'); },
+            jira_post_comment: function(args) { comments.push(args); }
+        };
+        var mod = loadWriteContentOutput(mocks, null, {
+            tokenUsageComment: {
+                postTokenUsageComments: function(ticketKey, opts) {
+                    tokenCalls.push({ ticketKey: ticketKey, opts: opts });
+                }
+            }
+        });
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'jira_field', field: 'Description' } }
+        }));
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Field update failed:');
+        assert.equal(comments.length, 1, 'failure comment must be posted');
+        assert.equal(comments[0].key, 'PROJ-10');
+        assert.contains(comments[0].comment, 'Content Output Failed');
+        assert.contains(comments[0].comment, 'field write exploded');
+        assert.equal(tokenCalls.length, 1, 'token usage must be posted on field write failure');
+        assert.equal(tokenCalls[0].ticketKey, 'PROJ-10');
+        assert.equal(tokenCalls[0].opts.initiator, 'user-1');
+    });
+
+    test('empty response.md posts error comment and token usage', function() {
+        var comments = [];
+        var tokenCalls = [];
+        var mocks = {
+            __outputs: {},
+            jira_post_comment: function(args) { comments.push(args); }
+        };
+        var mod = loadWriteContentOutput(mocks, null, {
+            tokenUsageComment: {
+                postTokenUsageComments: function(ticketKey) { tokenCalls.push(ticketKey); }
+            }
+        });
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'jira_field', field: 'Description' } }
+        }));
+        assert.equal(result.success, false);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'outputs/response.md is empty');
+        assert.equal(tokenCalls.length, 1);
+        assert.equal(tokenCalls[0], 'PROJ-10');
+    });
+
+    test('confluence publish failure posts error comment and token usage', function() {
+        var comments = [];
+        var tokenCalls = [];
+        var mocks = {
+            __outputs: { 'response.md': '# Solution' },
+            confluence_get_children_by_id: function() { throw new Error('confluence api down'); },
+            jira_post_comment: function(args) { comments.push(args); }
+        };
+        var mod = loadWriteContentOutput(mocks, null, {
+            tokenUsageComment: {
+                postTokenUsageComments: function(ticketKey) { tokenCalls.push(ticketKey); }
+            }
+        });
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+        }));
+        assert.equal(result.success, false);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Confluence publish failed:');
+        assert.contains(comments[0].comment, 'confluence api down');
+        assert.equal(tokenCalls.length, 1);
+    });
+
+    test('thenAction failure posts error comment and token usage', function() {
+        var comments = [];
+        var tokenCalls = [];
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() {},
+            jira_post_comment: function(args) { comments.push(args); }
+        };
+        var mod = loadModule('js/writeContentOutput.js', makeRequire({
+            './common/trackers.js': loadTrackersWc(mocks),
+            './common/contentOutput.js': loadContentOutputLib(mocks),
+            './common/outputFiles.js': { readOutputFile: function() { return 'content'; } },
+            './common/jiraHelpers.js': { assignForReview: function() {} },
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function(ticketKey) { tokenCalls.push(ticketKey); }
+            },
+            './config.js': { STATUSES: { IN_REVIEW: 'In Review' } },
+            './configLoader.js': { loadProjectConfig: function() { return {}; } },
+            './failingThenAction.js': {
+                action: function() { throw new Error('chained step boom'); }
+            }
+        }), mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: {
+                target: 'jira_field', field: 'Description',
+                thenAction: 'failingThenAction.js'
+            } }
+        }));
+        assert.equal(result.success, false);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'thenAction failed:');
+        assert.contains(comments[0].comment, 'chained step boom');
+        assert.equal(tokenCalls.length, 1);
+    });
+
+    test('failure comment throw is non-fatal and token usage still runs', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(msg) { warns.push(msg); };
+        var tokenCalls = [];
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() { throw new Error('field boom'); },
+            jira_post_comment: function() { throw new Error('comment service down'); }
+        };
+        var mod = loadWriteContentOutput(mocks, null, {
+            tokenUsageComment: {
+                postTokenUsageComments: function(ticketKey) { tokenCalls.push(ticketKey); }
+            }
+        });
+        try {
+            var result = mod.action(makeParams({
+                customParams: { contentOutput: { target: 'jira_field', field: 'Description' } }
+            }));
+            assert.equal(result.success, false);
+            assert.equal(warns.some(function(m) { return String(m).indexOf('Failed to post failure comment') !== -1; }), true);
+            assert.equal(tokenCalls.length, 1, 'token usage still runs when postComment throws');
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+});
