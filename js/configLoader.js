@@ -1214,12 +1214,13 @@ function extractTrackerPrompts(source, trackerType, agentName) {
 }
 
 /**
- * Append tracker prompts to cliPrompts when present (concat always yields a
- * new array; the reference is kept otherwise, as before the extraction).
+ * Append tracker prompts to cliPrompts when present, deduplicating entries
+ * already present (concatUnique always yields a new array; the reference is
+ * kept otherwise, as before the extraction).
  */
 function appendTrackerPrompts(cliPrompts, trackerPrompts) {
     if (trackerPrompts && trackerPrompts.length > 0) {
-        return cliPrompts.concat(trackerPrompts);
+        return concatUnique(cliPrompts, trackerPrompts);
     }
     return cliPrompts;
 }

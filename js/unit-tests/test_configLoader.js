@@ -2183,6 +2183,8 @@ suite('configLoader.resolveInstructions — extracted helpers', function() {
         var merged = configLoaderModule.appendTrackerPrompts(base, ['./t.md']);
         assert.deepEqual(merged, ['./base.md', './t.md']);
         assert.notEqual(merged, base);
+        var deduped = configLoaderModule.appendTrackerPrompts(['./base.md', './t.md'], ['./t.md', './u.md']);
+        assert.deepEqual(deduped, ['./base.md', './t.md', './u.md'], 'duplicate tracker prompts are not repeated');
     });
 });
 // ── Tracker-neutral config resolution (gh-932) ────────────────────────────────

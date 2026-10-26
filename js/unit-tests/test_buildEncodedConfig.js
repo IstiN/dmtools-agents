@@ -362,6 +362,33 @@ suite('buildEncodedConfig payload', function() {
         assert.notOk(decoded.params.cliPromptsByTracker);
     });
 
+    test('gh-1267: sets cliPromptsByTracker=null in encoded params to neutralize base pack config during runtime deepMerge and avoids duplicate tracker prompts', function() {
+        var builder = loadBuilder({});
+        var encoded = builder.buildEncodedConfig('101', { configFile: 'agents/story_description.json' }, { tracker: { provider: 'ado' } });
+        var decoded = decode(encoded);
+
+        assert.ok(Object.prototype.hasOwnProperty.call(decoded.params, 'cliPromptsByTracker'),
+            'cliPromptsByTracker key must be present so runtime deepMerge replaces base agent JSON map');
+        assert.equal(decoded.params.cliPromptsByTracker, null,
+            'cliPromptsByTracker must be null so CliCommandBuilder skips re-appending tracker prompts');
+
+        // Simulate runtime ConfigurationMerger.deepMerge(baseAgentJson, decodedEncodedConfig)
+        var baseJson = JSON.parse(file_read({ path: 'story_description.json' }));
+        var runtimeMerged = configLoaderModule.deepMerge(baseJson, decoded);
+        assert.equal(runtimeMerged.params.cliPromptsByTracker, null,
+            'after deepMerge with base story_description.json, cliPromptsByTracker is neutralized');
+
+        // Each ADO tracker instruction appears exactly once
+        var gfmCount = runtimeMerged.params.cliPrompts.filter(function(p) {
+            return p === './agents/instructions/tracker/gfm_markup_table.md';
+        }).length;
+        var adoTransformCount = runtimeMerged.params.cliPrompts.filter(function(p) {
+            return p === './agents/instructions/tracker/ado_markup_transform.md';
+        }).length;
+        assert.equal(gfmCount, 1, 'gfm_markup_table.md appears once in cliPrompts');
+        assert.equal(adoTransformCount, 1, 'ado_markup_transform.md appears once in cliPrompts');
+    });
+
     test('contentOutput.target=confluence in agent customParams selects confluence tracker prompts', function() {
         var builder = loadBuilder({
             'agents/test.json': JSON.stringify({

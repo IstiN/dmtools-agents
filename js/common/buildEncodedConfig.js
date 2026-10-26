@@ -226,9 +226,11 @@ function needsJqlInterpolation(value) {
  * Copy a single agent-JSON param value into the encoded params payload,
  * applying the JQL interpolation to strings carrying {jiraProject} /
  * {parentTicket} placeholders and deep-copying structured values.
- * cliPromptsByTracker is NOT copied: tracker prompts are already resolved
- * and flattened into cliPrompts (resolveInstructions); copying the map
- * would make the runtime merge them a second time.
+ * cliPromptsByTracker is cleared to null in copyAgentParams: tracker prompts
+ * are already resolved and flattened into cliPrompts (resolveInstructions),
+ * and an explicit null overrides the base agent JSON's cliPromptsByTracker map
+ * during ConfigurationMerger.deepMerge so the runtime (CliCommandBuilder)
+ * does not append the base tracker prompts a second time (gh-1267).
  */
 function copyParamValue(p, paramKey, value, effectiveConfig) {
     if (typeof value === 'string') {
@@ -248,9 +250,11 @@ function copyParamValue(p, paramKey, value, effectiveConfig) {
 
 /**
  * Copy all scalar/array/object params from the resolved agent JSON into the
- * encoded params payload (skipping inputJql and cliPromptsByTracker).
+ * encoded params payload (skipping inputJql and replacing cliPromptsByTracker
+ * with null so runtime deepMerge neutralizes the base config's tracker map).
  */
 function copyAgentParams(p, agentParamsRoot, effectiveConfig) {
+    p.cliPromptsByTracker = null;
     var skipKeys = { inputJql: true, cliPromptsByTracker: true };
     Object.keys(agentParamsRoot).forEach(function(paramKey) {
         if (skipKeys[paramKey]) return;
@@ -302,7 +306,7 @@ function applyCliPrompts(p, resolved) {
         } else {
             // merge (default): append config.js prompts after the JSON-inherited ones
             var existing = Array.isArray(p.cliPrompts) ? p.cliPrompts : [];
-            p.cliPrompts = existing.concat(resolved.cliPrompts);
+            p.cliPrompts = configLoader.appendTrackerPrompts(existing, resolved.cliPrompts);
         }
     }
     if (resolved.cliPrompt) {
