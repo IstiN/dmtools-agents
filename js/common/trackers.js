@@ -616,7 +616,14 @@ function createTracker(config, customParams) {
     }
 
     var ADO_FIELD_ALIASES = { summary: 'System.Title', title: 'System.Title', description: 'System.Description',
-        priority: 'Microsoft.VSTS.Common.Priority', labels: 'System.Tags', tags: 'System.Tags' };
+        priority: 'Microsoft.VSTS.Common.Priority', labels: 'System.Tags', tags: 'System.Tags',
+        'acceptance criteria': 'Microsoft.VSTS.Common.AcceptanceCriteria' };
+
+    function adoResolveField(f, lower) {
+        if (ADO_FIELD_ALIASES[lower]) return ADO_FIELD_ALIASES[lower];
+        if (f.indexOf('.') !== -1) return f;
+        try { return adoFieldCode(adoProjectFor(''), f) || f; } catch (e) { return f; }
+    }
 
     var ADO_SHORT_FIELDS = {
         summary: true, title: true, state: true, assignedto: true, priority: true, storypoints: true, effort: true,
@@ -633,7 +640,7 @@ function createTracker(config, customParams) {
             return ado_update_tags({ id: String(key), tags: Array.isArray(value) ? value.join('; ') : String(value) });
         }
         if (typeof ado_update_field !== 'function') throw adoMissingTool('ado_update_field', 'updating field "' + f + '"');
-        var args = { id: String(key), field: ADO_FIELD_ALIASES[lower] || f, value: value };
+        var args = { id: String(key), field: adoResolveField(f, lower), value: value };
         // Only large text fields take a format; short fields (title, state, priority, ...) never do.
         if (!ADO_SHORT_FIELDS[lower] && !ADO_SHORT_FIELDS[String(args.field).toLowerCase()]) withAdoFormat(args);
         return ado_update_field(args);

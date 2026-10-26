@@ -1033,6 +1033,25 @@ suite('trackers.js extended operations — ado provider', function () {
         assert.deepEqual(uf.calls[1], { id: '5', field: 'Custom.Solution', value: 'x', format: 'markdown' });
     });
 
+    test('gh-1268: updateField maps "Acceptance Criteria" (case-insensitive) to Microsoft.VSTS.Common.AcceptanceCriteria and resolves display names via ado_get_field_code', function () {
+        var uf = recorder('ado_update_field', '{}');
+        var fc = recorder('ado_get_field_code', function (a) {
+            if (a.fieldName === 'Solution Design') return { result: 'Custom.SolutionDesign' };
+            return null;
+        });
+        var t = loadTrackers({ ado_update_field: uf, ado_get_field_code: fc }).createTracker({ tracker: { provider: 'ado', adoProject: 'Proj' } });
+        t.updateField('5', 'Acceptance Criteria', 'Given X When Y Then Z');
+        t.updateField('5', 'acceptance criteria', 'ac2');
+        t.updateField('5', 'Solution Design', 'design doc');
+        t.updateField('5', 'Unknown Display Field', 'val');
+        assert.deepEqual(uf.calls[0], { id: '5', field: 'Microsoft.VSTS.Common.AcceptanceCriteria', value: 'Given X When Y Then Z', format: 'markdown' });
+        assert.deepEqual(uf.calls[1], { id: '5', field: 'Microsoft.VSTS.Common.AcceptanceCriteria', value: 'ac2', format: 'markdown' });
+        assert.deepEqual(uf.calls[2], { id: '5', field: 'Custom.SolutionDesign', value: 'design doc', format: 'markdown' });
+        assert.deepEqual(uf.calls[3], { id: '5', field: 'Unknown Display Field', value: 'val', format: 'markdown' });
+        assert.equal(fc.calls.length, 2, 'alias hit skips ado_get_field_code');
+        assert.deepEqual(fc.calls[0], { project: 'Proj', fieldName: 'Solution Design' });
+    });
+
     test('updateField on a runtime without ado_update_field names the missing tool', function () {
         var t = loadTrackers(NO_ADO_NEW_TOOLS).createTracker(ado());
         var msg = '';
