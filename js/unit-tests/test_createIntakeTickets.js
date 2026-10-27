@@ -269,6 +269,14 @@ suite('createIntakeTickets: full intake flow', function() {
         modCfg.action({ ticket: { key: 'P-1' }, initiator: 'acc1', metadata: {} });
         var cfgComment = recCfg.calls.filter(function(c) { return c[0] === 'comment'; })[0][1].comment;
         assert.contains(cfgComment, '* [P-100|https://jira.example.com/browse/P-100] (Epic) - Epic one');
+
+        // Numeric ADO work item IDs get '#' prefix in Created Tickets comment (gh-1278)
+        var recAdo = intakeRecorder();
+        recAdo.nextKey = function() { return '12345'; };
+        var modAdo = loadIntake(intakeFiles(stories, recAdo.jiraMocks()), {});
+        modAdo.action({ ticket: { key: '9999' }, initiator: 'acc1', metadata: {} });
+        var adoComment = recAdo.calls.filter(function(c) { return c[0] === 'comment'; })[0][1].comment;
+        assert.contains(adoComment, '* #12345 (Epic) - Epic one');
     });
 });
 

@@ -457,6 +457,7 @@ When the target tracker is Azure DevOps, replace every generic placeholder tag f
 - Do NOT use Jira wiki markup in ADO output: no `*bold*`, no `* item` bullets, no `h2.` headings, no `{code}...{code}` blocks.
 - Use `- item` for bullets and `1. item` for numbered lists.
 - For Mermaid diagrams in ADO fields that support them, wrap the diagram in ` ```mermaid\n...\n``` `.
+- Whenever referencing an ADO work item / ticket ID in any message, comment, or description, always prefix numeric ADO work item IDs with `#` (e.g. `#12345`, `see details in #12345` instead of `see details in 12345`) so Azure DevOps automatically generates a link to the mentioned work item.
 
 
 ---
@@ -474,6 +475,7 @@ Use GitHub-flavored Markdown in `outputs/response.md` for Azure DevOps work item
 - Inline code: `` `code` ``
 - Code block: ` ```lang ... ``` `
 - Link: `[title](url)`
+- Work item / ticket reference: `#<id>` (e.g. `#12345`, `see details in #12345`) — always prefix numeric ADO work item IDs with `#` in any message, comment, or description so Azure DevOps automatically renders a clickable work item link (never write a bare number like `see details in 12345`)
 - Tables: standard GFM table syntax
 
 Do not use Jira wiki markup (`h1.`, `*text*`, `{code}`, `[title|url]`) in ADO fields.
