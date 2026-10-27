@@ -1572,3 +1572,170 @@ suite('fetchParentContextToInput — resolveFieldName helpers', function() {
         assert.equal(untouched, false, 'no stray labels');
     });
 });
+
+// ── Suite: gh-1279 Bug / Epic skip & duplicate context deduplication ─────────
+
+suite('fetchParentContextToInput — gh-1279 Bug/Epic skip and sibling dedup', function() {
+
+    test('skips Bug tickets by default (ticket.fields.issuetype.name = Bug)', function() {
+        var searchCalled = false;
+        var written = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { throw new Error('must not fetch parent for Bug ticket'); },
+            jira_search_by_jql: function() { searchCalled = true; return []; },
+            file_write: function(p) { written.push(p); }
+        });
+        var params = makeParams(MINIMAL_PARENT_CONTEXT_FETCH);
+        params.ticket.fields.issuetype = { name: 'Bug' };
+        m.action(params);
+        assert.equal(searchCalled, false, 'sibling JQL not executed for Bug ticket');
+        assert.equal(written.length, 0, 'no files written for Bug ticket');
+    });
+
+    test('skips Bug tickets when issueType is on the outer ticket object (case-insensitive)', function() {
+        var searchCalled = false;
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { throw new Error('must not fetch parent for bug ticket'); },
+            jira_search_by_jql: function() { searchCalled = true; return []; },
+            file_write: function() {}
+        });
+        var params = makeParams(MINIMAL_PARENT_CONTEXT_FETCH);
+        params.ticket.issueType = 'bug';
+        m.action(params);
+        assert.equal(searchCalled, false, 'sibling JQL not executed for normalized bug ticket');
+    });
+
+    test('skips custom Bug issue type configured in projectConfig.jira.issueTypes.BUG', function() {
+        var searchCalled = false;
+        var m = loadFetchParentContextWithConfigLoader({
+            loadProjectConfig: function() {
+                return makeProjectConfig(Object.assign({ enabled: true }, MINIMAL_PARENT_CONTEXT_FETCH), {
+                    issueTypes: { BUG: 'Defect' }
+                });
+            }
+        }, {
+            jira_get_ticket: function() { throw new Error('must not fetch parent for Defect'); },
+            jira_search_by_jql: function() { searchCalled = true; return []; },
+            file_write: function() {}
+        });
+        var params = makeParams({});
+        params.ticket.fields.issuetype = { name: 'Defect' };
+        m.action(params);
+        assert.equal(searchCalled, false, 'custom Defect issue type skipped');
+    });
+
+    test('runs for Bug tickets when opted in via cfg.includeBug, cfg.bugParentContextFetch, cfg.includeIssueTypes, jobParams.includeBugParentContext, or projectConfig.parentContextFetch.includeBug', function() {
+        var mod = loadFetchParentContext({});
+        var bugFields = { issuetype: { name: 'Bug' } };
+        assert.equal(mod.shouldSkipBugTicket(bugFields, null, {}, {}, null), true, 'skipped by default');
+        assert.equal(mod.shouldSkipBugTicket(bugFields, null, { includeBug: true }, {}, null), false, 'cfg.includeBug opts in');
+        assert.equal(mod.shouldSkipBugTicket(bugFields, null, { bugParentContextFetch: true }, {}, null), false, 'cfg.bugParentContextFetch opts in');
+        assert.equal(mod.shouldSkipBugTicket(bugFields, null, { includeIssueTypes: ['Story', 'Bug'] }, {}, null), false, 'cfg.includeIssueTypes opts in');
+        assert.equal(mod.shouldSkipBugTicket(bugFields, null, {}, { includeBugParentContext: true }, null), false, 'jobParams.includeBugParentContext opts in');
+        assert.equal(mod.shouldSkipBugTicket(bugFields, null, {}, {}, { parentContextFetch: { includeBug: true } }), false, 'projectConfig.parentContextFetch.includeBug opts in');
+    });
+
+    test('skips when inline ticket.fields.parent has Epic or Feature issuetype', function() {
+        var searchCalled = false;
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { throw new Error('must not fetch when inline parent is Epic'); },
+            jira_search_by_jql: function() { searchCalled = true; return []; },
+            file_write: function() {}
+        });
+        var params = makeParams(MINIMAL_PARENT_CONTEXT_FETCH);
+        params.ticket.fields.parent = { key: PARENT_KEY, fields: { issuetype: { name: 'Epic' } } };
+        m.action(params);
+        assert.equal(searchCalled, false, 'inline Epic parent skipped');
+    });
+
+    test('skips writing parent and querying siblings when fetched parent ticket is an Epic or Feature container', function() {
+        var searchCalled = false;
+        var written = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() {
+                return { key: PARENT_KEY, fields: { summary: 'Quarterly Epic', status: { name: 'Open' }, issuetype: { name: 'Feature' } } };
+            },
+            jira_search_by_jql: function() { searchCalled = true; return [makeSearchResult('PROJ-200', '[BA]')]; },
+            file_write: function(p) { written.push(p); }
+        });
+        m.action(makeParams(MINIMAL_PARENT_CONTEXT_FETCH));
+        assert.equal(searchCalled, false, 'sibling JQL not executed when parent is Feature container');
+        assert.equal(written.length, 0, 'no files written when parent is Feature container');
+    });
+
+    test('allows Epic/Feature parent when opted in via includeEpicParent or includeParentIssueTypes', function() {
+        var mod = loadFetchParentContext({});
+        var epicFields = { issuetype: { name: 'Epic' } };
+        assert.equal(mod.shouldSkipParentContainer(epicFields, {}), true, 'Epic skipped by default');
+        assert.equal(mod.shouldSkipParentContainer(epicFields, { includeEpicParent: true }), false, 'includeEpicParent opts in');
+        assert.equal(mod.shouldSkipParentContainer(epicFields, { includeParentIssueTypes: ['Epic'] }), false, 'includeParentIssueTypes opts in');
+        assert.equal(mod.shouldSkipParentContainer({ issuetype: { name: 'Story' } }, {}), false, 'Story parent never skipped');
+        assert.equal(mod.issueTypeNameOf({ issuetype: 'Task' }), 'Task', 'string issuetype supported');
+        assert.equal(mod.issueTypeNameOf({ issuetype: {} }), '', 'empty issuetype object returns empty string');
+    });
+
+    test('deduplicates multiple sibling tickets matching the same context prefix (avoids N+1 getIssue and file overwrites)', function() {
+        var getCalls = [];
+        var writes = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(args) {
+                getCalls.push(args.key);
+                return {
+                    key: args.key,
+                    fields: {
+                        summary: '[BA] Full ' + args.key,
+                        description: 'Desc for ' + args.key,
+                        status: { name: 'Done' },
+                        'High-Level Solution': 'HLS for ' + args.key
+                    }
+                };
+            },
+            jira_search_by_jql: function() {
+                return [
+                    { key: 'PROJ-201', fields: { summary: '[BA] First BA', status: { name: 'Done' } } },
+                    { key: 'PROJ-202', fields: { summary: '[BA] Second BA', status: { name: 'Done' } } },
+                    { key: 'PROJ-203', fields: { summary: '[BA] Third BA', status: { name: 'Done' } } },
+                    { key: 'PROJ-204', fields: { summary: '[SA] First SA', status: { name: 'Done' } } },
+                    { key: 'PROJ-205', fields: { summary: '[SA] Second SA', status: { name: 'Done' } } }
+                ];
+            },
+            file_write: function(p, c) { writes.push({ path: p, content: c }); }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+            includeParentStory: false,
+            fields: ['key', 'summary', 'description', 'status', 'High-Level Solution'],
+            contexts: [
+                { prefix: '[BA]', file: 'ba.md', label: 'Business Analysis' },
+                { prefix: '[SA]', file: 'sa.md', label: 'Solution Architecture' }
+            ]
+        });
+        m.action(makeParams(cfg));
+        assert.deepEqual(getCalls, ['PROJ-201', 'PROJ-204'],
+            'getIssue called only once per context type (first match wins, no N+1)');
+        assert.equal(writes.length, 2, 'each context file written once without overwrites');
+        assert.ok(writes[0].content.indexOf('PROJ-201') !== -1, 'first BA ticket written');
+        assert.ok(writes[1].content.indexOf('PROJ-204') !== -1, 'first SA ticket written');
+    });
+
+    test('deduplicates by prefix when context entry has no file property', function() {
+        var writes = [];
+        var m = loadFetchParentContext({
+            jira_search_by_jql: function() {
+                return [
+                    makeSearchResult('PROJ-201', '[BA]'),
+                    makeSearchResult('PROJ-202', '[BA]')
+                ];
+            },
+            file_write: function(p) { writes.push(p); }
+        });
+        var cfg = {
+            includeParentStory: false,
+            jql: 'parent = {parentKey}',
+            fields: ['key', 'summary', 'description', 'status'],
+            contexts: [{ prefix: '[BA]', file: '', label: 'BA' }]
+        };
+        m.action(makeParams(cfg));
+        assert.equal(writes.length, 1, 'second match for same prefix skipped even when file is empty');
+    });
+
+});

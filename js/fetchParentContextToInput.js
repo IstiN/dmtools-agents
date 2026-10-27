@@ -400,6 +400,10 @@ function fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fie
         }
 
         var pf = parentTicket.fields;
+        if (shouldSkipParentContainer(pf, cfg)) {
+            console.log('fetchParentContextToInput: parent ' + parentKey + ' is an Epic/Feature container — skipping');
+            return false;
+        }
         var fieldsContent = renderParentFieldsContent(pf, fetchParentFields, fieldLabels);
 
         // Always write parent-{KEY}.md
@@ -660,6 +664,70 @@ function resolveActionTicket(actualParams, jobParams) {
     return actualParams.ticket || (jobParams.ticket);
 }
 
+/** Extract issue type name from Jira fields ({issuetype:{name}}) or normalized ticket ({issueType}). */
+function issueTypeNameOf(fieldsOrTicket) {
+    if (!fieldsOrTicket) return '';
+    var it = fieldsOrTicket.issuetype || fieldsOrTicket.issueType;
+    if (typeof it === 'string') return it;
+    return (it && typeof it.name === 'string') ? it.name : '';
+}
+
+/** Resolve issue type name from either ticket fields or the outer ticket object. */
+function resolveTicketIssueType(ticketFields, ticket) {
+    return issueTypeNameOf(ticketFields) || issueTypeNameOf(ticket);
+}
+
+/** Configured Bug issue type name (defaults to 'Bug'), lowercased. */
+function resolveBugTypeLower(projectConfig) {
+    var jira = projectConfig && projectConfig.jira;
+    var configured = jira && jira.issueTypes && jira.issueTypes.BUG;
+    return String(configured || 'Bug').toLowerCase();
+}
+
+/** Check if a case-insensitive list of issue type names includes targetLower. */
+function listIncludesLower(list, targetLower) {
+    if (!Array.isArray(list)) return false;
+    for (var i = 0; i < list.length; i++) {
+        if (String(list[i]).toLowerCase() === targetLower) return true;
+    }
+    return false;
+}
+
+function isCfgBugOptIn(cfg, bugTypeLower) {
+    if (!cfg) return false;
+    if (cfg.includeBug === true || cfg.bugParentContextFetch === true) return true;
+    return listIncludesLower(cfg.includeIssueTypes, bugTypeLower);
+}
+
+/** Whether Bug parent-context enrichment is explicitly opted in (gh-1279). */
+function isBugParentContextOptedIn(cfg, jobParams, projectConfig, bugTypeLower) {
+    if (isCfgBugOptIn(cfg, bugTypeLower)) return true;
+    if (jobParams && jobParams.includeBugParentContext === true) return true;
+    return !!(projectConfig && projectConfig.parentContextFetch && projectConfig.parentContextFetch.includeBug === true);
+}
+
+/** Skip Bug tickets by default unless opted in (gh-1279). */
+function shouldSkipBugTicket(ticketFields, ticket, cfg, jobParams, projectConfig) {
+    var typeLower = resolveTicketIssueType(ticketFields, ticket).toLowerCase();
+    var bugTypeLower = resolveBugTypeLower(projectConfig);
+    if (typeLower !== 'bug' && typeLower !== bugTypeLower) return false;
+    return !isBugParentContextOptedIn(cfg, jobParams, projectConfig, typeLower);
+}
+
+/** Whether Epic/Feature container parent-context enrichment is explicitly opted in (gh-1279). */
+function isEpicContainerOptedIn(cfg, typeLower) {
+    if (!cfg) return false;
+    if (cfg.includeEpicParent === true) return true;
+    return listIncludesLower(cfg.includeParentIssueTypes, typeLower);
+}
+
+/** True when a parent fields object represents an Epic/Feature container and is not opted in. */
+function shouldSkipParentContainer(parentFields, cfg) {
+    var typeLower = issueTypeNameOf(parentFields).toLowerCase();
+    if (typeLower !== 'epic' && typeLower !== 'feature') return false;
+    return !isEpicContainerOptedIn(cfg, typeLower);
+}
+
 /**
  * Ticket key + parent key for the run, logging the skip reasons. Returns null
  * when the run must stop: key unknown, ticket fetch failed, or no parent.
@@ -682,7 +750,25 @@ function resolveContextAnchor(tracker, ticket, folder) {
         return null;
     }
 
-    return { ticketKey: ticketKey, parentKey: parentKey };
+    return { ticketKey: ticketKey, parentKey: parentKey, ticketFields: ticketFields };
+}
+
+/** Inline parent fields when present on the ticket's parent reference. */
+function inlineParentFieldsOf(ticketFields) {
+    return ticketFields && ticketFields.parent ? ticketFields.parent.fields : null;
+}
+
+/** True when the ticket or its inline parent object should skip parent-context enrichment (gh-1279). */
+function shouldSkipAnchor(anchor, ticket, cfg, jobParams, projectConfig) {
+    if (shouldSkipBugTicket(anchor.ticketFields, ticket, cfg, jobParams, projectConfig)) {
+        console.log('fetchParentContextToInput: ' + anchor.ticketKey + ' is a Bug ticket — skipping parent context');
+        return true;
+    }
+    if (shouldSkipParentContainer(inlineParentFieldsOf(anchor.ticketFields), cfg)) {
+        console.log('fetchParentContextToInput: parent ' + anchor.parentKey + ' is an Epic/Feature container — skipping');
+        return true;
+    }
+    return false;
 }
 
 /** Sibling search fields: always base fields, resolved to tracker codes when asked. */
@@ -700,9 +786,10 @@ function writeSiblingContextFiles(tracker, opts, fetchFields, parentKey, folder)
     var results = searchSiblingTickets(tracker, opts.jqlTemplate, parentKey, fetchFields);
     if (!results || results.length === 0) return;
 
-    // 4. Write one file per matched context
+    // 4. Write at most one file per matched context (gh-1279: avoid N+1 getIssue + file overwrites)
+    var writtenContexts = {};
     for (var i = 0; i < results.length; i++) {
-        processContextItem(results[i], opts, fetchFields, folder, tracker);
+        processContextItem(results[i], opts, fetchFields, folder, tracker, writtenContexts);
     }
 }
 
@@ -722,7 +809,7 @@ function action(params) {
 
         var ticket = resolveActionTicket(actualParams, jobParams);
         var anchor = resolveContextAnchor(tracker, ticket, actualParams.inputFolderPath);
-        if (!anchor) return;
+        if (!anchor || shouldSkipAnchor(anchor, ticket, cfg, jobParams, projectConfig)) return;
 
         // Resolve configured options with defaults after parent is known so human-readable
         // custom fields can be resolved by project key when Jira requires customfield_* IDs.
@@ -730,10 +817,10 @@ function action(params) {
         var projectKey = resolveProjectKey(projectConfig, anchor.parentKey, anchor.ticketKey);
 
         // 2. Fetch parent story itself (unless explicitly disabled)
-        if (cfg.includeParentStory !== false) {
-            fetchParentStory(actualParams.inputFolderPath, anchor.parentKey, cfg, projectConfig, projectKey, opts.fieldLabels, tracker);
+        if (cfg.includeParentStory !== false &&
+            fetchParentStory(actualParams.inputFolderPath, anchor.parentKey, cfg, projectConfig, projectKey, opts.fieldLabels, tracker) === false) {
+            return;
         }
-
         var fetchFields = resolveSiblingFetchFields(cfg, opts, projectKey, tracker);
         writeSiblingContextFiles(tracker, opts, fetchFields, anchor.parentKey, actualParams.inputFolderPath);
 
@@ -746,13 +833,19 @@ function action(params) {
  * Match one search result against the configured contexts and write its file.
  * Unmatched results are skipped; per-item failures are non-fatal.
  */
-function processContextItem(item, opts, fetchFields, folder, tracker) {
+function claimContextSlot(ctx, writtenContexts) {
+    var ctxKey = ctx.file || ctx.prefix;
+    if (writtenContexts[ctxKey]) return false;
+    writtenContexts[ctxKey] = true;
+    return true;
+}
+
+function processContextItem(item, opts, fetchFields, folder, tracker, writtenContexts) {
     var itemFields = item.fields || {};
     var summary = itemFields.summary || '';
 
     var ctx = findMatchingContext(summary, opts.contexts);
-    if (!ctx) return;
-
+    if (!ctx || !claimContextSlot(ctx, writtenContexts)) return;
     // Re-fetch full ticket if any requested field is missing in search result
     if (needsFullFetch(itemFields, fetchFields)) {
         itemFields = mergeTicketFields(itemFields, fetchFullTicket(tracker, item.key));
@@ -781,6 +874,9 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveFetchFields: resolveFetchFields,
         isPassThroughField: isPassThroughField,
         unwrapTrackerResult: unwrapTrackerResult,
-        resolvedCustomFieldCode: resolvedCustomFieldCode
+        resolvedCustomFieldCode: resolvedCustomFieldCode,
+        issueTypeNameOf: issueTypeNameOf,
+        shouldSkipBugTicket: shouldSkipBugTicket,
+        shouldSkipParentContainer: shouldSkipParentContainer
     };
 }
