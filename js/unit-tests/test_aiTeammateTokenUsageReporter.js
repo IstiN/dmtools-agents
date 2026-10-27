@@ -1308,7 +1308,7 @@ suite('aiTeammateTokenUsageReporter buildTokensMap (gh-1108 UT-prod)', function(
                   agent: 'pr_rework', createdAt: '2026-10-13T11:00:00Z',
                   readTokens: 3000, writeTokens: 700, cachedTokens: 2500 }),
             row()
-        ]);
+        ], { now: '2026-10-16T10:00:00Z' });
         assert.equal(map['pr-1123'].length, 2, 'both PR legs ride the same key');
         assert.equal(map['issue-1040'].length, 1);
     });
@@ -1318,7 +1318,7 @@ suite('aiTeammateTokenUsageReporter buildTokensMap (gh-1108 UT-prod)', function(
         var map = reporter.buildTokensMap([row({
             title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
             agent: 'pr_review', createdAt: '2026-10-13T09:00:00Z',
-            readTokens: 2000, writeTokens: 300, cachedTokens: 1500 })]);
+            readTokens: 2000, writeTokens: 300, cachedTokens: 1500 })], { now: '2026-10-16T10:00:00Z' });
         assert.deepEqual(map['pr-1123'], [{
             leg: 'review', at: '2026-10-13T09:00:00Z',
             prompt: 2000, completion: 300, total: 2300,
@@ -1342,7 +1342,7 @@ suite('aiTeammateTokenUsageReporter buildTokensMap (gh-1108 UT-prod)', function(
             row({ title: 'teammate: assigned #1040', agent: 'pr_rework' }),
             row({ title: 'teammate: assigned #1041', agent: 'story_development' }),
             row({ title: 'teammate: assigned #1042', agent: 'pr_review' })
-        ]);
+        ], { now: '2026-10-16T10:00:00Z' });
         assert.equal(map['issue-1040'][0].leg, 'rework');
         assert.equal(map['issue-1041'][0].leg, 'dev');
         assert.equal(map['issue-1042'][0].leg, 'review');
@@ -1353,7 +1353,7 @@ suite('aiTeammateTokenUsageReporter buildTokensMap (gh-1108 UT-prod)', function(
         var map = reporter.buildTokensMap([
             row({ runId: '2', createdAt: '2026-10-13T11:00:00Z' }),
             row({ runId: '1', createdAt: '2026-10-13T09:00:00Z' })
-        ]);
+        ], { now: '2026-10-16T10:00:00Z' });
         assert.equal(map['issue-1040'][0].at, '2026-10-13T09:00:00Z');
         assert.equal(map['issue-1040'][1].at, '2026-10-13T11:00:00Z');
     });
@@ -1537,7 +1537,7 @@ suite('aiTeammateTokenUsageReporter publishTokensMap (gh-1108 IT-pub-1)', functi
         var map = reporter.buildTokensMap([
             row2('teammate: workflow_dispatch #1040 · pr-31 review', 'pr_review',
                 '2026-10-13T09:00:00Z', 2000, 300, 1500)
-        ]);
+        ], { now: '2026-10-16T10:00:00Z' });
         var st = fsModule.buildFactoryState({
             repoInfo: { owner: 'o', repo: 'r' }, now: '2026-10-13T13:10:00Z',
             prs: [{ number: 31, title: 't', labels: [],
@@ -1677,7 +1677,7 @@ suite('gh-1108 publish hardening — decorative by contract', function() {
         });
         var res = reporter.publishKeyedTokens(
             { publishTokens: true, workspace: 'o', repository: 'r',
-              tokensAsset: 'agents-tokens.json' },
+              tokensAsset: 'agents-tokens.json', tokensNow: '2026-10-16T10:00:00Z' },
             { outputDir: 'outputs/token_usage' },
             [{ runId: '1', createdAt: '2026-10-13T09:00:00Z', agent: 'pr_review',
                title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
@@ -1704,7 +1704,7 @@ suite('gh-1108 asset default — the derivation path', function() {
             }
         });
         var res = reporter.publishKeyedTokens(
-            { publishTokens: true, workspace: 'o', repository: 'coolwidgets' },
+            { publishTokens: true, workspace: 'o', repository: 'coolwidgets', tokensNow: '2026-10-16T10:00:00Z' },
             { outputDir: 'outputs/token_usage' },
             [{ runId: '1', createdAt: '2026-10-13T09:00:00Z', agent: 'pr_review',
                title: 'teammate: workflow_dispatch #1040 · pr-31 review',

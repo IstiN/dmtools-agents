@@ -15,9 +15,10 @@ function action(params) {
         var jobParams    = params.jobParams || params;
         var actualParams = params.inputFolderPath ? params : jobParams;
 
-        // 1. Fetch question subtasks
-        fetchQuestionsToInput.action(actualParams);
-
+        // 1. Fetch question subtasks (suppress its built-in parent-context call
+        //    because step 2 below runs fetchParentContextToInput explicitly — gh-1279)
+        var questionsParams = Object.assign({}, actualParams, { skipParentContext: true });
+        fetchQuestionsToInput.action(questionsParams);
         // 2. Fetch [BA]/[SA]/[VD] parent context (no-op if parentContextFetch not configured)
         try {
             fetchParentContextToInput.action(actualParams);
