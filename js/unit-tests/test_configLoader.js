@@ -2480,5 +2480,13 @@ suite('configLoader.resolveJiraBaseUrl and formatJiraTicketLink (gh-1266)', func
         );
     });
 
+    test('formatJiraTicketLink prefixes bare numeric ADO work item IDs with # (gh-1278)', function() {
+        assert.equal(configLoaderModule.formatJiraTicketLink('12345', ''), '#12345');
+        assert.equal(configLoaderModule.formatJiraTicketLink(12345, null, true), '#12345');
+        assert.equal(configLoaderModule.formatJiraTicketLink('12345', { jira: { baseUrl: 'https://jira.example.com/' } }, true), '#12345');
+        assert.equal(configLoaderModule.formatJiraTicketLink('#12345', ''), '#12345');
+        assert.equal(configLoaderModule.formatJiraTicketLink(null, ''), null);
+    });
+
 });
 

@@ -299,6 +299,21 @@ suite('createSolutionDesignTicketsAndAssignForReview.action — success', functi
         var cfgComment = trackerCfg._calls.comments[0][1];
         assert.contains(cfgDesc, 'Details are in [PROJ-1|https://jira.example.com/browse/PROJ-1|smart-link] \n\n');
         assert.contains(cfgComment, '* [PROJ-101|https://jira.example.com/browse/PROJ-101] - [SD CORE] My summary');
+
+        // 3. Numeric ADO work item IDs get '#' prefix (gh-1278)
+        var trackerAdo = makeTrackerMock();
+        trackerAdo.createTicketWithParent = function(projectKey, type, summary, description, parentKey) {
+            trackerAdo._calls.created.push({ projectKey: projectKey, type: type, summary: summary, description: description, parentKey: parentKey });
+            return '20001';
+        };
+        var modAdo = loadWithProjectConfig(trackerAdo, {});
+        var adoParams = makeParams({ core: true, api: false, ui: false, description: 'ADO core' });
+        adoParams.ticket.key = '12345';
+        modAdo.action(adoParams);
+        var adoDesc = trackerAdo._calls.created[0].description;
+        var adoComment = trackerAdo._calls.comments[0][1];
+        assert.contains(adoDesc, 'Details are in #12345 \n\n');
+        assert.contains(adoComment, '* #20001 - [SD CORE] My summary');
     });
 });
 
