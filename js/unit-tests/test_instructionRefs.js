@@ -312,6 +312,13 @@ suite('instructionRefs — pack reference integrity', function () {
                 name + ' must wire github_comment_format.md in cliPromptsByTracker.github');
         });
     });
+
+    test('R7 (gh-1278): ado_comment_format.md and ado_markup_transform.md require #<id> prefix for ADO ticket references', function () {
+        var commentFormat = readText('instructions/tracker/ado_comment_format.md');
+        var markupTransform = readText('instructions/tracker/ado_markup_transform.md');
+        assert.ok(commentFormat.indexOf('#12345') !== -1, 'ado_comment_format.md must instruct #<id> format (e.g. #12345)');
+        assert.ok(markupTransform.indexOf('#12345') !== -1, 'ado_markup_transform.md must instruct #<id> format (e.g. #12345)');
+    });
 });
 
 // ── gh-1230 CRAP characterization: reference-queue helpers ───────────────────

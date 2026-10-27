@@ -59,7 +59,9 @@ import {
   bump, resolveBaseVersion, resolveCandidateVersion, resolveShipVersion,
   fingerprintsDiffer,
 } from './pack_version_guard.cjs';
-import { unresolvedRequires } from './pack_require_gate.cjs';
+import {
+  unresolvedRequires, unresolvedConfigScripts, discoverConfigScriptClosure,
+} from './pack_require_gate.cjs';
 // gh-823: the pack runtime LOAD self-test generator — after every build the
 // zip is extracted and a generated probe requires EVERY packed .js in the
 // real dmtools runtime (parse errors and load-time require misses fail the
@@ -367,27 +369,45 @@ function zipManifestText(zipPath) {
  * validatePack() cannot catch this class: it re-hashes manifest entries
  * against themselves, never checks payload self-consistency.
  */
+function readRepoFileOrNull(relPath) {
+  const abs = join(ROOT, ...relPath.split('/'));
+  if (!existsSync(abs) || !statSync(abs).isFile()) return null;
+  return readFileSync(abs, 'utf8');
+}
+
+function formatUnresolvedLine(u) {
+  if (u.configRef) {
+    return `  config-ref  ${u.from} (${u.field}): '${u.spec}' -> none of [${u.bases.join(', ')}] is in the zip`;
+  }
+  return `  ${u.deferred ? 'deferred' : 'load-time'}  ${u.from}: require('${u.spec}') -> none of [${u.bases.join(', ')}] is in the zip`;
+}
+
 function assertZipRequires(zipPath) {
   const tmp = mkdtempSync(join(tmpdir(), 'pack-require-gate-'));
   try {
     execSync(`unzip -q -o ${JSON.stringify(zipPath)} -d ${JSON.stringify(tmp)}`);
     const paths = new Set();
     const sources = [];
+    const configs = [];
     for (const f of listFilesRecursive(tmp)) {
       paths.add(f.relPath);
       if (f.relPath.endsWith('.js')) {
         sources.push({ path: f.relPath, source: readFileSync(f.absPath, 'utf8') });
+      } else if (f.relPath.endsWith('.json') && f.relPath !== 'manifest.json') {
+        configs.push({ path: f.relPath, source: readFileSync(f.absPath, 'utf8') });
       }
     }
-    const unresolved = unresolvedRequires(sources, paths);
+    const unresolved = [
+      ...unresolvedRequires(sources, paths),
+      ...unresolvedConfigScripts(configs, paths),
+    ];
     if (unresolved.length > 0) {
-      const lines = unresolved
-        .map((u) => `  ${u.deferred ? 'deferred' : 'load-time'}  ${u.from}: require('${u.spec}') -> none of [${u.bases.join(', ')}] is in the zip`)
-        .join('\n');
+      const lines = unresolved.map(formatUnresolvedLine).join('\n');
       throw new Error(
         `require sanity gate FAILED for ${basename(zipPath)}: ` +
         `${unresolved.length} packed require(s) resolve to files absent from the zip (gh-812; ` +
-        `deferred = in-function require, resolves against the pack js/ root ONLY — gh-823):\n${lines}`,
+        `deferred = in-function require, resolves against the pack js/ root ONLY — gh-823; ` +
+        `config-ref = condition/thenAction/action script — gh-1276/gh-1277):\n${lines}`,
       );
     }
   } finally {
@@ -459,11 +479,18 @@ function assertPackLoads(zipPath) {
  * packs pass through untouched.
  */
 function augmentLaunchSurface(agent, zipPath) {
-  const extras = launchExtras(agent);
-  if (extras.length === 0) return;
+  const launch = launchExtras(agent);
+  const scripts = discoverConfigScriptClosure(`${agent}.json`, readRepoFileOrNull);
+  if (launch.length === 0 && scripts.length === 0) return;
   const tmp = mkdtempSync(join(tmpdir(), 'pack-launch-'));
   try {
     execSync(`unzip -q -o ${JSON.stringify(zipPath)} -d ${JSON.stringify(tmp)}`);
+    const extras = [...launch];
+    for (const entry of scripts) {
+      const dest = join(tmp, ...entry.split('/'));
+      if (!existsSync(dest)) extras.push({ entry, source: entry });
+    }
+    if (extras.length === 0) return;
     const added = [];
     for (const { entry, source } of extras) {
       const dest = join(tmp, ...entry.split('/'));

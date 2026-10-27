@@ -22,7 +22,7 @@
 
 'use strict';
 
-/* global loadModule, assert, test, suite */
+/* global loadModule, assert, test, suite, file_read */
 
 function gate() {
     return loadModule('ci/pack_require_gate.cjs');
@@ -500,5 +500,166 @@ suite('require gate: deferred requires resolve against the js/ root ONLY', funct
         var unresolved = gate().unresolvedRequires(files);
         assert.equal(unresolved.length, 1);
         assert.notOk(unresolved[0].deferred, 'top-level entries stay load-time');
+    });
+});
+
+// ── gh-1276 & gh-1277: config-referenced condition & thenAction scripts ──────
+
+suite('require gate: config-referenced script discovery (gh-1276, gh-1277)', function () {
+
+    test('normalizeConfigScriptPath strips ./ and agents/ and applies defaultJsDir for bare names', function () {
+        var g = gate();
+        assert.equal(
+            g.normalizeConfigScriptPath('agents/js/conditions/isCodeGraphAvailable.js', true),
+            'js/conditions/isCodeGraphAvailable.js');
+        assert.equal(
+            g.normalizeConfigScriptPath('./agents/js/conditions/isCodeGraphAvailable.js', true),
+            'js/conditions/isCodeGraphAvailable.js');
+        assert.equal(
+            g.normalizeConfigScriptPath('assignForSolutionArchitecture.js', true),
+            'js/assignForSolutionArchitecture.js');
+        assert.equal(
+            g.normalizeConfigScriptPath('agents/restoreDescription.js', false),
+            'restoreDescription.js');
+        assert.equal(g.normalizeConfigScriptPath(null, true), null);
+        assert.equal(g.normalizeConfigScriptPath('   ', true), null);
+    });
+
+    test('configScriptRefs extracts actions, cliPrompts[].condition, and customParams.contentOutput.thenAction', function () {
+        var raw = file_read({ path: 'story_acceptance_criteria.json' });
+        var refs = gate().configScriptRefs(raw);
+        var targets = refs.map(function (r) { return r.target; });
+        assert.deepEqual(targets, [
+            'js/requireTicket.js',
+            'js/preCliContentOutputSetup.js',
+            'js/writeContentOutput.js',
+            'js/conditions/isCodeGraphAvailable.js',
+            'js/assignForSolutionArchitecture.js',
+        ]);
+        var condRef = refs.filter(function (r) { return r.field.indexOf('condition') !== -1; })[0];
+        assert.equal(condRef.spec, 'agents/js/conditions/isCodeGraphAvailable.js');
+        assert.equal(condRef.target, 'js/conditions/isCodeGraphAvailable.js');
+        var thenRef = refs.filter(function (r) { return r.field.indexOf('thenAction') !== -1; })[0];
+        assert.equal(thenRef.spec, 'assignForSolutionArchitecture.js');
+        assert.equal(thenRef.target, 'js/assignForSolutionArchitecture.js');
+    });
+
+    test('configScriptRefs handles parsed objects, invalid JSON, and configs without scripts', function () {
+        var g = gate();
+        assert.deepEqual(g.configScriptRefs(null), []);
+        assert.deepEqual(g.configScriptRefs('{not valid json'), []);
+        assert.deepEqual(g.configScriptRefs({ params: { cliPrompts: ['plain string', null, {}] } }), []);
+    });
+
+    test('unresolvedConfigScripts flags missing condition and thenAction scripts in the zip', function () {
+        var raw = file_read({ path: 'story_acceptance_criteria.json' });
+        var configs = [{ path: 'story_acceptance_criteria.json', source: raw }];
+        var zipPaths = new Set([
+            'js/requireTicket.js',
+            'js/preCliContentOutputSetup.js',
+            'js/writeContentOutput.js',
+        ]);
+        var unresolved = gate().unresolvedConfigScripts(configs, zipPaths);
+        assert.equal(unresolved.length, 2,
+            'missing isCodeGraphAvailable.js (#1276) and assignForSolutionArchitecture.js (#1277) must fail the gate');
+        assert.deepEqual(unresolved.map(function (u) { return u.target; }), [
+            'js/conditions/isCodeGraphAvailable.js',
+            'js/assignForSolutionArchitecture.js',
+        ]);
+        assert.equal(unresolved[0].configRef, true);
+        assert.equal(unresolved[0].from, 'story_acceptance_criteria.json');
+    });
+
+    test('unresolvedConfigScripts passes when all config-referenced scripts are present', function () {
+        var raw = file_read({ path: 'story_acceptance_criteria.json' });
+        var configs = [{ path: 'story_acceptance_criteria.json', source: raw }];
+        var zipPaths = new Set([
+            'js/requireTicket.js',
+            'js/preCliContentOutputSetup.js',
+            'js/writeContentOutput.js',
+            'js/conditions/isCodeGraphAvailable.js',
+            'js/assignForSolutionArchitecture.js',
+        ]);
+        assert.deepEqual(gate().unresolvedConfigScripts(configs, zipPaths), []);
+        assert.deepEqual(gate().unresolvedConfigScripts(null, zipPaths), []);
+    });
+
+    test('discoverConfigScriptClosure walks config + parent.path + transitive require()s', function () {
+        var files = {
+            'child.json': JSON.stringify({
+                parent: { path: 'parent.json', merge: ['params.cliPrompts'] },
+                params: {
+                    postJSAction: 'agents/js/writeContentOutput.js',
+                    customParams: {
+                        contentOutput: { thenAction: 'assignForSolutionArchitecture.js' },
+                    },
+                },
+            }),
+            'parent.json': JSON.stringify({
+                params: {
+                    cliPrompts: [
+                        { id: 'cg', prompt: 'p.md', condition: 'agents/js/conditions/isCodeGraphAvailable.js' },
+                    ],
+                },
+            }),
+            'js/writeContentOutput.js': 'var x = 1;',
+            'js/conditions/isCodeGraphAvailable.js': "var h = require('../common/cgHelper');",
+            'js/common/cgHelper.js': 'module.exports = {};',
+            'js/assignForSolutionArchitecture.js': [
+                "var a = require('./common/autoStart.js');",
+                'function lazy() {',
+                "    return require('./common/lazyDep.js');",
+                '}',
+            ].join('\n'),
+            'js/common/autoStart.js': "var s = require('./scm.js');",
+            'js/common/scm.js': 'module.exports = {};',
+            'js/common/lazyDep.js': 'module.exports = {};',
+        };
+        var closure = gate().discoverConfigScriptClosure('child.json', function (p) {
+            return Object.prototype.hasOwnProperty.call(files, p) ? files[p] : null;
+        });
+        assert.deepEqual(closure, [
+            'js/assignForSolutionArchitecture.js',
+            'js/common/autoStart.js',
+            'js/common/cgHelper.js',
+            'js/common/lazyDep.js',
+            'js/common/scm.js',
+            'js/conditions/isCodeGraphAvailable.js',
+            'js/writeContentOutput.js',
+        ]);
+    });
+
+    test('discoverConfigScriptClosure on real story_acceptance_criteria.json includes condition, thenAction, and autoStart.js', function () {
+        var closure = gate().discoverConfigScriptClosure('story_acceptance_criteria.json', function (p) {
+            try {
+                return file_read({ path: p });
+            } catch (e) {
+                return null;
+            }
+        });
+        assert.ok(closure.indexOf('js/conditions/isCodeGraphAvailable.js') !== -1,
+            'must include cliPrompts[].condition script (#1276)');
+        assert.ok(closure.indexOf('js/assignForSolutionArchitecture.js') !== -1,
+            'must include contentOutput.thenAction script (#1277)');
+        assert.ok(closure.indexOf('js/common/autoStart.js') !== -1,
+            'must include transitive dependency of assignForSolutionArchitecture.js (#1277)');
+    });
+
+    test('transitiveScriptClosure and discoverConfigScriptClosure tolerate missing files, empty seeds, and unresolvable requires', function () {
+        var g = gate();
+        assert.deepEqual(g.transitiveScriptClosure(null, function () { return null; }), []);
+        assert.deepEqual(g.discoverConfigScriptClosure('missing.json', function () { return null; }), []);
+        var files = {
+            'js/entry.js': [
+                "var missing = require('./doesNotExist.js');",
+                "var shared = require('./shared.js');",
+                "var sharedAgain = require('./shared.js');",
+            ].join('\n'),
+            'js/shared.js': 'module.exports = {};',
+        };
+        var out = g.transitiveScriptClosure(['', 'js/absent.js', 'js/entry.js', 'js/entry.js'], function (p) {
+            return files[p] || null;
+        });
+        assert.deepEqual(out, ['js/entry.js', 'js/shared.js']);
     });
 });

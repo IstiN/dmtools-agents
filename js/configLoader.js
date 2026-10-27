@@ -1299,15 +1299,24 @@ function resolveJiraBaseUrl(config) {
     return String(raw || '').trim().replace(/\/+$/, '');
 }
 
+function _normalizeBaseUrlArg(baseUrlOrConfig) {
+    if (baseUrlOrConfig && typeof baseUrlOrConfig === 'object') {
+        return resolveJiraBaseUrl(baseUrlOrConfig);
+    }
+    return String(baseUrlOrConfig || '').trim().replace(/\/+$/, '');
+}
+
 /**
- * Format a Jira markup link (`[KEY|baseUrl/browse/KEY]` or with `|smart-link`),
- * or return the bare ticketKey when baseUrl is empty/unconfigured.
+ * Format a ticket reference for comments/descriptions:
+ * - Numeric work item IDs (e.g. ADO `12345`) → `#12345` so ADO/GitHub auto-link the work item (gh-1278)
+ * - Jira keys with configured baseUrl → `[KEY|baseUrl/browse/KEY]` (or with `|smart-link`)
+ * - Jira keys with blank/unconfigured baseUrl → bare `ticketKey`
  * `baseUrlOrConfig` may be a resolved baseUrl string or a projectConfig object.
  */
 function formatJiraTicketLink(ticketKey, baseUrlOrConfig, smartLink) {
-    var base = (baseUrlOrConfig && typeof baseUrlOrConfig === 'object')
-        ? resolveJiraBaseUrl(baseUrlOrConfig)
-        : String(baseUrlOrConfig || '').trim().replace(/\/+$/, '');
+    var keyStr = String(ticketKey == null ? '' : ticketKey).trim();
+    if (/^\d+$/.test(keyStr)) return '#' + keyStr;
+    var base = _normalizeBaseUrlArg(baseUrlOrConfig);
     if (!base) return ticketKey;
     var suffix = smartLink ? '|smart-link' : '';
     return '[' + ticketKey + '|' + base + '/browse/' + ticketKey + suffix + ']';
