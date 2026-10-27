@@ -440,3 +440,26 @@ suite('gh-812 release integrity wiring', function () {
             'the rejection must be visible in the run summary');
     });
 });
+
+// ── gh-1276 & gh-1277: config-referenced condition & thenAction wiring ───────
+
+suite('gh-1276 / gh-1277 config-script bundling and gate wiring', function () {
+
+    var builder = file_read({ path: 'ci/release_packs.mjs' });
+
+    test('augmentLaunchSurface folds missing config-referenced scripts into the pack before gating', function () {
+        var fnStart = builder.indexOf('function augmentLaunchSurface(');
+        assert.ok(fnStart !== -1, 'augmentLaunchSurface must exist');
+        var body = builder.slice(fnStart, builder.indexOf('function buildPack(', fnStart));
+        assert.ok(body.indexOf('discoverConfigScriptClosure(') !== -1,
+            'augmentLaunchSurface must discover config-referenced scripts (condition + thenAction + transitive requires) and add any omitted by dmtools compile');
+    });
+
+    test('assertZipRequires gates config-referenced scripts in packed .json configs', function () {
+        var fnStart = builder.indexOf('function assertZipRequires(');
+        assert.ok(fnStart !== -1, 'assertZipRequires must exist');
+        var body = builder.slice(fnStart, builder.indexOf('function assertPackLoads(', fnStart));
+        assert.ok(body.indexOf('unresolvedConfigScripts(') !== -1,
+            'assertZipRequires must check unresolvedConfigScripts on packed agent configs (#1276/#1277)');
+    });
+});

@@ -360,6 +360,218 @@ function unresolvedRequires(files, knownPaths) {
     return unresolved;
 }
 
+// ── Config-referenced scripts & transitive require closure (gh-1276, gh-1277) ─
+//
+// Agent configs reference JS scripts across several fields:
+//   - params.jsPath / jsAction / preJSAction / preCliJSAction / postJSAction /
+//     timerJSAction (e.g. 'agents/js/writeContentOutput.js', 'js/smAgent.js',
+//     'agents/restoreDescription.js')
+//   - params.cliPrompts[].condition (e.g. 'agents/js/conditions/isCodeGraphAvailable.js')
+//   - params.customParams.contentOutput.thenAction (e.g. 'assignForSolutionArchitecture.js')
+//
+// When `dmtools compile` omits condition or thenAction scripts (gh-1276, gh-1277),
+// the release builder must both (1) fold the missing scripts and their transitive
+// local require() closure into the zip and (2) fail the require gate if any
+// config-referenced script is absent from the zip.
+
+var CONFIG_ACTION_FIELDS = [
+    'jsPath',
+    'jsAction',
+    'preJSAction',
+    'preCliJSAction',
+    'postJSAction',
+    'timerJSAction',
+];
+
+/**
+ * Normalizes a config-referenced JS path to its zip-layout path:
+ *   'agents/js/conditions/isCodeGraphAvailable.js' -> 'js/conditions/isCodeGraphAvailable.js'
+ *   'assignForSolutionArchitecture.js' (defaultJsDir=true) -> 'js/assignForSolutionArchitecture.js'
+ *   'agents/restoreDescription.js' (defaultJsDir=false) -> 'restoreDescription.js'
+ */
+function normalizeConfigScriptPath(spec, defaultJsDir) {
+    if (!spec || typeof spec !== 'string') return null;
+    var s = spec.trim().replace(/^\.\//, '').replace(/^agents\//, '');
+    if (!s) return null;
+    if (defaultJsDir && s.indexOf('/') === -1) {
+        s = 'js/' + s;
+    }
+    return normalizePath(s.split('/'));
+}
+
+function parseConfigInput(configInput) {
+    if (!configInput) return null;
+    if (typeof configInput === 'object') return configInput;
+    try {
+        return JSON.parse(String(configInput));
+    } catch (e) {
+        return null;
+    }
+}
+
+function collectActionFieldRefs(params, out) {
+    for (var i = 0; i < CONFIG_ACTION_FIELDS.length; i++) {
+        var field = CONFIG_ACTION_FIELDS[i];
+        var target = normalizeConfigScriptPath(params[field], false);
+        if (target) {
+            out.push({ field: 'params.' + field, spec: params[field], target: target });
+        }
+    }
+}
+
+function collectCliPromptConditionRefs(params, out) {
+    var prompts = params.cliPrompts;
+    if (!Array.isArray(prompts)) return;
+    for (var i = 0; i < prompts.length; i++) {
+        var item = prompts[i];
+        var cond = item && typeof item === 'object' ? item.condition : null;
+        var target = normalizeConfigScriptPath(cond, true);
+        if (target) {
+            out.push({ field: 'params.cliPrompts[' + i + '].condition', spec: cond, target: target });
+        }
+    }
+}
+
+function collectThenActionRef(params, out) {
+    var co = params.customParams && params.customParams.contentOutput;
+    var thenAction = co && co.thenAction;
+    var target = normalizeConfigScriptPath(thenAction, true);
+    if (target) {
+        out.push({
+            field: 'params.customParams.contentOutput.thenAction',
+            spec: thenAction,
+            target: target,
+        });
+    }
+}
+
+/**
+ * Extracts all JS script references from a single agent config (JSON string or
+ * parsed object): [{ field, spec, target }].
+ */
+function configScriptRefs(configInput) {
+    var cfg = parseConfigInput(configInput);
+    var params = (cfg && cfg.params) || {};
+    var out = [];
+    collectActionFieldRefs(params, out);
+    collectCliPromptConditionRefs(params, out);
+    collectThenActionRef(params, out);
+    return out;
+}
+
+/**
+ * Config-referenced scripts across [configs] ([{path, source}]) that are absent
+ * from [knownPaths] (plain object map or Set). Returns
+ * [{ from, field, spec, target, bases, configRef: true }].
+ */
+function unresolvedConfigScripts(configs, knownPaths) {
+    var list = configs || [];
+    var unresolved = [];
+    for (var i = 0; i < list.length; i++) {
+        var refs = configScriptRefs(list[i].source);
+        for (var r = 0; r < refs.length; r++) {
+            var ref = refs[r];
+            if (!pathSetHas(knownPaths, ref.target)) {
+                unresolved.push({
+                    from: list[i].path,
+                    field: ref.field,
+                    spec: ref.spec,
+                    target: ref.target,
+                    bases: [ref.target],
+                    configRef: true,
+                });
+            }
+        }
+    }
+    return unresolved;
+}
+
+function resolveExistingCandidate(candidates, readFileFn) {
+    for (var i = 0; i < candidates.length; i++) {
+        var c = candidates[i];
+        if (readFileFn(c) !== null) return c;
+        if (c.slice(-3) !== '.js' && readFileFn(c + '.js') !== null) return c + '.js';
+    }
+    return null;
+}
+
+function requireCandidatesForClosure(fromPath, item) {
+    if (item.deferred) {
+        var root = deferredRequireBase(item.spec);
+        return root ? [root] : [];
+    }
+    return resolveRequireCandidates(fromPath, item.spec);
+}
+
+function enqueueDiscoveredRequires(fromPath, src, readFileFn, visited, queue) {
+    var reqs = classifyRequires(src);
+    for (var i = 0; i < reqs.length; i++) {
+        var hit = resolveExistingCandidate(
+            requireCandidatesForClosure(fromPath, reqs[i]),
+            readFileFn
+        );
+        if (hit && !visited[hit]) queue.push(hit);
+    }
+}
+
+function nonEmptySeeds(seedPaths) {
+    var list = seedPaths || [];
+    var queue = [];
+    for (var i = 0; i < list.length; i++) {
+        if (list[i]) queue.push(list[i]);
+    }
+    return queue;
+}
+
+/**
+ * Computes the transitive closure of zip-layout JS paths starting from
+ * [seedPaths], reading repo sources via `readFileFn(relPath)` (returns string
+ * content when the file exists, or null when absent). Sorted for determinism.
+ */
+function transitiveScriptClosure(seedPaths, readFileFn) {
+    var visited = {};
+    var queue = nonEmptySeeds(seedPaths);
+    var out = [];
+    while (queue.length > 0) {
+        var current = queue.shift();
+        if (visited[current]) continue;
+        visited[current] = true;
+        var src = readFileFn(current);
+        if (src === null) continue;
+        out.push(current);
+        enqueueDiscoveredRequires(current, src, readFileFn, visited, queue);
+    }
+    return out.sort();
+}
+
+function parentConfigPath(cfg) {
+    return cfg && cfg.parent && typeof cfg.parent.path === 'string'
+        ? normalizeConfigScriptPath(cfg.parent.path, false)
+        : null;
+}
+
+/**
+ * Walks `<agentConfigPath>` and its `parent.path` chain using `readFileFn`,
+ * returning the full transitive closure of config-referenced JS scripts and
+ * their relative `require()` dependencies as sorted zip-layout paths.
+ */
+function discoverConfigScriptClosure(agentConfigPath, readFileFn) {
+    var seeds = [];
+    var seenConfigs = {};
+    var cur = agentConfigPath;
+    while (cur && !seenConfigs[cur]) {
+        seenConfigs[cur] = true;
+        var cfg = parseConfigInput(readFileFn(cur));
+        if (!cfg) break;
+        var refs = configScriptRefs(cfg);
+        for (var i = 0; i < refs.length; i++) {
+            seeds.push(refs[i].target);
+        }
+        cur = parentConfigPath(cfg);
+    }
+    return transitiveScriptClosure(seeds, readFileFn);
+}
+
 module.exports = {
     requireSpecs: requireSpecs,
     classifyRequires: classifyRequires,
@@ -367,4 +579,9 @@ module.exports = {
     resolveRequireCandidates: resolveRequireCandidates,
     deferredRequireBase: deferredRequireBase,
     unresolvedRequires: unresolvedRequires,
+    normalizeConfigScriptPath: normalizeConfigScriptPath,
+    configScriptRefs: configScriptRefs,
+    unresolvedConfigScripts: unresolvedConfigScripts,
+    transitiveScriptClosure: transitiveScriptClosure,
+    discoverConfigScriptClosure: discoverConfigScriptClosure,
 };
