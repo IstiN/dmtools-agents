@@ -996,6 +996,27 @@ suite('autoStart — extracted pure helpers (gh-1183)', function() {
             project_key: 'PROJ'
         });
         assert.equal(autoStartModule().buildWorkflowDispatchPayload('TS-1', 'agents/x.json', 'ENC', '').project_key, '');
+        assert.equal(
+            autoStartModule().buildWorkflowDispatchPayload('2010283', 'agents/x.json', 'ENC', 'PROJ', 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 2010283').input_jql,
+            'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 2010283'
+        );
+        assert.equal(
+            autoStartModule().resolveAutoStartInputJql('2010283', { tracker: { provider: 'ado' } }),
+            'key = 2010283'
+        );
+        var adoAutoStart = loadAutoStartHelper(
+            {},
+            {
+                resolveTicketInputJql: function(ticketKey) {
+                    return 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = ' + ticketKey;
+                }
+            },
+            {}
+        );
+        assert.equal(
+            adoAutoStart.resolveAutoStartInputJql('2010283', { tracker: { provider: 'ado' } }),
+            'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 2010283'
+        );
     });
 
     test('projectLogSuffix renders only when a project key exists', function() {

@@ -290,6 +290,18 @@ suite('trackers.js ado provider', function () {
         assert.equal(results[0].key, '4242');
     });
 
+    test('search and searchIssues translate Jira-style key = <id> and key in (<id>) to WIQL (#1285)', function () {
+        var adoSearch = recorder('ado_search_by_wiql', JSON.stringify({
+            value: [ADO_TICKET]
+        }));
+        var trackers = loadTrackers({ ado_search_by_wiql: adoSearch });
+        var t = trackers.createTracker({ tracker: { provider: 'ado' } });
+        t.search('key = 2010283');
+        t.searchIssues('key in (2010283)', { fields: ['summary'] });
+        assert.equal(adoSearch.calls[0].wiql, 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 2010283');
+        assert.equal(adoSearch.calls[1].wiql, 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 2010283');
+    });
+
     test('comments map id and comment onto the ado comment tools', function () {
         var adoAdd = recorder('ado_add_work_item_comment', '{}');
         var adoList = recorder('ado_get_work_item_comments', JSON.stringify({

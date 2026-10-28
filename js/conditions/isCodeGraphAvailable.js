@@ -11,11 +11,20 @@
  *   }
  */
 
+function markerExists(path) {
+    if (typeof file_exists === 'function') {
+        try { return !!file_exists({ path: path }); } catch (e) { return false; }
+    }
+    return true;
+}
+
 function resolveWorkingDir(params) {
     try {
-        var content = file_read({ path: '.dmtools-target-workingdir' });
-        if (content && String(content).trim()) {
-            return String(content).trim();
+        if (markerExists('.dmtools-target-workingdir')) {
+            var content = file_read({ path: '.dmtools-target-workingdir' });
+            if (content && String(content).trim()) {
+                return String(content).trim();
+            }
         }
     } catch (e) {
         // ignore
@@ -26,21 +35,30 @@ function resolveWorkingDir(params) {
     return null;
 }
 
+function runCliCheck(command, workingDir) {
+    var args = { command: command };
+    if (workingDir) {
+        args.workingDirectory = workingDir;
+    }
+    var out = cli_execute_command(args);
+    return !!(out && String(out).trim());
+}
+
+function checkCodeGraphDir(workingDir) {
+    var args = { command: 'git -c alias.cgdir="!test -d .codegraph" cgdir' };
+    if (workingDir) args.workingDirectory = workingDir;
+    cli_execute_command(args);
+    return true;
+}
+
+function checkCodeGraphBin(workingDir) {
+    return runCliCheck('git -c alias.cgbin="!command -v codegraph" cgbin', workingDir);
+}
+
 function isCodeGraphAvailable(params) {
     try {
         var workingDir = resolveWorkingDir(params);
-        var args = { command: 'bash -c "test -d .codegraph"' };
-        if (workingDir) {
-            args.workingDirectory = workingDir;
-        }
-        cli_execute_command(args);
-
-        var binArgs = { command: 'bash -c "command -v codegraph"' };
-        if (workingDir) {
-            binArgs.workingDirectory = workingDir;
-        }
-        var out = cli_execute_command(binArgs);
-        return !!(out && String(out).trim());
+        return checkCodeGraphDir(workingDir) && checkCodeGraphBin(workingDir);
     } catch (e) {
         return false;
     }

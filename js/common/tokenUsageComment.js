@@ -26,6 +26,8 @@ var trackersModule = require('./trackers.js');
 var configLoader = null;
 try { configLoader = require('../configLoader.js'); } catch (e) { /* unit tests inject their own */ }
 
+var postedInRun = {};
+
 function readTextFile(filePath) {
     if (!filePath) {
         return null;
@@ -224,6 +226,10 @@ function postTokenUsageComments(ticketKey, options) {
     }
 
     usageFiles.forEach(function(filePath) {
+        var dedupKey = String(ticketKey || '') + '::' + filePath;
+        if (postedInRun[dedupKey]) {
+            return;
+        }
         var data = readJsonFile(filePath);
         if (!data) {
             errors.push(filePath + ' (parse error)');
@@ -235,6 +241,7 @@ function postTokenUsageComments(ticketKey, options) {
             var comment = formatUsageComment(filePath, data, initiator,
                 typeof tracker.provider === 'function' ? tracker.provider() : null);
             tracker.postComment(ticketKey, comment);
+            postedInRun[dedupKey] = true;
             console.log('Posted token usage comment for ' + ticketKey + ' from ' + filePath);
             posted += 1;
             files.push(filePath);

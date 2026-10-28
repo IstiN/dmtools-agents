@@ -244,10 +244,25 @@ jobs:
         if: steps.build.outputs.released == 'true' && inputs.dry_run != true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREV_RELEASE_TAG: ${{ steps.base.outputs.ref }}
         run: |
           set -euo pipefail
           tag="agents-rel-$(date -u +%Y%m%d-%H%M%S)"
           notes="Per-agent packs built by \`dmtools compile\` (dm.ai#595). See catalog.json for agent → version."
+          # gh-1283: carry forward previously shipped <agent>-<version>.zip
+          # assets from the previous release so consumers whose
+          # DMTOOLS_PACK_REGISTRY points at the latest release can still
+          # resolve pinned parent pack refs (e.g. story_acceptance_criteria@0.1.255).
+          if [ -n "${PREV_RELEASE_TAG}" ] && [[ "${PREV_RELEASE_TAG}" =~ ^agents-rel-[0-9]{8}-[0-9]{6}$ ]]; then
+            mkdir -p dist-prev
+            gh release download "${PREV_RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
+              --pattern "*.zip" --pattern "*.zip.sha256" --dir dist-prev 2>/dev/null || true
+            for f in dist-prev/*.zip dist-prev/*.zip.sha256; do
+              [ -e "$f" ] || continue
+              base_f="$(basename "$f")"
+              [ -e "dist/$base_f" ] || mv "$f" "dist/$base_f"
+            done
+          fi
           # Upload zips + sidecar checksums + catalog.json as release assets.
           gh release create "$tag" dist/*.zip dist/*.zip.sha256 dist/catalog.json \
             --title "Agent packs $tag" --notes "$notes" --repo "$GITHUB_REPOSITORY"
