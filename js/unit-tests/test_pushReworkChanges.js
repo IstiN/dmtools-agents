@@ -4773,3 +4773,131 @@ suite('pushReworkChanges.postThreadReplies — combined untargeted comment failu
         assert.equal(loaded.replyCalls.length, 0);
     });
 });
+
+suite('pushReworkChanges — gh-1287 cross-anchor label stripping (PR + linked issue)', function() {
+
+    test('parseLinkedIssueFromText and resolveLinkedIssueKeyForPr resolve issue keys from body, branch, and title', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var mod = loaded.mod;
+
+        assert.equal(mod.parseLinkedIssueFromText('Closes #1931'), 'gh-1931');
+        assert.equal(mod.parseLinkedIssueFromText('fixes #42'), 'gh-42');
+        assert.equal(mod.parseLinkedIssueFromText('Resolves #7'), 'gh-7');
+        assert.equal(mod.parseLinkedIssueFromText('ai/gh-0099'), 'gh-99');
+        assert.equal(mod.parseLinkedIssueFromText('no ref here'), null);
+        assert.equal(mod.parseLinkedIssueFromText(null), null);
+
+        assert.equal(mod.resolveLinkedIssueKeyForPr(null), null);
+        assert.equal(mod.resolveLinkedIssueKeyForPr({ body: 'Closes #1931', head: { ref: 'ai/gh-1' }, title: 'gh-2' }), 'gh-1931');
+        assert.equal(mod.resolveLinkedIssueKeyForPr({ body: '', head: { ref: 'ai/gh-1931' }, title: 'gh-2' }), 'gh-1931');
+        assert.equal(mod.resolveLinkedIssueKeyForPr({ body: '', head: 'ai/gh-1931', title: '' }), 'gh-1931');
+        assert.equal(mod.resolveLinkedIssueKeyForPr({ body: '', head: { ref: 'feature/x' }, title: 'fix(gh-1931): bug' }), 'gh-1931');
+        assert.equal(mod.resolveLinkedIssueKeyForPr({ body: '', head: { ref: 'feature/x' }, title: 'plain title' }), null);
+    });
+
+    test('removeConfiguredLabels on PR-anchored run (pr-1940) strips PR #1940 and linked issue gh-1931', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var mod = loaded.mod;
+        var trackerRemovals = [];
+        var scmRemovals = [];
+        var tracker = {
+            removeLabel: function(key, label) {
+                if (/^pr-/.test(key)) throw new Error('trackers: cannot parse GitHub issue key: ' + key);
+                trackerRemovals.push({ key: key, label: label });
+            }
+        };
+        var scm = {
+            removeLabel: function(prId, label) {
+                scmRemovals.push({ prId: prId, label: label });
+            }
+        };
+        var pr = { number: 1940, body: 'Closes #1931', head: { ref: 'ai/gh-1931' } };
+
+        mod.removeConfiguredLabels(tracker, 'pr-1940', { removeLabels: ['agent:rework'] }, scm, pr);
+
+        assert.deepEqual(trackerRemovals, [{ key: 'gh-1931', label: 'agent:rework' }]);
+        assert.deepEqual(scmRemovals, [{ prId: 1940, label: 'agent:rework' }]);
+    });
+
+    test('removeConfiguredLabels on issue-anchored run (gh-1931) strips both issue gh-1931 and PR #1940, and tolerates errors', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var mod = loaded.mod;
+        var trackerRemovals = [];
+        var scmRemovals = [];
+        var tracker = {
+            removeLabel: function(key, label) {
+                trackerRemovals.push({ key: key, label: label });
+            }
+        };
+        var scm = {
+            removeLabel: function(prId, label) {
+                scmRemovals.push({ prId: prId, label: label });
+                throw new Error('404 not on PR');
+            }
+        };
+        var pr = { number: 1940, body: 'Closes #1932', head: { ref: 'ai/gh-1931' } };
+
+        mod.removeConfiguredLabels(tracker, 'gh-1931', { removeLabel: 'agent:rework' }, scm, pr);
+
+        assert.deepEqual(trackerRemovals, [
+            { key: 'gh-1931', label: 'agent:rework' },
+            { key: 'gh-1932', label: 'agent:rework' }
+        ]);
+        assert.deepEqual(scmRemovals, [{ prId: 1940, label: 'agent:rework' }]);
+    });
+
+    test('removeOneConfiguredLabel handles failing linked-issue fallback and non-PR anchor failures gracefully', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var mod = loaded.mod;
+        var failingTracker = {
+            removeLabel: function() { throw new Error('always fails'); }
+        };
+        var pr = { number: 1940, body: 'Closes #1931' };
+
+        assert.equal(mod.canStripPrLabel(null, pr), false);
+        assert.equal(mod.canStripPrLabel({}, pr), false);
+        assert.equal(mod.canStripPrLabel({ removeLabel: function() {} }, null), false);
+        assert.equal(mod.canStripPrLabel({ removeLabel: function() {} }, pr), true);
+        assert.equal(mod.isPrAnchoredKey('pr-1940'), true);
+        assert.equal(mod.isPrAnchoredKey('gh-1931'), false);
+        assert.equal(mod.isPrAnchoredKey(null), false);
+        mod.removeTrackerLabelQuietly(failingTracker, '', 'agent:rework', '');
+        mod.stripLinkedIssueCounterpart(failingTracker, 'gh-1931', 'gh-1931', 'agent:rework');
+        mod.removeOneConfiguredLabel(failingTracker, 'pr-1940', 'agent:rework', null, pr);
+        mod.removeOneConfiguredLabel(failingTracker, 'PROJ-1', 'agent:rework', null, null);
+    });
+
+    test('parkBlockedPr on PR-anchored run strips arms from linked issue when pr-N tracker removeLabel throws', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var mod = loaded.mod;
+        var trackerRemovals = [];
+        var scmRemovals = [];
+        var scmAdds = [];
+        var tracker = {
+            removeLabel: function(key, label) {
+                if (/^pr-/.test(key)) throw new Error('cannot parse GitHub issue key: ' + key);
+                trackerRemovals.push({ key: key, label: label });
+            }
+        };
+        var scm = {
+            addLabel: function(prId, label) { scmAdds.push({ prId: prId, label: label }); },
+            removeLabel: function(prId, label) { scmRemovals.push({ prId: prId, label: label }); }
+        };
+        var pr = { number: 1940, body: 'Fixes #1931', labels: [{ name: 'agent:rework' }] };
+
+        mod.parkBlockedPr(scm, tracker, pr, 'pr-1940');
+
+        assert.deepEqual(scmAdds, [{ prId: 1940, label: 'blocked' }]);
+        assert.deepEqual(scmRemovals, [
+            { prId: 1940, label: 'agent:rework' },
+            { prId: 1940, label: 'agent:review' }
+        ]);
+        assert.deepEqual(trackerRemovals, [
+            { key: 'gh-1931', label: 'agent:rework' },
+            { key: 'gh-1931', label: 'agent:review' }
+        ]);
+
+        var alwaysFailTracker = { removeLabel: function() { throw new Error('boom'); } };
+        mod.stripArmFromIssue(alwaysFailTracker, 'pr-1940', 'agent:rework', pr);
+    });
+});
