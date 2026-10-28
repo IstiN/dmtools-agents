@@ -1571,6 +1571,39 @@ suite('fetchParentContextToInput — resolveFieldName helpers', function() {
         for (var k in labels) { if (k !== 'customfield_5') untouched = true; }
         assert.equal(untouched, false, 'no stray labels');
     });
+
+    test('gh-1290: resolvedCustomFieldCode accepts ADO reference names (Custom.*, Microsoft.VSTS.*) and records labels', function() {
+        var mod = loadHelpers();
+        var labels = {};
+        assert.equal(mod.resolvedCustomFieldCode('Custom.SolutionDesign', 'Solution Design', labels), 'Custom.SolutionDesign');
+        assert.equal(labels['Custom.SolutionDesign'], 'Solution Design');
+        assert.equal(mod.resolvedCustomFieldCode('Microsoft.VSTS.Common.AcceptanceCriteria', 'Acceptance Criteria', labels), 'Microsoft.VSTS.Common.AcceptanceCriteria');
+        assert.equal(labels['Microsoft.VSTS.Common.AcceptanceCriteria'], 'Acceptance Criteria');
+    });
+
+    test('gh-1290: buildDefaultFields includes Microsoft.VSTS.Common.AcceptanceCriteria on ADO', function() {
+        var mod = loadHelpers();
+        var jiraDefaults = mod.buildDefaultFields({ tracker: { provider: 'jira' } });
+        assert.equal(jiraDefaults.indexOf('Microsoft.VSTS.Common.AcceptanceCriteria'), -1);
+        var adoDefaults = mod.buildDefaultFields({ tracker: { provider: 'ado' } });
+        assert.ok(adoDefaults.indexOf('Microsoft.VSTS.Common.AcceptanceCriteria') !== -1);
+        var adoTrackerDefaults = mod.buildDefaultFields({}, { provider: function() { return 'ado'; } });
+        assert.ok(adoTrackerDefaults.indexOf('Microsoft.VSTS.Common.AcceptanceCriteria') !== -1);
+    });
+
+    test('gh-1290: findFieldValue and extractFieldLabel resolve ADO reference names and aliases', function() {
+        var mod = loadHelpers();
+        var adoFields = {
+            'System.Description': 'ADO desc',
+            'Microsoft.VSTS.Common.AcceptanceCriteria': 'ADO AC',
+            'Custom.SolutionDesign': 'ADO SD'
+        };
+        assert.equal(mod.findFieldValue(adoFields, 'description'), 'ADO desc');
+        assert.equal(mod.findFieldValue(adoFields, 'Acceptance Criteria'), 'ADO AC');
+        assert.equal(mod.findFieldValue(adoFields, 'Custom.SolutionDesign'), 'ADO SD');
+        assert.equal(mod.extractFieldLabel('Microsoft.VSTS.Common.AcceptanceCriteria'), 'Acceptance Criteria');
+        assert.equal(mod.extractFieldLabel('System.Description'), 'Description');
+    });
 });
 
 // ── Suite: gh-1279 Bug / Epic skip & duplicate context deduplication ─────────
@@ -1738,4 +1771,158 @@ suite('fetchParentContextToInput — gh-1279 Bug/Epic skip and sibling dedup', f
         assert.equal(writes.length, 1, 'second match for same prefix skipped even when file is empty');
     });
 
+});
+
+// ── Suite: gh-1290 Azure DevOps parent resolution & field mapping ───────────
+
+suite('fetchParentContextToInput — gh-1290 Azure DevOps parent & fields', function() {
+
+    test('resolves ADO parent from raw WorkItem with System.Parent or Hierarchy-Reverse relation and renders ADO fields', function() {
+        var written = {};
+        var getCalls = [];
+        var wiqlCalls = [];
+        var m = loadFetchParentContextWithConfigLoader({
+            loadProjectConfig: function() {
+                return {
+                    tracker: { provider: 'ado', adoProject: 'MyAdoProj' },
+                    jira: {
+                        parentContextFetch: {
+                            enabled: true,
+                            includeEpicParent: true,
+                            jql: 'SELECT [System.Id] FROM WorkItems WHERE [System.Parent] = {parentKey}'
+                        }
+                    }
+                };
+            }
+        }, {
+            ado_get_work_item: function(args) {
+                getCalls.push(args);
+                if (String(args.id) === '2010283') {
+                    // Unfiltered fetch returns relations with Hierarchy-Reverse
+                    return {
+                        id: 2010283,
+                        fields: {
+                            'System.Title': 'PBI Story',
+                            'System.State': 'Active',
+                            'System.WorkItemType': 'Product Backlog Item'
+                        },
+                        relations: [
+                            { rel: 'System.LinkTypes.Hierarchy-Reverse', url: 'https://dev.azure.com/org/MyAdoProj/_apis/wit/workItems/2010281' }
+                        ]
+                    };
+                }
+                if (String(args.id) === '2010281') {
+                    return {
+                        id: 2010281,
+                        fields: {
+                            'System.Title': 'Parent Feature',
+                            'System.State': 'Active',
+                            'System.WorkItemType': 'Feature',
+                            'System.Description': 'Feature description body',
+                            'Microsoft.VSTS.Common.AcceptanceCriteria': 'Feature AC body'
+                        }
+                    };
+                }
+                return null;
+            },
+            ado_search_by_wiql: function(args) {
+                wiqlCalls.push(args);
+                return {
+                    value: [
+                        {
+                            id: 2010290,
+                            fields: {
+                                'System.Title': '[BA] Business Analysis Task',
+                                'System.State': 'Done',
+                                'System.WorkItemType': 'Task',
+                                'System.Description': 'BA details',
+                                'Microsoft.VSTS.Common.AcceptanceCriteria': 'BA ACs',
+                                'Custom.SolutionDesign': 'Custom SD content'
+                            }
+                        }
+                    ]
+                };
+            },
+            ado_get_field_code: function(args) {
+                if (args.fieldName === 'Solution Design') return 'Custom.SolutionDesign';
+                return null;
+            },
+            file_write: function(p, c) { written[p] = c; }
+        });
+
+        // Simulate DMTools passing a raw ADO WorkItem from a filtered batch (no System.Parent, no relations)
+        m.action({
+            inputFolderPath: 'input/2010283',
+            ticket: {
+                id: 2010283,
+                fields: {
+                    'System.Title': 'PBI Story',
+                    'System.State': 'Active',
+                    'System.WorkItemType': 'Product Backlog Item'
+                }
+            },
+            jobParams: {
+                customParams: {
+                    parentContextFetch: {
+                        enabled: true,
+                        includeEpicParent: true,
+                        siblingFields: ['key', 'summary', 'description', 'status', 'Acceptance Criteria', 'Solution Design']
+                    }
+                }
+            }
+        });
+
+        assert.ok(written['input/2010283/parent-2010281.md'], 'parent-2010281.md written');
+        assert.contains(written['input/2010283/parent-2010281.md'], 'Feature description body');
+        assert.contains(written['input/2010283/parent-2010281.md'], '**Acceptance Criteria:**\n\nFeature AC body');
+        assert.ok(written['input/2010283/parent_context_ba.md'], 'parent_context_ba.md written');
+        assert.contains(written['input/2010283/parent_context_ba.md'], 'BA details');
+        assert.contains(written['input/2010283/parent_context_ba.md'], '**Acceptance Criteria:**\n\nBA ACs');
+        assert.contains(written['input/2010283/parent_context_ba.md'], '**Solution Design:**\n\nCustom SD content');
+        assert.equal(wiqlCalls.length, 1);
+        assert.contains(wiqlCalls[0].wiql, '2010281');
+    });
+
+    test('resolves ADO parent directly from inline raw WorkItem when System.Parent is present without extra getIssue call', function() {
+        var written = {};
+        var getIds = [];
+        var m = loadFetchParentContext({
+            ado_get_work_item: function(args) {
+                getIds.push(String(args.id));
+                return {
+                    id: 2010281,
+                    fields: {
+                        'System.Title': 'Parent Feature',
+                        'System.State': 'Active',
+                        'System.WorkItemType': 'User Story',
+                        'System.Description': 'Parent story desc'
+                    }
+                };
+            },
+            ado_search_by_wiql: function() { return { value: [] }; },
+            file_write: function(p, c) { written[p] = c; }
+        });
+
+        m.action({
+            inputFolderPath: 'input/2010283',
+            ticket: {
+                id: 2010283,
+                fields: {
+                    'System.Title': 'Child Task',
+                    'System.State': 'Active',
+                    'System.WorkItemType': 'Task',
+                    'System.Parent': 2010281
+                }
+            },
+            jobParams: {
+                customParams: {
+                    trackerProvider: 'ado',
+                    parentContextFetch: { enabled: true }
+                }
+            }
+        });
+
+        assert.deepEqual(getIds, ['2010281'], 'only parent work item fetched when System.Parent is on inline ticket');
+        assert.ok(written['input/2010283/parent-2010281.md'], 'parent-2010281.md written');
+    });
 });

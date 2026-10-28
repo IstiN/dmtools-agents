@@ -19,7 +19,10 @@
  *       acceptanceCriteria: 'Acceptance Criteria'
  *     },
  *     parentContextFetch: {
- *       enabled: true
+ *       enabled: true,
+ *       // On Azure DevOps, the natural parent of a PBI/User Story is a Feature (or Epic),
+ *       // so set includeEpicParent: true (or includeParentIssueTypes: ['Feature']) to enrich from Feature parents.
+ *       includeEpicParent: true
  *     }
  *   }
  *
@@ -64,6 +67,26 @@ var mergeObjectsShared = require('./common/mergeObjects.js');
 var DEFAULT_JQL = 'parent = {parentKey} AND (summary ~ "\\\\[BA\\\\]" OR summary ~ "\\\\[SA\\\\]" OR summary ~ "\\\\[VD\\\\]") ORDER BY created ASC';
 
 var DEFAULT_FIELDS = ['key', 'summary', 'description', 'status', 'comment'];
+
+var ADO_ACCEPTANCE_CRITERIA_FIELD = 'Microsoft.VSTS.Common.AcceptanceCriteria';
+
+var ADO_FIELD_LOOKUP_ALIASES = {
+    summary: 'System.Title',
+    title: 'System.Title',
+    description: 'System.Description',
+    status: 'System.State',
+    state: 'System.State',
+    labels: 'System.Tags',
+    tags: 'System.Tags',
+    priority: 'Microsoft.VSTS.Common.Priority',
+    'acceptance criteria': ADO_ACCEPTANCE_CRITERIA_FIELD
+};
+
+var DEFAULT_FIELD_LABELS = {
+    'Microsoft.VSTS.Common.AcceptanceCriteria': 'Acceptance Criteria',
+    'System.Description': 'Description',
+    'Microsoft.VSTS.Common.Priority': 'Priority'
+};
 
 var DEFAULT_CONTEXTS = [
     {
@@ -115,13 +138,26 @@ function pushIfAbsent(fields, fieldName) {
     if (fields.indexOf(fieldName) === -1) fields.push(fieldName);
 }
 
-function buildDefaultFields(projectConfig) {
+function isAdoTracker(tracker) {
+    return Boolean(tracker && typeof tracker.provider === 'function' && tracker.provider() === 'ado');
+}
+
+function isAdoProjectConfig(projectConfig, tracker) {
+    if (isAdoTracker(tracker)) return true;
+    var p = projectConfig && projectConfig.tracker && projectConfig.tracker.provider;
+    return String(p || '').toLowerCase() === 'ado';
+}
+
+function buildDefaultFields(projectConfig, tracker) {
     var fields = DEFAULT_FIELDS.slice();
     var customFields = getJiraCustomFields(projectConfig);
     for (var key in customFields) {
         if (Object.prototype.hasOwnProperty.call(customFields, key) && isHumanReadableFieldName(customFields[key])) {
             pushIfAbsent(fields, customFields[key]);
         }
+    }
+    if (isAdoProjectConfig(projectConfig, tracker)) {
+        pushIfAbsent(fields, ADO_ACCEPTANCE_CRITERIA_FIELD);
     }
     return fields;
 }
@@ -196,10 +232,17 @@ function unwrapTrackerResult(resolved) {
     return resolved;
 }
 
-/** Record the human label for a resolved customfield_* code; null when not a code. */
+/** True when resolved is a Jira customfield_* ID or an ADO reference name (e.g. Custom.*, Microsoft.VSTS.*). */
+function isResolvedFieldCode(resolved) {
+    if (!resolved || typeof resolved !== 'string') return false;
+    return resolved.indexOf('customfield_') === 0 || resolved.indexOf('.') !== -1;
+}
+
+/** Record the human label for a resolved customfield_* or ADO reference code; null when not a code. */
 function resolvedCustomFieldCode(resolved, fieldName, fieldLabels) {
-    if (resolved && typeof resolved === 'string' && resolved.indexOf('customfield_') === 0) {
-        fieldLabels[resolved] = fieldName;
+    if (isResolvedFieldCode(resolved)) {
+        if (fieldLabels && resolved !== fieldName) fieldLabels[resolved] = fieldName;
+        else if (fieldLabels && resolved.indexOf('customfield_') === 0) fieldLabels[resolved] = fieldName;
         return resolved;
     }
     return null;
@@ -238,18 +281,21 @@ function resolveFetchFields(fields, projectKey, fieldLabels, shouldResolve, trac
  * DMTools returns custom fields as "Label (customfield_ID)" keys,
  * so we need to match by suffix or exact name.
  */
-function findFieldValue(fields, fieldName) {
-    if (!fields || !fieldName) return undefined;
-    // Exact match first
-    if (fieldName in fields) return fields[fieldName];
-    // Match by suffix "(fieldName)" — dmtools format: "Label (customfield_12345)"
+function findSuffixFieldValue(fields, fieldName) {
     var suffix = '(' + fieldName + ')';
     var keys = Object.keys(fields);
     for (var i = 0; i < keys.length; i++) {
-        var k = keys[i];
-        if (k.indexOf(suffix) > -1) return fields[k];
+        if (keys[i].indexOf(suffix) > -1) return fields[keys[i]];
     }
     return undefined;
+}
+
+function findFieldValue(fields, fieldName) {
+    if (!fields || !fieldName) return undefined;
+    if (fieldName in fields) return fields[fieldName];
+    var alias = ADO_FIELD_LOOKUP_ALIASES[String(fieldName).toLowerCase()];
+    if (alias && (alias in fields)) return fields[alias];
+    return findSuffixFieldValue(fields, fieldName);
 }
 
 /**
@@ -257,6 +303,7 @@ function findFieldValue(fields, fieldName) {
  * "Acceptance Criteria (customfield_10397)" → "Acceptance Criteria"
  */
 function extractFieldLabel(fieldKey) {
+    if (DEFAULT_FIELD_LABELS[fieldKey]) return DEFAULT_FIELD_LABELS[fieldKey];
     var match = fieldKey.match(/^(.+?)\s*\(customfield_\d+\)$/);
     return match ? match[1].trim() : fieldKey;
 }
@@ -340,9 +387,13 @@ function renderCommentsMarkdown(commentField) {
  * }
  */
 /** Fields to fetch for the parent story: parentFields → fields → defaults. */
+function shouldResolveForTracker(cfg, tracker) {
+    return Boolean((cfg && cfg.resolveFieldNames === true) || isAdoTracker(tracker));
+}
+
 function resolveParentFetchFields(cfg, projectConfig, projectKey, fieldLabels, tracker) {
-    var parentFields = cfg.parentFields || cfg.fields || buildDefaultFields(projectConfig);
-    return resolveFetchFields(ensureBaseFields(parentFields), projectKey, fieldLabels, cfg.resolveFieldNames === true, tracker);
+    var parentFields = cfg.parentFields || cfg.fields || buildDefaultFields(projectConfig, tracker);
+    return resolveFetchFields(ensureBaseFields(parentFields), projectKey, fieldLabels, shouldResolveForTracker(cfg, tracker), tracker);
 }
 
 /** Rendered field section of a parent story ('_No content available._' when empty). */
@@ -426,18 +477,24 @@ function fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fie
  * Determine the ticket key: the input folder name wins over the ticket object.
  */
 function resolveTicketKey(folder, ticket) {
-    return folder ? folder.split('/').pop() : (ticket && ticket.key);
+    if (folder) return folder.split('/').pop();
+    if (!ticket) return undefined;
+    return ticket.key || (ticket.id != null ? String(ticket.id) : undefined);
 }
 
-/**
- * Determine the ticket fields: from the passed ticket, else fetch by key.
- * Returns null ONLY when the fetch itself failed (caller must bail out —
- * the warning is logged here); returns undefined when the ticket was fetched
- * but carries no fields (caller falls through to the no-parent path).
- */
-function resolveTicketFields(tracker, ticket, ticketKey) {
-    var ticketFields = ticket && ticket.fields;
-    if (ticketFields) return ticketFields;
+/** True when a ticket carries raw non-Jira fields that need tracker.toIssueView normalization. */
+function needsTicketNormalization(tracker, ticket) {
+    if (!ticket || !ticket.fields || ticket.fields.summary !== undefined) return false;
+    return Boolean(tracker && typeof tracker.toIssueView === 'function');
+}
+
+/** Convert a raw backend ticket (e.g. ADO WorkItem) to a Jira-shaped view when the tracker supports toIssueView. */
+function normalizeActionTicket(tracker, ticket) {
+    if (!needsTicketNormalization(tracker, ticket)) return ticket;
+    return tracker.toIssueView(ticket) || ticket;
+}
+
+function fetchTicketFieldsByKey(tracker, ticketKey) {
     try {
         var fetched = tracker.getIssue(ticketKey);
         return fetched ? fetched.fields : undefined;
@@ -448,10 +505,34 @@ function resolveTicketFields(tracker, ticket, ticketKey) {
 }
 
 /**
- * Project key for custom-field resolution: project config, else key prefix.
+ * Determine the ticket fields: from the passed ticket (normalized via tracker.toIssueView),
+ * else fetch by key. On ADO, if the inline ticket came from a filtered batch without parent/relations,
+ * re-fetch via tracker.getIssue(ticketKey) so System.Parent or Hierarchy-Reverse relation is resolved.
  */
+function resolveTicketFields(tracker, ticket, ticketKey) {
+    var normalized = normalizeActionTicket(tracker, ticket);
+    var ticketFields = normalized && normalized.fields;
+    if (ticketFields) {
+        if (!(ticketFields.parent && ticketFields.parent.key) && isAdoTracker(tracker)) {
+            var refetched = fetchTicketFieldsByKey(tracker, ticketKey);
+            if (refetched) return mergeTicketFields(ticketFields, { fields: refetched });
+        }
+        return ticketFields;
+    }
+    return fetchTicketFieldsByKey(tracker, ticketKey);
+}
+
+/**
+ * Project key for custom-field resolution: tracker.adoProject -> jira.project -> key prefix.
+ */
+function configuredProjectKey(projectConfig) {
+    if (!projectConfig) return null;
+    return (projectConfig.tracker && projectConfig.tracker.adoProject) ||
+        (projectConfig.jira && projectConfig.jira.project) || null;
+}
+
 function resolveProjectKey(projectConfig, parentKey, ticketKey) {
-    return (projectConfig && projectConfig.jira && projectConfig.jira.project) ||
+    return configuredProjectKey(projectConfig) ||
         parentKey.split('-')[0] ||
         ticketKey.split('-')[0];
 }
@@ -459,10 +540,10 @@ function resolveProjectKey(projectConfig, parentKey, ticketKey) {
 /**
  * Resolve the run options from the merged config, applying defaults.
  */
-function resolveFetchOptions(cfg, projectConfig) {
+function resolveFetchOptions(cfg, projectConfig, tracker) {
     return {
         jqlTemplate: cfg.jql || DEFAULT_JQL,
-        siblingFields: cfg.siblingFields || cfg.fields || buildDefaultFields(projectConfig),
+        siblingFields: cfg.siblingFields || cfg.fields || buildDefaultFields(projectConfig, tracker),
         contexts: cfg.contexts || DEFAULT_CONTEXTS,
         fieldLabels: cfg.fieldLabels || {},
         childQuestionsCfg: cfg.childQuestions || null
@@ -774,7 +855,7 @@ function shouldSkipAnchor(anchor, ticket, cfg, jobParams, projectConfig) {
 /** Sibling search fields: always base fields, resolved to tracker codes when asked. */
 function resolveSiblingFetchFields(cfg, opts, projectKey, tracker) {
     // Always ensure base fields are present for sibling search
-    return resolveFetchFields(ensureBaseFields(opts.siblingFields), projectKey, opts.fieldLabels, cfg.resolveFieldNames === true, tracker);
+    return resolveFetchFields(ensureBaseFields(opts.siblingFields), projectKey, opts.fieldLabels, shouldResolveForTracker(cfg, tracker), tracker);
 }
 
 /**
@@ -813,7 +894,7 @@ function action(params) {
 
         // Resolve configured options with defaults after parent is known so human-readable
         // custom fields can be resolved by project key when Jira requires customfield_* IDs.
-        var opts = resolveFetchOptions(cfg, projectConfig);
+        var opts = resolveFetchOptions(cfg, projectConfig, tracker);
         var projectKey = resolveProjectKey(projectConfig, anchor.parentKey, anchor.ticketKey);
 
         // 2. Fetch parent story itself (unless explicitly disabled)
@@ -875,6 +956,8 @@ if (typeof module !== 'undefined' && module.exports) {
         isPassThroughField: isPassThroughField,
         unwrapTrackerResult: unwrapTrackerResult,
         resolvedCustomFieldCode: resolvedCustomFieldCode,
+        findFieldValue: findFieldValue,
+        extractFieldLabel: extractFieldLabel,
         issueTypeNameOf: issueTypeNameOf,
         shouldSkipBugTicket: shouldSkipBugTicket,
         shouldSkipParentContainer: shouldSkipParentContainer

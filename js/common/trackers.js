@@ -587,7 +587,7 @@ function createTracker(config, customParams) {
 
     function adoGetIssue(key, fields) {
         var args = { id: String(key) };
-        if (fields) args.fields = fields;
+        if (fields) args.fields = Array.isArray(fields) ? adoSearchFields(fields) : fields;
         return toIssueView(ado_get_work_item(args));
     }
 
@@ -595,7 +595,8 @@ function createTracker(config, customParams) {
     // (the id always comes back), and Title/State/Tags/Type are always requested so the result is a complete ADO
     // item that normalizeTicket can turn into a key, on every dmtools version.
     var ADO_SEARCH_COLUMNS = { labels: 'System.Tags', tags: 'System.Tags', summary: 'System.Title', title: 'System.Title',
-        status: 'System.State', state: 'System.State', description: 'System.Description' };
+        status: 'System.State', state: 'System.State', description: 'System.Description', parent: 'System.Parent',
+        'acceptance criteria': 'Microsoft.VSTS.Common.AcceptanceCriteria' };
 
     var ADO_SEARCH_SKIP = { key: true, id: true, comment: true, comments: true };
 
@@ -674,11 +675,16 @@ function createTracker(config, customParams) {
         return ado_attach_file(args);
     }
 
-    function adoFieldCode(project, fieldName) {
-        if (typeof ado_get_field_code !== 'function') return null;   // callers treat null as "use the human name"
-        var r = ado_get_field_code({ project: project, fieldName: fieldName });
+    function _unwrapFieldCode(r) {
         if (r && typeof r === 'object' && r.result) r = r.result;
         return typeof r === 'string' ? r : null;
+    }
+
+    function adoFieldCode(project, fieldName) {
+        var alias = ADO_FIELD_ALIASES[String(fieldName || '').toLowerCase()];
+        if (alias) return alias;
+        if (typeof ado_get_field_code !== 'function') return null;   // callers treat null as "use the human name"
+        return _unwrapFieldCode(ado_get_field_code({ project: adoProjectFor(project), fieldName: fieldName }));
     }
 
     function adoCreateWithParent(project, type, title, description, parentKey, extra) {
@@ -989,11 +995,16 @@ function createTracker(config, customParams) {
     };
     var impl = impls[providerName];
 
-    /** True when a payload's `fields` is an ADO field bag (any System.* reference name), whichever columns were asked for. */
+    function _isAdoFieldKey(k) {
+        var s = String(k);
+        return s.indexOf('System.') === 0 || s.indexOf('Microsoft.VSTS.') === 0 || s.indexOf('Custom.') === 0;
+    }
+
+    /** True when a payload's `fields` is an ADO field bag (System.*, Microsoft.VSTS.*, or Custom.* reference name). */
     function _isAdoFields(f) {
         if (!f || typeof f !== 'object') return false;
         for (var k in f) {
-            if (Object.prototype.hasOwnProperty.call(f, k) && String(k).indexOf('System.') === 0) return true;
+            if (Object.prototype.hasOwnProperty.call(f, k) && _isAdoFieldKey(k)) return true;
         }
         return false;
     }
@@ -1060,6 +1071,25 @@ function createTracker(config, customParams) {
         });
     }
 
+    /** Extract the parent work-item ID from a Hierarchy-Reverse relation URL, else null. */
+    function _adoRelationParentId(rel) {
+        if (!rel || rel.rel !== 'System.LinkTypes.Hierarchy-Reverse' || typeof rel.url !== 'string') return null;
+        var m = rel.url.match(/\/(\d+)(?:$|[/?#])/);
+        return m ? m[1] : null;
+    }
+
+    /** ADO parent key: System.Parent field first, else Hierarchy-Reverse relation target ID. */
+    function _adoParentKey(t, af) {
+        if (af['System.Parent'] != null) return String(af['System.Parent']);
+        var rels = t && t.relations;
+        if (!Array.isArray(rels)) return null;
+        for (var i = 0; i < rels.length; i++) {
+            var id = _adoRelationParentId(rels[i]);
+            if (id) return id;
+        }
+        return null;
+    }
+
     /** ADO payload → flat view + the neutral extras (ADO carries no fix versions). */
     function _normalizeAdoTicket(t) {
         var af = t.fields;
@@ -1074,7 +1104,7 @@ function createTracker(config, customParams) {
             null
         ), {
             issueType: af['System.WorkItemType'] || null,
-            parentKey: af['System.Parent'] != null ? String(af['System.Parent']) : null,
+            parentKey: _adoParentKey(t, af),
             fixVersions: []
         });
     }
@@ -1148,8 +1178,19 @@ function createTracker(config, customParams) {
             typeof t.fields === 'object' && !_isAdoFields(t.fields));
     }
 
+    /** Copy raw ADO fields onto the Jira-shaped fields view without clobbering normalized keys. */
+    function _copyRawAdoFields(target, rawFields) {
+        if (!_isAdoFields(rawFields)) return target;
+        for (var k in rawFields) {
+            if (Object.prototype.hasOwnProperty.call(rawFields, k) && !(k in target)) {
+                target[k] = rawFields[k];
+            }
+        }
+        return target;
+    }
+
     /** The Jira-shaped fields block built from a normalizeTicket() flat view. */
-    function issueViewFields(n) {
+    function issueViewFields(n, rawFields) {
         var fields = {
             summary: n.title,
             status: { name: n.status },
@@ -1160,7 +1201,7 @@ function createTracker(config, customParams) {
             fixVersions: (n.fixVersions || []).map(function (v) { return { name: v }; })
         };
         if (n.parentKey) fields.parent = { key: n.parentKey };
-        return fields;
+        return _copyRawAdoFields(fields, rawFields);
     }
 
     /**
@@ -1176,7 +1217,7 @@ function createTracker(config, customParams) {
         if (isFilteredJiraTicketView(t)) return t;
         var n = normalizeTicket(t);
         if (!n) return null;
-        return { key: n.key, id: n.id, fields: issueViewFields(n), raw: t };
+        return { key: n.key, id: n.id, fields: issueViewFields(n, t && t.fields), raw: t };
     }
 
     /** A search result (page object or bare array) as an array of Jira-shaped issue views. */

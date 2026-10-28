@@ -2160,6 +2160,64 @@ suite('trackers.js toIssueView branch coverage (gh-119 characterization)', funct
         assert.equal(t('jira').toIssueView([1, 2, 3]), null);
         assert.equal(t('jira').toIssueView('42'), null);
     });
+
+    test('gh-1290: ADO Hierarchy-Reverse relation resolves parentKey when System.Parent is absent, and raw ADO fields survive on view.fields', function () {
+        var raw = {
+            id: 2010283,
+            fields: {
+                'System.Title': 'PBI title',
+                'System.State': 'Active',
+                'System.WorkItemType': 'Product Backlog Item',
+                'Microsoft.VSTS.Common.AcceptanceCriteria': 'AC1: must work',
+                'Custom.SolutionDesign': 'SD text'
+            },
+            relations: [
+                { rel: 'System.LinkTypes.Hierarchy-Forward', url: 'https://dev.azure.com/org/proj/_apis/wit/workItems/2010290' },
+                { rel: 'System.LinkTypes.Hierarchy-Reverse', url: 'https://dev.azure.com/org/proj/_apis/wit/workItems/2010281' }
+            ]
+        };
+        var v = t('ado').toIssueView(raw);
+        assert.equal(v.key, '2010283');
+        assert.deepEqual(v.fields.parent, { key: '2010281' });
+        assert.equal(v.fields['Microsoft.VSTS.Common.AcceptanceCriteria'], 'AC1: must work');
+        assert.equal(v.fields['Custom.SolutionDesign'], 'SD text');
+    });
+
+    test('gh-1290: ADO payload with only Custom.* or Microsoft.VSTS.* fields is recognized as ADO (not filtered Jira)', function () {
+        var rawCustom = { id: 88, fields: { 'Custom.SolutionDesign': 'arch', 'Microsoft.VSTS.Common.AcceptanceCriteria': 'ac' } };
+        var v = t('ado').toIssueView(rawCustom);
+        assert.notEqual(v, rawCustom);
+        assert.equal(v.key, '88');
+        assert.equal(v.fields['Custom.SolutionDesign'], 'arch');
+        assert.equal(v.fields['Microsoft.VSTS.Common.AcceptanceCriteria'], 'ac');
+    });
+
+    test('gh-1290: ado fieldCode resolves built-in aliases first and maps numeric project IDs via adoProjectFor', function () {
+        var seen = [];
+        var tr = loadTrackers({
+            ado_get_field_code: function (a) { seen.push(a); return 'Custom.SolutionDesign'; }
+        }).createTracker({ tracker: { provider: 'ado', adoProject: 'MyAdoProj' } });
+        assert.equal(tr.fieldCode('2010281', 'Acceptance Criteria'), 'Microsoft.VSTS.Common.AcceptanceCriteria');
+        assert.equal(seen.length, 0, 'alias resolved without calling ado_get_field_code');
+        assert.equal(tr.fieldCode('2010281', 'Solution Design'), 'Custom.SolutionDesign');
+        assert.deepEqual(seen[0], { project: 'MyAdoProj', fieldName: 'Solution Design' });
+    });
+
+    test('gh-1290: ado getIssue maps field array through adoSearchFields (aliases mapped, key/comment stripped)', function () {
+        var getCalls = [];
+        var tr = loadTrackers({
+            ado_get_work_item: function (a) {
+                getCalls.push(a);
+                return { id: 2010281, fields: { 'System.Title': 'Feat', 'System.State': 'Active', 'System.WorkItemType': 'Feature' } };
+            }
+        }).createTracker({ tracker: { provider: 'ado' } });
+        tr.getIssue('2010281', ['key', 'summary', 'description', 'status', 'comment', 'Acceptance Criteria']);
+        assert.equal(getCalls.length, 1);
+        assert.equal(getCalls[0].fields.indexOf('key'), -1);
+        assert.equal(getCalls[0].fields.indexOf('comment'), -1);
+        assert.ok(getCalls[0].fields.indexOf('System.Description') !== -1);
+        assert.ok(getCalls[0].fields.indexOf('Microsoft.VSTS.Common.AcceptanceCriteria') !== -1);
+    });
 });
 
 // ── gh-1244: createTrackerHolder ─────────────────────────────────────────────
