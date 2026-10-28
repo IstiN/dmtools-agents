@@ -210,6 +210,12 @@ function resolvePostTracker(options, tracker) {
  * @param {string} options.initiator - Optional initiator account id to mention in the comment.
  * @returns {object} Result summary { posted: number, files: string[], errors: string[] }.
  */
+function unpostedUsageFiles(ticketKey, usageFiles) {
+    return usageFiles.filter(function(filePath) {
+        return !postedInRun[ticketKey + '::' + filePath];
+    });
+}
+
 function postTokenUsageComments(ticketKey, options) {
     options = options || {};
     var outputsDir = options.outputsDir || OUTPUTS_DIR;
@@ -219,17 +225,13 @@ function postTokenUsageComments(ticketKey, options) {
     var errors = [];
     var tracker = options.tracker || null;
 
-    var usageFiles = findUsageFiles(outputsDir);
+    var usageFiles = unpostedUsageFiles(ticketKey, findUsageFiles(outputsDir));
     if (!usageFiles.length) {
         console.log('No token usage files found in ' + outputsDir);
         return { posted: 0, files: [], errors: [] };
     }
 
     usageFiles.forEach(function(filePath) {
-        var dedupKey = String(ticketKey || '') + '::' + filePath;
-        if (postedInRun[dedupKey]) {
-            return;
-        }
         var data = readJsonFile(filePath);
         if (!data) {
             errors.push(filePath + ' (parse error)');
@@ -241,7 +243,7 @@ function postTokenUsageComments(ticketKey, options) {
             var comment = formatUsageComment(filePath, data, initiator,
                 typeof tracker.provider === 'function' ? tracker.provider() : null);
             tracker.postComment(ticketKey, comment);
-            postedInRun[dedupKey] = true;
+            postedInRun[ticketKey + '::' + filePath] = true;
             console.log('Posted token usage comment for ' + ticketKey + ' from ' + filePath);
             posted += 1;
             files.push(filePath);

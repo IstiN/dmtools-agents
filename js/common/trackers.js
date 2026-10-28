@@ -332,6 +332,12 @@ function _adoCreatedKey(raw) {
     return extractTicketKey(raw);
 }
 
+function normalizeAdoQuery(query) {
+    var q = String(query == null ? '' : query).trim();
+    var m = /^key\s*(?:=\s*['"]?(\d+)['"]?|in\s*\(\s*['"]?(\d+)['"]?\s*\))$/i.exec(q);
+    return m ? 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = ' + (m[1] || m[2]) : query;
+}
+
 function createTracker(config, customParams) {
     config = _resolveEffectiveConfig(config, customParams);
     var providerName = _resolveProviderName(config, customParams);
@@ -500,12 +506,6 @@ function createTracker(config, customParams) {
 
     function adoGetTicket(key) {
         return normalizeTicket(ado_get_work_item({ id: String(key) }));
-    }
-
-    function normalizeAdoQuery(query) {
-        var q = String(query == null ? '' : query).trim();
-        var m = q.match(/^key\s*(?:=\s*['"]?(\d+)['"]?|in\s*\(\s*['"]?(\d+)['"]?\s*\))$/i);
-        return m ? 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = ' + (m[1] || m[2]) : query;
     }
 
     function adoSearch(query) {
