@@ -204,6 +204,13 @@ function isGlobalWorkflowCapReached(scm, workflowFile, options) {
  * branch/working tree — exactly what's needed to chain e.g. pr_review -> pr_rework
  * -> pr_review for the same ticket without ever leaving the local machine.
  */
+function resolveAutoStartInputJql(ticketKey, config) {
+    if (typeof buildEncodedConfigModule.resolveTicketInputJql === 'function') {
+        return buildEncodedConfigModule.resolveTicketInputJql(ticketKey, config);
+    }
+    return 'key = ' + ticketKey;
+}
+
 function triggerConfiguredJobLocally(options) {
     var ticketKey = options.ticketKey;
     var configFile = options.configFile;
@@ -235,8 +242,9 @@ function triggerConfiguredJobLocally(options) {
     // config back from disk with $(cat ...) rather than inlining it, to avoid shell-escaping a
     // large/multiline JSON blob as a literal CLI argument.
     var ciRunUrl = 'local://autochain/' + ticketKey + '/' + Date.now();
+    var inputJql = resolveAutoStartInputJql(ticketKey, config);
     var cmd = 'bash -c \'ENCODED_CONFIG="$(cat ' + encodedConfigFile + ')"; dmtools --debug run ' +
-        configFile + ' "${ENCODED_CONFIG}" --inputJql "key = ' + ticketKey + '" --ciRunUrl "' + ciRunUrl + '"\'';
+        configFile + ' "${ENCODED_CONFIG}" --inputJql "' + inputJql + '" --ciRunUrl "' + ciRunUrl + '"\'';
 
     console.log('  🖥️  [local auto-chain] ' + cmd);
 
@@ -300,14 +308,16 @@ function resolveTriggerContext(options) {
     };
 }
 
-function buildWorkflowDispatchPayload(ticketKey, configFile, encodedCfg, projectKey) {
-    return {
+function buildWorkflowDispatchPayload(ticketKey, configFile, encodedCfg, projectKey, inputJql) {
+    var payload = {
         concurrency_key: ticketKey,
         display_key: ticketKey,
         config_file: configFile,
         encoded_config: encodedCfg,
         project_key: projectKey || ''
     };
+    if (inputJql) payload.input_jql = inputJql;
+    return payload;
 }
 
 function projectLogSuffix(projectKey) {
@@ -369,7 +379,7 @@ function triggerConfiguredWorkflowForTicket(options) {
         aiTarget.owner,
         aiTarget.repo,
         ctx.workflowFile,
-        JSON.stringify(buildWorkflowDispatchPayload(ctx.ticketKey, ctx.configFile, encodedCfg, projectKey)),
+        JSON.stringify(buildWorkflowDispatchPayload(ctx.ticketKey, ctx.configFile, encodedCfg, projectKey, resolveAutoStartInputJql(ctx.ticketKey, ctx.config))),
         resolveDispatchRef(options.ref, ctx.customParams.aiRepository, ctx.config)
     );
 
@@ -448,6 +458,7 @@ function triggerSmIfIdle(options) {
 
 module.exports = {
     deriveProjectKey: deriveProjectKey,
+    resolveAutoStartInputJql: resolveAutoStartInputJql,
     triggerConfiguredWorkflowForTicket: triggerConfiguredWorkflowForTicket,
     triggerConfiguredJobLocally: triggerConfiguredJobLocally,
     hasActiveTargetRun: hasActiveTargetRun,

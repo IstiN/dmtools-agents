@@ -110,6 +110,24 @@ function applyMergeDirectives(merged, agentJson, parentParams, childParams) {
  * @param {number} [depth=0]   - Recursion guard (max 10 levels).
  * @returns {Object} Fully-resolved `params` object with parent inheritance applied.
  */
+function resolveParentFilePath(parentRefPath, agentPath) {
+    var direct = dirOf(agentPath) + parentRefPath;
+    if (tryReadJson(direct)) {
+        return direct;
+    }
+    var base = String(parentRefPath || '').replace(/@[^/]+$/, '').replace(/\.json$/i, '');
+    if (!base) {
+        return direct;
+    }
+    var candidates = [dirOf(agentPath) + base + '.json', 'agents/' + base + '.json', base + '.json'];
+    for (var i = 0; i < candidates.length; i++) {
+        if (tryReadJson(candidates[i])) {
+            return candidates[i];
+        }
+    }
+    return direct;
+}
+
 function resolveParentMerge(agentJson, agentPath, depth) {
     depth = depth || 0;
     var childParams = (agentJson && agentJson.params) ? agentJson.params : {};
@@ -118,8 +136,7 @@ function resolveParentMerge(agentJson, agentPath, depth) {
         return childParams;
     }
 
-    var parentRelPath = agentJson.parent.path;
-    var parentAbsPath = dirOf(agentPath) + parentRelPath;
+    var parentAbsPath = resolveParentFilePath(agentJson.parent.path, agentPath);
     var parentJson = tryReadJson(parentAbsPath);
     if (!parentJson) {
         return childParams;
@@ -453,6 +470,11 @@ function attachMetadata(p, resolvedCf, projectKey) {
  *   dispatching to GitHub Actions.
  * @returns {string} URL-encoded JSON string for workflow_dispatch `encoded_config`.
  */
+function resolveTicketInputJql(ticketKey, effectiveConfig) {
+    var provider = trackers.createTracker(effectiveConfig, {}).provider();
+    return validateInputJql.inputJqlForKey(ticketKey, provider);
+}
+
 function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
     // One owner of the key rules (validateInputJql): Jira PROJECT-123, GitHub gh-N / owner/repo#N /
     // #N / N and a bare numeric Azure DevOps work item id (#804). Injection-shaped keys still fail.
@@ -460,8 +482,7 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
         throw new Error('Invalid ticket key: "' + ticketKey +
             '". Expected a Jira key (PROJECT-123), a GitHub issue key or an Azure DevOps work item id');
     }
-    var provider = trackers.createTracker(effectiveConfig, {}).provider();
-    var p = { inputJql: validateInputJql.inputJqlForKey(ticketKey, provider) };
+    var p = { inputJql: resolveTicketInputJql(ticketKey, effectiveConfig) };
 
     var agent = loadAgentJsonParams(p, rule, effectiveConfig);
     p = applyProjectConfigResolutions(p, agent.resolvedCf, agent.agentParamsRoot, effectiveConfig);
@@ -480,6 +501,7 @@ module.exports = {
     extractAgentName: extractAgentName,
     resolveConfigFile: resolveConfigFile,
     resolveParentMerge: resolveParentMerge,
+    resolveParentFilePath: resolveParentFilePath,
     // gh-122: extracted parent-merge helpers, exported for unit tests.
     hasParentRef: hasParentRef,
     directiveKey: directiveKey,
@@ -488,6 +510,7 @@ module.exports = {
     applyMergeDirectives: applyMergeDirectives,
     resolveConfluenceTrackerOverride: resolveConfluenceTrackerOverride,
     buildEncodedConfig: buildEncodedConfig,
+    resolveTicketInputJql: resolveTicketInputJql,
     resolveProjectKey: resolveProjectKey,
     resolveAgentJsonPath: resolveAgentJsonPath,
     copyParamValue: copyParamValue,

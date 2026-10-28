@@ -599,4 +599,16 @@ suite('tokenUsageComment.postTokenUsageSafely (gh-124)', function() {
         assert.equal(posted.length, 1);
         assert.equal(posted[0].key, 'TS-4');
     });
+
+    test('deduplicates repeated postTokenUsageComments calls for the same ticket and usage file in one run (#1284)', function() {
+        var posted = [];
+        var mod = loadTokenUsageComment(usageFileMocks(posted));
+
+        var r1 = mod.postTokenUsageComments('2010283', { initiator: 'user-1' });
+        var r2 = mod.postTokenUsageComments('2010283', { initiator: 'user-1' });
+
+        assert.equal(r1.posted, 1);
+        assert.equal(r2.posted, 0, 'second call in the same run must be deduplicated');
+        assert.equal(posted.length, 1, 'comment must be posted only once per ticket+file');
+    });
 });

@@ -332,6 +332,12 @@ function _adoCreatedKey(raw) {
     return extractTicketKey(raw);
 }
 
+function normalizeAdoQuery(query) {
+    var q = String(query == null ? '' : query).trim();
+    var m = /^key\s*(?:=\s*['"]?(\d+)['"]?|in\s*\(\s*['"]?(\d+)['"]?\s*\))$/i.exec(q);
+    return m ? 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = ' + (m[1] || m[2]) : query;
+}
+
 function createTracker(config, customParams) {
     config = _resolveEffectiveConfig(config, customParams);
     var providerName = _resolveProviderName(config, customParams);
@@ -503,7 +509,7 @@ function createTracker(config, customParams) {
     }
 
     function adoSearch(query) {
-        return _ticketPage(ado_search_by_wiql({ wiql: query }), 'value');
+        return _ticketPage(ado_search_by_wiql({ wiql: normalizeAdoQuery(query) }), 'value');
     }
 
     // Adds format:'markdown' only when enabled: the html default sends the exact previous args, so a
@@ -606,7 +612,7 @@ function createTracker(config, customParams) {
     }
 
     function adoSearchIssues(query, opts) {
-        var args = { wiql: query };
+        var args = { wiql: normalizeAdoQuery(query) };
         args.fields = adoSearchFields(opts && opts.fields);
         return _issueList(ado_search_by_wiql(args), 'value');
     }

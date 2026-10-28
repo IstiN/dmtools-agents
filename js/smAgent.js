@@ -844,7 +844,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
             inputs = {
                 concurrency_key: concurrencyKey,
                 display_key:     ticketKey,
-                input_jql:       'key = ' + ticketKey,
+                input_jql:       buildEncodedConfigModule.resolveTicketInputJql(ticketKey, effectiveConfig),
                 config_file:     resolvedCf,
                 encoded_config:  buildEncodedConfigModule.buildEncodedConfig(ticketKey, rule, effectiveConfig),
                 project_key:     projectKey
@@ -9275,7 +9275,7 @@ function action(params) {
         if (matchedRule) {
             targetedRule = {};
             Object.keys(matchedRule).forEach(function(k) { targetedRule[k] = matchedRule[k]; });
-            targetedRule.jql = 'key = ' + targetTicket;
+            targetedRule.jql = buildEncodedConfigModule.resolveTicketInputJql(targetTicket, projectConfig);
             targetedRule.description = 'Targeted: ' + targetAgent + ' for ' + targetTicket;
             delete targetedRule.skipIfLabel;
             delete targetedRule.skipIfLabels;
@@ -9299,7 +9299,7 @@ function action(params) {
             }
             targetedRule = {
                 description: 'Targeted: ' + targetAgent + ' for ' + targetTicket,
-                jql: 'key = ' + targetTicket,
+                jql: buildEncodedConfigModule.resolveTicketInputJql(targetTicket, projectConfig),
                 configFile: targetAgent,
                 enabled: true,
                 localExecution: agentLocalExecution

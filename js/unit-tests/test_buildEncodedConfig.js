@@ -660,6 +660,22 @@ suite('resolveParentMerge — parent inheritance', function() {
         assert.deepEqual(builder.resolveParentMerge(childJson, 'agents/child.json'), { a: 1 });
     });
 
+    test('resolves pinned pack parent ref (story_acceptance_criteria@0.1.255) to local JSON (#1283)', function() {
+        var builder = loadBuilder({
+            'agents/story_acceptance_criteria.json': JSON.stringify({
+                params: { postJSAction: 'agents/js/writeContentOutput.js', cliPrompts: ['parent-ac.md'] }
+            })
+        });
+        var childJson = {
+            parent: { path: 'story_acceptance_criteria@0.1.255', merge: ['params.cliPrompts'] },
+            params: { cliPrompts: ['child-ac.md'] }
+        };
+        var merged = builder.resolveParentMerge(childJson, 'ai_teammate/project/story_ac_custom.json');
+        assert.equal(merged.postJSAction, 'agents/js/writeContentOutput.js');
+        assert.deepEqual(merged.cliPrompts, ['parent-ac.md', 'child-ac.md']);
+        assert.equal(builder.resolveParentFilePath('@0.1.255', 'agents/child.json'), 'agents/@0.1.255');
+    });
+
     test('merge directive tolerates non-array parent and child values', function() {
         var builder = loadBuilder({
             'agents/parent.json': JSON.stringify({ params: { cliPrompts: 'not-an-array' } })

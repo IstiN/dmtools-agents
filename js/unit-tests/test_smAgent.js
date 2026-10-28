@@ -801,6 +801,23 @@ suite('smAgent: config repository override', function() {
         assert.equal(sm.capturedTriggers[0].repo, 'param-repo');
     });
 
+
+    test('uses WIQL input_jql when tracker provider is ado (#1285)', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { repository: { owner: "o", repo: "r" }, tracker: { provider: "ado" } };'
+            },
+            tickets: [{ key: '2010283', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 2010283")
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.input_jql, 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 2010283');
+    });
 });
 
 // ── smRules override ──────────────────────────────────────────────────────────
