@@ -1610,15 +1610,32 @@ function fetchPullRequestObject(repoInfo, prNumber) {
     return typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
 }
 
-function linkedIssueNumberFromPR(repoInfo, prNumber) {
+function parseBranchIssueNumber(branch) {
+    var m = /(^|[^a-z0-9])gh-0*(\d+)([^0-9]|$)/i.exec(String(orEmpty(branch)));
+    return m ? parseInt(m[2], 10) : null;
+}
+
+function linkedIssueNumberFromPR(repoInfo, prNumber, prBranch) {
     var prObj = fetchPullRequestObject(repoInfo, prNumber);
-    return parseLinkedIssueNumber(prObj.body);
+    var fromBody = parseLinkedIssueNumber(prObj.body);
+    if (fromBody) return fromBody;
+    var headRef = prObj.head && (prObj.head.ref || prObj.head);
+    return parseBranchIssueNumber(headRef) || parseBranchIssueNumber(prBranch);
+}
+
+function stripLinkedIssueArmLabels(scm, linkedIssue, isApproved) {
+    if (!linkedIssue) return;
+    removePRLabelQuietly(scm, linkedIssue, 'agent:review', 'No agent:review label to remove from issue #' + linkedIssue);
+    if (isApproved) {
+        removePRLabelQuietly(scm, linkedIssue, 'agent:rework', 'No agent:rework label to remove from issue #' + linkedIssue);
+    }
 }
 
 function rearmReworkOnLinkedIssue(ctx, pr, repoInfo) {
     try {
-        var linkedIssue = linkedIssueNumberFromPR(repoInfo, pr.number);
+        var linkedIssue = linkedIssueNumberFromPR(repoInfo, pr.number, pr.branch);
         if (linkedIssue) {
+            stripLinkedIssueArmLabels(ctx.scm, linkedIssue, false);
             ctx.scm.addLabel(linkedIssue, 'agent:rework');
             console.log('Re-armed agent:rework on linked issue #' + linkedIssue);
         }
@@ -1638,6 +1655,15 @@ function rearmLinkedIssueRework(ctx, pr, repoInfo) {
     rearmReworkOnLinkedIssue(ctx, pr, repoInfo);
 }
 
+function cleanLinkedIssueArmsOnApproval(ctx, pr, repoInfo) {
+    if (!machineAuthorModule.isMachineAuthored({ author: pr.author }, ctx.machineAuthor, repoOwnerOf(repoInfo))) return;
+    try {
+        stripLinkedIssueArmLabels(ctx.scm, linkedIssueNumberFromPR(repoInfo, pr.number, pr.branch), true);
+    } catch (e) {
+        console.warn('Linked-issue approval cleanup failed:', e.message || e);
+    }
+}
+
 /**
  * ── PR-anchored runs end here (#687): verdict + labels live on the
  * PR; the ticket-side steps below (tracker statuses/labels, ticket
@@ -1650,6 +1676,8 @@ function finishPRAnchoredReview(ctx, pr, repoInfo, isApproved, recommendation) {
     removePRLabelQuietly(ctx.scm, pr.number, 'agent:review', 'No agent:review label to remove from PR #' + pr.number);
     if (!isApproved) {
         rearmLinkedIssueRework(ctx, pr, repoInfo);
+    } else {
+        cleanLinkedIssueArmsOnApproval(ctx, pr, repoInfo);
     }
     console.log('✅ PR-anchored review complete — PR #' + pr.number + ' (' + recommendation + ')');
     return { success: true, prNumber: pr.number, recommendation: recommendation };
@@ -2166,6 +2194,11 @@ if (typeof module !== 'undefined' && module.exports) {
         maxThreadLimitOf,
         resolveFormalReviewEnabled,
         parseLinkedIssueNumber,
+        parseBranchIssueNumber,
+        linkedIssueNumberFromPR,
+        stripLinkedIssueArmLabels,
+        cleanLinkedIssueArmsOnApproval,
+        finishPRAnchoredReview,
         resolveWipLabel,
         buildBitriseEnvVars,
         resolveBitriseBranch,

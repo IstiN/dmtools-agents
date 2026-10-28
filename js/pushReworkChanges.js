@@ -195,15 +195,79 @@ function prHasApproved(pr, ticket) {
     return hasPrApprovedLabel(ticket);
 }
 
-function removeConfiguredLabels(tracker, ticketKey, customParams) {
+function parseLinkedIssueFromText(text) {
+    var m = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(String(text || ''));
+    if (m) return 'gh-' + parseInt(m[1], 10);
+    m = /(^|[^a-z0-9])gh-0*(\d+)([^0-9]|$)/i.exec(String(text || ''));
+    return m ? 'gh-' + parseInt(m[2], 10) : null;
+}
+
+function resolveLinkedIssueKeyForPr(pr) {
+    if (!pr) return null;
+    var fromBody = parseLinkedIssueFromText(pr.body);
+    if (fromBody) return fromBody;
+    var headRef = pr.head && (pr.head.ref || pr.head);
+    var fromBranch = parseLinkedIssueFromText(headRef);
+    if (fromBranch) return fromBranch;
+    return parseLinkedIssueFromText(pr.title);
+}
+
+function canStripPrLabel(scm, pr) {
+    if (!scm || typeof scm.removeLabel !== 'function') return false;
+    return !!(pr && pr.number != null);
+}
+
+function stripPrSideLabelQuietly(scm, pr, label) {
+    if (!canStripPrLabel(scm, pr)) return;
+    try {
+        scm.removeLabel(pr.number, label);
+        console.log('✅ Removed SM label from PR #' + pr.number + ':', label);
+    } catch (e) {
+        console.warn('Failed to remove SM label ' + label + ' from PR #' + pr.number + ':', e.message || e);
+    }
+}
+
+function removeTrackerLabelQuietly(tracker, key, label, logContext) {
+    if (!key) return;
+    try {
+        tracker.removeLabel(key, label);
+        console.log('✅ Removed SM label' + logContext + ':', label);
+    } catch (e) {
+        console.warn('Failed to remove SM label ' + label + logContext + ':', e);
+    }
+}
+
+function isPrAnchoredKey(ticketKey) {
+    return /^pr-(\d+)$/.test(String(ticketKey || ''));
+}
+
+function stripLinkedIssueCounterpart(tracker, ticketKey, linkedIssueKey, label) {
+    if (!linkedIssueKey || String(linkedIssueKey) === String(ticketKey)) return;
+    removeTrackerLabelQuietly(tracker, linkedIssueKey, label, ' from linked issue ' + linkedIssueKey);
+}
+
+function removeOneConfiguredLabel(tracker, ticketKey, label, scm, pr) {
+    var linkedIssueKey = resolveLinkedIssueKeyForPr(pr);
+    try {
+        tracker.removeLabel(ticketKey, label);
+        console.log('✅ Removed SM label:', label);
+    } catch (e) {
+        if (isPrAnchoredKey(ticketKey) && linkedIssueKey) {
+            removeTrackerLabelQuietly(tracker, linkedIssueKey, label, ' from linked issue ' + linkedIssueKey);
+        } else {
+            console.warn('Failed to remove SM label ' + label + ':', e);
+        }
+    }
+    if (!isPrAnchoredKey(ticketKey)) {
+        stripLinkedIssueCounterpart(tracker, ticketKey, linkedIssueKey, label);
+    }
+    stripPrSideLabelQuietly(scm, pr, label);
+}
+
+function removeConfiguredLabels(tracker, ticketKey, customParams, scm, pr) {
     labelListModule.normalizeLabels(customParams && customParams.removeLabel, customParams && customParams.removeLabels)
         .forEach(function(label) {
-            try {
-                tracker.removeLabel(ticketKey, label);
-                console.log('✅ Removed SM label:', label);
-            } catch (e) {
-                console.warn('Failed to remove SM label ' + label + ':', e);
-            }
+            removeOneConfiguredLabel(tracker, ticketKey, label, scm, pr);
         });
 }
 
@@ -2034,12 +2098,17 @@ function stripArmFromPr(scm, pr, arm) {
 }
 
 // Strip one arm from the issue carrier — best-effort, mirroring the PR side.
-function stripArmFromIssue(tracker, ticketKey, arm) {
+function stripArmFromIssue(tracker, ticketKey, arm, pr) {
+    var linkedIssueKey = resolveLinkedIssueKeyForPr(pr);
     try {
         tracker.removeLabel(ticketKey, arm);
         console.log('✅ Stripped ' + arm + ' from ' + ticketKey + ' (gh-1060 park)');
     } catch (e) {
-        console.warn('Failed to strip ' + arm + ' from ' + ticketKey + ':', e.message || e);
+        if (isPrAnchoredKey(ticketKey) && linkedIssueKey) {
+            removeTrackerLabelQuietly(tracker, linkedIssueKey, arm, ' from linked issue ' + linkedIssueKey);
+        } else {
+            console.warn('Failed to strip ' + arm + ' from ' + ticketKey + ':', e.message || e);
+        }
     }
 }
 
@@ -2049,7 +2118,7 @@ function parkBlockedPr(scm, tracker, pr, ticketKey) {
         labelPrBlocked(scm, pr);
         ARMS.forEach(function(arm) { stripArmFromPr(scm, pr, arm); });
     }
-    ARMS.forEach(function(arm) { stripArmFromIssue(tracker, ticketKey, arm); });
+    ARMS.forEach(function(arm) { stripArmFromIssue(tracker, ticketKey, arm, pr); });
 }
 
 // ── gh-1195 CRAP split: best-effort steps of the blocked close ───────────────
@@ -2276,7 +2345,7 @@ function wipLabelOf(actualParams) {
         : null;
 }
 
-function finalizeTicketState(tracker, ticketKey, statuses, actualParams, customParams) {
+function finalizeTicketState(tracker, ticketKey, statuses, actualParams, customParams, scm, pr) {
     try {
         tracker.moveToStatus(ticketKey, statuses.IN_REVIEW);
         console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW);
@@ -2307,7 +2376,7 @@ function finalizeTicketState(tracker, ticketKey, statuses, actualParams, customP
     }
 
     // Remove SM idempotency label so the ticket can be re-triggered next cycle
-    removeConfiguredLabels(tracker, ticketKey, customParams);
+    removeConfiguredLabels(tracker, ticketKey, customParams, scm, pr);
 }
 
 // GitHub machine loop latches. A no-op rework (no new commits since the last
@@ -2887,7 +2956,7 @@ function completeReworkLeg(params, setup, tracker, branchName, codeChangesCommit
     prCommentPosted = postCompletionPrComment(scm, pr, ticketKey, fixSummary, fixSummaryWithWarnings,
         repliesPosted, nonBlockingGateWarningBlock, codeChangesCommitted);
 
-    finalizeTicketState(tracker, ticketKey, statuses, actualParams, setup.customParams);
+    finalizeTicketState(tracker, ticketKey, statuses, actualParams, setup.customParams, scm, pr);
 
     // Post completion comment to the ticket.
     // gh-799: the comment is generated from a LIVE unresolved-thread
@@ -2982,7 +3051,7 @@ if (typeof module !== 'undefined' && module.exports) {
     actionSetup, pushAndPublishOrFail, resumeOrFailLadder, completeReworkLeg,
     openThreadsCompletionComment, unaddressedRepliesCompletionComment, changesRequestedCompletionComment, cleanCompletionComment, completionPrCommentSuffix,
     blockedLogLine, postBlockedPrComment, moveToBlockedStatus, removeContextWipLabel,
-    hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, replyTargetsThread, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment,
+    hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, parseLinkedIssueFromText, resolveLinkedIssueKeyForPr, canStripPrLabel, stripPrSideLabelQuietly, removeTrackerLabelQuietly, isPrAnchoredKey, stripLinkedIssueCounterpart, removeOneConfiguredLabel, removeConfiguredLabels, stripArmFromIssue, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, replyTargetsThread, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment,
     // gh-1220: helpers extracted from the CRAP-target functions — exported for
     // direct unit testing (per-function CRAP ratchet).
     threadIdLabel, threadLocation, threadBodyExcerpt, replyMatchesThreadId, replyMatchesRootId,

@@ -2791,3 +2791,82 @@ suite('postPRReviewComments — fixture factories (gh-1230 characterization)', f
         mocks2.jira_assign_ticket_to();
     });
 });
+
+suite('postPRReviewComments — gh-1287 cross-anchor label stripping on PR-anchored reviews', function() {
+
+    function loadWithPrMock(prObj) {
+        var fileRead = function() { return null; };
+        return loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': prReviewOutputFiles(fileRead)
+            })),
+            {
+                file_read: fileRead,
+                github_get_pr: function() {
+                    if (typeof prObj === 'function') return prObj();
+                    return JSON.stringify(prObj);
+                }
+            }
+        );
+    }
+
+    test('parseBranchIssueNumber and linkedIssueNumberFromPR fall back to branch when PR body has no closing keyword', function() {
+        var mod = loadWithPrMock({ number: 1940, body: 'No keyword here', head: { ref: 'ai/gh-1931' } });
+
+        assert.equal(mod.parseBranchIssueNumber('ai/gh-1931'), 1931);
+        assert.equal(mod.parseBranchIssueNumber('feature/gh-0042-fix'), 42);
+        assert.equal(mod.parseBranchIssueNumber('main'), null);
+        assert.equal(mod.parseBranchIssueNumber(null), null);
+
+        assert.equal(mod.linkedIssueNumberFromPR({ owner: 'IstiN', repo: 'fa' }, 1940, 'main'), 1931);
+
+        var modNoHead = loadWithPrMock({ number: 1940, body: '' });
+        assert.equal(modNoHead.linkedIssueNumberFromPR({ owner: 'IstiN', repo: 'fa' }, 1940, 'ai/gh-1935'), 1935);
+    });
+
+    test('stripLinkedIssueArmLabels and cleanLinkedIssueArmsOnApproval strip stale agent:review and agent:rework on linked issue', function() {
+        var removed = [];
+        var added = [];
+        var scm = {
+            addLabel: function(num, label) { added.push({ num: num, label: label }); },
+            removeLabel: function(num, label) { removed.push({ num: num, label: label }); }
+        };
+        var mod = loadWithPrMock({ number: 1940, body: 'Closes #1931', head: { ref: 'ai/gh-1931' } });
+
+        mod.stripLinkedIssueArmLabels(scm, null, true);
+        assert.equal(removed.length, 0);
+
+        var ctx = { scm: scm, machineAuthor: 'IstiN' };
+        var pr = { number: 1940, author: 'IstiN', branch: 'ai/gh-1931' };
+        var repoInfo = { owner: 'IstiN', repo: 'fa' };
+
+        // Non-approved PR-anchored review: strips agent:review from PR and linked issue, adds agent:rework to linked issue
+        mod.finishPRAnchoredReview(ctx, pr, repoInfo, false, 'REQUEST_CHANGES');
+        assert.deepEqual(removed, [
+            { num: 1940, label: 'agent:review' },
+            { num: 1931, label: 'agent:review' }
+        ]);
+        assert.ok(added.some(function(c) { return c.num === 1931 && c.label === 'agent:rework'; }));
+
+        // Approved PR-anchored review: strips agent:review from PR and both agent:review + agent:rework from linked issue
+        removed.length = 0;
+        added.length = 0;
+        mod.finishPRAnchoredReview(ctx, pr, repoInfo, true, 'APPROVE');
+        assert.deepEqual(removed, [
+            { num: 1940, label: 'agent:review' },
+            { num: 1931, label: 'agent:review' },
+            { num: 1931, label: 'agent:rework' }
+        ]);
+        assert.ok(!added.some(function(c) { return c.label === 'agent:rework'; }));
+
+        // Guest author: does not touch linked issue on approval
+        removed.length = 0;
+        mod.cleanLinkedIssueArmsOnApproval(ctx, { number: 1940, author: 'external-guest' }, repoInfo);
+        assert.equal(removed.length, 0);
+
+        // Error tolerance in cleanLinkedIssueArmsOnApproval
+        var modThrows = loadWithPrMock(function() { throw new Error('github_get_pr failed'); });
+        modThrows.cleanLinkedIssueArmsOnApproval(ctx, pr, repoInfo);
+    });
+});
