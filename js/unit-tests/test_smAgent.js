@@ -12836,6 +12836,24 @@ suite('smAgent: validate_pr dispatch-race guard (gh-748)', function () {
         assert.equal(sm.hasRecentHeadRun(null, grace), false, 'null rollup (failed probe) — fail OPEN');
     });
 
+    test('ambient CodeQL / pull_request runs do NOT block validation CI dispatch (fa PR #1955)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [pr(1955, '028513ac3f')] },
+            onCliExecute: cliRouter([
+                { name: 'CodeQL', event: 'dynamic', status: 'in_progress', head_sha: '028513ac3f',
+                  created_at: new Date(Date.now() - 30 * 1000).toISOString() },
+                { name: 'Machine Merge Bot', event: 'pull_request', status: 'completed', conclusion: 'success',
+                  head_sha: '028513ac3f', created_at: new Date(Date.now() - 20 * 1000).toISOString(),
+                  updated_at: new Date(Date.now() - 5 * 1000).toISOString() },
+                { name: 'AAB 16k gate self-test', event: 'pull_request_target', status: 'in_progress',
+                  head_sha: '028513ac3f', created_at: new Date(Date.now() - 15 * 1000).toISOString() }
+            ], [])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULE] } });
+
+        assert.equal(dispatchCommands(sm).length, 1, 'ambient dynamic/pull_request runs never order CI — SM must dispatch');
+    });
+
     test('dispatchRaceGraceMs knob parsing (direct pin)', function () {
         var sm = makeSmAgent(config('a', 'b'));
         assert.equal(sm.dispatchRaceGraceMs({}), 60 * 1000, 'default 60s');
