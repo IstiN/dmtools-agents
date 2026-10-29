@@ -2,7 +2,7 @@ Each question `.md` file (referenced from `questions.json` as `description`) mus
 
 The block below is a **structural template / example only**. The tags such as `<bold>` and `<bullet>` are placeholders that show the required shape of the document.
 
-**CRITICAL: Never write the final question description using these literal metatags.** Use the tracker-specific transformation table (for example `agents/instructions/tracker/jira_markup_transform.md` when the tracker is Jira) to convert every placeholder into the correct tracker markup.
+**CRITICAL: Never write the final question description using these literal metatags.** Use the tracker-specific markup transformation table included in this prompt to convert every placeholder into the correct tracker markup.
 
 Structure:
 ```

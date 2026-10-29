@@ -269,7 +269,7 @@ instruction document — do not include the fence in your actual
 
 ### [13] `./agents/instructions/enhancement/solution_design_few_shots.md`
 
-The examples below use generic XML-style tags (`<bold>`, `<bullet>`, `<code>`, etc.) only to illustrate the required structure. In the final `outputs/response.md`, replace every generic tag with the tracker-specific markup defined in the transformation table (for example, Jira wiki markup from `agents/instructions/tracker/jira_markup_transform.md`). Do not leave literal XML-style tags in the final output.
+The examples below use generic XML-style tags (`<bold>`, `<bullet>`, `<code>`, etc.) only to illustrate the required structure. In the final `outputs/response.md`, replace every generic tag with the tracker-specific markup defined in the transformation table included in this prompt. Do not leave literal XML-style tags in the final output.
 
 **Example content for outputs/response.md:**
 

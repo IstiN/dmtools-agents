@@ -133,8 +133,7 @@ If the solution requires no repository changes (pure configuration, Jira-only up
 
 The post-action appends an *Affected Repositories* section to the ticket description
 after the solution is written. Format the section according to the tracker-specific
-markup rules already defined in `jira_markup_transform.md` (Jira) or
-`ado_markup_transform.md` (ADO). This file only describes the **structure**.
+markup transformation rules included in this prompt. This section only describes the **structure**.
 
 ---
 

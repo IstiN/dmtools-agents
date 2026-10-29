@@ -19,15 +19,14 @@ Read `batch_bugs.md` first. Then process each bug in the list.
 
 ## Reusing the single bug-fix rules
 
-For every bug in the batch follow the workflow defined in
-`agents/instructions/bug_fix_development/scope.md` and the per-stage
-instructions in the same folder:
+For every bug in the batch follow the single bug-fix workflow defined in the
+`bug_development` instructions included in this prompt:
 
-- `agents/instructions/bug_fix_development/setup.md`
-- `agents/instructions/bug_fix_development/analysis.md`
-- `agents/instructions/bug_fix_development/implementation.md`
-- `agents/instructions/bug_fix_development/verification.md`
-- `agents/instructions/bug_fix_development/finalization.md`
+- `agents/instructions/bug_development/general_guidelines.md`
+- `agents/instructions/bug_development/tdd_approach.md`
+- `agents/instructions/bug_development/output_rules.md`
+- `agents/instructions/bug_development/formatting_rules.md`
+- `agents/instructions/bug_development/few_shots.md`
 
 Apply the rules as if you were fixing the bug individually, **but**:
 
@@ -38,7 +37,7 @@ Apply the rules as if you were fixing the bug individually, **but**:
 3. Keep changes minimal and focused on the listed bugs only.
 4. If a bug is already fixed, cannot be reproduced, or needs clarification,
    follow the `blocked.json` / `already_fixed.json` handling described in
-   `scope.md` and record the decision in the PR description.
+   `general_guidelines.md` and `output_rules.md` and record the decision in the PR description.
 
 ## Pull request
 

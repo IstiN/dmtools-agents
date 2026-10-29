@@ -252,7 +252,7 @@ suite('prepareBugFixBatchContext', function() {
         assert.contains(batchMd, 'TS-1415');
         assert.contains(batchMd, 'TS-1423');
         assert.contains(batchMd, 'input/TS-1415/');
-        assert.contains(batchMd, 'agents/instructions/bug_fix_development/');
+        assert.contains(batchMd, 'agents/instructions/bug_development/');
         assert.contains(batchMd, 'agents/instructions/bug_fix_batch_development/batch_scope.md');
 
         assert.equal(loaded.fetchCalls.length, 4, 'two fetch actions per bug');

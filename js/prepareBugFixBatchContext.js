@@ -105,7 +105,7 @@ function renderBugList(bugs) {
         lines.push((i + 1) + '. **' + bug.key + '** — ' + (f.summary || '(no summary)') + '  ');
         lines.push('   - Status: ' + status);
         lines.push('   - Input folder: `input/' + bug.key + '/`');
-        lines.push('   - Bug instructions: apply `agents/instructions/bug_fix_development/` to this bug');
+        lines.push('   - Bug instructions: apply `agents/instructions/bug_development/` to this bug');
         lines.push('');
     }
     return lines.join('\n');
@@ -147,7 +147,7 @@ function writeBatchBugsMarkdown(epicFolder, epic, bugs) {
     lines.push('  - `existing_questions.json` — answered clarification questions');
     lines.push('  - `linked_tests.md` — failing test cases that triggered the bug');
     lines.push('  - `parent-<PARENT>.md` / `parent_context_*.md` — BA/SA/VD context');
-    lines.push('- Shared bug-fix instructions: `agents/instructions/bug_fix_development/`');
+    lines.push('- Shared bug-fix instructions: `agents/instructions/bug_development/`');
     lines.push('- Batch scope / Epic-level instructions: `agents/instructions/bug_fix_batch_development/batch_scope.md`');
     lines.push('');
 
@@ -155,7 +155,7 @@ function writeBatchBugsMarkdown(epicFolder, epic, bugs) {
     lines.push('');
     lines.push('1. Read this file first.');
     lines.push('2. For each bug, read `input/<BUG-KEY>/` context and follow');
-    lines.push('   `agents/instructions/bug_fix_development/scope.md`.');
+    lines.push('   `agents/instructions/bug_development/general_guidelines.md`.');
     lines.push('3. Implement all fixes in the same branch.');
     lines.push('4. Create **one** PR for the Epic; link it to the Epic.');
     lines.push('5. Move the Epic and every linked bug to **In Review** and add `ai_developed`.');

@@ -12,8 +12,8 @@ Write separate files for separate consumers. Do not reuse one format for all des
 Purpose: posted to the Test Case ticket.
 
 Use the tracker-specific markup format configured for the project (loaded via `cliPromptsByTracker`).
-- For Jira trackers: use Jira wiki markup and follow `agents/instructions/tracker/jira_comment_format.md`.
-- For Azure DevOps trackers: use GitHub-flavored Markdown and follow `agents/instructions/tracker/ado_comment_format.md`.
+- For Jira trackers: use Jira wiki markup following the tracker comment formatting rules included in this prompt.
+- For Azure DevOps trackers: use GitHub-flavored Markdown following the tracker comment formatting rules included in this prompt.
 
 Required structure (render with the appropriate tracker syntax):
 
@@ -77,4 +77,4 @@ If a platform still expects `outputs/response.md`, write a concise GitHub Markdo
 
 ## `outputs/test_automation_result.json` — machine-readable result
 
-Write the structured status JSON exactly as described in `agents/instructions/test_automation/test_automation_json_output.md`.
+Write the structured status JSON following the **Test Automation JSON Output Format** section included in this prompt.
