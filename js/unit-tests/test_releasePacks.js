@@ -462,4 +462,10 @@ suite('gh-1276 / gh-1277 config-script bundling and gate wiring', function () {
         assert.ok(body.indexOf('unresolvedConfigScripts(') !== -1,
             'assertZipRequires must check unresolvedConfigScripts on packed agent configs (#1276/#1277)');
     });
+
+    test('Publish step excludes factory-setup-* from carried-forward previous release assets (unzip exit 11 guard)', function () {
+        var wf = file_read({ path: '.github/workflows/agent-pack-release.yml' });
+        assert.ok(wf.indexOf('factory-setup-*) continue ;;') !== -1,
+            'agent-pack-release.yml must skip factory-setup-* when carrying forward previous release assets so only one factory-setup-*.zip exists per release');
+    });
 });

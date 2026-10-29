@@ -7720,10 +7720,15 @@ function hasActiveLegRun(runs, workflowFile) {
 // OPEN, matching hasActiveDispatchedRun's error contract). A completed run
 // with no parseable timestamp never blocks (cannot be aged — the 15-min
 // completed grace of the dispatched probe covers it if it is CI).
+function isAmbientNonDispatchRun(r) {
+    if (!r || !r.event) return false;
+    return r.event === 'dynamic' || r.event === 'pull_request' || r.event === 'pull_request_target';
+}
+
 function hasRecentHeadRun(runs, graceMs) {
     var now = Date.now();
     return (runs || []).some(function (r) {
-        if (!r) return false;
+        if (!r || isAmbientNonDispatchRun(r)) return false;
         if (r.status === 'queued' || r.status === 'in_progress' ||
             r.status === 'waiting' || r.status === 'pending' ||
             r.status === 'requested') return true;

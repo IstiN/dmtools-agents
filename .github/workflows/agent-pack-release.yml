@@ -260,6 +260,9 @@ jobs:
             for f in dist-prev/*.zip dist-prev/*.zip.sha256; do
               [ -e "$f" ] || continue
               base_f="$(basename "$f")"
+              case "$base_f" in
+                factory-setup-*) continue ;;
+              esac
               [ -e "dist/$base_f" ] || mv "$f" "dist/$base_f"
             done
           fi
