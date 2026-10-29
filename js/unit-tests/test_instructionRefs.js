@@ -38,19 +38,9 @@ var KNOWN_ORPHANS = [];
 // R2/R3 wholesale. Emptied in gh-1147 after deleting all legacy directories.
 var LEGACY_DIRS = [];
 
-// Known dangling references — TEXT pointers inside JS actions that mention
-// files which never existed in git (prepareBugFixBatchContext.js points the
-// CLI agent at agents/instructions/bug_fix_development/*.md; only
-// bug_fix_batch_development/batch_scope.md exists). Tracked in the linked
-// issue; fix = retarget the JS to real files, then shrink this list.
-var KNOWN_DANGLING = [
-    'instructions/bug_fix_development/analysis.md',
-    'instructions/bug_fix_development/finalization.md',
-    'instructions/bug_fix_development/implementation.md',
-    'instructions/bug_fix_development/scope.md',
-    'instructions/bug_fix_development/setup.md',
-    'instructions/bug_fix_development/verification.md'
-];
+// Known dangling references — emptied in gh-1292 after retargeting
+// batch_scope.md and prepareBugFixBatchContext.js to bug_development/*.md.
+var KNOWN_DANGLING = [];
 
 var REF_PAT = /(agents\/)?((?:instructions|js)\/[A-Za-z0-9_\-./]+\.(?:md|js))/g;
 
@@ -318,6 +308,29 @@ suite('instructionRefs — pack reference integrity', function () {
         var markupTransform = readText('instructions/tracker/ado_markup_transform.md');
         assert.ok(commentFormat.indexOf('#12345') !== -1, 'ado_comment_format.md must instruct #<id> format (e.g. #12345)');
         assert.ok(markupTransform.indexOf('#12345') !== -1, 'ado_markup_transform.md must instruct #<id> format (e.g. #12345)');
+    });
+
+    test('R8 (gh-1292, gh-1293): batch_scope.md references bug_development/* and instructions do not reference already-inlined tracker/json files by path', function () {
+        var batchScope = readText('instructions/bug_fix_batch_development/batch_scope.md');
+        assert.ok(batchScope.indexOf('bug_fix_development/') === -1, 'batch_scope.md must not reference non-existent bug_fix_development/*');
+        assert.ok(batchScope.indexOf('agents/instructions/bug_development/general_guidelines.md') !== -1, 'batch_scope.md must reference bug_development/general_guidelines.md');
+
+        var checkedFiles = [
+            'instructions/intake/description_template.md',
+            'instructions/story_questions/description_template.md',
+            'instructions/intake/workflow.md',
+            'instructions/enhancement/solution_design_few_shots.md',
+            'instructions/story_solution/affected_repos_section_format.md',
+            'instructions/test_automation/test_automation_output_files.md'
+        ];
+        checkedFiles.forEach(function (file) {
+            var content = readText(file);
+            assert.ok(content.indexOf('jira_markup_transform.md') === -1, file + ' must not reference jira_markup_transform.md by path');
+            assert.ok(content.indexOf('ado_markup_transform.md') === -1, file + ' must not reference ado_markup_transform.md by path');
+            assert.ok(content.indexOf('jira_comment_format.md') === -1, file + ' must not reference jira_comment_format.md by path');
+            assert.ok(content.indexOf('ado_comment_format.md') === -1, file + ' must not reference ado_comment_format.md by path');
+            assert.ok(content.indexOf('test_automation_json_output.md') === -1, file + ' must not reference test_automation_json_output.md by path');
+        });
     });
 });
 
