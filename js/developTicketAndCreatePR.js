@@ -541,6 +541,90 @@ function createPullRequest(title, branchName, baseBranch, ticketKey) {
     });
 }
 
+// ─ Completion post-check: integration-readiness concerns (outputs/concerns.md) ─
+// After tests pass, the agent scans its own change for feature-blocking
+// EXTERNAL dependencies the repo lacks (services, config files/IDs/secrets,
+// platform setup, referenced-but-absent endpoints) and writes
+// outputs/concerns.md. These post-processors surface that file — one appends
+// it to the completion comment (with the informational ai_concerns label),
+// the other mirrors it into the PR body source. Both degrade to no-ops when
+// the agent raised no concerns, and a read/label/write failure is a warn,
+// never a leg failure: the PR proceeds through review normally either way.
+// Scope stays non-code — code quality remains the review agent's job.
+
+var CONCERNS_SECTION_TITLE = '⚠️ Concerns — may not work until resolved';
+
+// Trimmed concerns text, or null when the agent raised none (file absent,
+// blank or unreadable — same candidate expansion as every other output file).
+function readConcernsMd() {
+    try {
+        var detailed = outputFiles.readOutputFileDetailed('concerns.md');
+        return detailed ? concernsTextOf(detailed.content) : null;
+    } catch (e) {
+        console.warn('Could not read outputs/concerns.md:', e);
+    }
+    return null;
+}
+
+// null for absent/blank content — "no concerns" and "unreadable" must land in
+// the same skip path, never in a failure.
+function concernsTextOf(content) {
+    return (content || '').trim() || null;
+}
+
+// Appends the concerns section to the completion comment and flags the ticket
+// with the informational ai_concerns label (the label only makes concerned
+// PRs visible; the comment text is the durable signal, so a label failure
+// must not drop the section). Returns the comment unchanged when the agent
+// raised no concerns.
+function appendConcernsToCompletionComment(comment, ticketKey) {
+    var concerns = readConcernsMd();
+    if (!concerns) return comment;
+    var m = commentMarkup.forTicket(ticketKey);
+    comment += '\n\n' + m.h(3, CONCERNS_SECTION_TITLE) + '\n\n';
+    comment += concerns + '\n';
+    try {
+        getTracker().addLabel(ticketKey, LABELS.AI_CONCERNS);
+        console.log('⚠️ Added ' + LABELS.AI_CONCERNS + ' label to', ticketKey);
+    } catch (e) {
+        console.warn('Could not add ' + LABELS.AI_CONCERNS + ' label:', e);
+    }
+    return comment;
+}
+
+// Mirrors the concerns into the PR body SOURCE. The PR body is assembled from
+// the outputs/response.md FILE (see bodyFileCandidates in createPullRequest),
+// so the concerns are appended to that file rather than to the in-memory
+// string returned here. Dedup guard: a resumed leg can land here twice —
+// response.md already carrying the section means skip, not double-append.
+// Returns the content the caller should keep using (re-read + appended on
+// success; unchanged when there is nothing to mirror or the write fails).
+function mirrorConcernsIntoResponseBody(ctx, responseContent) {
+    try {
+        var concerns = readConcernsMd();
+        if (!concerns) return responseContent;
+        return writeConcernsIntoResponseMd(ctx, responseContent, concerns);
+    } catch (e) {
+        console.warn('Could not append concerns to the PR body source:', e);
+        return responseContent;
+    }
+}
+
+// The single write of the mirrored response.md — kept as a separate helper so
+// both entry points stay complexity-flat for the CRAP ratchet. Layout is
+// byte-identical to the original inline block.
+function writeConcernsIntoResponseMd(ctx, responseContent, concerns) {
+    var baseResponse = readResponseMd(ctx.ticketKey) || '';
+    if (baseResponse.indexOf(CONCERNS_SECTION_TITLE) !== -1) return responseContent;
+    var mirrored = baseResponse + '\n\n## ' + CONCERNS_SECTION_TITLE + '\n\n' + concerns + '\n';
+    file_write({
+        path: 'outputs/response.md',
+        content: mirrored
+    });
+    console.log('Appended outputs/concerns.md to outputs/response.md (PR body source).');
+    return mirrored;
+}
+
 /**
  * Post comment to Jira ticket with PR details
  *
@@ -561,6 +645,12 @@ function postPRCommentToJira(ticketKey, prUrl, branchName) {
         }
 
         comment += '\nAI Teammate has completed the implementation and created a pull request for review.';
+
+        // Completion post-check: append the agent's integration-readiness
+        // concerns (outputs/concerns.md) + the informational ai_concerns
+        // label — a no-op when the agent raised none (see
+        // appendConcernsToCompletionComment).
+        comment = appendConcernsToCompletionComment(comment, ticketKey);
 
         getTracker().postComment(ticketKey, comment);
 
@@ -1479,6 +1569,14 @@ function ensureResponseForPrBody(ctx) {
             resetInterruptedDevelopment(ctx, interruptedPartialWorkComment(ctx.ticketKey, ctx.branchName, ctx.providerOutage));
         }
     }
+    // Completion post-check: mirror the agent's integration-readiness
+    // concerns into the PR body SOURCE file — the body is assembled from the
+    // outputs/response.md FILE (see bodyFileCandidates in createPullRequest),
+    // so the concerns must land in that file, not just the in-memory string.
+    // No-op when the agent raised none or the section is already present
+    // (see mirrorConcernsIntoResponseBody).
+    responseContent = mirrorConcernsIntoResponseBody(ctx, responseContent);
+
     // gh-1137: the PR body (the leg summary) must state which Dart SDK the leg
     // verified with — `toolchain: dart <v> (CI: <pin>, match: yes|no)` — so
     // format/analyzer claims are checkable against CI. No-op on failure, on
@@ -1852,6 +1950,10 @@ if (typeof module !== 'undefined' && module.exports) {
         // call sites — exported for direct characterization tests.
         syncBranchWithBaseUsingRunCmd,
         // gh-1229: landing-guard decomposition — exported for direct tests.
-        branchCarriesWork, hasCommitsAheadOfBase, workingTreeCarriesWork, statusLineIndicatesWork
+        branchCarriesWork, hasCommitsAheadOfBase, workingTreeCarriesWork, statusLineIndicatesWork,
+        // Completion post-check (outputs/concerns.md) — the two surfacing
+        // post-processors + the read seam, exported for direct
+        // characterization tests.
+        readConcernsMd, appendConcernsToCompletionComment, mirrorConcernsIntoResponseBody
     };
 }

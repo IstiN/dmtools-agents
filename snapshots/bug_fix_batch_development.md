@@ -166,7 +166,10 @@ flowchart TD
     VERIFY --> PASS{All tests pass?}
     PASS -->|No| ADJUST["Adjust fix and re-run tests"]
     ADJUST --> VERIFY
-    PASS -->|Yes| GITSTATUS["Run git status and review every new/modified file"]
+    PASS -->|Yes| POSTCHECK{"Integration readiness check:<br/>does the feature depend on external setup<br/>the repo does not contain?"}
+    POSTCHECK -->|Gaps found| CONCERNS["Write outputs/concerns.md:<br/>what is missing + what is needed to make it work"]
+    CONCERNS --> GITSTATUS["Run git status and review every new/modified file"]
+    POSTCHECK -->|Self-sufficient| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
     SECRETS -->|No| SUMMARY["Write concise bug fix summary to outputs/response.md — see output_rules.md"]
@@ -181,6 +184,8 @@ When this Bug has been sent back to development because a linked Test Case faile
 1. Read the `Failed Reason` field of every linked Test Case.
 2. If the failure is caused by a missing token, missing permission, missing secret, or any other access/credential/infra issue that you cannot fix in product code, write `outputs/blocked.json` and stop. Do **not** try to code a fix for an access problem.
 3. Only attempt a product-code fix when the failure is a genuine product regression.
+
+Before finishing, run the COMPLETION POST-CHECK — see `instructions/common/completion_post_check.md`.
 
 
 ---

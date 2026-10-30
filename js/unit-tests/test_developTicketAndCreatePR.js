@@ -3064,3 +3064,213 @@ suite('developTicketAndCreatePR > branchCarriesWork contract (gh-1229)', functio
         assert.equal(mod.branchCarriesWork('develop'), false);
     });
 });
+
+// ─ Completion post-check: concerns seam (appendConcernsToCompletionComment /
+// mirrorConcernsIntoResponseBody) ─ Direct characterization tests of the two
+// post-processors that surface outputs/concerns.md (the seam split keeps the
+// changed callers complexity-flat for the CRAP ratchet).
+
+var CONCERNS_SAMPLE = 'Depends on an external scoring service that this repo does not provision.';
+
+// concerns.md detailed read as pure data (no branches in the builder): an
+// absent value reads as "no file", any other value rides the detailed
+// {content, path} shape. The unreadable-file case passes `concernsReader`
+// instead — a throwing reader exercises the read-failure branch.
+function concernsFileStub(concerns) {
+    return function () {
+        return concerns === undefined ? null : { content: concerns, path: 'outputs/concerns.md' };
+    };
+}
+
+// response.md read as pure data: an absent value reads as "no file".
+function responseMdStub(responseMd) {
+    return function () { return responseMd === undefined ? null : responseMd; };
+}
+
+// outputFiles stub table for the concerns-seam loader — plain data assembly,
+// no branches (the CRAP ratchet counts the test loaders too).
+function concernsSeamOutputFilesStub(opts) {
+    return {
+        readOutputFileDetailed: opts.concernsReader || concernsFileStub(opts.concerns),
+        readOutputFile: responseMdStub(opts.responseMd)
+    };
+}
+
+// Loader for the concerns-seam suite: readOutputFileDetailed (concerns.md) and
+// readOutputFile (response.md) are injectable via opts, and file_write /
+// jira_add_label come through the same global mocks the other loaders use
+// (file_write is absent in the node harness unless stubbed here). configLoader
+// is stubbed to load nothing so the tracker deterministically resolves to the
+// jira provider — the addLabel assertion must not depend on machine-local
+// project config or env. The loader itself stays a thin branch-free
+// composition: all optionality lives in the stub tables above.
+function loadForConcernsSeam(mocks, opts) {
+    opts = opts || {};
+    return (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+            './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
+            './common/submodules.js': {},
+            './common/feedbackLoop.js': feedbackLoopStubWith(),
+            './common/autoStart.js': { triggerSmIfIdle: function () { } },
+            './common/outputFiles.js': concernsSeamOutputFilesStub(opts),
+            './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModule,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
+            './configLoader.js': { loadProjectConfig: function () { return null; } },
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
+            ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })(Object.assign({
+            cli_execute_command: function () { return ''; },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        }, mocks || {}));
+}
+
+suite('developTicketAndCreatePR > completion post-check: concerns seam', function () {
+
+    test('concerns present → completion comment gains the concerns section and the ai_concerns label', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        }, { concerns: CONCERNS_SAMPLE });
+        var base = 'h3. Development Completed\n*Branch:* `ai/TS-21`\n';
+
+        var out = mod.appendConcernsToCompletionComment(base, 'TS-21');
+
+        assert.contains(out, 'h3. ⚠️ Concerns — may not work until resolved',
+            'the section header renders in the ticket markup flavor (jira → h3.)');
+        assert.contains(out, CONCERNS_SAMPLE, 'the concerns text itself rides the comment');
+        assert.deepEqual(labels, [{ key: 'TS-21', label: 'ai_concerns' }],
+            'the informational ai_concerns label is added');
+    });
+
+    test('concerns absent → comment unchanged, no label', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        });
+        var base = 'h3. Development Completed\n';
+
+        var out = mod.appendConcernsToCompletionComment(base, 'TS-21');
+
+        assert.equal(out, base, 'no concerns.md → the comment is returned byte-identical');
+        assert.deepEqual(labels, [], 'no label when there is nothing to flag');
+    });
+
+    test('blank concerns file counts as no concerns (comment unchanged, no label)', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        }, { concerns: '  \n' });
+        var base = 'h3. Development Completed\n';
+
+        assert.equal(mod.appendConcernsToCompletionComment(base, 'TS-21'), base);
+        assert.deepEqual(labels, []);
+    });
+
+    test('a label failure keeps the concerns section (the comment text is the durable signal)', function () {
+        var mod = loadForConcernsSeam({
+            jira_add_label: function () { throw new Error('tracker down'); }
+        }, { concerns: CONCERNS_SAMPLE });
+
+        var out = mod.appendConcernsToCompletionComment('h3. Development Completed\n', 'TS-21');
+
+        assert.contains(out, '⚠️ Concerns — may not work until resolved');
+        assert.contains(out, CONCERNS_SAMPLE);
+    });
+
+    test('an unreadable concerns file degrades to no concerns (never throws)', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        }, { concernsReader: function () { throw new Error('fs boom'); } });
+        var base = 'h3. Development Completed\n';
+
+        var out = mod.appendConcernsToCompletionComment(base, 'TS-21');
+
+        assert.equal(out, base, 'the read failure is a warn, not a leg failure');
+        assert.deepEqual(labels, []);
+    });
+
+    test('concerns present → response.md (PR body source) is rewritten with the appended section', function () {
+        var writes = [];
+        var responseMd = '### What changed\n- thing\n';
+        var mirrored = responseMd + '\n\n## ⚠️ Concerns — may not work until resolved\n\n' + CONCERNS_SAMPLE + '\n';
+        var mod = loadForConcernsSeam({
+            file_write: function (args) { writes.push(args); }
+        }, { concerns: CONCERNS_SAMPLE, responseMd: responseMd });
+
+        var out = mod.mirrorConcernsIntoResponseBody({ ticketKey: 'TS-22' }, responseMd);
+
+        assert.deepEqual(writes, [{ path: 'outputs/response.md', content: mirrored }],
+            'the PR body source file gains the concerns section');
+        assert.equal(out, mirrored,
+            'the caller keeps using the appended content (in-memory string matches the file)');
+    });
+
+    test('dedup guard: response.md already carrying the section is not appended twice', function () {
+        var writes = [];
+        var responseMd = '### What changed\n- thing\n\n## ⚠️ Concerns — may not work until resolved\n\nold concerns\n';
+        var mod = loadForConcernsSeam({
+            file_write: function (args) { writes.push(args); }
+        }, { concerns: CONCERNS_SAMPLE, responseMd: responseMd });
+
+        var out = mod.mirrorConcernsIntoResponseBody({ ticketKey: 'TS-22' }, responseMd);
+
+        assert.deepEqual(writes, [], 'the dedup guard skips the write');
+        assert.equal(out, responseMd, 'the in-memory content is left untouched');
+    });
+
+    test('concerns absent → response.md is not written', function () {
+        var writes = [];
+        var responseMd = '### What changed\n- thing\n';
+        var mod = loadForConcernsSeam({
+            file_write: function (args) { writes.push(args); }
+        }, { responseMd: responseMd });
+
+        var out = mod.mirrorConcernsIntoResponseBody({ ticketKey: 'TS-22' }, responseMd);
+
+        assert.deepEqual(writes, [], 'nothing to mirror → no write');
+        assert.equal(out, responseMd);
+    });
+
+    test('a failing response.md write keeps the mirror best-effort (content unchanged, no throw)', function () {
+        var responseMd = '### What changed\n- thing\n';
+        var mod = loadForConcernsSeam({
+            file_write: function () { throw new Error('disk full'); }
+        }, { concerns: CONCERNS_SAMPLE, responseMd: responseMd });
+
+        var out = mod.mirrorConcernsIntoResponseBody({ ticketKey: 'TS-22' }, responseMd);
+
+        assert.equal(out, responseMd, 'the mirror failure never fails the leg');
+    });
+
+    test('response.md unreadable while concerns exist → section still appended to an empty base', function () {
+        var writes = [];
+        var mirrored = '\n\n## ⚠️ Concerns — may not work until resolved\n\n' + CONCERNS_SAMPLE + '\n';
+        var mod = loadForConcernsSeam({
+            file_write: function (args) { writes.push(args); }
+        }, { concerns: CONCERNS_SAMPLE });
+
+        var out = mod.mirrorConcernsIntoResponseBody({ ticketKey: 'TS-22' }, 'fallback');
+
+        assert.deepEqual(writes, [{ path: 'outputs/response.md', content: mirrored }]);
+        assert.equal(out, mirrored);
+    });
+
+    test('readConcernsMd: trimmed text on success, null when blank or absent', function () {
+        var mod = loadForConcernsSeam({}, { concerns: '  ' + CONCERNS_SAMPLE + '  ' });
+        assert.equal(mod.readConcernsMd(), CONCERNS_SAMPLE, 'surrounding whitespace is trimmed');
+
+        var blankMod = loadForConcernsSeam({}, { concerns: '  ' });
+        assert.equal(blankMod.readConcernsMd(), null, 'a whitespace-only file reads as no concerns');
+
+        var absentMod = loadForConcernsSeam({}, {});
+        assert.equal(absentMod.readConcernsMd(), null, 'a missing file reads as no concerns');
+    });
+
+});

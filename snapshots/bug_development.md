@@ -98,7 +98,10 @@ flowchart TD
     VERIFY --> PASS{All tests pass?}
     PASS -->|No| ADJUST["Adjust fix and re-run tests"]
     ADJUST --> VERIFY
-    PASS -->|Yes| GITSTATUS["Run git status and review every new/modified file"]
+    PASS -->|Yes| POSTCHECK{"Integration readiness check:<br/>does the feature depend on external setup<br/>the repo does not contain?"}
+    POSTCHECK -->|Gaps found| CONCERNS["Write outputs/concerns.md:<br/>what is missing + what is needed to make it work"]
+    CONCERNS --> GITSTATUS["Run git status and review every new/modified file"]
+    POSTCHECK -->|Self-sufficient| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
     SECRETS -->|No| SUMMARY["Write concise bug fix summary to outputs/response.md — see output_rules.md"]
@@ -113,6 +116,8 @@ When this Bug has been sent back to development because a linked Test Case faile
 1. Read the `Failed Reason` field of every linked Test Case.
 2. If the failure is caused by a missing token, missing permission, missing secret, or any other access/credential/infra issue that you cannot fix in product code, write `outputs/blocked.json` and stop. Do **not** try to code a fix for an access problem.
 3. Only attempt a product-code fix when the failure is a genuine product regression.
+
+Before finishing, run the COMPLETION POST-CHECK — see `instructions/common/completion_post_check.md`.
 
 
 ---
@@ -223,7 +228,27 @@ flowchart TD
 
 ---
 
-### [11] `./agents/instructions/bug_development/formatting_rules.md`
+### [11] `./agents/instructions/common/completion_post_check.md`
+
+# ⚠️ COMPLETION POST-CHECK — integration readiness (before finishing)
+
+After implementation is done and all tests pass, run a quick integration-readiness scan of YOUR OWN change. Question it answers: **will this feature actually work in the target environment, or does it depend on external setup this repo does not contain?**
+
+Flag (as concerns) anything feature-blocking that is NOT code:
+- External services the code now depends on but that are not provisioned (Firebase, Apple/Google developer config, API backends, databases).
+- Missing configuration artifacts: `google-services.json`, `GoogleService-Info.plist`, client IDs / API keys / secrets, environment variables, `.entitlements`, URL scheme registrations, Gradle/Info.plist/manifest changes.
+- Referenced-but-absent external contracts: an endpoint that the provided API spec (e.g. swagger) does not define, a webhook URL that was never registered.
+
+**Do NOT flag code-quality, style, architecture, or test-coverage issues — the review agent owns those. Do not duplicate its work.**
+
+If there ARE concerns: write `outputs/concerns.md` — for each concern: (a) what the PR does, (b) what is missing, (c) concretely what is needed to make it work (exact file names, IDs, console/account steps). Short and factual; the pipeline appends it to the completion comment and the PR body and labels the ticket `ai_concerns`.
+
+If there are NO concerns: write nothing — no file, no label.
+
+
+---
+
+### [12] `./agents/instructions/bug_development/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -240,7 +265,7 @@ flowchart TD
 
 ---
 
-### [12] `./agents/instructions/bug_development/few_shots.md`
+### [13] `./agents/instructions/bug_development/few_shots.md`
 
 Example bug fix PR descriptions — follow this structure and brevity:
 
@@ -256,7 +281,7 @@ flowchart TD
 
 ---
 
-### [13] `./agents/instructions/common/dmtools_cli.md`
+### [14] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -294,7 +319,7 @@ flowchart TD
 
 ---
 
-### [14] `./agents/instructions/common/session_ephemerality.md`
+### [15] `./agents/instructions/common/session_ephemerality.md`
 
 ```mermaid
 flowchart LR
@@ -313,7 +338,7 @@ implementation.
 
 ---
 
-### [15] `./agents/prompts/bash_tools.md`
+### [16] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -358,7 +383,7 @@ flowchart TD
 
 ---
 
-### [16] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
+### [17] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
 
 **HARD GATE — read before any tool call:**
 
