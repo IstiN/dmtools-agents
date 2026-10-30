@@ -51,6 +51,42 @@ function smRealKeyModules() {
         './trackers.js': trackers
     };
 }
+function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule, buildEncodedConfigModule, smMocks, omitFallbacks) {
+    if (omitFallbacks) {
+        var unreadable = { __unreadable__: true };
+        return {
+            './common/ticketKeyShapes.js': unreadable,
+            './common/linkedIssuesReport.js': unreadable,
+            './common/tokenUsageComment.js': unreadable,
+            './common/smDoneCheck.js': unreadable,
+            './common/aiChat.js': unreadable,
+            './common/validateInputJql.js': unreadable,
+            './common/autoStart.js': unreadable
+        };
+    }
+    var shapes = loadModule('js/common/ticketKeyShapes.js', makeRequire({}), {});
+    return {
+        './common/ticketKeyShapes.js': shapes,
+        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({}), {}),
+        './common/tokenUsageComment.js': loadModule('js/common/tokenUsageComment.js', makeRequire({
+            './trackers.js': trackersForSm,
+            '../configLoader.js': freshConfigLoader
+        }), smMocks),
+        './common/smDoneCheck.js': loadModule('js/common/smDoneCheck.js', makeRequire({}), smMocks),
+        './common/aiChat.js': loadModule('js/common/aiChat.js', makeRequire({}), smMocks),
+        './common/validateInputJql.js': loadModule('js/common/validateInputJql.js', makeRequire({
+            './ticketKeyShapes.js': shapes,
+            './trackers.js': trackersForSm,
+            '../configLoader.js': freshConfigLoader
+        }), smMocks),
+        './common/autoStart.js': loadModule('js/common/autoStart.js', makeRequire({
+            './scm.js': mockScmModule,
+            './buildEncodedConfig.js': buildEncodedConfigModule,
+            './workflowRuns.js': loadModule('js/common/workflowRuns.js', makeRequire({}), {})
+        }), smMocks)
+    };
+}
+
 
 function cloneRan(cmds) {
     return cmds.some(function (c) { return c.command.indexOf('gh repo clone') !== -1; });
@@ -465,7 +501,7 @@ function makeSmAgent(opts) {
     );
     var sm = loadModule(
         'js/smAgent.js',
-        makeRequire({
+        makeRequire(Object.assign(smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule, buildEncodedConfigModule, smMocks, opts.omitLocalHelperFallbacks), {
             './common/trackers.js': trackersForSm,
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
@@ -547,7 +583,7 @@ function makeSmAgent(opts) {
                     './common/machineAuthor.js': machineAuthorModule,
                     './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {})
                 }), {}),
-        }),
+        })),
         smMocks
     );
 
@@ -14254,17 +14290,107 @@ suite('smAgent: runLocalAction require shim (gh-908)', function() {
         assert.contains(err.message, 'boom at load', 'original error reason must be preserved');
     });
 
-    test('E4: unreadable helper source fails fast with Cannot read (like the config.js/scm.js guards)', function() {
+    test('E4: unreadable helper source fails fast with Cannot read when packed fallback is absent', function() {
         var fm = fileMapWith(TRACKER_ACTION_KEY, 'module.exports.action = function() { return 1; };');
-        // both CWD shapes must come up empty for the fail-fast guard to fire
+        // both CWD shapes and the packed fallback must come up empty for the fail-fast guard to fire
         fm['agents/js/common/ticketKeyShapes.js'] = null;
         fm['js/common/ticketKeyShapes.js'] = null;
-        var sm = makeSmAgent({ fileMap: fm });
+        var sm = makeSmAgent({ fileMap: fm, omitLocalHelperFallbacks: true });
         var err = null;
         try { sm.runLocalAction(TRACKER_ACTION_KEY, { key: 'PROJ-1' }, {}); }
         catch (e) { err = e; }
-        assert.ok(err, 'must throw when a helper source cannot be read');
+        assert.ok(err, 'must throw when a helper source cannot be read and has no packed fallback');
         assert.contains(err.message, 'Cannot read: common/ticketKeyShapes.js');
+    });
+
+    test('gh-1299: runLocalAction succeeds when CWD has no agents/js/ or js/ helper files (release-pack setup)', function() {
+        var repoLocalAction = '.dmtools/js/createDevTask.js';
+        var fm = {
+            '.dmtools/config.js': 'module.exports = { jira: { project: "PROJ" } };'
+        };
+        fm[repoLocalAction] = [
+            'var configLoader = require("agents/js/configLoader.js");',
+            'var trackers = require("agents/js/common/trackers.js");',
+            'var linked = require("./common/linkedIssuesReport.js");',
+            'var tokenUsage = require("./common/tokenUsageComment.js");',
+            'var smDone = require("./common/smDoneCheck.js");',
+            'var aiChat = require("./common/aiChat.js");',
+            'var validateJql = require("./common/validateInputJql.js");',
+            'var buildCfg = require("./common/buildEncodedConfig.js");',
+            'var autoStart = require("./common/autoStart.js");',
+            'var scm = require("./common/scm.js");',
+            'var cfg = require("./config.js");',
+            'module.exports.action = function(params) {',
+            '    var loaded = configLoader.loadProjectConfig(params.jobParams || {});',
+            '    return {',
+            '        project: loaded.jira.project,',
+            '        createTracker: typeof trackers.createTracker,',
+            '        resolveInputContext: typeof linked.resolveInputContext,',
+            '        postTokenUsageComments: typeof tokenUsage.postTokenUsageComments,',
+            '        runDoneCheckAction: typeof smDone.runDoneCheckAction,',
+            '        aiChat: typeof aiChat.aiChat,',
+            '        extractTicketKeyFromJql: typeof validateJql.extractTicketKeyFromJql,',
+            '        buildEncodedConfig: typeof buildCfg.buildEncodedConfig,',
+            '        triggerConfiguredWorkflowForTicket: typeof autoStart.triggerConfiguredWorkflowForTicket,',
+            '        createScm: typeof scm.createScm,',
+            '        hasStatuses: typeof cfg.STATUSES',
+            '    };',
+            '};'
+        ].join('\n');
+        [
+            'config.js',
+            'configLoader.js',
+            'common/scm.js',
+            'common/ticketKeyShapes.js',
+            'common/trackers.js',
+            'common/linkedIssuesReport.js',
+            'common/tokenUsageComment.js',
+            'common/smDoneCheck.js',
+            'common/aiChat.js',
+            'common/validateInputJql.js',
+            'common/buildEncodedConfig.js',
+            'common/autoStart.js'
+        ].forEach(function(rel) {
+            fm['agents/js/' + rel] = null;
+            fm['js/' + rel] = null;
+        });
+        var sm = makeSmAgent({ fileMap: fm });
+        var res = sm.runLocalAction(repoLocalAction, { key: 'PROJ-99' }, {});
+        assert.equal(res.project, 'PROJ');
+        assert.equal(res.createTracker, 'function');
+        assert.equal(res.resolveInputContext, 'function');
+        assert.equal(res.postTokenUsageComments, 'function');
+        assert.equal(res.runDoneCheckAction, 'function');
+        assert.equal(res.aiChat, 'function');
+        assert.equal(res.extractTicketKeyFromJql, 'function');
+        assert.equal(res.buildEncodedConfig, 'function');
+        assert.equal(res.triggerConfiguredWorkflowForTicket, 'function');
+        assert.equal(res.createScm, 'function');
+        assert.equal(res.hasStatuses, 'object');
+    });
+
+    test('gh-1299: sm.json transitive script closure includes every runLocalAction helper module', function() {
+        var gateMod = loadModule('ci/pack_require_gate.cjs');
+        var closure = gateMod.discoverConfigScriptClosure('sm.json', function(p) {
+            try { return file_read({ path: p }); } catch (e) { return null; }
+        });
+        [
+            'js/config.js',
+            'js/configLoader.js',
+            'js/common/scm.js',
+            'js/common/ticketKeyShapes.js',
+            'js/common/trackers.js',
+            'js/common/linkedIssuesReport.js',
+            'js/common/tokenUsageComment.js',
+            'js/common/smDoneCheck.js',
+            'js/common/aiChat.js',
+            'js/common/validateInputJql.js',
+            'js/common/buildEncodedConfig.js',
+            'js/common/autoStart.js'
+        ].forEach(function(expectedPath) {
+            assert.ok(closure.indexOf(expectedPath) !== -1,
+                'sm pack closure must contain ' + expectedPath + ' for localExecution (gh-1299)');
+        });
     });
 });
 
