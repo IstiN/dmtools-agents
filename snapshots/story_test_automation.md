@@ -67,7 +67,7 @@ flowchart TD
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
         D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
-        D3["See instructions/common/dmtools_cli.md for full reference"]
+        D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
     INPUT_ORDER --> CONFLUENCE_RULE --> ATTACH_RULE --> DMTOOLS_RULE
@@ -91,7 +91,7 @@ Before inspecting `testing/` or any source file with `grep`, `find`, `cat`, or `
 
 ## Pre-flight merge conflict resolution
 
-If `merge_conflicts.md` exists in the ticket input folder, the test branch could not be cleanly synced with `origin/main`:
+If `merge_conflicts.md` exists in the ticket input folder, the test branch could not be cleanly synced with the remote default branch (e.g., `origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)`):
 1. Resolve every `<<<<<<<` / `=======` / `>>>>>>>` conflict marker in the listed files, using `pr_diff.txt` for context.
 2. Stage each resolved file with `git add <file>`.
 3. Do NOT `git commit` or `git merge --abort`. Only proceed to test automation after the working directory is clean of conflicts.
@@ -175,7 +175,7 @@ You are automating a Story that has reached **Ready For Testing**. The Story alr
 - You may ONLY write code inside the `testing/` folder.
 - Each Test Case must have its own folder under `testing/tests/{TC_KEY}/`.
 - Reuse components from `testing/components/`, `testing/frameworks/`, and `testing/core/`.
-- Do NOT put raw Flutter/widget locators or `WidgetTester` code directly in the ticket test file.
+- Do NOT put raw UI locators or low-level driver/framework calls directly in the ticket test file.
 - Every `testing/tests/{TC_KEY}/` folder must contain:
   - `README.md` describing what is being tested.
   - `config.yaml` with test metadata.
@@ -693,7 +693,7 @@ Use tracker-specific format:
 - `input/{STORY_KEY}/ticket.md` — Story details, acceptance criteria, solution.
 - `input/{STORY_KEY}/linked_test_cases.md` — all linked Test Cases with key, summary, description, priority, and existing status.
 - `input/{STORY_KEY}/linked_test_cases.json` — machine-readable version of the above.
-- `input/{STORY_KEY}/merge_conflicts.md` *(if present)* — unresolved merge conflicts from syncing the test branch with `origin/main`.
+- `input/{STORY_KEY}/merge_conflicts.md` *(if present)* — unresolved merge conflicts from syncing the test branch with the remote default branch (`origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)`).
 - `input/{STORY_KEY}/pr_diff.txt` *(if present)* — diff context for resolving conflicts.
 - `testing/` — existing reusable components, frameworks, core helpers, and previously automated tests.
 

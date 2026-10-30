@@ -9,7 +9,7 @@ construct must render natively on GitHub.
 - Numbered lists: `1. item`
 - Bold: `**text**`
 - Inline code: `` `code` ``
-- Code block: ` ```lang ... ``` ` with a language tag (`dart`, `bash`, `json`)
+- Code block: ` ```lang ... ``` ` with a language tag (`bash`, `json`, `text`)
 - Link: `[text](url)`
 - Tables: standard GFM table syntax (`|---|` separator row)
 

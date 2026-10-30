@@ -19,7 +19,7 @@ flowchart TD
     BLOCKING -->|No| IMPORTANT[Fix IMPORTANT issues]
     IMPORTANT --> SUGGESTIONS{Minor suggestions?}
     SUGGESTIONS -->|Yes| SKIP["Skip if time-consuming — note in response.md"]
-    SUGGESTIONS -->|No| TEST["Follow TDD approach for every fix — see tdd_approach.md — then run tests and verify"]
+    SUGGESTIONS -->|No| TEST["Follow TDD approach for every fix — see the TDD approach section included later in this prompt — then run tests and verify"]
     SKIP --> TEST
     TEST --> OUTPUT[Write outputs/response.md]
     OUTPUT --> REPLIES{Open review threads?}
@@ -72,9 +72,9 @@ The full uncapped list lives in `ci_violations.json`. In `outputs/response.md`, 
 
 For `dart_format` owned items (rule `dart_format` — the `static` job failed on `dart format --set-exit-if-changed`), the expected fix is `dart format .` on the whole tree, then verify with `dart format --set-exit-if-changed --output=none .` before pushing.
 
-## 3. Already-addressed / invalid threads (gh-957 audit-resolve)
+## 3. Already-addressed / invalid threads (audit-resolve)
 
-The thread list in `pr_discussions.md` / `pr_discussions_raw.json` comes from the SAME GraphQL reviewThreads census the SM armer counts (gh-957) — if it lists threads, they are really open on GitHub and each one needs exactly one reply entry in `outputs/review_replies.json`.
+The thread list in `pr_discussions.md` / `pr_discussions_raw.json` comes from the SAME GraphQL reviewThreads census the SM armer counts — if it lists threads, they are really open on GitHub and each one needs exactly one reply entry in `outputs/review_replies.json`.
 
 A reply entry does NOT always imply a code commit:
 
