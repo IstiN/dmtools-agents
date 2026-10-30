@@ -141,6 +141,7 @@ PYEOF
       test -f outputs/story_development_usage.json
       grep -q '"source": "transcript-summary"' outputs/story_development_usage.json
       grep -q '"approximate": true' outputs/story_development_usage.json
+      grep -q '"gpt-5.3-codex"' outputs/story_development_usage.json
     else
       test ! -e outputs/story_development_usage.json
       test ! -e outputs/token_usage_files.json

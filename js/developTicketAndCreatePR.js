@@ -151,10 +151,99 @@ function syncBranchWithBaseUsingRunCmd(branchName, baseBranch) {
 }
 
 /**
+ * gh-1308: true when `val` is a 7..40 char hex git object SHA.
+ */
+function isValidGitSha(val) {
+    return /^[0-9a-f]{7,40}$/i.test(String(val || '').trim());
+}
+
+/**
+ * gh-1308: read the setup-time HEAD SHA from input/<ticketKey>/dev_base_head.txt
+ * when available, or fall back to `git merge-base origin/<baseBranch> HEAD`.
+ * Returns null when neither resolves to a valid hex SHA.
+ */
+function readRecordedDevBaseHead(ticketKey) {
+    if (!ticketKey || typeof file_read !== 'function') return null;
+    try {
+        var recorded = String(file_read({ path: 'input/' + ticketKey + '/dev_base_head.txt' }) || '').trim();
+        return isValidGitSha(recorded) ? recorded : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function readDevBaseHead(runCommand, ticketKey, baseBranch) {
+    var recorded = readRecordedDevBaseHead(ticketKey);
+    if (recorded) return recorded;
+    var originRef = baseBranch ? 'origin/' + baseBranch : 'origin/main';
+    try {
+        var mb = cleanCommandOutput(runCommand('git merge-base ' + originRef + ' HEAD') || '').trim();
+        return isValidGitSha(mb) ? mb : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * gh-1308: true when every non-empty commit subject in the list is either a
+ * timer `WIP auto-save` commit or the target development commit message, and
+ * the list is not already a single clean target commit.
+ */
+function canSquashDevWipSubjects(subjects, safeMessage) {
+    if (!subjects || subjects.length === 0) return false;
+    if (subjects.length === 1 && subjects[0] === safeMessage) return false;
+    for (var i = 0; i < subjects.length; i++) {
+        if (!/WIP auto-save/.test(subjects[i]) && subjects[i] !== safeMessage) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * gh-1308: non-empty commit subjects in `<range>` (`git log --format=%s`),
+ * or `[]` when `<range>` contains a merge commit.
+ */
+function readNonMergeSubjects(runCommand, range) {
+    var merges = cleanCommandOutput(runCommand('git rev-list --merges ' + range) || '').trim();
+    if (merges) return [];
+    return cleanCommandOutput(runCommand('git log --format=%s ' + range) || '').split('\n')
+        .map(function (l) { return l.trim(); }).filter(Boolean);
+}
+
+/**
+ * gh-1308: squash timer `WIP auto-save` commits made during the development
+ * pass into a single descriptive commit before pushing. Returns true only when
+ * history was rewritten (caller must push with `--force-with-lease`). Fails
+ * closed (returns false, history untouched) when the base is unknown, a merge
+ * commit is present in `<base>..HEAD`, or any commit subject is not a WIP
+ * auto-save / target message.
+ */
+function squashDevelopmentWipCommits(runCommand, ticketKey, baseBranch, commitMessage) {
+    if (!commitMessage) return false;
+    try {
+        var base = readDevBaseHead(runCommand, ticketKey, baseBranch);
+        if (!base) return false;
+        var subjects = readNonMergeSubjects(runCommand, base + '..HEAD');
+        var safeMsg = sanitizeCommitMessage(commitMessage);
+        if (!canSquashDevWipSubjects(subjects, safeMsg)) return false;
+        runCommand('git reset --soft ' + base);
+        runCommand('git commit -m "' + safeMsg + '"');
+        console.log('✅ Squashed ' + subjects.length + ' WIP auto-save commit(s) into one: ' + safeMsg);
+        return true;
+    } catch (e) {
+        console.warn('squashDevelopmentWipCommits skipped (history untouched):', String(e));
+        return false;
+    }
+}
+
+/**
  * Push already-committed changes to remote (used when CLI agent committed its own work).
  */
-function performPushOnly(branchName, baseBranch) {
+function performPushOnly(branchName, baseBranch, commitMessage, ticketKey) {
     console.log('Pushing pre-committed changes to remote...');
+    var runStr = function (command) { return runCmd({ command: command }); };
+    var squashed = squashDevelopmentWipCommits(runStr, ticketKey, baseBranch, commitMessage);
     var syncResult = syncBranchWithBaseUsingRunCmd(branchName, baseBranch);
     if (!syncResult.success) {
         return { success: false, isMergeSyncFailure: true, error: syncResult.error };
@@ -163,7 +252,7 @@ function performPushOnly(branchName, baseBranch) {
     // gh-1190: the push attempt + failure detection reuse the gh-1003
     // helpers (pushBranchToRemote / detectPushFailure) — identical soft-
     // rejection markers and exception handling as the original inline chain.
-    var pushAttempt = pushBranchToRemote(function (command) { return runCmd({ command: command }); }, branchName);
+    var pushAttempt = pushBranchToRemote(runStr, branchName, squashed);
     if (detectPushFailure(pushAttempt.output, pushAttempt.threw)) {
         var forceRetry = retryForcePushAfterRejection(branchName);
         if (forceRetry) return forceRetry;
@@ -277,9 +366,10 @@ function branchMissingOnRemote(lsRemoteOutput, branchName) {
  * code converted the exception to text and treated it as a failure signal —
  * preserved here via the `threw` flag.
  */
-function pushBranchToRemote(runCommand, branchName) {
+function pushBranchToRemote(runCommand, branchName, forceWithLease) {
+    var pushCmd = 'git push -u origin ' + branchName + (forceWithLease ? ' --force-with-lease' : '');
     try {
-        return { output: runCommand('git push -u origin ' + branchName) || '', threw: false };
+        return { output: runCommand(pushCmd) || '', threw: false };
     } catch (pushErr) {
         // git push exits with non-zero (e.g. non-fast-forward) — cli_execute_command throws
         return { output: String(pushErr), threw: true };
@@ -308,14 +398,14 @@ function probeCommitsAhead(runCommand, refExpression, warnMessage) {
  * work (→ the historical no-changes error). Log lines and return shapes are
  * preserved verbatim.
  */
-function resolveNothingStagedOutcome(runCommand, branchName, baseBranch) {
+function resolveNothingStagedOutcome(runCommand, branchName, baseBranch, commitMessage, ticketKey) {
     var originRef = baseBranch ? 'origin/' + baseBranch : 'origin/main';
     console.log('Nothing staged — checking whether the agent already committed or pushed its work...');
     var commitsAhead = probeCommitsAhead(runCommand, originRef + '..HEAD', 'Could not check commits ahead of ' + originRef + ':');
     if (commitsAhead > 0) {
         console.log('No uncommitted changes, but branch is ' + commitsAhead + ' commit(s) ahead of ' + originRef + ' — agent already committed. Skipping commit step.');
         // Jump straight to push after syncing with the latest base branch.
-        return performPushOnly(branchName, baseBranch);
+        return performPushOnly(branchName, baseBranch, commitMessage, ticketKey);
     }
 
     // Check if the remote branch already has commits not yet in origin/main
@@ -411,7 +501,7 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         if (!hasStagedChanges(statusOutput)) {
             return resolveNothingStagedOutcome(function (command) {
                 return runCmd({ command: command });
-            }, branchName, baseBranch);
+            }, branchName, baseBranch, commitMessage, ticketKey);
         }
 
         // Commit changes — sanitize message to avoid shell metacharacter rejection
@@ -420,6 +510,9 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         runCmd({
             command: 'git commit -m "' + safeMessage + '"'
         });
+        var squashedAfterCommit = squashDevelopmentWipCommits(function (command) {
+            return runCmd({ command: command });
+        }, ticketKey, baseBranch, commitMessage);
 
         var syncResult = syncBranchWithBaseUsingRunCmd(branchName, baseBranch);
         if (!syncResult.success) {
@@ -437,7 +530,7 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         // and exception handling as the original inline chain.
         const pushAttempt = pushBranchToRemote(function (command) {
             return runCmd({ command: command });
-        }, branchName);
+        }, branchName, squashedAfterCommit);
         var pushOutput = pushAttempt.output;
         const pushFailed = detectPushFailure(pushOutput, pushAttempt.threw);
 
@@ -1141,6 +1234,21 @@ function findOpenPrForBranch(scm, branchName) {
     })[0];
 }
 
+/**
+ * Log the honest outcome of a tracker moveToStatus call (dm.ai#795): when
+ * stageFallback='label' caught a rejected state transition and applied a
+ * `stage_*` label instead, log the fallback marker rather than claiming the
+ * ticket moved to `statusLabel`.
+ */
+function logMoveToStatusOutcome(ticketKey, statusLabel, moveResult, suffix) {
+    var tail = suffix ? ' ' + suffix : '';
+    if (moveResult && moveResult.marked) {
+        console.log('⚠️ ' + ticketKey + ': transition to ' + statusLabel + ' rejected — marked with label ' + moveResult.label + tail);
+        return;
+    }
+    console.log('✅ Moved ' + ticketKey + ' to ' + statusLabel + tail);
+}
+
 function reuseOpenPrResult(ctx, existingPr) {
     var existingUrl = existingPr.html_url || existingPr.url || '';
     console.log('⚠️  PR already open for', ctx.ticketKey, ':', existingUrl || ('#' + existingPr.number), '— skipping re-development');
@@ -1151,8 +1259,8 @@ function reuseOpenPrResult(ctx, existingPr) {
                 'Moved ticket to ' + m.bold('In Review') + ' for review.');
     } catch (e) { }
     try {
-        getTracker().moveToStatus(ctx.ticketKey, ctx.statuses.IN_REVIEW);
-        console.log('✅ Moved', ctx.ticketKey, 'to In Review');
+        var moveRes = getTracker().moveToStatus(ctx.ticketKey, ctx.statuses.IN_REVIEW);
+        logMoveToStatusOutcome(ctx.ticketKey, 'In Review', moveRes);
     } catch (e) { console.warn('Failed to move to In Review:', e); }
     return { success: true, path: 'pr_already_open', ticketKey: ctx.ticketKey };
 }
@@ -1272,8 +1380,8 @@ function finalizeNoChangesOutcome(ctx, agentResponse) {
         console.warn('Failed to post agent analysis comment:', e);
     }
     try {
-        getTracker().moveToStatus(ctx.ticketKey, ctx.statuses.IN_REVIEW);
-        console.log('✅ Moved', ctx.ticketKey, 'to', ctx.statuses.IN_REVIEW, '(no code changes needed)');
+        var noChangeMoveRes = getTracker().moveToStatus(ctx.ticketKey, ctx.statuses.IN_REVIEW);
+        logMoveToStatusOutcome(ctx.ticketKey, ctx.statuses.IN_REVIEW, noChangeMoveRes, '(no code changes needed)');
     } catch (e) {
         console.warn('Failed to move ticket to ' + ctx.statuses.IN_REVIEW + ':', e);
     }
@@ -1515,8 +1623,8 @@ function assignAndMoveToReview(ctx) {
 
     // Move ticket to In Review status
     try {
-        getTracker().moveToStatus(ctx.ticketKey, ctx.statuses.IN_REVIEW);
-        console.log('✅ Moved ' + ctx.ticketKey + ' to In Review');
+        var reviewMoveRes = getTracker().moveToStatus(ctx.ticketKey, ctx.statuses.IN_REVIEW);
+        logMoveToStatusOutcome(ctx.ticketKey, 'In Review', reviewMoveRes);
     } catch (error) {
         console.warn('Failed to move ticket to In Review:', error);
     }
@@ -1846,6 +1954,9 @@ if (typeof module !== 'undefined' && module.exports) {
         // gh-1190: performPushOnly/action seam helpers — exported for direct
         // characterization tests.
         isHardPushRejection, retryForcePushAfterRejection, performPushOnly,
+        isValidGitSha, readRecordedDevBaseHead, readDevBaseHead,
+        canSquashDevWipSubjects, readNonMergeSubjects, squashDevelopmentWipCommits,
+        logMoveToStatusOutcome,
         prepareDevelopmentGitStage, stageOutcomeOf, runPublishPipeline,
         createDevelopmentPr, finalizeDevelopmentSuccess, concludeActionFailure,
         // gh-1250: shared sync wrapper extracted from the two syncBranchWithBase

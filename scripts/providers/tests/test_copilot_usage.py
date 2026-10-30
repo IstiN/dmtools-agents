@@ -379,6 +379,54 @@ class TranscriptFallbackTest(unittest.TestCase):
                 copilot_usage.extract_usage([transcript], home=home)
 
 
+    def test_transcript_fallback_populates_models_from_transcript_or_flag(self):
+        with tempfile.TemporaryDirectory() as home:
+            transcript = Path(home) / "attempt1.log"
+            transcript.write_text(
+                "Running: copilot --allow-all --model claude-opus-4-7\n" + FOOTER_A,
+                encoding="utf-8",
+            )
+            usage = copilot_usage.extract_usage([transcript], home=home)
+            self.assertEqual(usage["models"], ["claude-opus-4-7"])
+
+            # Fallback to explicit --model when transcript lacks a --model line
+            plain = Path(home) / "attempt2.log"
+            plain.write_text(FOOTER_B, encoding="utf-8")
+            usage_from_arg = copilot_usage.extract_usage(
+                [plain], home=home, models=["gpt-5.4"]
+            )
+            self.assertEqual(usage_from_arg["models"], ["gpt-5.4"])
+
+    def test_describe_store_skip_reason_reports_store_missing_no_session_and_no_rows(self):
+        with tempfile.TemporaryDirectory() as home:
+            reason_missing = copilot_usage.describe_store_skip_reason([SESSION_A], home=home)
+            self.assertIn("session store not found at", reason_missing)
+            self.assertIn("using transcript footer", reason_missing)
+
+            make_store(home, [])
+            reason_no_session = copilot_usage.describe_store_skip_reason([], home=home, since_id=0)
+            self.assertIn("no session id resolved", reason_no_session)
+            self.assertIn("using transcript footer", reason_no_session)
+
+            reason_no_rows = copilot_usage.describe_store_skip_reason([SESSION_A], home=home, since_id=5)
+            self.assertIn("no usage rows found in session store", reason_no_rows)
+            self.assertIn(SESSION_A, reason_no_rows)
+            self.assertIn("using transcript footer", reason_no_rows)
+
+    def test_print_usage_summary_mentions_rounded_token_counts(self):
+        import io
+        from contextlib import redirect_stdout
+
+        usage = copilot_usage.normalize_transcript_footers(
+            [("attempt.log", FOOTER_A)], models=["claude-opus-4-7"]
+        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            copilot_usage.print_usage_summary(usage, Path("outputs/story_development_usage.json"))
+        out = buf.getvalue()
+        self.assertIn("claude-opus-4-7", out)
+        self.assertIn("token counts (input, cached, written, output, reasoning) are rounded", out)
+
 class CostTest(unittest.TestCase):
     def setUp(self):
         self._previous = os.environ.pop("COPILOT_USD_PER_CREDIT", None)

@@ -3064,3 +3064,120 @@ suite('developTicketAndCreatePR > branchCarriesWork contract (gh-1229)', functio
         assert.equal(mod.branchCarriesWork('develop'), false);
     });
 });
+
+suite('developTicketAndCreatePR > WIP auto-save squash (gh-1308)', function () {
+
+    function loadWithRealPrHelper(mocks) {
+        return loadDevelopTicketAndCreatePRWithRealGitHelpers(Object.assign({
+            file_write: function () { }
+        }, mocks));
+    }
+
+    test('readDevBaseHead reads dev_base_head.txt first and falls back to git merge-base', function () {
+        var mod1 = loadWithRealPrHelper({
+            file_read: function (args) {
+                if (args.path === 'input/AB-42/dev_base_head.txt') return '  1122334455667788  \n';
+                return '';
+            }
+        });
+        assert.equal(mod1.readDevBaseHead(function () { return ''; }, 'AB-42', 'main'), '1122334455667788');
+
+        var mod2 = loadWithRealPrHelper({
+            file_read: function () { throw new Error('missing'); }
+        });
+        var sha = mod2.readDevBaseHead(function (cmd) {
+            if (cmd === 'git merge-base origin/main HEAD') return 'aabbccddeeff0011\n';
+            return '';
+        }, 'AB-42', null);
+        assert.equal(sha, 'aabbccddeeff0011');
+        assert.equal(mod2.readDevBaseHead(function () { throw new Error('no git'); }, null, 'main'), null);
+    });
+
+    test('canSquashDevWipSubjects accepts WIP auto-save and target message, rejects foreign or single clean commit', function () {
+        var mod = loadWithRealPrHelper({});
+        assert.equal(mod.canSquashDevWipSubjects([], 'AB#42 Fix login'), false);
+        assert.equal(mod.canSquashDevWipSubjects(['AB#42 Fix login'], 'AB#42 Fix login'), false);
+        assert.equal(mod.canSquashDevWipSubjects(['AB#42: WIP auto-save 2026-04-19T14:58:58Z'], 'AB#42 Fix login'), true);
+        assert.equal(mod.canSquashDevWipSubjects(['AB#42: WIP auto-save 2026-04-19T14:58:58Z', 'AB#42 Fix login'], 'AB#42 Fix login'), true);
+        assert.equal(mod.canSquashDevWipSubjects(['AB#42: WIP auto-save 2026-04-19T14:58:58Z', 'Custom agent commit'], 'AB#42 Fix login'), false);
+    });
+
+    test('squashDevelopmentWipCommits resets softly to base and creates one clean commit when all commits are WIP', function () {
+        var commands = [];
+        var mod = loadWithRealPrHelper({
+            file_read: function (args) {
+                if (args.path === 'input/2010283/dev_base_head.txt') return 'deadbeef12345678';
+                return '';
+            }
+        });
+        var squashed = mod.squashDevelopmentWipCommits(function (cmd) {
+            commands.push(cmd);
+            if (cmd === 'git rev-list --merges deadbeef12345678..HEAD') return '';
+            if (cmd === 'git log --format=%s deadbeef12345678..HEAD') {
+                return 'AB#2010283: WIP auto-save 2026-04-19T14:58:58Z\nAB#2010283: WIP auto-save 2026-04-19T15:03:56Z\n';
+            }
+            return '';
+        }, '2010283', 'main', 'AB#2010283 Implement feature');
+        assert.equal(squashed, true);
+        assert.ok(commands.indexOf('git reset --soft deadbeef12345678') !== -1);
+        assert.ok(commands.indexOf('git commit -m "AB#2010283 Implement feature"') !== -1);
+    });
+
+    test('squashDevelopmentWipCommits skips when a merge commit is present, when already a single clean commit, or on git error', function () {
+        var mod = loadWithRealPrHelper({
+            file_read: function () { return 'deadbeef12345678'; }
+        });
+        assert.equal(mod.squashDevelopmentWipCommits(function () { return ''; }, '1', 'main', ''), false);
+        assert.equal(mod.squashDevelopmentWipCommits(function (cmd) {
+            if (cmd.indexOf('git rev-list --merges') === 0) return 'mergesha';
+            return '';
+        }, '1', 'main', 'msg'), false);
+        assert.equal(mod.squashDevelopmentWipCommits(function (cmd) {
+            if (cmd.indexOf('git log --format=%s') === 0) return 'msg\n';
+            return '';
+        }, '1', 'main', 'msg'), false);
+        assert.equal(mod.squashDevelopmentWipCommits(function () {
+            throw new Error('git failed');
+        }, '1', 'main', 'msg'), false);
+    });
+
+    test('performPushOnly squashes WIP auto-save commits and pushes with --force-with-lease', function () {
+        var calls = [];
+        var mod = loadWithRealPrHelper({
+            file_read: function () { return 'deadbeef12345678'; },
+            cli_execute_command: function (opts) {
+                var c = opts.command;
+                calls.push(c);
+                if (c === 'git log --format=%s deadbeef12345678..HEAD') {
+                    return 'AB#2010283: WIP auto-save 2026-04-19T14:58:58Z\n';
+                }
+                if (c === 'git rev-parse origin/main') return 'base-sha';
+                if (c === 'git merge-base origin/main HEAD') return 'base-sha';
+                if (c === 'git ls-remote --heads origin ai/2010283') {
+                    return '0123456789abcdef0123456789abcdef01234567\trefs/heads/ai/2010283\n';
+                }
+                return '';
+            }
+        });
+        var res = mod.performPushOnly('ai/2010283', 'main', 'AB#2010283 Clean feature commit', '2010283');
+        assert.equal(res.success, true);
+        assert.ok(calls.indexOf('git reset --soft deadbeef12345678') !== -1);
+        assert.ok(calls.indexOf('git commit -m "AB#2010283 Clean feature commit"') !== -1);
+        assert.ok(calls.indexOf('git push -u origin ai/2010283 --force-with-lease') !== -1);
+    });
+
+    test('logMoveToStatusOutcome logs stage-label fallback honestly instead of claiming Moved to In Review (dm.ai#795)', function () {
+        var logs = [];
+        var mod = loadWithRealPrHelper({});
+        var origLog = console.log;
+        console.log = function () { logs.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            mod.logMoveToStatusOutcome('2010283', 'In Review', { moved: false, marked: true, label: 'stage_in_review' });
+            mod.logMoveToStatusOutcome('2010283', 'In Review', { moved: true, marked: false }, '(no code changes needed)');
+        } finally {
+            console.log = origLog;
+        }
+        assert.contains(logs[0], 'transition to In Review rejected — marked with label stage_in_review');
+        assert.contains(logs[1], 'Moved 2010283 to In Review (no code changes needed)');
+    });
+});

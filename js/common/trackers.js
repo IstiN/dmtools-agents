@@ -1297,7 +1297,7 @@ function createTracker(config, customParams) {
             } else {
                 impl.assignTo(ticketKey, initiatorId);
             }
-            moveToStatusOrMark(ticketKey, statusName, 'IN_REVIEW');
+            var moveOutcome = moveToStatusOrMark(ticketKey, statusName, 'IN_REVIEW');
             impl.addLabel(ticketKey, aiLabel);
             if (wipLabel) {
                 try {
@@ -1307,9 +1307,21 @@ function createTracker(config, customParams) {
                     console.warn('Failed to remove WIP label "' + wipLabel + '":', labelError);
                 }
             }
+            if (moveOutcome && moveOutcome.marked) {
+                console.log('✅ Assigned to initiator and marked with ' + moveOutcome.label + ' (' + statusName + ' state not available)');
+                return {
+                    success: true,
+                    moved: false,
+                    marked: true,
+                    label: moveOutcome.label,
+                    message: 'Ticket ' + ticketKey + ' assigned and marked with ' + moveOutcome.label
+                };
+            }
             console.log('✅ Assigned to initiator and moved to ' + statusName);
             return {
                 success: true,
+                moved: true,
+                marked: false,
                 message: 'Ticket ' + ticketKey + ' assigned and moved to ' + statusName
             };
         } catch (error) {

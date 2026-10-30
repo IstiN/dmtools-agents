@@ -901,6 +901,10 @@ suite('trackers.js assignForReview', function () {
         );
         var result = t.assignForReview('491', undefined, 'story_wip', 'In Review');
         assert.equal(result.success, true, 'expected success with stageFallback=label: ' + JSON.stringify(result));
+        assert.equal(result.moved, false);
+        assert.equal(result.marked, true);
+        assert.equal(result.label, 'stage_in_review');
+        assert.contains(result.message, 'marked with stage_in_review');
         assert.deepEqual(
             adoAddLabel.calls.map(function (c) { return c.label; }),
             ['stage_in_review', configModule.LABELS.AI_GENERATED]

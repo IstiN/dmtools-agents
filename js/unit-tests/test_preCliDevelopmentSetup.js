@@ -1551,3 +1551,43 @@ suite('preCliDevelopmentSetup.reportExistingDevBranch — degradation branches (
         assert.notContains(minimal, '## Commits ahead of base');
     });
 });
+
+suite('preCliDevelopmentSetup.writeDevBaseHead (gh-1308)', function () {
+
+    function loadWithMocks(cliFn, writeFn) {
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'main', null, []);
+        return loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: cliFn,
+            file_write: writeFn || function () { }
+        });
+    }
+
+    test('writes dev_base_head.txt when git rev-parse HEAD returns a valid SHA', function () {
+        var writes = [];
+        var mod = loadWithMocks(function (opts) {
+            if (opts.command === 'git rev-parse HEAD') return 'abc1234567890\n';
+            return '';
+        }, function (args) { writes.push(args); });
+
+        mod.writeDevBaseHead('input/PROJ-1');
+
+        assert.equal(writes.length, 1);
+        assert.equal(writes[0].path, 'input/PROJ-1/dev_base_head.txt');
+        assert.equal(writes[0].content, 'abc1234567890');
+    });
+
+    test('skips write when folder is missing or SHA is invalid', function () {
+        var writes = [];
+        var mod = loadWithMocks(function () { return 'not-a-sha'; }, function (args) { writes.push(args); });
+
+        mod.writeDevBaseHead(null);
+        mod.writeDevBaseHead('input/PROJ-1');
+
+        assert.equal(writes.length, 0);
+    });
+
+    test('swallows git or file_write errors with a warning', function () {
+        var mod = loadWithMocks(function () { throw new Error('git boom'); });
+        assert.doesNotThrow(function () { mod.writeDevBaseHead('input/PROJ-1'); });
+    });
+});
