@@ -59,9 +59,11 @@ function prGhMocks(opts, record) {
 
 function prGitOpsMocks(opts, record) {
     return {
-        checkoutPRBranch: function(branchName, workingDir, baseBranch) {
-            record.gitOps.push({ fn: 'checkoutPRBranch', branchName: branchName,
-                workingDir: workingDir, baseBranch: baseBranch });
+        checkoutPRBranch: function(branchName, workingDir, baseBranch, pullRef) {
+            var entry = { fn: 'checkoutPRBranch', branchName: branchName,
+                workingDir: workingDir, baseBranch: baseBranch };
+            if (pullRef !== undefined && pullRef !== null) entry.pullRef = pullRef;
+            record.gitOps.push(entry);
             if (opts.checkoutError) throw opts.checkoutError;
         },
         getPRDiff: function(baseBranch, headBranch, workingDir) {
@@ -131,7 +133,10 @@ function prLoad(opts) {
         './common/gitOps.js': Object.assign(prGitOpsMocks(opts, record), opts.gitOps || {}),
         './common/commentMarkup.js': prCommentMarkup(),
         './fetchParentContextToInput.js': prParentMock(opts, record),
-        './common/trackers.js': prTrackersWith(globalMocks)
+        './common/trackers.js': prTrackersWith(globalMocks),
+        './common/forkCheckout.js': loadModule('js/common/forkCheckout.js',
+            makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js') }),
+            opts.forkEnv ? { get_env_variable: function(k) { return opts.forkEnv[k] || null; } } : {})
     }), globalMocks);
 
     return { module: module, record: record };
@@ -227,6 +232,32 @@ test('pr-N anchored: no ticket lookup, no ticket comments, repo from git remote'
     assert.equal(rec.ghCalls[0].prNumber, 99);
     assert.equal(rec.comments.length, 0);
     assert.equal(rec.parentCalls.length, 0);
+});
+
+test('fork PR: checkoutPrBranch passes refs/pull/<N>/head pullRef to gitOps.checkoutPRBranch', function() {
+    var rec = prRecorder();
+    var loaded = prLoad({
+        record: rec,
+        config: { repository: { owner: 'IstiN', repo: 'dmtools-agents' }, git: { baseBranch: 'main' } },
+        prDetails: {
+            number: 1301,
+            html_url: 'https://github.com/IstiN/dmtools-agents/pull/1301',
+            head: { ref: 'feat/needs-input-upstream', sha: 'b06f1c57', repo: { full_name: 'ajaxspace/dmtools-agents' } },
+            base: { ref: 'main', repo: { full_name: 'IstiN/dmtools-agents' } },
+            changed_files: 6
+        }
+    });
+
+    var result = loaded.module.action({ inputFolderPath: 'input/pr-1301', jobParams: {} });
+
+    assert.equal(result.success, true);
+    assert.deepEqual(rec.gitOps[0], {
+        fn: 'checkoutPRBranch',
+        branchName: 'feat/needs-input-upstream',
+        workingDir: undefined,
+        baseBranch: 'main',
+        pullRef: 'refs/pull/1301/head'
+    });
 });
 
 test('jobParams.prNumber and jobParams.pr act as PR anchors', function() {

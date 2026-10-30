@@ -16,6 +16,7 @@ const gitOps = require('./common/gitOps.js');
 const commentMarkup = require('./common/commentMarkup.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var trackersModule = require('./common/trackers.js');
+var forkCheckout = require('./common/forkCheckout.js');
 
 // ── Parsing / context ────────────────────────────────────────────────────────
 
@@ -179,11 +180,13 @@ function fetchPrDetails(ctx, pr) {
 }
 
 // Step 4: checkout the PR branch (non-fatal on failure)
-function checkoutPrBranch(ctx, branchName) {
+function checkoutPrBranch(ctx, branchName, prDetails) {
     try {
         if (branchName) {
+            var pullRef = forkCheckout.resolvePullRef(
+                forkCheckout.prPullRef(prDetails), forkCheckout.envCheckoutRef());
             console.log('Checking out PR branch:', branchName, 'workingDir:', ctx.config.workingDir || '(default)');
-            gitOps.checkoutPRBranch(branchName, ctx.config.workingDir, ctx.config.git.baseBranch);
+            gitOps.checkoutPRBranch(branchName, ctx.config.workingDir, ctx.config.git.baseBranch, pullRef);
             console.log('Checkout completed for branch:', branchName);
         } else {
             console.warn('PR details did not include a head branch; checkout skipped');
@@ -345,7 +348,7 @@ function action(params) {
         var prDetails = detailsOutcome.prDetails;
 
         var branchName = extractHeadBranch(prDetails);
-        checkoutPrBranch(ctx, branchName);
+        checkoutPrBranch(ctx, branchName, prDetails);
 
         var diff = generateDiff(ctx, prDetails, branchName);
         var discussionData = fetchDiscussionData(ctx, prOutcome.pr.number);

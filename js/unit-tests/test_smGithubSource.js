@@ -4086,12 +4086,13 @@ suite('sm github source — matchesGuards probe order (gh-1221 composite split)'
         var provider = recordingProvider(calls,
             { state: 'CHANGES_REQUESTED', commitId: 'old' },
             { record: { verdict: 'CHANGES_REQUESTED' } });
-        var ok = gt.matchesGuards(headItem(),
+        var item = headItem();
+        var ok = gt.matchesGuards(item,
             { query: { type: 'pr', reviewStale: true, staleVerdict: true,
                        latestVerdict: ['CHANGES_REQUESTED'], threadsResolved: true } },
             provider, null, 'o', { owner: 'o', repo: 'r' });
         assert.equal(ok, true, 'all probes agree — the item matches');
-        assert.deepEqual(calls,
+        assert.equal(item.lastReviewCommitId, 'old', 'attaches lastReviewCommitId to item for arm_review silent-update guard');
             ['lastReview', 'lastReview', 'latestVerdictRecord', 'reviewThreads'],
             'probe order and multiplicity are contract (reviewStale + staleVerdict both read lastReview)');
     });
