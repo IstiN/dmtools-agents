@@ -106,7 +106,7 @@ function buildExclusionPathspecs(paths, runCommand) {
     if (typeof runCommand === 'function') {
         kept = kept.filter(function (path) {
             try {
-                runCommand({ command: 'git check-ignore -q -- ' + path });
+                runCommand({ command: 'git check-ignore -q -- ' + path, expectNonZeroExit: true });
                 return false; // ignored — git's own exclude machinery owns it
             } catch (e) {
                 return true; // not ignored (or probe unavailable) — pathspec exclusion required

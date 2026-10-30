@@ -31,7 +31,7 @@ var MAX_PR_DIFF_CONTEXT_CHARS = 12000;
 // copies grew here).
 function dirScopedCmd(workingDir) {
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
-    return function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+    return function(command, extraOpts) { return cli_execute_command(Object.assign({}, cmdOpts, extraOpts || {}, { command: command })); };
 }
 
 
@@ -174,7 +174,7 @@ function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
         // gitignored; when it is NOT ignored (the nested-gitlink case) the
         // exclusion is kept and the guard cannot fire.
         cmd('git add -A -- ' + gitStaging.buildExclusionPathspecs(['factory-kit'], function (args) {
-            return cmd(args.command);
+            return cmd(args.command, args);
         }));
         try {
             cmd('git stash push -u -m "preflight-checkout-' + branchName + '"');
