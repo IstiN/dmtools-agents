@@ -1417,7 +1417,62 @@ function resetInterruptedDevelopment(ctx, commentBody) {
     throwInterruptedReset(ctx.ticketKey);
 }
 
+// ── inputs pre-flight (ask-mode) seam ───────────────────────────────────────
+// Both ask-mode exits share the same bookkeeping: label the ticket as waiting
+// on the reporter (best-effort) and end the leg GREEN with a needsInput
+// outcome — no PR, no interrupted reset.
+
+/** Best-effort ai_questions_asked label — the reviewer hand-off reads it. */
+function markNeedsInputTicket(ctx) {
+    try {
+        getTracker().addLabel(ctx.ticketKey, LABELS.AI_QUESTIONS_ASKED);
+    } catch (e) {
+        console.warn('Could not add ' + LABELS.AI_QUESTIONS_ASKED + ' label:', e);
+    }
+}
+
+/** The green outcome body shared by both ask-mode exits. */
+function needsInputOutcomeBody(ctx) {
+    return {
+        success: true,
+        message: 'Ticket ' + ctx.ticketKey + ' needs input from the reporter — question posted, no PR created',
+        needsInput: true
+    };
+}
+
+/**
+ * Ask-mode (no-assumptions rule) — the agent flagged missing ticket inputs
+ * and stopped WITHOUT writing response.md (the question comment is already
+ * posted; outputs/needs-input.md marks the leg). This check MUST precede the
+ * interrupted classification in recoverNoChangesOutcome: a response.md-less
+ * ask leg is exactly where the ticket should be — waiting on the reporter —
+ * never an interrupted reset, and the reviewer hand-off skips ask-mode via
+ * the same label. Returns null when the leg is not an ask-mode leg.
+ */
+function askModeOutcome(ctx) {
+    if (!outputFiles.hasOutputFile('needs-input.md')) return null;
+    console.log('outputs/needs-input.md present — ask-mode leg: agent asked for missing inputs. No PR, no reset.');
+    markNeedsInputTicket(ctx);
+    return { result: needsInputOutcomeBody(ctx) };
+}
+
+/**
+ * runPublishPipeline seam of the same pre-flight: outputs/needs-input.md
+ * present → label + green outcome, skipping the gates and PR creation; the
+ * ticket waits for the reporter's answer (a caller may re-arm the leg on a
+ * human comment — see the dispatch gate's comment-resume). Absent → null
+ * (the pipeline continues to PR creation).
+ */
+function needsInputOutcome(ctx) {
+    if (!outputFiles.hasOutputFile('needs-input.md')) return null;
+    console.log('outputs/needs-input.md present — agent flagged missing ticket inputs. Skipping gates and PR creation.');
+    markNeedsInputTicket(ctx);
+    return needsInputOutcomeBody(ctx);
+}
+
 function recoverNoChangesOutcome(params, ctx) {
+    var askMode = askModeOutcome(ctx);
+    if (askMode) return askMode;
     var agentResponse = noChangesResponse(ctx);
     if (agentResponse) {
         var guard = landingGuardResume(params, ctx, agentResponse);
@@ -1680,6 +1735,12 @@ function runPublishPipeline(params, ctx, branchName, commitMessage) {
         return stageOutcomeOf(params, initialOutcome);
     }
 
+    // Inputs pre-flight outcome (no-assumptions rule) — see needsInputOutcome().
+    // Ask-mode: label the ticket and end the leg GREEN without creating a PR;
+    // the gates and PR creation never run on an ask-mode leg.
+    var needsInput = needsInputOutcome(ctx);
+    if (needsInput) return needsInput;
+
     var gateResult = feedbackLoop.runQualityGates({
         ticketKey: ctx.ticketKey,
         customParams: ctx.customParams,
@@ -1852,6 +1913,8 @@ if (typeof module !== 'undefined' && module.exports) {
         // call sites — exported for direct characterization tests.
         syncBranchWithBaseUsingRunCmd,
         // gh-1229: landing-guard decomposition — exported for direct tests.
-        branchCarriesWork, hasCommitsAheadOfBase, workingTreeCarriesWork, statusLineIndicatesWork
+        branchCarriesWork, hasCommitsAheadOfBase, workingTreeCarriesWork, statusLineIndicatesWork,
+        // inputs pre-flight (ask-mode) seams — exported for direct tests.
+        askModeOutcome, needsInputOutcome
     };
 }

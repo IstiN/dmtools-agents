@@ -149,7 +149,10 @@ otherwise.
 ```mermaid
 flowchart TD
     START([Bug ticket ready for fix]) --> READ["⚠️ MANDATORY: Read ALL input files FIRST — see instructions/common/input_context_reading.md"]
-    READ --> RETURNED{Ticket returned to development?}
+    READ --> PREFLIGHT{"⚠️ STEP 0 input-completeness pre-flight:<br/>any missing attachment / reference / contradiction?"}
+    PREFLIGHT -->|Highlights - missing input| ASK["Post ONE comment asking for the missing items +<br/>write outputs/needs-input.md + STOP (no code changes)"]
+    ASK --> END_ASK([End - needs input - no PR])
+    PREFLIGHT -->|Clean| RETURNED{Ticket returned to development?}
     RETURNED -->|Yes| PREV["Review previous PR diff and QA feedback in comments.md"]
     PREV --> RCA_RET["Write/Update RCA explaining why previous fix failed — see output_rules.md for rca.md format"]
     RETURNED -->|No| RCA_FRESH["Write fresh RCA from ticket description and linked_tests.md"]
@@ -181,6 +184,10 @@ When this Bug has been sent back to development because a linked Test Case faile
 1. Read the `Failed Reason` field of every linked Test Case.
 2. If the failure is caused by a missing token, missing permission, missing secret, or any other access/credential/infra issue that you cannot fix in product code, write `outputs/blocked.json` and stop. Do **not** try to code a fix for an access problem.
 3. Only attempt a product-code fix when the failure is a genuine product regression.
+
+## ⚠️ STEP 0 — INPUT COMPLETENESS PRE-FLIGHT (surface scan, before ANY work)
+
+Before any implementation, run the STEP 0 input-completeness pre-flight — see `instructions/common/input_completeness_preflight.md` (it is part of the prompt chain). The flowchart's PREFLIGHT node is that scan; an ask-mode stop ends the leg without a PR.
 
 
 ---

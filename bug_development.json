@@ -28,6 +28,7 @@
       "./agents/instructions/common/agent_task_preamble.md",
       "./agents/instructions/common/coding_guidelines.md",
       "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/common/input_completeness_preflight.md",
       "./agents/instructions/bug_development/general_guidelines.md",
       "./agents/instructions/bug_development/tdd_approach.md",
       "./agents/instructions/common/tdd_test_directory.md",
