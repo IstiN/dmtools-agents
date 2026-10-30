@@ -5,8 +5,8 @@ flowchart TD
     PARENT --> ANALYZE["Analyze requirements — every acceptance criterion must be addressed"]
     ANALYZE --> ARCH["Understand existing codebase patterns, architecture, and test structure"]
     ARCH --> PRINCIPLES["Apply OOP principles: SRP, OCP, DI, Encapsulation, Composition over inheritance"]
-    PRINCIPLES --> TDD["Follow TDD approach — see tdd_approach.md"]
-    TDD --> TEST_LOC["Write TDD tests in the standard unit-test tree only<br/>— Flutter/Dart: test/<br/>— NEVER in testing/ (owned by test-automation agents)"]
+    PRINCIPLES --> TDD["Follow TDD approach — see the TDD approach section included later in this prompt"]
+    TDD --> TEST_LOC["Write TDD tests in the repository's existing unit-test tree only<br/>— discover the path from build/test config and nearby tests<br/>— NEVER in testing/ (owned by test-automation agents)"]
     TEST_LOC --> IMPLEMENT["Implement source code and unit tests following existing patterns"]
     IMPLEMENT --> DOCS["Update documentation ONLY if ticket explicitly requires it"]
     DOCS --> RUN["Run all unit tests — MUST pass before finishing"]
@@ -19,10 +19,10 @@ flowchart TD
     POSTCHECK -->|Self-sufficient| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
-    SECRETS -->|No| GUARD["⚠️ COMPLETION GUARD — prove work landed BEFORE writing the summary:<br/>git fetch origin main &amp;&amp; git log origin/main..HEAD --oneline<br/>EMPTY result = work did NOT land — re-do or resume the work,<br/>NEVER report done from session memory or main's tip"]
+    SECRETS -->|No| GUARD["⚠️ COMPLETION GUARD — prove work landed BEFORE writing the summary:<br/>git fetch origin &amp;&amp; git log &quot;origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD&quot; --oneline<br/>EMPTY result = work did NOT land — re-do or resume the work,<br/>NEVER report done from session memory or the base branch's tip"]
     IGNORE --> GUARD
     GUARD -->|Diff shows your commits| SUMMARY["Write concise PR description to outputs/response.md — see output_rules.md"]
-    GUARD -->|Empty diff| REDO["Re-do or resume the work — verify the working dir,<br/>git log, git stash list.<br/>If the fix is genuinely already on the base branch,<br/>prove it (git log origin/main -- grep) before any<br/>'no changes needed' conclusion"]
+    GUARD -->|Empty diff| REDO["Re-do or resume the work — verify the working dir,<br/>git log, git stash list.<br/>If the fix is genuinely already on the base branch,<br/>prove it (git log &quot;origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)&quot; --grep=...) before any<br/>'no changes needed' conclusion"]
     REDO --> IMPLEMENT
     SUMMARY --> END([End — post-processing handles branch, commit and PR])
 ```

@@ -6,7 +6,7 @@
 - `input/{BUG_KEY}/ticket.md` — Bug details, description, reproduction steps.
 - `input/{BUG_KEY}/linked_test_cases.md` — all linked Test Cases.
 - `input/{BUG_KEY}/linked_test_cases.json` — machine-readable list.
-- `input/{BUG_KEY}/merge_conflicts.md` *(if present)* — unresolved merge conflicts from syncing the test branch with `origin/main`.
+- `input/{BUG_KEY}/merge_conflicts.md` *(if present)* — unresolved merge conflicts from syncing the test branch with the remote default branch (`origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)`).
 - `input/{BUG_KEY}/pr_diff.txt` *(if present)* — diff context for resolving conflicts.
 - `testing/` — existing tests and reusable helpers.
 

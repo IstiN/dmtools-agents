@@ -63,7 +63,7 @@ flowchart TD
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
         D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
-        D3["See instructions/common/dmtools_cli.md for full reference"]
+        D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
     INPUT_ORDER --> CONFLUENCE_RULE --> ATTACH_RULE --> DMTOOLS_RULE
@@ -250,9 +250,9 @@ Replace every generic placeholder tag from the template with the GitHub-flavored
 | `<italic>X</italic>` | `*X*` | `*hint*` |
 | `<strike>X</strike>` | `~~X~~` | `~~deprecated~~` |
 | `<underline>X</underline>` | `<u>X</u>` | `<u>important</u>` |
-| `<code>X</code>` | `` `X` `` | `` `main.dart` `` |
-| `<codeblock>X</codeblock>` | ` ```\nX\n``` ` | ` ```\nvoid main() {}\n``` ` |
-| `<codeblock:lang>X</codeblock:lang>` | ` ```lang\nX\n``` ` | ` ```dart\nvoid main() {}\n``` ` |
+| `<code>X</code>` | `` `X` `` | `` `main.js` `` |
+| `<codeblock>X</codeblock>` | ` ```\nX\n``` ` | ` ```\nfunction main() {}\n``` ` |
+| `<codeblock:lang>X</codeblock:lang>` | ` ```lang\nX\n``` ` | ` ```js\nfunction main() {}\n``` ` |
 | `<bullet> text` | `- text` | `- Option A` |
 | `<numbered> text` | `1. text` | `1. Step one` |
 | `<heading1>X</heading1>` | `# X` | `# Title` |

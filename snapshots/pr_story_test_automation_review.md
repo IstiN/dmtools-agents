@@ -67,7 +67,7 @@ flowchart TD
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
         D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
-        D3["See instructions/common/dmtools_cli.md for full reference"]
+        D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
     INPUT_ORDER --> CONFLUENCE_RULE --> ATTACH_RULE --> DMTOOLS_RULE
@@ -242,7 +242,7 @@ Example inline comment:
 1. Every linked Test Case has a corresponding automated test under `testing/tests/{TC_KEY}/`.
 2. Each test folder contains `README.md` and `config.yaml`.
 3. Tests use the correct layers: `tests/` → `components/` → `frameworks/` → `core/`.
-4. No raw Flutter locators or `WidgetTester` calls directly in ticket test files.
+4. No raw UI locators or low-level driver/framework calls directly in ticket test files.
 5. Tests are deterministic, isolated, and include proper assertions and teardown.
 6. Tests match the Test Case description and acceptance criteria verbatim.
 7. No dead code, debug prints, or commented-out experiments.

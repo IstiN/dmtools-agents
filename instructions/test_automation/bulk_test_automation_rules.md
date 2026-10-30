@@ -2,7 +2,7 @@
 
 ## Pre-flight merge conflict resolution
 
-If `merge_conflicts.md` exists in the ticket input folder, the test branch could not be cleanly synced with `origin/main`:
+If `merge_conflicts.md` exists in the ticket input folder, the test branch could not be cleanly synced with the remote default branch (e.g., `origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)`):
 1. Resolve every `<<<<<<<` / `=======` / `>>>>>>>` conflict marker in the listed files, using `pr_diff.txt` for context.
 2. Stage each resolved file with `git add <file>`.
 3. Do NOT `git commit` or `git merge --abort`. Only proceed to test automation after the working directory is clean of conflicts.

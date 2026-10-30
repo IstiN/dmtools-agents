@@ -1,4 +1,4 @@
-Precondition (including any `"no changes needed"` conclusion): run `git log origin/main..HEAD --oneline` per the **Git Completion Guard & Closing-Keyword Rules** section.
+Precondition (including any `"no changes needed"` conclusion): run `git fetch origin && git log "origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD" --oneline` per the **Git Completion Guard & Closing-Keyword Rules** section.
 
 ```mermaid
 flowchart TD

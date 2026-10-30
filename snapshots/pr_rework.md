@@ -62,7 +62,7 @@ flowchart TD
     BLOCKING -->|No| IMPORTANT[Fix IMPORTANT issues]
     IMPORTANT --> SUGGESTIONS{Minor suggestions?}
     SUGGESTIONS -->|Yes| SKIP["Skip if time-consuming — note in response.md"]
-    SUGGESTIONS -->|No| TEST["Follow TDD approach for every fix — see tdd_approach.md — then run tests and verify"]
+    SUGGESTIONS -->|No| TEST["Follow TDD approach for every fix — see the TDD approach section included later in this prompt — then run tests and verify"]
     SKIP --> TEST
     TEST --> OUTPUT[Write outputs/response.md]
     OUTPUT --> REPLIES{Open review threads?}
@@ -115,9 +115,9 @@ The full uncapped list lives in `ci_violations.json`. In `outputs/response.md`, 
 
 For `dart_format` owned items (rule `dart_format` — the `static` job failed on `dart format --set-exit-if-changed`), the expected fix is `dart format .` on the whole tree, then verify with `dart format --set-exit-if-changed --output=none .` before pushing.
 
-## 3. Already-addressed / invalid threads (gh-957 audit-resolve)
+## 3. Already-addressed / invalid threads (audit-resolve)
 
-The thread list in `pr_discussions.md` / `pr_discussions_raw.json` comes from the SAME GraphQL reviewThreads census the SM armer counts (gh-957) — if it lists threads, they are really open on GitHub and each one needs exactly one reply entry in `outputs/review_replies.json`.
+The thread list in `pr_discussions.md` / `pr_discussions_raw.json` comes from the SAME GraphQL reviewThreads census the SM armer counts — if it lists threads, they are really open on GitHub and each one needs exactly one reply entry in `outputs/review_replies.json`.
 
 A reply entry does NOT always imply a code commit:
 
@@ -165,11 +165,10 @@ flowchart TD
 
 # TDD Test Directory Rules
 
-Write failing unit or widget tests in the project's standard unit-test tree **only**:
+Write failing unit tests in the repository's existing unit-test tree **only**:
 
-- Flutter / Dart projects → `test/`
-- Node projects → `__tests__/` or `test/` according to the repo convention
-- Python projects → `tests/` or project-specific unit-test directory
+- Discover the unit-test directory from the existing build and test configuration and from nearby tests for the code being changed.
+- Follow the naming, layout, and test-runner conventions already established in that directory.
 
 ❌ **Never** place development TDD tests under `testing/`.
 `testing/` is owned by test-automation agents (regression probes, workflow observation tests, accessibility gates, etc.). If your production changes break existing tests there, leave them untouched and mention the breakage in `outputs/response.md` so the test-automation agent can update them.
@@ -181,7 +180,7 @@ Write failing unit or widget tests in the project's standard unit-test tree **on
 
 # Git Completion & Closing-Keyword Guard
 
-- **Completion guard**: Before writing `outputs/response.md`, run `git fetch origin main && git log origin/main..HEAD --oneline`. An empty result means your commits did not land — re-do or resume the work before declaring completion.
+- **Completion guard**: Before writing `outputs/response.md`, run `git fetch origin && git log "origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD" --oneline`. An empty result means your commits did not land — re-do or resume the work before declaring completion.
 - **No closing keywords in commits or PR bodies**: Do NOT include `Fixes #...`, `Closes #...`, or `Resolves #...` against tracker tickets unless explicitly instructed; ticket lifecycle transitions are managed by the post-action workflow.
 
 
@@ -250,7 +249,7 @@ Rules for review replies:
 - Do **not** put the reply body inline in the JSON; use the `reply` field only as a file path reference.
 - ⚠️ **Common mistake**: `pr_discussions_raw.json` uses the field names `rootCommentId` and `body`. When writing `review_replies.json`, you MUST rename these to `inReplyToId` and `reply` respectively — do NOT copy the input field names as-is into the output JSON, or the reply will silently post as an untargeted top-level comment instead of a threaded reply.
 
-### Blocked (agents#827)
+### Blocked
 
 Rework only reworks: it fixes the open review threads in code and never asks questions (questions
 belong to the refinement agents). Every open thread needs a code fix in this pass. If you hit a problem
@@ -474,7 +473,7 @@ construct must render natively on GitHub.
 - Numbered lists: `1. item`
 - Bold: `**text**`
 - Inline code: `` `code` ``
-- Code block: ` ```lang ... ``` ` with a language tag (`dart`, `bash`, `json`)
+- Code block: ` ```lang ... ``` ` with a language tag (`bash`, `json`, `text`)
 - Link: `[text](url)`
 - Tables: standard GFM table syntax (`|---|` separator row)
 

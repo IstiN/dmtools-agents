@@ -8,9 +8,9 @@ Replace every generic placeholder tag from the template with the GitHub-flavored
 | `<italic>X</italic>` | `*X*` | `*hint*` |
 | `<strike>X</strike>` | `~~X~~` | `~~deprecated~~` |
 | `<underline>X</underline>` | `<u>X</u>` | `<u>important</u>` |
-| `<code>X</code>` | `` `X` `` | `` `main.dart` `` |
-| `<codeblock>X</codeblock>` | ` ```\nX\n``` ` | ` ```\nvoid main() {}\n``` ` |
-| `<codeblock:lang>X</codeblock:lang>` | ` ```lang\nX\n``` ` | ` ```dart\nvoid main() {}\n``` ` |
+| `<code>X</code>` | `` `X` `` | `` `main.js` `` |
+| `<codeblock>X</codeblock>` | ` ```\nX\n``` ` | ` ```\nfunction main() {}\n``` ` |
+| `<codeblock:lang>X</codeblock:lang>` | ` ```lang\nX\n``` ` | ` ```js\nfunction main() {}\n``` ` |
 | `<bullet> text` | `- text` | `- Option A` |
 | `<numbered> text` | `1. text` | `1. Step one` |
 | `<heading1>X</heading1>` | `# X` | `# Title` |

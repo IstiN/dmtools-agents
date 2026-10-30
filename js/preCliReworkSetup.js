@@ -194,9 +194,9 @@ function buildCensusNote(census, openCount) {
     if (!census || typeof census.graphqlUnresolved !== 'number') return null;
     if (census.graphqlUnresolved === openCount) {
         return '> ℹ️ Arm-rule census: the SM armer counts the SAME ' + census.graphqlUnresolved +
-            ' unresolved review thread(s) via GraphQL reviewThreads (gh-957 — one source of truth).';
+            ' unresolved review thread(s) via GraphQL reviewThreads (one source of truth).';
     }
-    return '> ℹ️ Arm-rule census (gh-957): the SM armer counts ' + census.graphqlUnresolved +
+    return '> ℹ️ Arm-rule census: the SM armer counts ' + census.graphqlUnresolved +
         ' unresolved review thread(s) via GraphQL reviewThreads; the actionable list below is ' +
         openCount + ' — the delta is machine-notice/bot threads (excluded above, never reply targets).';
 }
