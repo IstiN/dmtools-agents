@@ -8,6 +8,17 @@
 // a separate coverage unit of complexity 1 (CRAP 2, far below the bar).
 var stubToolchainLine = function (t) { return t; };
 
+// gh-1301: shared outputFiles stub for loaders whose tests never take the
+// ask-mode path. hasOutputFile mirrors readOutputFile's boolean contract so
+// the needs-input pre-flight seams see "no needs-input.md" without growing
+// per-callsite object literals (same CRAP rationale as stubToolchainLine).
+function outputFilesStubFor(readOverride) {
+    return {
+        readOutputFile: readOverride || function () { return null; },
+        hasOutputFile: function () { return false; }
+    };
+}
+
 // Real tracker layer loaded WITH the same tool mocks as the script under test
 // (loadModule mocks only shadow globals inside the module they are passed to).
 function trackersWith(mocks) {
@@ -61,7 +72,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             './common/submodules.js': {},
             './common/feedbackLoop.js': feedbackLoopStubWith(feedbackLoopOverrides),
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
-            './common/outputFiles.js': { readOutputFile: function () { return null; } },
+            './common/outputFiles.js': outputFilesStubFor(),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -94,7 +105,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks, feedbackLoopOverr
             './common/submodules.js': { pushManagedSubmodules: function () { } },
             './common/feedbackLoop.js': feedbackLoopStubWith(feedbackLoopOverrides),
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
-            './common/outputFiles.js': { readOutputFile: function () { return null; } },
+            './common/outputFiles.js': outputFilesStubFor(),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -438,7 +449,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                     resumeOnceForMissingResponse: function () { return { attempted: false }; }
                 },
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
-                './common/outputFiles.js': { readOutputFile: function () { return null; } },
+                './common/outputFiles.js': outputFilesStubFor(),
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -515,7 +526,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                     resumeOnceForMissingResponse: function () { return { attempted: false }; }
                 },
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
-                './common/outputFiles.js': { readOutputFile: function () { return null; } },
+                './common/outputFiles.js': outputFilesStubFor(),
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -592,7 +603,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                     resumeOnceForMissingResponse: function () { return { attempted: false }; }
                 },
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
-                './common/outputFiles.js': { readOutputFile: function () { return null; } },
+                './common/outputFiles.js': outputFilesStubFor(),
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -737,7 +748,9 @@ function loadForLandingGuard(mocks, opts) {
             },
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': {
-                readOutputFile: function () { return opts.responseMd === undefined ? null : opts.responseMd; }
+                readOutputFile: function () { return opts.responseMd === undefined ? null : opts.responseMd; },
+                // gh-1301: ask-mode seam — needsInputMd flips outputs/needs-input.md.
+                hasOutputFile: function () { return !!opts.needsInputMd; }
             },
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
@@ -944,7 +957,9 @@ function loadForPrTail(mocks, opts) {
             },
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': {
-                readOutputFile: function () { return opts.responseMd === undefined ? null : opts.responseMd; }
+                readOutputFile: function () { return opts.responseMd === undefined ? null : opts.responseMd; },
+                // gh-1301: ask-mode seam — needsInputMd flips outputs/needs-input.md.
+                hasOutputFile: function () { return !!opts.needsInputMd; }
             },
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
@@ -1903,7 +1918,9 @@ function loadForOutcomePinning(mocks, opts) {
                 }
             },
             './common/outputFiles.js': {
-                readOutputFile: function () { return opts.responseMd === undefined ? null : opts.responseMd; }
+                readOutputFile: function () { return opts.responseMd === undefined ? null : opts.responseMd; },
+                // gh-1301: ask-mode seam — needsInputMd flips outputs/needs-input.md.
+                hasOutputFile: function () { return !!opts.needsInputMd; }
             },
             './cacheToReleases.js': {
                 action: function () { telemetry.cache++; }
@@ -2359,6 +2376,50 @@ suite('developTicketAndCreatePR > leg outcome characterization (gh-930)', functi
         assert.deepEqual(movedTo, ['Ready For Development']);
         assert.equal(comments.length, 1);
         assert.contains(comments[0].comment, 'Git Push (after retry)');
+    });
+
+    test('a gate-fix push that stays rejected resets the ticket through the gate-fix recovery seam', function () {
+        // The INITIAL publish push lands; the gate-fix push (after green
+        // gates) stays rejected — recoverGitOutcome(GATE_FIX_GIT_STAGES) must
+        // surface the reset result through stageOutcomeOf instead of throwing.
+        var comments = [];
+        var movedTo = [];
+        var branchName = 'ai/TS-74';
+        var plainPushes = 0;
+        var inner = committedWorkGitMock(branchName, '');
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: function (args) {
+                var command = args.command;
+                if (command === 'git push -u origin ' + branchName) {
+                    plainPushes++;
+                    if (plainPushes === 1) return ''; // initial publish push lands
+                    return 'error: failed to push some refs — rejected (non-fast-forward)';
+                }
+                if (command === 'git push -u origin ' + branchName + ' --force') {
+                    return 'remote rejected: GH013: push declined';
+                }
+                return inner(args);
+            },
+            file_write: function () { },
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-74', fields: { summary: 'gate-fix push rejected', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'development-reset-for-retry');
+        assert.contains(result.error, 'Gate fix push failed even after retry:');
+        assert.deepEqual(movedTo, ['Ready For Development']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Gate Fix Git Push');
     });
 
     test('a resumable push failure re-runs the leg once before falling back to the reset', function () {
@@ -3063,4 +3124,149 @@ suite('developTicketAndCreatePR > branchCarriesWork contract (gh-1229)', functio
         var mod = modWithGit(baseHandler());
         assert.equal(mod.branchCarriesWork('develop'), false);
     });
+});
+
+// ── inputs pre-flight (needs-input seams) ───────────────────────────────────
+// The ask-mode exits share one bookkeeping cluster (label + green outcome) and
+// one file probe; the seams are tested directly and through the two legs that
+// read them (publish pipeline + no-changes recovery).
+
+suite('developTicketAndCreatePR > inputs pre-flight (needs-input seams)', function () {
+
+    test('needsInputOutcome: needs-input.md present → green outcome + ai_questions_asked label', function () {
+        var labels = [];
+        var loaded = loadForOutcomePinning({
+            jira_add_label: function (args) { labels.push(args.label); }
+        }, { needsInputMd: '## Missing inputs\n- credentials not attached\n' });
+
+        var outcome = loaded.mod.needsInputOutcome({ ticketKey: 'TS-1301' });
+
+        assert.ok(outcome, 'a needs-input leg ends the pipeline with a terminal outcome');
+        assert.equal(outcome.success, true);
+        assert.equal(outcome.needsInput, true);
+        assert.contains(outcome.message, 'TS-1301');
+        assert.contains(outcome.message, 'no PR created');
+        assert.deepEqual(labels, ['ai_questions_asked'],
+            'the reviewer hand-off reads this label — it must be added on the ask-mode exit');
+    });
+
+    test('needsInputOutcome: absent → null and no label (pipeline falls through to the gates)', function () {
+        var labels = [];
+        var loaded = loadForOutcomePinning({
+            jira_add_label: function (args) { labels.push(args.label); }
+        }, {});
+
+        assert.equal(loaded.mod.needsInputOutcome({ ticketKey: 'TS-1301' }), null,
+            'no needs-input.md → the leg is not ask-mode');
+        assert.deepEqual(labels, []);
+    });
+
+    test('needsInputOutcome: label failure is non-fatal — the green outcome stands', function () {
+        var loaded = loadForOutcomePinning({
+            jira_add_label: function () { throw new Error('tracker API down'); }
+        }, { needsInputMd: '## Missing inputs\n' });
+
+        var outcome = loaded.mod.needsInputOutcome({ ticketKey: 'TS-1301' });
+        assert.ok(outcome && outcome.success && outcome.needsInput,
+            'a labeling outage must not turn the ask-mode leg into a failure');
+    });
+
+    test('askModeOutcome: needs-input.md present → wrapped green result', function () {
+        var labels = [];
+        var loaded = loadForOutcomePinning({
+            jira_add_label: function (args) { labels.push(args.label); }
+        }, { needsInputMd: '## Missing inputs\n' });
+
+        var outcome = loaded.mod.askModeOutcome({ ticketKey: 'TS-1301' });
+        assert.ok(outcome && outcome.result, 'the recovery seam wraps the outcome as { result }');
+        assert.equal(outcome.result.success, true);
+        assert.equal(outcome.result.needsInput, true);
+        assert.deepEqual(labels, ['ai_questions_asked']);
+    });
+
+    test('askModeOutcome: absent → null (interrupted classification proceeds)', function () {
+        var loaded = loadForOutcomePinning({}, {});
+        assert.equal(loaded.mod.askModeOutcome({ ticketKey: 'TS-1301' }), null);
+    });
+
+    test('publish-pipeline path: committed work + needs-input.md → green outcome, gates skipped, no PR', function () {
+        var comments = [];
+        var movedTo = [];
+        var labels = [];
+        var gateCalls = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-1302', ''),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_add_label: function (args) { labels.push(args.label); }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n',
+            needsInputMd: '## Missing inputs\n',
+            feedbackLoop: {
+                runQualityGates: function () { gateCalls.push('quality'); return { success: true }; },
+                runPolicyGates: function () { gateCalls.push('policy'); return { success: true }; },
+                runPostPublishGates: function () { gateCalls.push('postPublish'); return { success: true }; }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1302', fields: { summary: 'ask-mode with work', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.needsInput, true, 'the ask-mode outcome wins over PR creation');
+        assert.deepEqual(gateCalls, [], 'no gate may run on an ask-mode leg');
+        assert.deepEqual(movedTo, [], 'the ticket stays with the reporter — no status move');
+        assert.deepEqual(comments, [], 'the agent already posted the question comment');
+        assert.deepEqual(labels, ['ai_questions_asked']);
+    });
+
+    test('no-changes path: an ask leg is never reset as interrupted (gh-1301 ordering)', function () {
+        var comments = [];
+        var movedTo = [];
+        var labels = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: noChangesGitCommandMock('TS-1303', 'ai/TS-1303'),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_add_label: function (args) { labels.push(args.label); }
+        }, { needsInputMd: '## Missing inputs\n' });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1303', fields: { summary: 'ask-mode, no work', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {}
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.needsInput, true, 'the ask-mode check precedes the interrupted classification');
+        assert.deepEqual(movedTo, [], 'no Ready For Development reset while awaiting the answer');
+        assert.deepEqual(comments, [], 'no Development Interrupted comment on an ask leg');
+        assert.deepEqual(labels, ['ai_questions_asked']);
+    });
+
+    test('no-changes path: without needs-input.md the interrupted reset still fires (guard stays exact)', function () {
+        var caught = null;
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: noChangesGitCommandMock('TS-1304', 'ai/TS-1304'),
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_add_label: function () { }
+        }, {});
+
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-1304', fields: { summary: 'genuinely interrupted', description: '', labels: [] } },
+                metadata: { contextId: 'story_development' },
+                customParams: {}
+            });
+        } catch (e) { caught = e; }
+
+        assert.ok(caught && caught.interruptedReset === true,
+            'no needs-input.md → the gh-742 interrupted-reset contract is unchanged');
+    });
+
 });
