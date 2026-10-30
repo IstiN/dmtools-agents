@@ -387,7 +387,7 @@ run_copilot() {
   echo "Full transcript(s) saved to:"
   printf '  %s\n' "${copilot_log_files[@]}"
 
-  report_copilot_usage "${exit_code}" "${copilot_usage_baseline_id}" "${copilot_log_files[@]}"
+  report_copilot_usage "${exit_code}" "${copilot_usage_baseline_id}" "${copilot_model_value}" "${copilot_log_files[@]}"
 
   echo ""
   echo "=== Agent completed with exit code: $exit_code ==="
@@ -401,7 +401,8 @@ run_copilot() {
 report_copilot_usage() {
   local agent_exit_code="$1"
   local baseline_id="$2"
-  shift 2
+  local configured_model="$3"
+  shift 3
 
   local provider_script_dir usage_name usage_file usage_exit_code manifest_exit_code
   provider_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -412,6 +413,9 @@ report_copilot_usage() {
   local usage_args=(--output "${usage_file}" --since-id "${baseline_id}")
   if [ -n "${COPILOT_SESSION_ID:-}" ]; then
     usage_args+=(--session-id "${COPILOT_SESSION_ID}")
+  fi
+  if [ -n "${configured_model:-}" ]; then
+    usage_args+=(--model "${configured_model}")
   fi
   local log_file
   for log_file in "$@"; do

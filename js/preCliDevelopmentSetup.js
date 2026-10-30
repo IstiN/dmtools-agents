@@ -55,7 +55,7 @@ function branchHasUniquePatches(baseBranch) {
 
 function isAncestorRef(ancestor, descendant) {
     try {
-        runCmd({ command: 'git merge-base --is-ancestor ' + ancestor + ' ' + descendant });
+        runCmd({ command: 'git merge-base --is-ancestor ' + ancestor + ' ' + descendant, expectNonZeroExit: true });
         return true;
     } catch (e) {
         return false;
@@ -604,6 +604,24 @@ function runExistingWorkReportStep(ticketKey, config, actualParams, params, fold
     }
 }
 
+/**
+ * Remember the head this pass starts from, so developTicketAndCreatePR can
+ * squash timer WIP auto-save commits made during this pass into one clean
+ * development commit (gh-1308). Optional helper — a failure leaves the
+ * fallback to origin/<baseBranch> merge-base active.
+ */
+function writeDevBaseHead(folder) {
+    if (!folder) return;
+    try {
+        var sha = cleanCommandOutput(runCmd({ command: 'git rev-parse HEAD' }) || '').trim();
+        if (/^[0-9a-f]{7,40}$/i.test(sha)) {
+            file_write({ path: folder + '/dev_base_head.txt', content: sha });
+        }
+    } catch (e) {
+        console.warn('Could not write dev_base_head.txt (non-fatal):', e && e.message ? e.message : e);
+    }
+}
+
 /** Write setup_warnings.md (best-effort — an unwritable file must not fail the leg). */
 function writeSetupWarningsFile(folder, setupWarnings) {
     try {
@@ -696,6 +714,7 @@ function action(params) {
         // would be overwritten".
         baseBranchMarker.writeBaseBranchMarker(config.git.baseBranch);
 
+        writeDevBaseHead(folder);
         // 2.5. Surface existing remote dev-branch work into the input folder (gh-1164):
         // a resumed leg must see previous rounds' commits instead of mistaking the
         // base branch tip for its own work. Cheap: one ls-remote (+ one log/diff when
@@ -742,6 +761,7 @@ if (typeof module !== 'undefined' && module.exports) {
         runDevTransitionAssertion,
         checkoutBranchOrReport,
         runExistingWorkReportStep,
+        writeDevBaseHead,
         writeSetupWarningsFile,
         runSetupCommandsStep,
         runFetchLinkedTestsStep,

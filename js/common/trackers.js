@@ -1278,6 +1278,48 @@ function createTracker(config, customParams) {
         return out;
     }
 
+    function _assignInitiatorOrWarn(ticketKey, initiatorId, statusName) {
+        if (initiatorId === undefined || initiatorId === null || String(initiatorId).trim() === '') {
+            // agents#874: without an initiator there is nobody to assign to; the provider tools reject an
+            // empty assignee (ADO: "Required parameter 'userEmail' is missing") and the whole hand-off —
+            // status move, AI label — used to be lost. Skip only the assignment.
+            console.warn('⚠️ No initiator for ' + ticketKey + ' — skipping assignment; the ticket is still moved to ' +
+                statusName + ' and labelled. Set "initiator" in the job params to assign it.');
+            return;
+        }
+        impl.assignTo(ticketKey, initiatorId);
+    }
+
+    function _removeWipLabelIfGiven(ticketKey, wipLabel) {
+        if (!wipLabel) return;
+        try {
+            impl.removeLabel(ticketKey, wipLabel);
+            console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
+        } catch (labelError) {
+            console.warn('Failed to remove WIP label "' + wipLabel + '":', labelError);
+        }
+    }
+
+    function _formatAssignForReviewResult(ticketKey, statusName, moveOutcome) {
+        if (moveOutcome && moveOutcome.marked) {
+            console.log('✅ Assigned to initiator and marked with ' + moveOutcome.label + ' (' + statusName + ' state not available)');
+            return {
+                success: true,
+                moved: false,
+                marked: true,
+                label: moveOutcome.label,
+                message: 'Ticket ' + ticketKey + ' assigned and marked with ' + moveOutcome.label
+            };
+        }
+        console.log('✅ Assigned to initiator and moved to ' + statusName);
+        return {
+            success: true,
+            moved: true,
+            marked: false,
+            message: 'Ticket ' + ticketKey + ' assigned and moved to ' + statusName
+        };
+    }
+
     /**
      * Common post-processing flow (jiraHelpers.assignForReview parity):
      * assign to the initiator, move to the review status, add the AI
@@ -1288,30 +1330,11 @@ function createTracker(config, customParams) {
         var statusName = targetStatus || STATUSES.IN_REVIEW;
         try {
             console.log('Processing ticket:', ticketKey);
-            if (initiatorId === undefined || initiatorId === null || String(initiatorId).trim() === '') {
-                // agents#874: without an initiator there is nobody to assign to; the provider tools reject an
-                // empty assignee (ADO: "Required parameter 'userEmail' is missing") and the whole hand-off —
-                // status move, AI label — used to be lost. Skip only the assignment.
-                console.warn('⚠️ No initiator for ' + ticketKey + ' — skipping assignment; the ticket is still moved to ' +
-                    statusName + ' and labelled. Set "initiator" in the job params to assign it.');
-            } else {
-                impl.assignTo(ticketKey, initiatorId);
-            }
-            moveToStatusOrMark(ticketKey, statusName, 'IN_REVIEW');
+            _assignInitiatorOrWarn(ticketKey, initiatorId, statusName);
+            var moveOutcome = moveToStatusOrMark(ticketKey, statusName, 'IN_REVIEW');
             impl.addLabel(ticketKey, aiLabel);
-            if (wipLabel) {
-                try {
-                    impl.removeLabel(ticketKey, wipLabel);
-                    console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
-                } catch (labelError) {
-                    console.warn('Failed to remove WIP label "' + wipLabel + '":', labelError);
-                }
-            }
-            console.log('✅ Assigned to initiator and moved to ' + statusName);
-            return {
-                success: true,
-                message: 'Ticket ' + ticketKey + ' assigned and moved to ' + statusName
-            };
+            _removeWipLabelIfGiven(ticketKey, wipLabel);
+            return _formatAssignForReviewResult(ticketKey, statusName, moveOutcome);
         } catch (error) {
             console.error('❌ Error in assignForReview:', error);
             return { success: false, error: error.toString() };

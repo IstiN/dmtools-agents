@@ -45,6 +45,8 @@ _CACHED_PATTERN = re.compile(r"(" + _NUMBER + r")\s*cached", re.IGNORECASE)
 _WRITTEN_PATTERN = re.compile(r"(" + _NUMBER + r")\s*written", re.IGNORECASE)
 _REASONING_PATTERN = re.compile(r"(" + _NUMBER + r")\s*reasoning", re.IGNORECASE)
 _CREDITS_PATTERN = re.compile(r"AI\s+Credits\s+([0-9][0-9.,]*\s*[kmb]?)", re.IGNORECASE)
+_MODEL_FLAG_PATTERN = re.compile(r"--model[=\s]+([A-Za-z0-9._:/-]+)")
+_MODEL_LINE_PATTERN = re.compile(r"^\s*Model:\s*([A-Za-z0-9._:/-]+)\s*$", re.MULTILINE)
 
 
 class UsageNotFoundError(ValueError):
@@ -99,6 +101,30 @@ def find_session_ids(texts: Iterable[str]) -> list[str]:
     return ordered
 
 
+def find_models(texts: Iterable[str], fallback_models: Iterable[str] | None = None) -> list[str]:
+    """Collect model names from transcripts (e.g. ``--model <name>`` or ``Model: <name>``) or fallbacks."""
+    found: set[str] = set()
+    for text in texts:
+        if not text:
+            continue
+        for match in _MODEL_FLAG_PATTERN.finditer(text):
+            model = match.group(1).strip()
+            if model:
+                found.add(model)
+        for match in _MODEL_LINE_PATTERN.finditer(text):
+            model = match.group(1).strip()
+            if model:
+                found.add(model)
+    if not found and fallback_models:
+        for model in fallback_models:
+            if model and str(model).strip():
+                found.add(str(model).strip())
+    if not found:
+        env_model = (os.environ.get("COPILOT_MODEL") or os.environ.get("COPILOT_DEFAULT_MODEL") or "").strip()
+        if env_model:
+            found.add(env_model)
+    return sorted(found)
+
 def resolve_store_path(home: str | None = None) -> Path | None:
     """Locate the Copilot session store.
 
@@ -119,6 +145,40 @@ def resolve_store_path(home: str | None = None) -> Path | None:
         if store.is_file():
             return store
     return None
+
+def expected_store_path(home: str | None = None) -> Path:
+    """Return the primary candidate path where the Copilot session store was expected."""
+    if home:
+        candidate = Path(home)
+    else:
+        env_home = os.environ.get("COPILOT_HOME")
+        candidate = Path(env_home) if env_home else (Path.home() / ".copilot")
+    return candidate if candidate.name == STORE_FILE_NAME else candidate / STORE_FILE_NAME
+
+
+def describe_store_skip_reason(
+    session_ids: list[str],
+    home: str | None = None,
+    since_id: int = 0,
+) -> str:
+    """Explain why the session store was not used and the transcript footer fallback ran."""
+    store = resolve_store_path(home)
+    if store is None:
+        return f"session store not found at {expected_store_path(home)}, using transcript footer"
+    if not session_ids and since_id <= 0:
+        return (
+            f"no session id resolved and baseline is 0 for session store at {store}, "
+            "using transcript footer"
+        )
+    if session_ids:
+        return (
+            f"no usage rows found in session store at {store} for session(s) "
+            f"{', '.join(session_ids)} (since_id={since_id}), using transcript footer"
+        )
+    return (
+        f"no usage rows found in session store at {store} (since_id={since_id}), "
+        "using transcript footer"
+    )
 
 
 def _connect_readonly(store: Path) -> tuple[sqlite3.Connection, str | None]:
@@ -309,7 +369,10 @@ def parse_transcript_footer(text: str) -> dict[str, Any] | None:
     }
 
 
-def normalize_transcript_footers(transcripts: list[tuple[str, str]]) -> dict[str, Any]:
+def normalize_transcript_footers(
+    transcripts: list[tuple[str, str]],
+    models: Iterable[str] | None = None,
+) -> dict[str, Any]:
     """Aggregate footers across attempts, keeping one footer per Copilot session.
 
     Retries that resume the same session print a cumulative footer, so only the
@@ -342,8 +405,10 @@ def normalize_transcript_footers(transcripts: list[tuple[str, str]]) -> dict[str
 
     input_other = max(0, total_input - input_cache_read - input_cache_creation)
 
+    resolved_models = find_models((text for _, text in transcripts), fallback_models=models)
+
     usage = build_usage(
-        models=[],
+        models=resolved_models,
         usage_records=len(per_session),
         input_other=input_other,
         input_cache_read=input_cache_read,
@@ -412,6 +477,7 @@ def extract_usage(
     home: str | None = None,
     since_id: int = 0,
     session_ids: list[str] | None = None,
+    models: list[str] | None = None,
 ) -> dict[str, Any]:
     transcripts = [(str(path), read_text(path)) for path in transcript_paths]
 
@@ -423,9 +489,13 @@ def extract_usage(
 
     rows = read_store_rows(resolved, home=home, since_id=since_id)
     if rows:
+        store = resolve_store_path(home)
+        print(f"Copilot usage: selected session store at {store} ({len(rows)} row(s))")
         return normalize_store_rows(rows, scoped=bool(resolved))
-    return normalize_transcript_footers(transcripts)
 
+    skip_reason = describe_store_skip_reason(resolved, home=home, since_id=since_id)
+    print(f"Copilot usage: {skip_reason}")
+    return normalize_transcript_footers(transcripts, models=models)
 
 def write_usage(output_path: Path, usage: dict[str, Any]) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -450,7 +520,10 @@ def print_usage_summary(usage: dict[str, Any], output_path: Path) -> None:
         print(f"  Cost (USD):             {usage['cost_usd']}")
     print(f"  Source:                 {usage['source']}")
     if usage.get("approximate"):
-        print("  Note:                   values are rounded by the Copilot CLI summary")
+        print(
+            "  Note:                   token counts (input, cached, written, output, reasoning) "
+            "are rounded by the Copilot CLI summary"
+        )
     if usage.get("scoped") is False:
         print("  Note:                   no session id was resolved; totals cover every new")
         print("                          store row since baseline, not just this run's session")
@@ -465,6 +538,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--home", default=None)
     parser.add_argument("--session-id", action="append", default=[])
     parser.add_argument("--since-id", type=int, default=0)
+    parser.add_argument("--model", action="append", default=[])
     parser.add_argument(
         "--baseline",
         action="store_true",
@@ -485,6 +559,7 @@ def main(argv: list[str] | None = None) -> int:
             home=args.home,
             since_id=args.since_id,
             session_ids=args.session_id,
+            models=args.model,
         )
     except (OSError, UsageNotFoundError) as error:
         print(f"Copilot token usage unavailable: {error}", file=sys.stderr)

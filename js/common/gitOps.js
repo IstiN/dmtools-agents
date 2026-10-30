@@ -394,7 +394,7 @@ function _unshallowIfNeeded(cmd) {
 // assumption but is announced.
 function _mergeStagedChanges(cmd) {
     try {
-        cmd('git diff --cached --quiet HEAD'); // exit 0 → nothing staged
+        cmd('git diff --cached --quiet HEAD', { expectNonZeroExit: true }); // exit 0 → nothing staged
         return false;
     } catch (eQuiet) {
         var quietExitCode = _commandExitCode(eQuiet);
