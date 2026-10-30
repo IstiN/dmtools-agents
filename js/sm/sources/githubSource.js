@@ -404,9 +404,7 @@ function _lastReviewFor(provider, prNumber) {
 // Stale review verdict (PR #690): CHANGES_REQUESTED pinned to an older
 // commit while fixes landed on a newer green head — a re-review is owed.
 function _isStaleChangesRequested(lr, item) {
-    return !!(lr && lr.state === 'CHANGES_REQUESTED' && item.pr &&
-              item.pr.headSha && lr.commitId &&
-              lr.commitId !== item.pr.headSha);
+    return Boolean(lr && lr.state === 'CHANGES_REQUESTED' && _verdictOnOlderHead(lr, item));
 }
 
 function _reviewStaleGuardFail(q, item, provider) {
@@ -417,10 +415,10 @@ function _reviewStaleGuardFail(q, item, provider) {
 // ANY verdict (not just CHANGES_REQUESTED) rendered on an older commit —
 // pairs with threadsResolved so a re-review fires once per head change.
 function _verdictOnOlderHead(lv, item) {
-    return !!(lv && lv.commitId && item.pr && item.pr.headSha &&
-              lv.commitId !== item.pr.headSha);
+    if (!lv || !lv.commitId || !item || !item.pr || !item.pr.headSha) return false;
+    item.lastReviewCommitId = lv.commitId;
+    return lv.commitId !== item.pr.headSha;
 }
-
 function _staleVerdictGuardFail(q, item, provider) {
     if (!q.staleVerdict) return false;
     return !_verdictOnOlderHead(_lastReviewFor(provider, item.prNumber), item);

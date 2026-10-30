@@ -45,7 +45,9 @@ function w2LoadPR(rec) {
         './common/gitOps.js': {},
         './common/commentMarkup.js': loadModule('js/common/commentMarkup.js', makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') })),
         './fetchParentContextToInput.js': {},
-        './common/trackers.js': w2Trackers(rec.mocks)
+        './common/trackers.js': w2Trackers(rec.mocks),
+        './common/forkCheckout.js': loadModule('js/common/forkCheckout.js',
+            makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js') }))
     }), Object.assign({ config: {} }, rec.mocks));
 }
 

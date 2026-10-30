@@ -1897,6 +1897,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // the label and re-reviews the current head. The fresh verdict
             // carries the head's commit_id, so the stale query never
             // matches it again (convergent, no loop).
+            if (armReviewOnlyMachineMerges(effectiveRepoInfo, ticket, key, machineAuthor)) continue;
             try {
                 githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'agent:review');
                 console.log('  ✅ ' + key + ' agent:review re-armed (stale CHANGES_REQUESTED on PR #' + ticket.prNumber + ')');
@@ -8149,6 +8150,18 @@ function parkResetCommit(repoInfo, headSha, machineAuthor) {
     console.warn('  ⚠️  park-reset walk: 10 machine merges deep without a ' +
         'substantive commit — keeping the park (fail closed)');
     return null;
+}
+
+function armReviewOnlyMachineMerges(repoInfo, ticket, key, machineAuthor) {
+    var reviewCid = ticket.lastReviewCommitId || null;
+    var armHeadSha = (ticket.pr && ticket.pr.headSha) || ticket.headSha || null;
+    if (!reviewCid || !armHeadSha || reviewCid === armHeadSha) return false;
+    var subst = parkResetCommit(repoInfo, armHeadSha, machineAuthor);
+    if (!subst || subst.sha !== reviewCid) return false;
+    console.log('  ⏭️  ' + key + ' arm_review skipped (head ' +
+        armHeadSha.slice(0, 8) + ' only adds machine merge(s) over reviewed commit ' +
+        reviewCid.slice(0, 8) + ')');
+    return true;
 }
 
 function resolveHeadSha(repoInfo, ticket) {

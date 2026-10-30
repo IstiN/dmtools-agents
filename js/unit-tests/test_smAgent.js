@@ -17734,3 +17734,104 @@ suite('smAgent: global workflowRef resolution (epam/dm.ai#765)', function () {
             'empty {branch} expansion must fall back to configured baseBranch');
     });
 });
+
+suite('smAgent: arm_review skips when head only added machine merge(s) over reviewed commit', function () {
+    var REVIEWED_SHA = '62bc2ef811111111111111111111111111111111';
+    var MERGE_SHA = 'bf8ccbd122222222222222222222222222222222';
+    var SUBST_SHA = '9999999933333333333333333333333333333333';
+
+    var ARM_RULE = {
+        id: 'review-stale-verdict',
+        source: 'github',
+        query: { type: 'pr', reviewStale: true, checks: 'green', draft: false },
+        localAction: 'arm_review',
+        limit: 5
+    };
+
+    test('skips adding agent:review when headCommitActor walk past sm-silent-update merge lands on lastReviewCommitId', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "IstiN", repo: "dmtools-agents" } };' },
+            captureConsole: true,
+            github: {
+                items: [{
+                    key: 'pr-1302',
+                    prNumber: 1302,
+                    labels: [],
+                    lastReviewCommitId: REVIEWED_SHA,
+                    pr: { headSha: MERGE_SHA, state: 'OPEN', checks: 'green' }
+                }]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/commits/' + MERGE_SHA) !== -1) {
+                    return JSON.stringify({
+                        login: 'IstiN',
+                        committer: 'sm-silent-update',
+                        sha: MERGE_SHA,
+                        parents: [REVIEWED_SHA, 'aaaa000000000000000000000000000000000000']
+                    });
+                }
+                if (c.indexOf('/commits/' + REVIEWED_SHA) !== -1) {
+                    return JSON.stringify({
+                        login: 'ajaxspace',
+                        committer: 'GitHub',
+                        sha: REVIEWED_SHA,
+                        parents: ['0000111111111111111111111111111111111111']
+                    });
+                }
+                return '';
+            }
+        });
+
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'dmtools-agents', rules: [ARM_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'must NOT re-arm agent:review when only a silent-update merge landed on top of the reviewed commit');
+        assert.ok(sm.capturedLogs.join('\n').indexOf('arm_review skipped') !== -1);
+    });
+
+    test('re-arms agent:review when a substantive commit landed between lastReviewCommitId and headSha', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "IstiN", repo: "dmtools-agents" } };' },
+            captureConsole: true,
+            github: {
+                items: [{
+                    key: 'pr-1302',
+                    prNumber: 1302,
+                    labels: [],
+                    lastReviewCommitId: REVIEWED_SHA,
+                    pr: { headSha: MERGE_SHA, state: 'OPEN', checks: 'green' }
+                }]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/commits/' + MERGE_SHA) !== -1) {
+                    return JSON.stringify({
+                        login: 'IstiN',
+                        committer: 'sm-silent-update',
+                        sha: MERGE_SHA,
+                        parents: [SUBST_SHA, 'aaaa000000000000000000000000000000000000']
+                    });
+                }
+                if (c.indexOf('/commits/' + SUBST_SHA) !== -1) {
+                    return JSON.stringify({
+                        login: 'ajaxspace',
+                        committer: 'GitHub',
+                        sha: SUBST_SHA,
+                        parents: [REVIEWED_SHA]
+                    });
+                }
+                return '';
+            }
+        });
+
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'dmtools-agents', rules: [ARM_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1,
+            'must re-arm agent:review when a substantive commit landed after the reviewed commit');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 1302);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:review']);
+    });
+});
