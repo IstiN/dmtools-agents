@@ -13,7 +13,10 @@ flowchart TD
     RUN --> PASS{Tests pass?}
     PASS -->|No| FIX["Fix failures and re-run tests"]
     FIX --> RUN
-    PASS -->|Yes| GITSTATUS["Run git status and review every new/modified file"]
+    PASS -->|Yes| POSTCHECK{"Integration readiness check:<br/>does the feature depend on external setup<br/>the repo does not contain?"}
+    POSTCHECK -->|Gaps found| CONCERNS["Write outputs/concerns.md:<br/>what is missing + what is needed to make it work"]
+    CONCERNS --> GITSTATUS["Run git status and review every new/modified file"]
+    POSTCHECK -->|Self-sufficient| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
     SECRETS -->|No| GUARD["⚠️ COMPLETION GUARD — prove work landed BEFORE writing the summary:<br/>git fetch origin main &amp;&amp; git log origin/main..HEAD --oneline<br/>EMPTY result = work did NOT land — re-do or resume the work,<br/>NEVER report done from session memory or main's tip"]
@@ -23,3 +26,5 @@ flowchart TD
     REDO --> IMPLEMENT
     SUMMARY --> END([End — post-processing handles branch, commit and PR])
 ```
+
+Before finishing, run the COMPLETION POST-CHECK — see `instructions/common/completion_post_check.md`.
