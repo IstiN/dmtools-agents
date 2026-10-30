@@ -28,6 +28,8 @@
 
 var GUIDELINES = 'instructions/story_development/general_guidelines.md';
 var OUTPUT_RULES = 'instructions/story_development/output_rules.md';
+var GIT_COMPLETION_GUARD = 'instructions/common/git_completion_guard.md';
+var DYNAMIC_HEAD_DIFF = 'origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD';
 
 function readPackFile(path) {
     var c = file_read({ path: path });
@@ -37,26 +39,28 @@ function readPackFile(path) {
     return typeof c === 'string' ? c : String(c);
 }
 
-suite('completion guard — story_development pack (gh-712)', function () {
+suite('completion guard — story_development pack (gh-712, gh-1297)', function () {
 
-    test('general_guidelines.md contains the completion guard command', function () {
+    test('general_guidelines.md contains the dynamic completion guard command', function () {
         var text = readPackFile(GUIDELINES);
-        assert.ok(text.indexOf('git fetch origin main') !== -1,
-            'guidelines must instruct the agent to fetch the base branch before proving completion');
-        assert.ok(text.indexOf('git log origin/main..HEAD --oneline') !== -1,
-            'guidelines must instruct the agent to diff HEAD against the base branch');
+        assert.ok(text.indexOf('git fetch origin') !== -1,
+            'guidelines must instruct the agent to fetch origin before proving completion');
+        assert.ok(text.indexOf(DYNAMIC_HEAD_DIFF) !== -1,
+            'guidelines must instruct the agent to diff HEAD against the dynamically discovered default branch');
+        assert.ok(text.indexOf('origin/main') === -1 && text.indexOf('origin main') === -1,
+            'guidelines must not hardcode origin/main or origin main');
     });
 
     test('general_guidelines.md treats an empty diff as "work did not land"', function () {
         var text = readPackFile(GUIDELINES).toLowerCase();
         assert.ok(text.indexOf('empty') !== -1 && text.indexOf('did not land') !== -1,
-            'an empty origin/main..HEAD result must be defined as "work did not land" — ' +
+            'an empty default-branch..HEAD result must be defined as "work did not land" — ' +
             're-do/resume instead of reporting done');
     });
 
     test('completion guard runs BEFORE writing outputs/response.md', function () {
         var text = readPackFile(GUIDELINES);
-        var guardIdx = text.indexOf('origin/main..HEAD');
+        var guardIdx = text.indexOf(DYNAMIC_HEAD_DIFF);
         var summaryIdx = text.indexOf('outputs/response.md');
         assert.ok(guardIdx !== -1, 'guard step missing entirely');
         assert.ok(summaryIdx !== -1, 'response.md step missing entirely');
@@ -66,13 +70,25 @@ suite('completion guard — story_development pack (gh-712)', function () {
 
     test('output_rules.md makes the guard a precondition of response.md and of "no changes needed"', function () {
         var text = readPackFile(OUTPUT_RULES);
-        assert.ok(text.indexOf('git log origin/main..HEAD --oneline') !== -1,
-            'output_rules must carry the guard command, not just the guidelines');
+        assert.ok(text.indexOf(DYNAMIC_HEAD_DIFF) !== -1,
+            'output_rules must carry the dynamic guard command, not just the guidelines');
+        assert.ok(text.indexOf('origin/main') === -1,
+            'output_rules must not hardcode origin/main');
         assert.ok(text.indexOf('no changes needed') !== -1,
             'output_rules must extend the same guard to the "no changes needed" conclusion');
-        var guardIdx = text.indexOf('origin/main..HEAD');
+        var guardIdx = text.indexOf(DYNAMIC_HEAD_DIFF);
         var responseIdx = text.indexOf('outputs/response.md');
         assert.ok(guardIdx < responseIdx,
             'guard rule must be stated before the response.md output contract');
+    });
+
+    test('git_completion_guard.md uses dynamic default-branch discovery instead of hardcoded origin/main', function () {
+        var text = readPackFile(GIT_COMPLETION_GUARD);
+        assert.ok(text.indexOf('git fetch origin') !== -1,
+            'git_completion_guard.md must fetch origin');
+        assert.ok(text.indexOf(DYNAMIC_HEAD_DIFF) !== -1,
+            'git_completion_guard.md must diff against the dynamically discovered default branch');
+        assert.ok(text.indexOf('origin/main') === -1 && text.indexOf('origin main') === -1,
+            'git_completion_guard.md must not hardcode origin/main or origin main');
     });
 });

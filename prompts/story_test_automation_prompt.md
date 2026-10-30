@@ -6,7 +6,7 @@
 - `input/{STORY_KEY}/ticket.md` — Story details, acceptance criteria, solution.
 - `input/{STORY_KEY}/linked_test_cases.md` — all linked Test Cases with key, summary, description, priority, and existing status.
 - `input/{STORY_KEY}/linked_test_cases.json` — machine-readable version of the above.
-- `input/{STORY_KEY}/merge_conflicts.md` *(if present)* — unresolved merge conflicts from syncing the test branch with `origin/main`.
+- `input/{STORY_KEY}/merge_conflicts.md` *(if present)* — unresolved merge conflicts from syncing the test branch with the remote default branch (`origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)`).
 - `input/{STORY_KEY}/pr_diff.txt` *(if present)* — diff context for resolving conflicts.
 - `testing/` — existing reusable components, frameworks, core helpers, and previously automated tests.
 

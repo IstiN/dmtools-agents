@@ -8,9 +8,9 @@ When the target tracker is Jira, replace every generic placeholder tag from the 
 | `<italic>X</italic>` | `_X_` | `_hint_` |
 | `<strike>X</strike>` | `-X-` | `-deprecated-` |
 | `<underline>X</underline>` | `+X+` | `+important+` |
-| `<code>X</code>` | `{{X}}` | `{{main.dart}}` |
-| `<codeblock>X</codeblock>` | `{code}X{code}` | `{code}void main() {}{code}` |
-| `<codeblock:lang>X</codeblock:lang>` | `{code:lang}X{code}` | `{code:dart}void main() {}{code}` |
+| `<code>X</code>` | `{{X}}` | `{{main.js}}` |
+| `<codeblock>X</codeblock>` | `{code}X{code}` | `{code}function main() {}{code}` |
+| `<codeblock:lang>X</codeblock:lang>` | `{code:lang}X{code}` | `{code:js}function main() {}{code}` |
 | `<bullet> text` | `* text` | `* Option A` |
 | `<numbered> text` | `# text` | `# Step one` |
 | `<heading1>X</heading1>` | `h1. X` | `h1. Title` |
