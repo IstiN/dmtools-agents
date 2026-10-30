@@ -15,7 +15,7 @@
 1. Every linked Test Case has a corresponding automated test under `testing/tests/{TC_KEY}/`.
 2. Each test folder contains `README.md` and `config.yaml`.
 3. Tests use the correct layers: `tests/` → `components/` → `frameworks/` → `core/`.
-4. No raw Flutter locators or `WidgetTester` calls directly in ticket test files.
+4. No raw UI locators or low-level driver/framework calls directly in ticket test files.
 5. Tests are deterministic, isolated, and include proper assertions and teardown.
 6. Tests match the Test Case description and acceptance criteria verbatim.
 7. No dead code, debug prints, or commented-out experiments.

@@ -42,7 +42,7 @@ Every finding sourced from the web, a linked Confluence page, or a codebase file
 
 ## Evidence and decisions must be traceable
 
-Every row in a decisions/assumptions/open-questions table needs a source column with a real link where one exists (a URL, a Confluence page, a file path) — "ticket comment 2026-07-20" is acceptable only when there is genuinely no linkable artifact (e.g. a verbal/chat comment with no URL). Never leave the source column blank.
+Every row in a decisions/assumptions/open-questions table needs a source column with a real link where one exists (a URL, a Confluence page, a file path) — an unlinked note such as "verbal/chat comment (no URL)" is acceptable only when there is genuinely no linkable artifact. Never leave the source column blank.
 
 ## Findings must be atomic and falsifiable, not vague vibes
 

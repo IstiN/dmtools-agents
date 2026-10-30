@@ -67,7 +67,7 @@ flowchart TD
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
         D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
-        D3["See instructions/common/dmtools_cli.md for full reference"]
+        D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
     INPUT_ORDER --> CONFLUENCE_RULE --> ATTACH_RULE --> DMTOOLS_RULE
@@ -151,11 +151,10 @@ flowchart TD
 
 # TDD Test Directory Rules
 
-Write failing unit or widget tests in the project's standard unit-test tree **only**:
+Write failing unit tests in the repository's existing unit-test tree **only**:
 
-- Flutter / Dart projects → `test/`
-- Node projects → `__tests__/` or `test/` according to the repo convention
-- Python projects → `tests/` or project-specific unit-test directory
+- Discover the unit-test directory from the existing build and test configuration and from nearby tests for the code being changed.
+- Follow the naming, layout, and test-runner conventions already established in that directory.
 
 ❌ **Never** place development TDD tests under `testing/`.
 `testing/` is owned by test-automation agents (regression probes, workflow observation tests, accessibility gates, etc.). If your production changes break existing tests there, leave them untouched and mention the breakage in `outputs/response.md` so the test-automation agent can update them.
@@ -167,7 +166,7 @@ Write failing unit or widget tests in the project's standard unit-test tree **on
 
 # Git Completion & Closing-Keyword Guard
 
-- **Completion guard**: Before writing `outputs/response.md`, run `git fetch origin main && git log origin/main..HEAD --oneline`. An empty result means your commits did not land — re-do or resume the work before declaring completion.
+- **Completion guard**: Before writing `outputs/response.md`, run `git fetch origin && git log "origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD" --oneline`. An empty result means your commits did not land — re-do or resume the work before declaring completion.
 - **No closing keywords in commits or PR bodies**: Do NOT include `Fixes #...`, `Closes #...`, or `Resolves #...` against tracker tickets unless explicitly instructed; ticket lifecycle transitions are managed by the post-action workflow.
 
 
@@ -301,15 +300,15 @@ flowchart TD
 flowchart LR
     ENV["⚠️ ONE-SHOT SESSION — this agent runs in an ephemeral CI runner.<br/>When your final turn ends, the process EXITS and the runner is destroyed:<br/>- schedule_message / self-reminders NEVER fire after exit — no wake-up exists<br/>- detached processes (nohup/&) are killed with the runner<br/>- nothing can be finished 'later' — there is no later"]
     ENV --> RULE["NEVER end the session with work pending.<br/>A long job (full test suite, build) must be concluded INSIDE the turn:<br/>run it in background (bash background:true) and poll with<br/>bash_job status/output BETWEEN your steps — the process stays alive<br/>while you keep working — or run it in the foreground if nothing else<br/>remains. Do NOT arm a timer and exit; do NOT nohup-and-exit."]
-    RULE --> ARTIFACT["The ONLY completion artifact is outputs/response.md<br/>written BEFORE you exit. Missing response.md = the run is read as<br/>'interrupted mid-way' (gh-742): the ticket resets for retry and the<br/>whole leg re-runs — your work survives only if committed to the branch."]
+    RULE --> ARTIFACT["The ONLY completion artifact is outputs/response.md<br/>written BEFORE you exit. Missing response.md = the run is read as<br/>'interrupted mid-way': the ticket resets for retry and the<br/>whole leg re-runs — your work survives only if committed to the branch."]
 ```
 
-**Evidence (fa#1341, 2026-10-07):** the dev agent finished its edits, launched
-the full test suite detached (`nohup dart test &`), armed a `schedule_message`
-wake-up "in 18m", and ended its turn. The process exited code 0, the timer
-could never fire, `outputs/response.md` was never written — the leg failed
-twice in a row with the same "interrupted mid-way" reset, burning two full
-dev runs on a completed implementation.
+**Why this matters:** if the agent finishes its edits, launches the full test
+suite detached (`nohup <test-command> &`), arms a `schedule_message` wake-up
+for later, and ends its turn, the process exits code 0, the timer never fires,
+and `outputs/response.md` is never written — the leg fails with an
+"interrupted mid-way" reset and burns full runs on an already-completed
+implementation.
 
 
 ---
@@ -485,7 +484,7 @@ construct must render natively on GitHub.
 - Numbered lists: `1. item`
 - Bold: `**text**`
 - Inline code: `` `code` ``
-- Code block: ` ```lang ... ``` ` with a language tag (`dart`, `bash`, `json`)
+- Code block: ` ```lang ... ``` ` with a language tag (`bash`, `json`, `text`)
 - Link: `[text](url)`
 - Tables: standard GFM table syntax (`|---|` separator row)
 

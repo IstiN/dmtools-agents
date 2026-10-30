@@ -67,7 +67,7 @@ flowchart TD
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
         D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
-        D3["See instructions/common/dmtools_cli.md for full reference"]
+        D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
     INPUT_ORDER --> CONFLUENCE_RULE --> ATTACH_RULE --> DMTOOLS_RULE
@@ -599,9 +599,9 @@ Use tracker-specific format:
 - Example: if a bug was fixed by adding a heartbeat probe that runs every 5 seconds, your test must wait at least 5–10 seconds after blocking auth domains before asserting the error appears.
 - If the bug status is `Done` or `In Testing`, the fix is deployed — **run the test against the live implementation** and expect it to pass.
 
-The feature code is **already implemented** in the `main` branch and **deployed**. Your job is to automate this test case — not to implement features.
+The feature code is **already implemented** in the default branch and **deployed**. Your job is to automate this test case — not to implement features.
 
-If `merge_conflicts.md` is present in the input folder, the test branch could not be safely auto-aligned with `origin/main` before you started. Resolve this first: inspect the guidance, sync the branch deliberately with `origin/main`, prefer `origin/main` for setup/config/workflow/shared infrastructure conflicts, and keep only ticket-specific test automation that is still relevant. Do not open or leave a PR that is still dirty/conflicting with the base branch.
+If `merge_conflicts.md` is present in the input folder, the test branch could not be safely auto-aligned with the remote default branch (`origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)`) before you started. Resolve this first: inspect the guidance, sync the branch deliberately with the remote default branch, prefer the remote default branch for setup/config/workflow/shared infrastructure conflicts, and keep only ticket-specific test automation that is still relevant. Do not open or leave a PR that is still dirty/conflicting with the base branch.
 
 ## Your task
 

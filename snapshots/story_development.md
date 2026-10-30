@@ -67,7 +67,7 @@ flowchart TD
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
         D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
-        D3["See instructions/common/dmtools_cli.md for full reference"]
+        D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
     INPUT_ORDER --> CONFLUENCE_RULE --> ATTACH_RULE --> DMTOOLS_RULE
@@ -85,8 +85,8 @@ flowchart TD
     PARENT --> ANALYZE["Analyze requirements — every acceptance criterion must be addressed"]
     ANALYZE --> ARCH["Understand existing codebase patterns, architecture, and test structure"]
     ARCH --> PRINCIPLES["Apply OOP principles: SRP, OCP, DI, Encapsulation, Composition over inheritance"]
-    PRINCIPLES --> TDD["Follow TDD approach — see tdd_approach.md"]
-    TDD --> TEST_LOC["Write TDD tests in the standard unit-test tree only<br/>— Flutter/Dart: test/<br/>— NEVER in testing/ (owned by test-automation agents)"]
+    PRINCIPLES --> TDD["Follow TDD approach — see the TDD approach section included later in this prompt"]
+    TDD --> TEST_LOC["Write TDD tests in the repository's existing unit-test tree only<br/>— discover the path from build/test config and nearby tests<br/>— NEVER in testing/ (owned by test-automation agents)"]
     TEST_LOC --> IMPLEMENT["Implement source code and unit tests following existing patterns"]
     IMPLEMENT --> DOCS["Update documentation ONLY if ticket explicitly requires it"]
     DOCS --> RUN["Run all unit tests — MUST pass before finishing"]
@@ -96,10 +96,10 @@ flowchart TD
     PASS -->|Yes| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
-    SECRETS -->|No| GUARD["⚠️ COMPLETION GUARD — prove work landed BEFORE writing the summary:<br/>git fetch origin main &amp;&amp; git log origin/main..HEAD --oneline<br/>EMPTY result = work did NOT land — re-do or resume the work,<br/>NEVER report done from session memory or main's tip"]
+    SECRETS -->|No| GUARD["⚠️ COMPLETION GUARD — prove work landed BEFORE writing the summary:<br/>git fetch origin &amp;&amp; git log &quot;origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD&quot; --oneline<br/>EMPTY result = work did NOT land — re-do or resume the work,<br/>NEVER report done from session memory or the base branch's tip"]
     IGNORE --> GUARD
     GUARD -->|Diff shows your commits| SUMMARY["Write concise PR description to outputs/response.md — see output_rules.md"]
-    GUARD -->|Empty diff| REDO["Re-do or resume the work — verify the working dir,<br/>git log, git stash list.<br/>If the fix is genuinely already on the base branch,<br/>prove it (git log origin/main -- grep) before any<br/>'no changes needed' conclusion"]
+    GUARD -->|Empty diff| REDO["Re-do or resume the work — verify the working dir,<br/>git log, git stash list.<br/>If the fix is genuinely already on the base branch,<br/>prove it (git log &quot;origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)&quot; --grep=...) before any<br/>'no changes needed' conclusion"]
     REDO --> IMPLEMENT
     SUMMARY --> END([End — post-processing handles branch, commit and PR])
 ```
@@ -142,11 +142,10 @@ flowchart TD
 
 # TDD Test Directory Rules
 
-Write failing unit or widget tests in the project's standard unit-test tree **only**:
+Write failing unit tests in the repository's existing unit-test tree **only**:
 
-- Flutter / Dart projects → `test/`
-- Node projects → `__tests__/` or `test/` according to the repo convention
-- Python projects → `tests/` or project-specific unit-test directory
+- Discover the unit-test directory from the existing build and test configuration and from nearby tests for the code being changed.
+- Follow the naming, layout, and test-runner conventions already established in that directory.
 
 ❌ **Never** place development TDD tests under `testing/`.
 `testing/` is owned by test-automation agents (regression probes, workflow observation tests, accessibility gates, etc.). If your production changes break existing tests there, leave them untouched and mention the breakage in `outputs/response.md` so the test-automation agent can update them.
@@ -158,7 +157,7 @@ Write failing unit or widget tests in the project's standard unit-test tree **on
 
 # Git Completion & Closing-Keyword Guard
 
-- **Completion guard**: Before writing `outputs/response.md`, run `git fetch origin main && git log origin/main..HEAD --oneline`. An empty result means your commits did not land — re-do or resume the work before declaring completion.
+- **Completion guard**: Before writing `outputs/response.md`, run `git fetch origin && git log "origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD" --oneline`. An empty result means your commits did not land — re-do or resume the work before declaring completion.
 - **No closing keywords in commits or PR bodies**: Do NOT include `Fixes #...`, `Closes #...`, or `Resolves #...` against tracker tickets unless explicitly instructed; ticket lifecycle transitions are managed by the post-action workflow.
 
 
@@ -186,7 +185,7 @@ When work cannot proceed because required credentials, secrets, permissions, tes
 
 ### [10] `./agents/instructions/story_development/output_rules.md`
 
-Precondition (including any `"no changes needed"` conclusion): run `git log origin/main..HEAD --oneline` per the **Git Completion Guard & Closing-Keyword Rules** section.
+Precondition (including any `"no changes needed"` conclusion): run `git fetch origin && git log "origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD" --oneline` per the **Git Completion Guard & Closing-Keyword Rules** section.
 
 ```mermaid
 flowchart TD
@@ -275,15 +274,15 @@ flowchart TD
 flowchart LR
     ENV["⚠️ ONE-SHOT SESSION — this agent runs in an ephemeral CI runner.<br/>When your final turn ends, the process EXITS and the runner is destroyed:<br/>- schedule_message / self-reminders NEVER fire after exit — no wake-up exists<br/>- detached processes (nohup/&) are killed with the runner<br/>- nothing can be finished 'later' — there is no later"]
     ENV --> RULE["NEVER end the session with work pending.<br/>A long job (full test suite, build) must be concluded INSIDE the turn:<br/>run it in background (bash background:true) and poll with<br/>bash_job status/output BETWEEN your steps — the process stays alive<br/>while you keep working — or run it in the foreground if nothing else<br/>remains. Do NOT arm a timer and exit; do NOT nohup-and-exit."]
-    RULE --> ARTIFACT["The ONLY completion artifact is outputs/response.md<br/>written BEFORE you exit. Missing response.md = the run is read as<br/>'interrupted mid-way' (gh-742): the ticket resets for retry and the<br/>whole leg re-runs — your work survives only if committed to the branch."]
+    RULE --> ARTIFACT["The ONLY completion artifact is outputs/response.md<br/>written BEFORE you exit. Missing response.md = the run is read as<br/>'interrupted mid-way': the ticket resets for retry and the<br/>whole leg re-runs — your work survives only if committed to the branch."]
 ```
 
-**Evidence (fa#1341, 2026-10-07):** the dev agent finished its edits, launched
-the full test suite detached (`nohup dart test &`), armed a `schedule_message`
-wake-up "in 18m", and ended its turn. The process exited code 0, the timer
-could never fire, `outputs/response.md` was never written — the leg failed
-twice in a row with the same "interrupted mid-way" reset, burning two full
-dev runs on a completed implementation.
+**Why this matters:** if the agent finishes its edits, launches the full test
+suite detached (`nohup <test-command> &`), arms a `schedule_message` wake-up
+for later, and ends its turn, the process exits code 0, the timer never fires,
+and `outputs/response.md` is never written — the leg fails with an
+"interrupted mid-way" reset and burns full runs on an already-completed
+implementation.
 
 
 ---
@@ -459,7 +458,7 @@ construct must render natively on GitHub.
 - Numbered lists: `1. item`
 - Bold: `**text**`
 - Inline code: `` `code` ``
-- Code block: ` ```lang ... ``` ` with a language tag (`dart`, `bash`, `json`)
+- Code block: ` ```lang ... ``` ` with a language tag (`bash`, `json`, `text`)
 - Link: `[text](url)`
 - Tables: standard GFM table syntax (`|---|` separator row)
 

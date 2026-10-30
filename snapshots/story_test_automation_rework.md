@@ -73,7 +73,7 @@ flowchart TD
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
         D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
-        D3["See instructions/common/dmtools_cli.md for full reference"]
+        D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
     INPUT_ORDER --> CONFLUENCE_RULE --> ATTACH_RULE --> DMTOOLS_RULE
@@ -88,7 +88,7 @@ flowchart TD
 
 ## Pre-flight merge conflict resolution
 
-If `merge_conflicts.md` exists in the ticket input folder, the test branch could not be cleanly synced with `origin/main`:
+If `merge_conflicts.md` exists in the ticket input folder, the test branch could not be cleanly synced with the remote default branch (e.g., `origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)`):
 1. Resolve every `<<<<<<<` / `=======` / `>>>>>>>` conflict marker in the listed files, using `pr_diff.txt` for context.
 2. Stage each resolved file with `git add <file>`.
 3. Do NOT `git commit` or `git merge --abort`. Only proceed to test automation after the working directory is clean of conflicts.

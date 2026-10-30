@@ -113,7 +113,7 @@ When in doubt, start one level higher; downgrade only after confirming the risk 
 
 ### External-spec evidence rule
 
-A finding whose core claim is "**the spec / reference / ticket / external tool says or does X**" may be raised at 🚨 **BLOCKING** only when it quotes the exact source the review actually read during this run — a `file:line` reference or a doc URL. A bare "the spec says …" assertion is unfalsifiable for the author and for the machine, and a false one holds a validated PR hostage (live: a BLOCKING thread claiming an exemption list that the reference source did not contain — the reviewed code was behaviorally identical to it).
+A finding whose core claim is "**the spec / reference / ticket / external tool says or does X**" may be raised at 🚨 **BLOCKING** only when it quotes the exact source the review actually read during this run — a `file:line` reference or a doc URL. A bare "the spec says …" assertion is unfalsifiable for the author and for the machine, and a false one holds a validated PR hostage (for example, a BLOCKING thread claiming an exemption list that the reference source does not contain when the reviewed code is behaviorally identical to it).
 
 Without a verifiable citation:
 

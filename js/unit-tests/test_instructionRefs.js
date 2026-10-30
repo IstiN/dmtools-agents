@@ -310,10 +310,19 @@ suite('instructionRefs — pack reference integrity', function () {
         assert.ok(markupTransform.indexOf('#12345') !== -1, 'ado_markup_transform.md must instruct #<id> format (e.g. #12345)');
     });
 
-    test('R8 (gh-1292, gh-1293): batch_scope.md references bug_development/* and instructions do not reference already-inlined tracker/json files by path', function () {
+    test('R8 (gh-1292, gh-1293, gh-1296): batch_scope.md and instructions do not reference already-inlined files by path', function () {
         var batchScope = readText('instructions/bug_fix_batch_development/batch_scope.md');
         assert.ok(batchScope.indexOf('bug_fix_development/') === -1, 'batch_scope.md must not reference non-existent bug_fix_development/*');
-        assert.ok(batchScope.indexOf('agents/instructions/bug_development/general_guidelines.md') !== -1, 'batch_scope.md must reference bug_development/general_guidelines.md');
+        assert.ok(batchScope.indexOf('tdd_approach.md') === -1, 'batch_scope.md must not reference already-inlined tdd_approach.md by path');
+
+        var inputReading = readText('instructions/common/input_context_reading.md');
+        assert.ok(inputReading.indexOf('dmtools_cli.md') === -1, 'input_context_reading.md must not reference dmtools_cli.md by path');
+
+        var storyGuidelines = readText('instructions/story_development/general_guidelines.md');
+        assert.ok(storyGuidelines.indexOf('tdd_approach.md') === -1, 'story_development/general_guidelines.md must not reference tdd_approach.md by path');
+
+        var reworkGuidelines = readText('instructions/pr_rework/general_guidelines.md');
+        assert.ok(reworkGuidelines.indexOf('tdd_approach.md') === -1, 'pr_rework/general_guidelines.md must not reference tdd_approach.md by path');
 
         var checkedFiles = [
             'instructions/intake/description_template.md',
@@ -331,6 +340,42 @@ suite('instructionRefs — pack reference integrity', function () {
             assert.ok(content.indexOf('ado_comment_format.md') === -1, file + ' must not reference ado_comment_format.md by path');
             assert.ok(content.indexOf('test_automation_json_output.md') === -1, file + ' must not reference test_automation_json_output.md by path');
         });
+    });
+
+    test('R9 (gh-1298): prompts and instructions contain no internal issue/PR refs, ISO dates, or live-incident provenance markers', function () {
+        var files = Object.keys(collectInstructionFiles('instructions'))
+            .concat(Object.keys(collectInstructionFiles('prompts')));
+        var internalRefRe = /\b(?:fa#[0-9]+|agents#[0-9]+|gh-[0-9]+|pr-[0-9]+)\b/i;
+        var isoDateRe = /\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b/;
+        var liveMarkerRe = /(?:Evidence\s*\(|observed live|live:\s)/i;
+        var violators = [];
+        files.forEach(function (file) {
+            var content = readText(file) || '';
+            var m = content.match(internalRefRe) || content.match(isoDateRe) || content.match(liveMarkerRe);
+            if (m) violators.push(file + ' (' + m[0] + ')');
+        });
+        assert.deepEqual(violators, [],
+            'prompts/ and instructions/ must not leak internal issue/PR refs, ISO dates, or live evidence markers: ' +
+            violators.join(', '));
+    });
+
+    test('R10 (gh-1303): generic prompts and instructions do not hardcode Flutter/Dart/WidgetTester test paths or examples', function () {
+        var files = Object.keys(collectInstructionFiles('instructions'))
+            .concat(Object.keys(collectInstructionFiles('prompts')));
+        var stackRe = /\b(?:flutter|dart|dartdoc|widgettester)\b/i;
+        var allowedRuleDoc = { 'instructions/pr_rework/general_guidelines.md': true };
+        var violators = [];
+        files.forEach(function (file) {
+            var content = readText(file) || '';
+            if (allowedRuleDoc[file]) {
+                content = content.replace(/`dart format[^`]*`/g, '').replace(/`dart_format`/g, '');
+            }
+            var m = content.match(stackRe);
+            if (m) violators.push(file + ' (' + m[0] + ')');
+        });
+        assert.deepEqual(violators, [],
+            'prompts/ and instructions/ must stay stack-agnostic (no Flutter/Dart/WidgetTester references): ' +
+            violators.join(', '));
     });
 });
 

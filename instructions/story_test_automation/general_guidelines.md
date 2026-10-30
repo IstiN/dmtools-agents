@@ -19,7 +19,7 @@ You are automating a Story that has reached **Ready For Testing**. The Story alr
 - You may ONLY write code inside the `testing/` folder.
 - Each Test Case must have its own folder under `testing/tests/{TC_KEY}/`.
 - Reuse components from `testing/components/`, `testing/frameworks/`, and `testing/core/`.
-- Do NOT put raw Flutter/widget locators or `WidgetTester` code directly in the ticket test file.
+- Do NOT put raw UI locators or low-level driver/framework calls directly in the ticket test file.
 - Every `testing/tests/{TC_KEY}/` folder must contain:
   - `README.md` describing what is being tested.
   - `config.yaml` with test metadata.

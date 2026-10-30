@@ -151,7 +151,7 @@ flowchart TD
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
         D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
-        D3["See instructions/common/dmtools_cli.md for full reference"]
+        D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
     INPUT_ORDER --> CONFLUENCE_RULE --> ATTACH_RULE --> DMTOOLS_RULE
@@ -727,7 +727,7 @@ Every finding sourced from the web, a linked Confluence page, or a codebase file
 
 ## Evidence and decisions must be traceable
 
-Every row in a decisions/assumptions/open-questions table needs a source column with a real link where one exists (a URL, a Confluence page, a file path) — "ticket comment 2026-07-20" is acceptable only when there is genuinely no linkable artifact (e.g. a verbal/chat comment with no URL). Never leave the source column blank.
+Every row in a decisions/assumptions/open-questions table needs a source column with a real link where one exists (a URL, a Confluence page, a file path) — an unlinked note such as "verbal/chat comment (no URL)" is acceptable only when there is genuinely no linkable artifact. Never leave the source column blank.
 
 ## Findings must be atomic and falsifiable, not vague vibes
 
