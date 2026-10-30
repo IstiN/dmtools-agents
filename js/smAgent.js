@@ -227,6 +227,18 @@ var nakedPrReconcileModule = require('./common/nakedPrReconcile.js');
 // 2026-10-18 08:04–08:09Z). Pure half here; the probe fan-out lives in
 // hasActiveLegRunOnBranch below.
 var branchLegGuardModule = require('./common/branchLegGuard.js');
+// gh-1299 (hoisted, never lazy — the gh-823 pack-require rule): the localExecution
+// (runLocalAction) helper modules so `dmtools compile` includes them in the `sm`
+// pack closure and `runLocalAction` can fall back to the packed runtime modules
+// when the consumer repo runs `dmtools run sm@latest` without an `agents/js/`
+// checkout in the working directory.
+var ticketKeyShapesModule = require('./common/ticketKeyShapes.js');
+var linkedIssuesReportModule = require('./common/linkedIssuesReport.js');
+var tokenUsageCommentModule = require('./common/tokenUsageComment.js');
+var smDoneCheckModule = require('./common/smDoneCheck.js');
+var aiChatModule = require('./common/aiChat.js');
+var validateInputJqlModule = require('./common/validateInputJql.js');
+var autoStartModule = require('./common/autoStart.js');
 // gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
 // already recorded THIS tick. The already-parked guard in
 // recordDispatchFailure reads the query-time label snapshot — within one
@@ -1311,67 +1323,78 @@ function normalizePositiveInt(value) {
 
 // ─── Local execution ──────────────────────────────────────────────────────────
 
-function runLocalAction(jsPath, ticket, agentParams) {
+function readDualLayoutSource(relPath) {
+    var code = file_read({ path: 'agents/' + relPath });
+    if (!code || !code.trim()) code = file_read({ path: relPath });
+    return (code && code.trim()) ? code : null;
+}
+
+function readLocalActionSource(jsPath) {
     // CWD portability: agents/ prefix present when running from the parent
     // repo, absent when running from the agents checkout root — try both.
-    var actionCode = file_read({ path: jsPath });
-    if ((!actionCode || !actionCode.trim()) && jsPath.indexOf('agents/') === 0) {
-        actionCode = file_read({ path: jsPath.substring('agents/'.length) });
+    var code = file_read({ path: jsPath });
+    if ((!code || !code.trim()) && jsPath.indexOf('agents/') === 0) {
+        code = file_read({ path: jsPath.substring('agents/'.length) });
     }
-    if ((!actionCode || !actionCode.trim()) && jsPath.indexOf('agents/') !== 0) {
-        actionCode = file_read({ path: 'agents/' + jsPath });
+    if ((!code || !code.trim()) && jsPath.indexOf('agents/') !== 0) {
+        code = file_read({ path: 'agents/' + jsPath });
     }
-    if (!actionCode || !actionCode.trim()) throw new Error('Cannot read: ' + jsPath);
+    if (!code || !code.trim()) throw new Error('Cannot read: ' + jsPath);
+    return code;
+}
 
-    var configCode = file_read({ path: 'agents/js/config.js' });
-    if (!configCode || !configCode.trim()) configCode = file_read({ path: 'js/config.js' });
-    if (!configCode || !configCode.trim()) throw new Error('Cannot read: config.js');
+function buildLocalModuleBlock(varName, relPath, fallbackExpr, reqExpr, errLabel, wrapHelperErr) {
+    var code = readDualLayoutSource(relPath);
+    if (code) {
+        var evalBody = '  (function(module, exports, require) {\n' + code + '\n  })(' + varName + ', ' + varName + '.exports, ' + reqExpr + ');\n';
+        if (wrapHelperErr) {
+            evalBody = '  try {\n' + evalBody + '  } catch (e) {\n' +
+                '    throw new Error("Failed to load localExecution helper ' + wrapHelperErr + ': " + (e.message || e));\n  }\n';
+        }
+        return '  var ' + varName + ' = { exports: {} };\n' + evalBody;
+    }
+    if (fallbackExpr) {
+        return '  var ' + varName + ' = { exports: ' + fallbackExpr + ' };\n';
+    }
+    throw new Error('Cannot read: ' + errLabel);
+}
 
-    var scmCode = file_read({ path: 'agents/js/common/scm.js' });
-    if (!scmCode || !scmCode.trim()) scmCode = file_read({ path: 'js/common/scm.js' });
-    if (!scmCode || !scmCode.trim()) throw new Error('Cannot read: common/scm.js');
+function helperFallbackExpr(mod, expr) {
+    return (mod && !mod.__unreadable__) ? expr : null;
+}
 
-    var configLoaderCode = file_read({ path: 'agents/js/configLoader.js' });
-    if (!configLoaderCode || !configLoaderCode.trim()) configLoaderCode = file_read({ path: 'js/configLoader.js' });
+function runLocalAction(jsPath, ticket, agentParams) {
+    var actionCode = readLocalActionSource(jsPath);
+    var baseBlocks =
+        buildLocalModuleBlock('_cm', 'js/config.js',
+            helperFallbackExpr(configModule, 'configModule'), 'function() { return {}; }', 'config.js', null) +
+        buildLocalModuleBlock('_scm', 'js/common/scm.js',
+            helperFallbackExpr(scmModule, 'scmModule'), 'function() { return _cm.exports; }', 'common/scm.js', null) +
+        buildLocalModuleBlock('_cl', 'js/configLoader.js',
+            helperFallbackExpr(configLoader, 'configLoader') || '({})',
+            'function(id) { return id.indexOf("scm.js") !== -1 ? _scm.exports : _cm.exports; }', 'configLoader.js', null);
 
-    // gh-908: the sandbox used to answer every unrecognized require id with
-    // config.js exports, so any postJS action requiring the shared helper
-    // layer (tracker trio, autoStart chain, aiChat) died with a TypeError on
-    // its first member call — live on story_ba_check. Load the known helper
-    // sources with the same dual-read CWD pattern as config.js/scm.js, in
-    // dependency order, and resolve their ids explicitly in the shim below.
+    // gh-908 / gh-1299: load the shared helper layer from CWD when present,
+    // falling back to the packed runtime modules required at load time so
+    // `dmtools run sm@latest` works in consumer repos without an `agents/js/`
+    // checkout in CWD.
     var helperModules = [
-        { id: 'ticketKeyShapes.js', varName: '_tks' },
-        { id: 'trackers.js', varName: '_tr' },
-        { id: 'linkedIssuesReport.js', varName: '_lir' },
-        { id: 'tokenUsageComment.js', varName: '_tu' },
-        { id: 'smDoneCheck.js', varName: '_sdc' },
-        { id: 'aiChat.js', varName: '_ac' },
-        { id: 'validateInputJql.js', varName: '_vq' },
-        { id: 'buildEncodedConfig.js', varName: '_bc' },
-        { id: 'autoStart.js', varName: '_as' }
+        { id: 'ticketKeyShapes.js', varName: '_tks', fallbackExpr: helperFallbackExpr(ticketKeyShapesModule, 'ticketKeyShapesModule') },
+        { id: 'trackers.js', varName: '_tr', fallbackExpr: helperFallbackExpr(trackersModule, 'trackersModule') },
+        { id: 'linkedIssuesReport.js', varName: '_lir', fallbackExpr: helperFallbackExpr(linkedIssuesReportModule, 'linkedIssuesReportModule') },
+        { id: 'tokenUsageComment.js', varName: '_tu', fallbackExpr: helperFallbackExpr(tokenUsageCommentModule, 'tokenUsageCommentModule') },
+        { id: 'smDoneCheck.js', varName: '_sdc', fallbackExpr: helperFallbackExpr(smDoneCheckModule, 'smDoneCheckModule') },
+        { id: 'aiChat.js', varName: '_ac', fallbackExpr: helperFallbackExpr(aiChatModule, 'aiChatModule') },
+        { id: 'validateInputJql.js', varName: '_vq', fallbackExpr: helperFallbackExpr(validateInputJqlModule, 'validateInputJqlModule') },
+        { id: 'buildEncodedConfig.js', varName: '_bc', fallbackExpr: helperFallbackExpr(buildEncodedConfigModule, 'buildEncodedConfigModule') },
+        { id: 'autoStart.js', varName: '_as', fallbackExpr: helperFallbackExpr(autoStartModule, 'autoStartModule') }
     ];
     var helperBlocks = '';
     for (var hmi = 0; hmi < helperModules.length; hmi++) {
-        var helperModule = helperModules[hmi];
-        var helperCode = file_read({ path: 'agents/js/common/' + helperModule.id });
-        if (!helperCode || !helperCode.trim()) helperCode = file_read({ path: 'js/common/' + helperModule.id });
-        if (!helperCode || !helperCode.trim()) throw new Error('Cannot read: common/' + helperModule.id);
-        helperBlocks +=
-            '  var ' + helperModule.varName + ' = { exports: {} };\n' +
-            '  try {\n' +
-            '  (function(module, exports, require) {\n' + helperCode + '\n  })(' + helperModule.varName + ', ' + helperModule.varName + '.exports, _shim);\n' +
-            '  } catch (e) {\n' +
-            '    throw new Error("Failed to load localExecution helper ' + helperModule.id + ': " + (e.message || e));\n' +
-            '  }\n';
+        var hm = helperModules[hmi];
+        helperBlocks += buildLocalModuleBlock(hm.varName, 'js/common/' + hm.id, hm.fallbackExpr, '_shim', 'common/' + hm.id, hm.id);
     }
 
-    // One require shim for the helper modules AND the action: exact
-    // configLoader ids (plus the ../configLoader.js spelling used from
-    // common/), then a substring match per helper — consistent with the
-    // existing scm.js handling, ./trackers.js, common/trackers.js and bare
-    // trackers all resolve — then the config.js catch-all keeps unmatched
-    // ids working exactly as before.
     var shimFn =
         'function(id) {\n' +
         '      if (id === "./configLoader.js" || id === "./configLoader" || id.indexOf("configLoader.js") !== -1) return _cl.exports;\n' +
@@ -1390,14 +1413,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
 
     var script =
         '(function() {\n' +
-        '  var _cm = { exports: {} };\n' +
-        '  (function(module, exports) {\n' + configCode + '\n  })(_cm, _cm.exports);\n' +
-        '  var _scm = { exports: {} };\n' +
-        '  (function(module, exports, require) {\n' + scmCode + '\n  })(_scm, _scm.exports, function(id) { return _cm.exports; });\n' +
-        '  var _cl = { exports: {} };\n' +
-        (configLoaderCode ?
-        '  (function(module, exports, require) {\n' + configLoaderCode + '\n  })(_cl, _cl.exports, function(id) { return id.indexOf("scm.js") !== -1 ? _scm.exports : _cm.exports; });\n' :
-        '') +
+        baseBlocks +
         '  var _shim = ' + shimFn + ';\n' +
         helperBlocks +
         '  var _am = { exports: {} };\n' +
