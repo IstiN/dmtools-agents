@@ -188,6 +188,18 @@ suite('gitStaging', function() {
             'without a runner the full static list is returned');
     });
 
+    test('buildExclusionPathspecs passes expectNonZeroExit: true on check-ignore probes (gh-1304)', function() {
+        var seenArgs = [];
+        gitStaging.buildExclusionPathspecs(['factory-kit'], function (args) {
+            seenArgs.push(args);
+            throw new Error('Command execution failed (exit code 1)');
+        });
+        assert.equal(seenArgs.length, 1);
+        assert.equal(seenArgs[0].command, 'git check-ignore -q -- factory-kit');
+        assert.equal(seenArgs[0].expectNonZeroExit, true,
+            'check-ignore probe must pass expectNonZeroExit: true so exit 1 does not log stack traces');
+    });
+
     test('isRuntimeArtifactStatusLine flags runtime-artifact status lines only', function() {
         assert.ok(gitStaging.isRuntimeArtifactStatusLine('?? .dmtools/copilot-sessions/'),
             'untracked copilot-sessions leftover');

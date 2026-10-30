@@ -604,7 +604,7 @@ function squashReworkWipIfEnabled(cmd, ticketKey, config, workingDir, customPara
 function commitAndPush(ticketKey, config, customParams) {
     var workingDir = config.workingDir || null;
     var cmdOpts = reworkCmdOpts(workingDir);
-    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+    var cmd = function(command, extraOpts) { return cli_execute_command(Object.assign({}, cmdOpts, extraOpts || {}, { command: command })); };
 
     // Read expected branch from pr_info.md (written by preCliReworkSetup).
     // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
@@ -649,7 +649,7 @@ function commitAndPush(ticketKey, config, customParams) {
     // a static `:!factory-kit` exclusion trips git add's ignored-pathspec
     // guard when the kit is materialized AND gitignored.
     cmd('git add . -- ' + gitStaging.buildStagingPathspecs(function (args) {
-        return cmd(args.command);
+        return cmd(args.command, args);
     }, ['factory-kit']));
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);

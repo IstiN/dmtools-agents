@@ -278,7 +278,8 @@ function stageWorkingTree(workingDir) {
             command: 'git add -A -- ' + gitStaging.buildStagingPathspecs(function (args) {
                 return cli_execute_command({
                     command: args.command,
-                    workingDirectory: workingDir
+                    workingDirectory: workingDir,
+                    expectNonZeroExit: args.expectNonZeroExit
                 });
             }, ['factory-kit']),
             workingDirectory: workingDir
