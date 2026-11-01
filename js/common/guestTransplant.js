@@ -341,6 +341,44 @@ function resolveTransplantSha(marker, currentHeadSha) {
 
 // ── Verdict carry (AC6) ──────────────────────────────────────────────────
 
+function extractPrDiffText(raw) {
+    if (!raw) return null;
+    if (typeof raw === 'string') return _extractDiffFromString(raw);
+    return _extractDiffFromObject(raw);
+}
+
+function _extractDiffFromString(raw) {
+    var trimmed = raw.trim();
+    if (trimmed.charAt(0) === '{') {
+        try { return _extractDiffFromObject(JSON.parse(raw)); } catch (e) { return null; }
+    }
+    return raw.indexOf('diff --git') !== -1 ? raw : null;
+}
+
+function _extractDiffFromObject(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    var keys = ['diff', 'result', 'arg$1', 'body'];
+    for (var i = 0; i < keys.length; i++) {
+        var v = obj[keys[i]];
+        if (typeof v === 'string' && v.length) return v;
+    }
+    return null;
+}
+
+function _eligibleCarryLabels(cfg, sourceLabels) {
+    var carry = ((cfg && cfg.carryLabels) || []).slice();
+    if (!Array.isArray(sourceLabels)) return carry;
+    return carry.filter(function (l) { return sourceLabels.indexOf(l) !== -1; });
+}
+
+function _identicalDiffCarry(cfg, sourceLabels) {
+    var labels = _eligibleCarryLabels(cfg, sourceLabels);
+    if (!labels.length && Array.isArray(sourceLabels)) {
+        return { carry: false, labels: [], reason: 'no-source-verdict-labels' };
+    }
+    return { carry: true, labels: labels, reason: 'identical-diff' };
+}
+
 // Byte fingerprint of a unified diff: CRLF and trailing-newline variance
 // normalize away; everything else (blob index lines included — they are
 // content-addressed) must match byte-for-byte for the carry.
@@ -354,15 +392,12 @@ function diffFingerprint(diffText) {
 
 // AC6: verdicts carry iff the transplanted diff is byte-identical to the
 // reviewed source diff; every degraded read is a fresh pipeline.
-function carryDecision(sourceDiff, transplantDiff, cfg) {
+function carryDecision(sourceDiff, transplantDiff, cfg, sourceLabels) {
     var fp1 = diffFingerprint(sourceDiff);
     var fp2 = diffFingerprint(transplantDiff);
     if (fp1 === null) return { carry: false, labels: [], reason: 'source-diff-unavailable' };
     if (fp2 === null) return { carry: false, labels: [], reason: 'transplant-diff-unavailable' };
-    if (fp1 === fp2) {
-        return { carry: true, labels: ((cfg && cfg.carryLabels) || []).slice(),
-                 reason: 'identical-diff' };
-    }
+    if (fp1 === fp2) return _identicalDiffCarry(cfg, sourceLabels);
     return { carry: false, labels: [], reason: 'diff-drifted' };
 }
 
@@ -1069,6 +1104,7 @@ module.exports = {
     parseTransplantMarker: parseTransplantMarker,
     resolveTransplantSha: resolveTransplantSha,
     diffFingerprint: diffFingerprint,
+    extractPrDiffText: extractPrDiffText,
     carryDecision: carryDecision,
     classifyArmActor: classifyArmActor,
     buildTransplantComment: buildTransplantComment,

@@ -2293,6 +2293,30 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
             'the mergeStateLatch is inert on BLOCKED — guests keep the validation dispatch');
     });
 
+    test('guest-transplanted machine PR (ai/guest-<N>) satisfies mergeStateLatch on CLEAN without a linked issue', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [{
+                    number: 1313,
+                    labels: [],
+                    draft: false,
+                    user: { login: 'dmtools-factory-bot[bot]' },
+                    head: { ref: 'ai/guest-1301', sha: '386f1117' },
+                    body: 'Transplanted from IstiN/dmtools-agents#1301'
+                }];
+            },
+            github_get_issue: function () {
+                throw new Error('must not fetch closed guest PR as an issue for ai/guest-1301');
+            }
+        }, {}, {
+            1313: { number: 1313, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        });
+        var items = srcMod.query(Object.assign({}, RULE, { limit: 10 }),
+            { repoInfo: { owner: 'IstiN', repo: 'dmtools-agents' } });
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-1313'],
+            'ai/guest-1301 machine PR matches validate-fresh-masked-green on CLEAN without needing ai_developed on #1301');
+    });
+
     test('review-on-issue-label rule exists in sm_github.json (issue-carried review arm)', function () {
         // Live dead loop (dart gh-377, 2026-10-15): agent:review sat on the
         // ISSUE while every review arm in the catalog is PR-carried — the PR
