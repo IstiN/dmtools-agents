@@ -139,7 +139,13 @@ function loadDevelopBugFixBatchAndCreatePR(mocks) {
             './common/pullRequest.js': prHelperStub,
             './common/trackers.js': realTrackers,
             './prepareBugFixBatchContext.js': mocks.batchContextStub || { findBugsInEpic: function() { return []; } },
-            './common/bugFixBatchContext.js': sharedBatchCtx
+            './common/bugFixBatchContext.js': sharedBatchCtx,
+            // gh-1301: the batch leg probes outputs/needs-input.md through the
+            // shared ask-mode cluster — map the real modules (file_read comes
+            // from allMocks, so a needs-input file is absent unless a test
+            // provides one).
+            './common/outputFiles.js': loadModule('js/common/outputFiles.js', null, allMocks),
+            './common/needsInput.js': loadModule('js/common/needsInput.js')
         }),
         allMocks
     );

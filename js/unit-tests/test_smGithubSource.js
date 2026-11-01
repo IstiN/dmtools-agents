@@ -3041,6 +3041,18 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
         assert.contains(script, 'ai_developed',
             'hand-issue-to-reviewer.sh must require ai_developed or status:In Review before stamping agent:review');
     });
+
+    test('gh-1301: the ai_questions_asked gate runs AFTER the In Review / ai_developed guards (sticky label must not gate a shipped ticket)', function () {
+        var script = file_read({ path: 'scripts/hand-issue-to-reviewer.sh' });
+        var reviewGuardAt = script.indexOf('ai_developed');
+        var askGateAt = script.indexOf('ai_questions_asked');
+        assert.ok(reviewGuardAt !== -1, 'the review-reached guard is present');
+        assert.ok(askGateAt !== -1, 'the ask-mode gate is present');
+        assert.ok(reviewGuardAt < askGateAt,
+            'a ticket that demonstrably reached In Review / ai_developed must be handed off regardless of the stale ask label');
+        assert.ok(/has_q"\s*=\s*"true"\s*\]/.test(script) && /&&\s*!/.test(script.slice(script.indexOf('has_q'), script.indexOf('--add-label "agent:review"') + 25)),
+            'the ask gate is conditioned on NOT having reached review');
+    });
 });
 
 suite('sm github source — gh-1009 CRAP characterization (paths touched by the query split)', function () {

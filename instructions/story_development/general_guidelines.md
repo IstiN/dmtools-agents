@@ -1,7 +1,10 @@
 ```mermaid
 flowchart TD
     START([Story ticket ready for development]) --> READ_INPUT["⚠️ MANDATORY: Read ALL input files FIRST — see instructions/common/input_context_reading.md"]
-    READ_INPUT --> PARENT["Read parent epic context if present:<br/>- input/TICKET/parent_context_ba.md — business rules<br/>- input/TICKET/parent_context_sa.md — technical design<br/>- input/TICKET/parent_context_vd.md — visual design"]
+    READ_INPUT --> PREFLIGHT{"⚠️ STEP 0 input-completeness pre-flight (story legs):<br/>missing attachment, broken reference, or contradiction?"}
+    PREFLIGHT -->|Highlights - missing input| ASK["Post ONE comment asking for the missing items +<br/>write outputs/needs-input.md + STOP before implementation — the publish pipeline's<br/>ask-mode probe (developTicketAndCreatePR) ends the leg green before any PR work"]
+    ASK --> END_ASK([End - needs input - story leg green, no PR])
+    PREFLIGHT -->|Clean| PARENT["Read parent epic context if present:<br/>- input/TICKET/parent_context_ba.md — business rules<br/>- input/TICKET/parent_context_sa.md — technical design<br/>- input/TICKET/parent_context_vd.md — visual design"]
     PARENT --> ANALYZE["Analyze requirements — every acceptance criterion must be addressed"]
     ANALYZE --> ARCH["Understand existing codebase patterns, architecture, and test structure"]
     ARCH --> PRINCIPLES["Apply OOP principles: SRP, OCP, DI, Encapsulation, Composition over inheritance"]
@@ -26,5 +29,9 @@ flowchart TD
     REDO --> IMPLEMENT
     SUMMARY --> END([End — post-processing handles branch, commit and PR])
 ```
+
+## ⚠️ STEP 0 — INPUT COMPLETENESS PRE-FLIGHT (story legs, before ANY work)
+
+Story legs run the STEP 0 input-completeness pre-flight defined in `instructions/common/input_completeness_preflight.md` (it is part of the prompt chain). On this leg the needs-input probe lives in the publish pipeline (`js/developTicketAndCreatePR.js`): a needs-input stop adds the `ai_questions_asked` label and the outcome message names the preserved WIP branch (`ai/<ticket>`).
 
 Before finishing, run the COMPLETION POST-CHECK — see `instructions/common/completion_post_check.md`.

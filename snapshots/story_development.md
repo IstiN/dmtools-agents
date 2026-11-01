@@ -76,12 +76,39 @@ flowchart TD
 
 ---
 
-### [5] `./agents/instructions/story_development/general_guidelines.md`
+### [5] `./agents/instructions/common/input_completeness_preflight.md`
+
+# ⚠️ STEP 0 — INPUT COMPLETENESS PRE-FLIGHT (surface scan, before ANY work)
+
+Right after reading the input files, run a QUICK (surface-level) go/no-go scan of the ticket — title, description, and comments authored by humans. Do NOT deep-analyze. Flag only highlights that would force you to ASSUME:
+- The ticket references an attachment, image, screenshot, logo, design file, or external resource that is NOT present in the ticket context.
+- Referenced credentials, environment details, or access are missing.
+- Essential statements contradict each other.
+
+If there ARE highlights — do NOT implement. Instead:
+1. Post ONE comment on the ticket asking for exactly the missing items. Be specific; propose nothing, assume nothing. If you had already committed work when the missing input surfaced, name the WIP branch (`ai/<ticket-key>`) in that comment so the reporter and the next leg know where the partial work lives.
+2. Write `outputs/needs-input.md` listing the missing items (same content as the comment).
+3. Make NO code changes and stop. The pipeline labels the ticket `ai_questions_asked` and ends the leg without a PR.
+
+If there are NO highlights — continue with the normal flow.
+
+**Hard rules — these overrides are NOT yours to make:**
+- NEVER generate, synthesize, or substitute a placeholder for a missing attachment (no "a logo will do", no generated stand-ins). An unattended run is NOT a license to improvise.
+- NEVER assume a value for missing data "to keep the leg moving".
+- If missing information surfaces DURING implementation, stop the same way (comment + `outputs/needs-input.md`, no further code changes) instead of guessing.
+
+
+---
+
+### [6] `./agents/instructions/story_development/general_guidelines.md`
 
 ```mermaid
 flowchart TD
     START([Story ticket ready for development]) --> READ_INPUT["⚠️ MANDATORY: Read ALL input files FIRST — see instructions/common/input_context_reading.md"]
-    READ_INPUT --> PARENT["Read parent epic context if present:<br/>- input/TICKET/parent_context_ba.md — business rules<br/>- input/TICKET/parent_context_sa.md — technical design<br/>- input/TICKET/parent_context_vd.md — visual design"]
+    READ_INPUT --> PREFLIGHT{"⚠️ STEP 0 input-completeness pre-flight (story legs):<br/>missing attachment, broken reference, or contradiction?"}
+    PREFLIGHT -->|Highlights - missing input| ASK["Post ONE comment asking for the missing items +<br/>write outputs/needs-input.md + STOP before implementation — the publish pipeline's<br/>ask-mode probe (developTicketAndCreatePR) ends the leg green before any PR work"]
+    ASK --> END_ASK([End - needs input - story leg green, no PR])
+    PREFLIGHT -->|Clean| PARENT["Read parent epic context if present:<br/>- input/TICKET/parent_context_ba.md — business rules<br/>- input/TICKET/parent_context_sa.md — technical design<br/>- input/TICKET/parent_context_vd.md — visual design"]
     PARENT --> ANALYZE["Analyze requirements — every acceptance criterion must be addressed"]
     ANALYZE --> ARCH["Understand existing codebase patterns, architecture, and test structure"]
     ARCH --> PRINCIPLES["Apply OOP principles: SRP, OCP, DI, Encapsulation, Composition over inheritance"]
@@ -107,12 +134,16 @@ flowchart TD
     SUMMARY --> END([End — post-processing handles branch, commit and PR])
 ```
 
+## ⚠️ STEP 0 — INPUT COMPLETENESS PRE-FLIGHT (story legs, before ANY work)
+
+Story legs run the STEP 0 input-completeness pre-flight defined in `instructions/common/input_completeness_preflight.md` (it is part of the prompt chain). On this leg the needs-input probe lives in the publish pipeline (`js/developTicketAndCreatePR.js`): a needs-input stop adds the `ai_questions_asked` label and the outcome message names the preserved WIP branch (`ai/<ticket>`).
+
 Before finishing, run the COMPLETION POST-CHECK — see `instructions/common/completion_post_check.md`.
 
 
 ---
 
-### [6] `./agents/instructions/story_development/tdd_approach.md`
+### [7] `./agents/instructions/story_development/tdd_approach.md`
 
 ```mermaid
 flowchart TD
@@ -143,7 +174,7 @@ flowchart TD
 
 ---
 
-### [7] `./agents/instructions/common/tdd_test_directory.md`
+### [8] `./agents/instructions/common/tdd_test_directory.md`
 
 # TDD Test Directory Rules
 
@@ -158,7 +189,7 @@ Write failing unit tests in the repository's existing unit-test tree **only**:
 
 ---
 
-### [8] `./agents/instructions/common/git_completion_guard.md`
+### [9] `./agents/instructions/common/git_completion_guard.md`
 
 # Git Completion & Closing-Keyword Guard
 
@@ -168,7 +199,7 @@ Write failing unit tests in the repository's existing unit-test tree **only**:
 
 ---
 
-### [9] `./agents/instructions/common/blocked_output_contract.md`
+### [10] `./agents/instructions/common/blocked_output_contract.md`
 
 # Blocked Output Contract (`outputs/blocked.json`)
 
@@ -188,7 +219,7 @@ When work cannot proceed because required credentials, secrets, permissions, tes
 
 ---
 
-### [10] `./agents/instructions/story_development/output_rules.md`
+### [11] `./agents/instructions/story_development/output_rules.md`
 
 Precondition (including any `"no changes needed"` conclusion): run `git fetch origin && git log "origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD" --oneline` per the **Git Completion Guard & Closing-Keyword Rules** section.
 
@@ -207,7 +238,7 @@ flowchart TD
 
 ---
 
-### [11] `./agents/instructions/common/completion_post_check.md`
+### [12] `./agents/instructions/common/completion_post_check.md`
 
 # ⚠️ COMPLETION POST-CHECK — integration readiness (before finishing)
 
@@ -227,7 +258,7 @@ If there are NO concerns: write nothing — no file, no label.
 
 ---
 
-### [12] `./agents/instructions/story_development/formatting_rules.md`
+### [13] `./agents/instructions/story_development/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -240,7 +271,7 @@ flowchart TD
 
 ---
 
-### [13] `./agents/instructions/story_development/few_shots.md`
+### [14] `./agents/instructions/story_development/few_shots.md`
 
 Example PR descriptions — follow this structure and brevity:
 
@@ -255,7 +286,7 @@ flowchart TD
 
 ---
 
-### [14] `./agents/instructions/common/dmtools_cli.md`
+### [15] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -293,7 +324,7 @@ flowchart TD
 
 ---
 
-### [15] `./agents/instructions/common/session_ephemerality.md`
+### [16] `./agents/instructions/common/session_ephemerality.md`
 
 ```mermaid
 flowchart LR
@@ -312,7 +343,7 @@ implementation.
 
 ---
 
-### [16] `./agents/prompts/bash_tools.md`
+### [17] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -357,7 +388,7 @@ flowchart TD
 
 ---
 
-### [17] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
+### [18] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
 
 **HARD GATE — read before any tool call:**
 

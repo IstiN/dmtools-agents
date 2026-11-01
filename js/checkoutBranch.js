@@ -94,10 +94,39 @@ function establishFeatureBranch(config, customParams, ticket) {
 }
 
 /**
+ * gh-1301 resume-leg alignment: drop untracked input/ per-run artifacts
+ * before the dev-branch checkout. A leg that ended in ask-mode pushes
+ * ai/<ticket> with the session timer's auto-committed input/<ticket>/ copies;
+ * a leg re-running the same ticket (comment-resume, retry) regenerates those
+ * files and git refuses the checkout ("would be overwritten by checkout").
+ * input/ is a per-run artifact drop — remove untracked collisions (tracked
+ * files are untouched) so the re-run aligns with the existing branch,
+ * mirroring the .codegraph guard pattern. Best-effort: removal failures
+ * warn and never block the checkout.
+ *
+ * The command is a CONSTANT: `git clean -fd -- input/` deletes untracked
+ * files/directories under input/ (no -x, so ignored files are untouched).
+ * Nothing from `git status` is parsed or interpolated — porcelain C-quotes
+ * non-trivial names (`?? "input/bad name.md"`), so a parse + `rm -rf`
+ * loop both no-oped on exactly the attachment-style names most likely to
+ * collide and embedded ticket-controlled bytes into a shell string
+ * (review round 1, blocking).
+ */
+function dropUntrackedInputArtifacts() {
+    try {
+        runCommandForProbes('git clean -fd -- input/');
+    } catch (e) {
+        console.warn('Input-artifact cleanup before checkout failed:', e);
+    }
+}
+
+/**
  * Dev-branch checkout decision tree: exists locally → plain checkout;
  * exists on remote → tracking checkout; absent → create from branchBase.
  */
 function checkoutDevBranch(branchName, branchBase) {
+    dropUntrackedInputArtifacts();
+
     var localBranches = readLocalBranchList(branchName, 'Error checking local branches:');
     if (localBranches.trim()) {
         // Branch exists locally — check it out
@@ -163,6 +192,7 @@ if (typeof module !== 'undefined' && module.exports) {
         probeRemoteBranch: probeRemoteBranch,
         createFeatureBranch: createFeatureBranch,
         establishFeatureBranch: establishFeatureBranch,
-        checkoutDevBranch: checkoutDevBranch
+        checkoutDevBranch: checkoutDevBranch,
+        dropUntrackedInputArtifacts: dropUntrackedInputArtifacts
     };
 }

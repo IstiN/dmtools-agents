@@ -21,6 +21,10 @@ const gitStaging = require('./common/gitStaging.js');
 // burning a per-tick retry against the quota wall.
 var quotaBreaker = require('./common/quotaCircuitBreaker.js');
 var toolchainSummary = require('./common/toolchainSummary.js');
+// gh-1301: shared ask-mode cluster — all three dev legs (story, bug, batch)
+// share the needs-input probe, the ai_questions_asked label lifecycle and
+// the green needsInput outcome body (review round 1, bug-legs thread).
+var needsInputCommon = require('./common/needsInput.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 // gh-1250: the lazy-tracker boilerplate lives in the shared trackerSlot module.
@@ -1475,6 +1479,9 @@ function finalizeNoChangesOutcome(ctx, agentResponse) {
     } catch (e) {
         console.warn('Failed to move ticket to ' + ctx.statuses.IN_REVIEW + ':', e);
     }
+    // gh-1301: the no-changes outcome also proceeds past ask-mode — the
+    // stale ai_questions_asked label must not outlive it.
+    needsInputCommon.clearNeedsInputTicket(getTracker(), ctx.ticketKey, LABELS.AI_QUESTIONS_ASKED);
     removeWipLabelQuietly(ctx.ticketKey, wipLabelFor(ctx.metadata));
     return { success: true, path: 'no-changes-needed', ticketKey: ctx.ticketKey };
 }
@@ -1615,7 +1622,57 @@ function resetInterruptedDevelopment(ctx, commentBody) {
     throwInterruptedReset(ctx.ticketKey);
 }
 
+// ── inputs pre-flight (ask-mode) seam ───────────────────────────────────────
+// Both ask-mode exits share the same bookkeeping: label the ticket as waiting
+// on the reporter (best-effort) and end the leg GREEN with a needsInput
+// outcome — no PR, no interrupted reset.
+
+/** Best-effort ai_questions_asked label — the reviewer hand-off reads it. */
+function markNeedsInputTicket(ctx) {
+    needsInputCommon.markNeedsInputTicket(getTracker(), ctx.ticketKey, LABELS.AI_QUESTIONS_ASKED);
+}
+
+/** The green outcome body shared by all ask-mode exits. When the leg's WIP
+ * branch is known (ctx.expectedBranch — set by initDevelopmentContext before
+ * both exits run), the message names it: the question comment is authored by
+ * the agent, so the outcome is the only pointer to the pushed partial work. */
+function needsInputOutcomeBody(ctx) {
+    return needsInputCommon.needsInputOutcomeBody(ctx.ticketKey, ctx.expectedBranch || ctx.branchName || null);
+}
+
+/**
+ * Ask-mode (no-assumptions rule) — the agent flagged missing ticket inputs
+ * and stopped WITHOUT writing response.md (the question comment is already
+ * posted; outputs/needs-input.md marks the leg). This check MUST precede the
+ * interrupted classification in recoverNoChangesOutcome: a response.md-less
+ * ask leg is exactly where the ticket should be — waiting on the reporter —
+ * never an interrupted reset, and the reviewer hand-off skips ask-mode via
+ * the same label. Returns null when the leg is not an ask-mode leg.
+ */
+function askModeOutcome(ctx) {
+    if (!needsInputCommon.hasNeedsInputFile(outputFiles)) return null;
+    console.log('outputs/needs-input.md present — ask-mode leg: agent asked for missing inputs. No PR, no reset.');
+    markNeedsInputTicket(ctx);
+    return { result: needsInputOutcomeBody(ctx) };
+}
+
+/**
+ * runPublishPipeline seam of the same pre-flight: outputs/needs-input.md
+ * present → label + green outcome, skipping the gates and PR creation; the
+ * ticket waits for the reporter's answer (a caller may re-arm the leg on a
+ * human comment — see the dispatch gate's comment-resume). Absent → null
+ * (the pipeline continues to PR creation).
+ */
+function needsInputOutcome(ctx) {
+    if (!needsInputCommon.hasNeedsInputFile(outputFiles)) return null;
+    console.log('outputs/needs-input.md present — agent flagged missing ticket inputs. Skipping gates and PR creation.');
+    markNeedsInputTicket(ctx);
+    return needsInputOutcomeBody(ctx);
+}
+
 function recoverNoChangesOutcome(params, ctx) {
+    var askMode = askModeOutcome(ctx);
+    if (askMode) return askMode;
     var agentResponse = noChangesResponse(ctx);
     if (agentResponse) {
         var guard = landingGuardResume(params, ctx, agentResponse);
@@ -1735,6 +1792,13 @@ function applyDevelopmentOutcomeLabels(ctx) {
     } catch (error) {
         console.warn('Failed to add ai_developed label:', error);
     }
+
+    // gh-1301: a resume leg that made it past ask-mode (PR created / status
+    // In Review) must not stay gated out of the reviewer hand-off by the
+    // previous ask round-trip's label — strip it (inverse of
+    // markNeedsInputTicket, review round 1).
+    needsInputCommon.clearNeedsInputTicket(getTracker(), ctx.ticketKey, LABELS.AI_QUESTIONS_ASKED);
+
 
     // Remove WIP label if configured (dynamically generated from contextId)
     var wipLabel = wipLabelFor(ctx.metadata);
@@ -1885,6 +1949,12 @@ function runPublishPipeline(params, ctx, branchName, commitMessage) {
     if (initialOutcome) {
         return stageOutcomeOf(params, initialOutcome);
     }
+
+    // Inputs pre-flight outcome (no-assumptions rule) — see needsInputOutcome().
+    // Ask-mode: label the ticket and end the leg GREEN without creating a PR;
+    // the gates and PR creation never run on an ask-mode leg.
+    var needsInput = needsInputOutcome(ctx);
+    if (needsInput) return needsInput;
 
     var gateResult = feedbackLoop.runQualityGates({
         ticketKey: ctx.ticketKey,
@@ -2062,6 +2132,8 @@ if (typeof module !== 'undefined' && module.exports) {
         syncBranchWithBaseUsingRunCmd,
         // gh-1229: landing-guard decomposition — exported for direct tests.
         branchCarriesWork, hasCommitsAheadOfBase, workingTreeCarriesWork, statusLineIndicatesWork,
+        // inputs pre-flight (ask-mode) seams — exported for direct tests.
+        askModeOutcome, needsInputOutcome,
         // Completion post-check (outputs/concerns.md) — the two surfacing
         // post-processors + the read seam, exported for direct
         // characterization tests.
