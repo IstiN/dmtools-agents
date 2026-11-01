@@ -94,10 +94,44 @@ function establishFeatureBranch(config, customParams, ticket) {
 }
 
 /**
+ * gh-1301 resume-leg alignment: drop untracked input/ per-run artifacts
+ * before the dev-branch checkout. A leg that ended in ask-mode pushes
+ * ai/<ticket> with the session timer's auto-committed input/<ticket>/ copies;
+ * a leg re-running the same ticket (comment-resume, retry) regenerates those
+ * files and git refuses the checkout ("would be overwritten by checkout").
+ * input/ is a per-run artifact drop — remove untracked collisions (tracked
+ * files are untouched) so the re-run aligns with the existing branch,
+ * mirroring the .codegraph guard pattern. Best-effort: probe/removal failures
+ * warn and never block the checkout.
+ */
+function dropUntrackedInputArtifacts() {
+    try {
+        var statusOut = prHelper.cleanCommandOutput(
+            runCommandForProbes('git status --porcelain -- input/') || '');
+        var statusLines = statusOut.split('\n');
+        for (var si = 0; si < statusLines.length; si++) {
+            var statusLine = statusLines[si];
+            if (statusLine.substring(0, 2) === '??') {
+                var stalePath = statusLine.substring(3).trim();
+                if (!stalePath) continue;
+                console.log('Removing untracked per-run artifact before checkout:', stalePath);
+                try { cli_execute_command({ command: 'bash -c "rm -rf ' + stalePath + '"' }); } catch (e) {
+                    console.warn('Could not remove stale artifact ' + stalePath + ':', e);
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('Input-artifact cleanup before checkout failed:', e);
+    }
+}
+
+/**
  * Dev-branch checkout decision tree: exists locally → plain checkout;
  * exists on remote → tracking checkout; absent → create from branchBase.
  */
 function checkoutDevBranch(branchName, branchBase) {
+    dropUntrackedInputArtifacts();
+
     var localBranches = readLocalBranchList(branchName, 'Error checking local branches:');
     if (localBranches.trim()) {
         // Branch exists locally — check it out
@@ -163,6 +197,7 @@ if (typeof module !== 'undefined' && module.exports) {
         probeRemoteBranch: probeRemoteBranch,
         createFeatureBranch: createFeatureBranch,
         establishFeatureBranch: establishFeatureBranch,
-        checkoutDevBranch: checkoutDevBranch
+        checkoutDevBranch: checkoutDevBranch,
+        dropUntrackedInputArtifacts: dropUntrackedInputArtifacts
     };
 }
