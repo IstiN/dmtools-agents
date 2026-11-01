@@ -100,6 +100,8 @@ _Pre-CLI Development Setup Action_
 _Develop Ticket and Create PR Action_
 
 - Source: `agents/js/developTicketAndCreatePR.js`
+- Writes:
+  - `outputs/response.md`
 - Side effects:
   - git push
   - git checkout
