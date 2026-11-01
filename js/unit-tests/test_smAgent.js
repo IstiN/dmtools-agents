@@ -17928,4 +17928,64 @@ suite('smAgent: transplant_guest_pr limit slot yield on noop/skip/conflict', fun
         assert.deepEqual(res.processedKeys, ['pr-1302'],
             'parked-unchanged pr-1301 must yield the limit:1 slot so pr-1302 transplants in the same tick');
     });
+
+    test('transplant_guest_pr carries only verdict labels present on the source PR when github_get_pr_diff_text returns raw unified diff', function () {
+        var RAW_DIFF = 'diff --git a/js/smAgent.js b/js/smAgent.js\nindex 11..22 100644\n--- a/js/smAgent.js\n+++ b/js/smAgent.js\n@@ -1 +1 @@\n-old\n+new\n';
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "IstiN", repo: "dmtools-agents" }, smGuestTransplant: {} };' },
+            captureConsole: true,
+            extraMocks: {
+                github_get_pr_diff_text: function () { return RAW_DIFF; }
+            },
+            github: {
+                items: [
+                    {
+                        key: 'pr-1302',
+                        prNumber: 1302,
+                        title: 'feat(dev): completion post-check',
+                        author: 'ajaxspace',
+                        labels: ['po_accept', 'ai_pr_reviewed'],
+                        headRepo: 'ajaxspace/dmtools-agents',
+                        draft: false,
+                        pr: { headSha: HEAD_1302, state: 'OPEN' }
+                    }
+                ],
+                prComments: []
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/issues/1302/events') !== -1) {
+                    return JSON.stringify([{ event: 'labeled', label: { name: 'po_accept' }, actor: { login: 'IstiN' }, created_at: '2026-10-31T22:36:48Z' }]);
+                }
+                if (c.indexOf('/branches/ai/guest-') !== -1) {
+                    throw new Error('404 Not Found');
+                }
+                if (c.indexOf('/branches/main --jq .commit.sha') !== -1) {
+                    return MAIN_SHA;
+                }
+                if (c.indexOf('/merges -X POST') !== -1) {
+                    return JSON.stringify({ sha: MERGED_SHA });
+                }
+                if (c.indexOf('/pulls -X POST') !== -1) {
+                    return JSON.stringify({ number: 1314 });
+                }
+                return '';
+            }
+        });
+
+        sm.action({
+            jobParams: {
+                owner: 'IstiN',
+                repo: 'dmtools-agents',
+                machineAuthor: 'ai-teammate,dmtools-factory-bot',
+                smGuestTransplant: {},
+                rules: [TRANSPLANT_RULE]
+            }
+        });
+
+        var adds1314 = sm.capturedPrLabelAdds.filter(function (a) { return Number(a.number) === 1314; });
+        assert.equal(adds1314.length, 1, 'carries only ai_pr_reviewed onto #1314, not pr_approved');
+        assert.deepEqual(adds1314[0].labels, ['ai_pr_reviewed']);
+    });
 });

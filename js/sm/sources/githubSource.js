@@ -385,12 +385,18 @@ function _latchWantedLabels(q, item) {
 // gh-829 mergeState latch: a listed merge state matches ONLY when the PR's
 // linked issue carries the latch label(s). Fails CLOSED: no linked issue,
 // fetch failure, or a missing label excludes the state, never matches it.
+function _isGuestTransplantItem(item) {
+    var b = String((item && item.branch) || (item && item.pr && item.pr.branch) || '');
+    return guestTransplantModule.parseGuestBranch(b, guestTransplantModule.DEFAULTS.branchPrefix) !== null;
+}
+
 function _mergeStateLatchGuardFail(q, item, repoInfo) {
     // Fail closed standalone: an item with NO merge-state observation must
     // not sail through a latch over a listed state — unknown is not CLEAN.
     if (!item.pr) return true;
     var latchWant = _latchWantedLabels(q, item);
     if (!latchWant) return false;
+    if (_isGuestTransplantItem(item)) return false;
     var latchIssue = (item.issueNumber && repoInfo)
         ? cachedIssueLabels(repoInfo, item.issueNumber) : null;
     if (!latchIssue) return true;
