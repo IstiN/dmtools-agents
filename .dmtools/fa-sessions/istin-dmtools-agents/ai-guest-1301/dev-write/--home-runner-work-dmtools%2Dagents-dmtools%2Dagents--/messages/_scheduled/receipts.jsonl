@@ -1,0 +1,2 @@
+{"ts":"2026-11-01T12:13:11.153842Z","event":"scheduled","id":"1793535191153293_0000_4l4l0r","dueMs":1793535551153,"to":"01a196d9-d01f-798d-97e3-612b5dd91f69/main","text":"pr-1313 leg 2: check background job sh-15-hnr6nx2m254x21ft (full unit suite, log /tmp/full_suite3.log). If finished: update the suite tally line in outputs/response.md Test Coverage with THIS run's ac"}
+{"ts":"2026-11-01T13:01:56.598600Z","event":"delivered","id":"1793535191153293_0000_4l4l0r","to":"01a196d9-d01f-798d-97e3-612b5dd91f69/main","dueMs":1793535551153,"lagMs":2565445}

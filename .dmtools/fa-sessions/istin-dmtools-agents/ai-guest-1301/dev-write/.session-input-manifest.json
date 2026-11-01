@@ -1,0 +1,253 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-01T12:47:54.138Z",
+  "ticketKey": "pr-1313",
+  "headSha": "e72e4405f47ab6fab83fd4398bc13ef074b4690e",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:c42abedd25880472",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:7ef084f8f1f0d08f",
+      "size": 40668
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:c286580f17a3bc3f",
+      "size": 6444
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:c29109d27506982e",
+      "size": 973
+    },
+    "request.md": {
+      "hash": "fnv1a64:c1a4dbb7d6638b08",
+      "size": 627
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:7622c1b386e068fd",
+      "size": 1250
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:7cb96aecc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:b54bc97ee4cd64f5",
+      "size": 688
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:c1a4dbb7d6638b08",
+      "size": 627
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6yaN5d",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/developBugAndCreatePR.js:425",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: the bug leg's ask-mode exit strips its own SM idempotency label while the ticket stays JQL-eligible — the SM re-dispatches the ask leg forever (~every 15 min)**\n\n`js/developBugAndCreatePR.js:425` — `completeNeedsInputPath` ends with:\n\n```js\nremoveLabels(ticketKey, params, tracker);\n```\n\nwhich removes both the WIP label **and** `customParams.removeLabel` — and `bug_development.json:23` sets that to `sm_bug_development_triggered`. The ask terminal also deliberately does **not** move the ticket (tests assert `moves: []`).\n\nNow trace the SM loop (`sm.json`, rule *\"Backlog / To Do / Ready For Development / In Development / In Rework Bugs → trigger bug_development\"*):\n\n- JQL matches the ticket **before and after** the ask leg (no status change; `In Development` / `Ready For Development` / `In Rework` are all in the rule's status list);\n- `skipIfLabel: sm_bug_development_triggered` — the **only** skip guard — was just stripped by the ask leg;\n- `ai_questions_asked` is **not** in this rule's `skipIfLabels` (only the `story_questions` rule skips on it);\n- `updated <= -15m` is satisfied again once the ask leg's label/comment writes age out.\n\nSo the next SM tick re-dispatches the leg → the agent re-runs, re-asks (the pre-flight scan covers *human* comments; its own prior bot question is not an answer) → `needs-input.md` again → green ask exit → label stripped again → **unbounded ~15-minute cycle**, each round burning a full AI leg and posting another question comment under the reporter's ticket.\n\nEvery pre-existing `removeLabels` call site is loop-safe because its terminal either leaves the rule's JQL (normal → In Review, blocked → Blocked, already-fixed → Done) or intends a retry (gh-742 reset, gh-1087 bounded probe). The ask terminal is the first that strips the guard **and** stays JQL-eligible without intending a retry. The story leg's ask exit keeps `sm_story_development_triggered` (that stickiness is what makes it loop-safe) and the batch leg's ask probe never calls `removeLabels` — this call is the odd one out.\n\n**Fix (either suffices; both is belt-and-braces):**\n1. In `completeNeedsInputPath`, drop the `removeLabels(...)` call (or remove only the WIP label) so the ask exit behaves like the story/batch ask exits — the stale `sm_bug_development_triggered` keeps the SM from re-firing until a human re-arms the ticket; **and/or**\n2. Add `\"ai_questions_asked\"` to the bug-development rule's `skipIfLabels` in `sm.json` so a waiting-on-reporter ticket is never re-dispatched.\n\nAdd a test pinning the ask exit's label behavior (today both ask tests pass `removeLabel` in `customParams` but assert nothing about it being kept/removed — which is why this slipped through a 7797-green suite)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6yaN7G",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/developBugFixBatchAndCreatePR.js:173",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: the batch happy path never clears a stale `ai_questions_asked` from a previous ask round-trip**\n\nThe ask probe here (`js/developBugFixBatchAndCreatePR.js:171-173`) correctly adds `ai_questions_asked` to the epic and exits green. But the happy path below (PR created → `transitionTickets(..., IN_REVIEW)` → `addLabels(..., AI_DEVELOPED)`) never removes a stale `ai_questions_asked` left by an earlier ask round-trip — unlike the story leg, where `applyDevelopmentOutcomeLabels` and `finalizeNoChangesOutcome` both call `needsInputCommon.clearNeedsInputTicket`, and the bug leg, whose normal-fix path delegates into that same story pipeline.\n\nToday nothing breaks: the reviewer hand-off's ask gate in `scripts/hand-issue-to-reviewer.sh` is conditioned on `! ai_developed && ! status:In Review`, so a shipped batch PR is handed off regardless. But the epic keeps a permanently stale waiting-on-reporter label, and any future logic that trusts `ai_questions_asked` (e.g. the `story_questions` rule pattern, or reporting) reads a false \"waiting for human\" state.\n\nMirror the story leg: on the batch happy path (and ideally the batch skip/already-open terminal), best-effort `needsInputCommon.clearNeedsInputTicket(tracker, epicKey, LABELS.AI_QUESTIONS_ASKED)` for the epic (and the batch bugs, to match the symmetric `addLabels`)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6yaN8g",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/developBugAndCreatePR.js:755",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: on the bug leg, the pr-already-open guard still preempts the ask probe — an ask stop on a rework leg with an existing PR is swallowed**\n\nThe ask probe's placement here (after the gh-775 shared resume gate, before the interrupted classification) is correct. But two earlier guards in `action()` return before it is ever reached — notably `resolvePrAlreadyOpenOutcome` (~line 705), which fires when a PR already exists for `ai/<ticket>` and moves the ticket to In Review.\n\nConcrete sequence: leg 1 develops and opens a PR → QA sends the ticket back to development → leg 2 re-analyzes and finds the ticket is actually missing an input (attachment, credential, contradiction) → the agent posts its question and writes `outputs/needs-input.md` → the pr-already-open guard returns first → the ticket moves to In Review and the ask stop is silently swallowed; the reporter's question is never registered by the pipeline (no `ai_questions_asked` label, no green needs-input outcome).\n\nThe story leg does not have this asymmetry: its no-changes recovery checks `askModeOutcome` before any terminal classification, so a needs-input stop wins even when a PR already exists.\n\nIf the ordering is deliberate (a PR existing means the review lane owns the ticket), consider at least letting the ask-mode outcome win over the pr-already-open outcome when `needs-input.md` is present — or posting the ask outcome as a secondary note. Otherwise hoist the probe above `resolvePrAlreadyOpenOutcome`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:ef2c0154",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `dropUntrackedInputArtifacts` builds `rm -rf` by string-concatenating raw `git status --porcelain` output — the cleanup silently no-ops for any quoted path, and the pattern is an untrusted-bytes-into-shell command**\n\n`js/checkoutBranch.js:118`:\n\n```js\ntry { cli_execute_command({ command: 'bash -c \"rm -rf ' + stalePath + '\"' }); } catch (e) {\n```\n\n`stalePath` is taken verbatim from porcelain output. Porcelain C-quotes every non-trivial name (verified on git 2.56: `?? \"input/bad name.md\"`, `?? \"input/$(touch pwned).md\"`). Ticket-context artifacts under `input/` are exactly such names (attachment-derived names with spaces are common), and the quote characters ride along into `stalePath`. The built command is then malformed nested quoting:\n\n```text\nbash -c \"rm -rf \"input/bad name.md\"\"\n```\n\nExecuted through a shell, the inner `\"` terminates the `bash -c` script after `rm -rf ` — the removal runs with no operand and **removes nothing** (verified: `sh -c 'bash -c \"rm -rf \"input/bad name.md\"\"'` → files intact, no warning raised). Consequences:\n\n1. **The feature does not work for the names most likely to collide.** The log prints `Removing untracked per-run artifact before checkout: ...` right before a silent no-op, so the original checkout failure (\"untracked working tree files ... would be overwritten\") persists for those artifacts — the exact bug this guard exists to fix — now masked by a misleading log line.\n2. **The command embeds ticket-controlled bytes into a shell string.** Today the blast radius is bounded mostly by accident: dmtools' metacharacter guard rejects `` ; \\n \\r ` $() ${} && || | > < `` (documented in `js/postMobileTestAutomationResults.js:252`), and the quote mangling neuters the rest. Correctness/security must not rest on that double accident — a future refactor of the quoting (or executor) turns this into a live injection or wrong-target-deletion vector.\n3. The new tests only exercise plain names (`input/PROJ-1/old.md`), so none of this is covered.\n\n**Recommended fix** — replace the whole parse + interpolate loop with one fixed command that has exactly the advertised semantics (untracked removed, tracked untouched, ignored untouched — same blind spot as the current `git status --porcelain` probe, which also hides ignored files):\n\n```js\nfunction dropUntrackedInputArtifacts() {\n    try {\n        runCommandForProbes('git clean -fd -- input/');\n    } catch (e) {\n        console.warn('Input-artifact cleanup before checkout failed:', e);\n    }\n}\n```\n\n`git clean -fd -- input/` is a constant string (nothing to inject, nothing to parse), uses the already-whitelisted `git` first token, and deletes untracked files/directories only. The characterization tests should then assert the single `git clean` call."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:c7d0d82a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `ai_questions_asked` is sticky — after one ask round-trip the hand-off gate suppresses `agent:review` forever, including when the ticket later produces a real PR**\n\n`scripts/hand-issue-to-reviewer.sh:18-22` short-circuits before every legacy guard:\n\n```bash\nhas_q=\"$(gh issue view ... -q '([.labels[].name] | index(\"ai_questions_asked\")) != null' ...)\"\nif [ \"$has_q\" = \"true\" ]; then\n  echo \"→ ticket #$NUMBER carries ai_questions_asked — waiting for human input, no review hand-off\"\n  exit 0\nfi\n```\n\nNothing in this PR (or the repo) ever **removes** that label. Grep across `js/`, `scripts/`, `.github/`: it is only ever added (`developTicketAndCreatePR.js` `markNeedsInputTicket`, `createQuestionsAndAssignForReview.js`) and skipped-on (`sm.json` `skipIfLabels`). Lifecycle of the documented resume flow:\n\n1. Ask leg → question posted, `ai_questions_asked` added, green no-PR exit. ✔\n2. Reporter answers → ticket re-armed (comment-resume / re-assign).\n3. Resume leg succeeds → PR created, status In Review, `ai_developed` added.\n4. Hand-off runs → **step 1's label is still there → `exit 0` → `agent:review` is never stamped and the pr_review leg is never queued.**\n\nEvery ticket that ever went through ask-mode is permanently review-gated off until a human manually strips the label. Also note the gate fails open on `gh issue view` errors (`|| echo false`), so it is not even a reliable gate — the robust fix belongs on the label lifecycle.\n\n**Fix (both halves are cheap):**\n- Remove the label when a leg proceeds past ask-mode — the natural inverse of `markNeedsInputTicket` in `js/developTicketAndCreatePR.js`: on any non-ask outcome (or at minimum when the PR is created / status moves to In Review), best-effort `removeLabel(ticketKey, LABELS.AI_QUESTIONS_ASKED)` in a `try`/`catch` like the add side.\n- Or, belt-and-braces in the script: move the `ai_questions_asked` early-exit **after** the existing `status:In Review` / `ai_developed` guards, so a ticket that demonstrably reached review is handed off regardless of the stale label."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:bd68932d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: the pre-flight is wired into the bug legs, but their pipelines were not taught the ask-mode outcome — an ask leg on a bug ticket is processed as \"CLI agent interrupted\"**\n\nThis PR adds `instructions/common/input_completeness_preflight.md` to the `bug_development` prompt chain (`bug_development.json:31`) and threads the STEP 0 node through `instructions/bug_development/general_guidelines.md`. The pre-flight contract promises: *\"Make NO code changes and stop. The pipeline labels the ticket `ai_questions_asked` and ends the leg without a PR.\"*\n\nOn the bug leg that promise is broken end-to-end:\n\n- `bug_development.json` post-action is `agents/js/developBugAndCreatePR.js`, which **delegates to `developTicketAndCreatePR` only on the normal-fix path** (response.md present + code changes). Its outcome table (`js/developBugAndCreatePR.js:13`) knows `blocked.json`, `already_fixed.json` and \"response.md missing → CLI agent interrupted (rate limit / crash)\" — `needs-input.md` does not exist for it. A canonical ask leg (needs-input.md written, response.md deliberately absent, no code changes) therefore lands on the **interrupted** path: partial-work push, an *\"The AI agent was interrupted (likely hit a rate limit)…\"* comment, reset to Ready For Development, and the run **fails** (gh-742 dead letter). No `ai_questions_asked` label, no ask-mode gating anywhere downstream, and the reporter sees a false \"interrupted\" incident under their question.\n- `bug_fix_batch_development` is half-wired too: its regenerated snapshot (`snapshots/bug_fix_batch_development.md`) now shows the STEP 0 pre-flight node (pulled in via the shared `general_guidelines.md`), but the file is **not in its prompt chain** (`bug_fix_batch_development.json` still lists `general_guidelines.md` without `input_completeness_preflight.md`) — so the guidelines' claim \"it is part of the prompt chain\" is false for this leg — and its post-action `developBugFixBatchAndCreatePR.js` has no needs-input handling either.\n\nThe new ask-mode seams (`askModeOutcome` / `needsInputOutcome`) and their tests only cover `developTicketAndCreatePR.js`, i.e. the story leg. The unit-suite is green precisely because the bug legs are untested for this contract.\n\n**Fix options:**\n1. Implement the seam in both bug post-actions: probe `outputFiles.hasOutputFile('needs-input.md')` before the interrupted classification, reuse `markNeedsInputTicket` + the green `needsInput` outcome (extract the tiny cluster into `js/common/` so the three dev legs share it), and add the file to `bug_fix_batch_development.json`'s chain; **or**\n2. If bug/batch support is out of scope for this PR, revert the pre-flight from `bug_development.json`'s chain and the bug/batch guidelines flowcharts until the pipelines can honor the contract — shipping a prompt whose stop contract the pipeline mishandles is worse than not shipping it."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:3c3bfc53",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: name the pushed WIP branch in the ask-mode outcome message — the reporter's only pointer to it is implicit**\n\nOn an ask leg where the agent had already committed work, `runPublishPipeline` pushes the branch (`ai/<ticket>` including the auto-committed `input/<ticket>/` copies) *before* `needsInputOutcome` ends the leg, and the outcome deliberately posts no tracker comment (the tests assert `comments: []`). So a pushed orphan branch exists on the remote that neither the question comment (authored by the agent, which doesn't know the outcome shape) nor the outcome message mentions:\n\n```js\nmessage: 'Ticket ' + ctx.ticketKey + ' needs input from the reporter — question posted, no PR created',\n```\n\nConsider appending the branch name (it is available at the seam via the caller) — e.g. `... no PR created (WIP preserved on ai/<ticket>)` — or adding one line to the pre-flight instruction telling the agent to include the branch name in its question comment when it stops mid-implementation. Small cost, saves the next leg (and any human looking at the remote) from guessing where the partial work lives."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:1c86e93d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread 1 — `dropUntrackedInputArtifacts` (`js/checkoutBranch.js:118`)\n\n**Fixed.** The parse + interpolate loop is gone. `dropUntrackedInputArtifacts` is now a single fixed command with no parsing and no interpolation:\n\n```js\nfunction dropUntrackedInputArtifacts() {\n    try {\n        runCommandForProbes('git clean -fd -- input/');\n    } catch (e) {\n        console.warn('Input-artifact cleanup before checkout failed:', e);\n    }\n}\n```\n\nExactly the recommended shape (`js/checkoutBranch.js:100-119`):\n\n- `git clean -fd -- input/` is a constant string — nothing from `git status --porcelain` is read, split, or concatenated into any command, so porcelain C-quoting (`?? \"input/bad name.md\"`, `?? \"input/$(touch pwned).md\"`) can no longer mangle quoting or ride into a shell string. No `bash -c` involved; the first token stays on the whitelisted `git`.\n- Semantics match the advertised contract: `-fd` deletes untracked files/directories only, tracked files are untouched, ignored files untouched (no `-x`) — the same blind spot the old porcelain probe had.\n- A cleanup failure still warns (`Input-artifact cleanup before checkout failed`) and never blocks the checkout.\n\n**Tests** (`js/unit-tests/test_checkoutBranch.js`, suite `checkoutBranch — input/ artifact cleanup (gh-1301)`) — rewritten TDD-style; they failed against the old implementation before the fix:\n\n- untracked input/ file → exactly `['git clean -fd -- input/']`, nothing else executed;\n- quoted porcelain names (`?? \"input/bad name.md\"`, `?? \"input/$(touch pwned).md\"`) → still exactly the one constant command, with explicit assertions that no `rm -rf`, `$`, or `\"` ever reaches an executed command;\n- the flags pin the semantics (`-fd`, no `-x`) so tracked/ignored files stay untouched;\n- cleanup failure → warning, no throw;\n- `checkoutDevBranch` runs the constant clean before the branch decision tree (also updated in the three decision-tree characterization tests)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:41a203c2",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread 2 — sticky `ai_questions_asked` (`scripts/hand-issue-to-reviewer.sh:18`)\n\n**Fixed — both halves.**\n\n**1. Label lifecycle (the inverse of `markNeedsInputTicket`).** The shared ask-mode cluster (`js/common/needsInput.js`, new) now owns both directions, and the legs strip the stale label on every terminal that proceeds past ask-mode:\n\n- `js/developTicketAndCreatePR.js` — `applyDevelopmentOutcomeLabels` (runs on the PR-created / In Review success tail, right after `ai_developed` is added) calls `needsInputCommon.clearNeedsInputTicket(getTracker(), ctx.ticketKey, LABELS.AI_QUESTIONS_ASKED)` — best-effort `removeLabel` in a try/catch, mirroring the add side.\n- The no-changes outcome (`finalizeNoChangesOutcome`, which also moves the ticket to In Review) strips it too.\n- The bug leg's ask-mode outcome (`js/developBugAndCreatePR.js` `completeNeedsInputPath`) and the batch leg's (`js/developBugFixBatchAndCreatePR.js`) add the label via the same shared `markNeedsInputTicket`, so add/remove can't drift between legs.\n\nA resume leg that ships a PR therefore deletes the previous ask round-trip's label before the hand-off script ever runs.\n\n**2. Belt-and-braces in the script.** The `ai_questions_asked` early-exit in `scripts/hand-issue-to-reviewer.sh` moved **after** the existing `status:In Review` / `ai_developed` guards and is now additionally conditioned on them:\n\n```bash\nif [ \"$has_q\" = \"true\" ] \\\n  && ! printf '%s\\n' \"$ISSUE_LABELS\" | grep -Fxq \"ai_developed\" \\\n  && ! printf '%s\\n' \"$ISSUE_LABELS\" | grep -Fxq \"status:In Review\"; then\n  echo \"→ ticket #$NUMBER carries ai_questions_asked — waiting for human input, no review hand-off\"\n  exit 0\nfi\n```\n\nSo even a ticket that somehow kept the stale label is handed off the moment it demonstrably reached review. The `gh-1156` guards (Ready For Development / Blocked / Done) are untouched.\n\n**Verification** — the script was executed against a fake `gh` with recorded label mutations:\n\n| ticket labels | agent:review stamped |\n|---|---|\n| `ai_questions_asked` only | no (waiting on reporter — gate intact) |\n| `ai_questions_asked` + `status:In Review` | **yes** (was: suppressed forever) |\n| `ai_questions_asked` + `ai_developed` | **yes** |\n| `ai_questions_asked` + `status:Blocked` | no (gh-1156 preserved) |\n\n**Tests**: `js/unit-tests/test_smGithubSource.js` pins the script ordering (the review-reached guard must precede the ask gate), and `js/unit-tests/test_developTicketAndCreatePR.js` adds two leg-level tests: the PR-created success tail and the no-changes outcome each strip a stale `ai_questions_asked` (both failed before the fix)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:c6565f45",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread 3 — ask-mode not implemented in the bug legs (`bug_development.json:31`)\n\n**Fixed — option 1.** The seam is implemented in both bug post-actions and the batch prompt chain is completed; the pre-flight stays wired into the bug legs.\n\n**Shared cluster** — `js/common/needsInput.js` (new): `hasNeedsInputFile(outputFiles)`, `markNeedsInputTicket(tracker, ticketKey, label)`, `clearNeedsInputTicket(...)`, `needsInputOutcomeBody(ticketKey, branchName)`. Pure functions with injected dependencies, so all three dev legs (story, bug, bug-fix batch) share one probe/label/outcome contract that cannot drift.\n\n**`js/developBugAndCreatePR.js`** — new `completeNeedsInputPath`, probed in `action()` *before* the interrupted classification:\n\n- `outputs/needs-input.md` present (and `response.md` still absent after the gh-775 resume gate) → the ask-mode outcome, not the gh-742 dead letter: partial work (e.g. `outputs/rca.md`) is first pushed to `ai/<ticket>` via the same `pushPreservedAnalysisWork` the interrupted path uses, `ai_questions_asked` is added, WIP/SM idempotency labels are removed, and the leg ends **green** with the `needsInput` outcome — no \"The AI agent was interrupted…\" comment, no Ready For Development reset, no run failure, no gh-742 dead letter.\n- Without `needs-input.md` the interrupted classification is byte-identical (existing gh-742/gh-1087 tests still pass unchanged).\n- When `response.md` IS present the leg delegates to `developTicketAndCreatePR.action` as before — the story pipeline's own `needsInputOutcome` seam keeps handling that combination.\n\n**`js/developBugFixBatchAndCreatePR.js`** — the ask probe runs first in `action()`, before any PR lookup/creation or board transitions: `ai_questions_asked` goes on the epic, the leg ends green with the `needsInput` outcome naming the batch branch. Previously an ask leg would have sailed into `ensurePRExists` and In Review transitions.\n\n**Prompt chain** — `bug_fix_batch_development.json` now lists `./agents/instructions/common/input_completeness_preflight.md` (after `input_context_reading.md`, matching `bug_development.json`), so the batch guidelines' \"it is part of the prompt chain\" claim is true. `snapshots/bug_fix_batch_development.md` regenerated accordingly.\n\n**Tests** (TDD — both new leg tests failed against the pre-fix code with the exact reported symptom, the gh-742 interrupted reset):\n\n- `test_developBugAndCreatePR.js`: ask leg with partial work → label + green `needsInput` outcome + WIP pushed + no reset/comments; clean ask leg → label only, nothing pushed.\n- `test_developBugFixBatchAndCreatePR.js`: ask leg → `ai_questions_asked` on the epic, zero PR calls, zero transitions.\n- `test_developTicketAndCreatePR.js` guard stays exact: without `needs-input.md` the gh-742 interrupted reset still fires."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:fe1222a9",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread 4 — name the pushed WIP branch in the ask-mode outcome (`js/developTicketAndCreatePR.js:1543`)\n\n**Fixed (both suggested variants, they compose).**\n\n1. **Outcome message names the branch.** `needsInputOutcomeBody` now appends the branch when it is known at the seam (`ctx.expectedBranch` is set by `initDevelopmentContext` before both ask-mode exits run; `ctx.branchName` as fallback):\n\n   ```\n   Ticket TS-1302 needs input from the reporter — question posted, no PR created (WIP preserved on ai/TS-1302)\n   ```\n\n   Implemented once in the shared cluster (`js/common/needsInput.js` `needsInputOutcomeBody`), so the bug leg (`developBugAndCreatePR.js`) and the batch leg (`developBugFixBatchAndCreatePR.js`) name their branches (`ai/<ticket>`, the batch branch) on their ask-mode outcomes too.\n\n2. **Pre-flight instruction updated.** `instructions/common/input_completeness_preflight.md` step 2 now tells the agent to include the WIP branch name in the question comment when it stops mid-implementation (`outputs/needs-input.md` lists it too), so the reporter's question comment itself points at the partial work even when no outcome comment is posted.\n\nDirect-seam calls without a branch context keep the old message (no invented branch name).\n\n**Tests** (`js/unit-tests/test_developTicketAndCreatePR.js`, suite `inputs pre-flight (needs-input seams)` — failed before the fix):\n\n- `needsInputOutcome` with `expectedBranch: 'ai/TS-1301'` → message contains `WIP preserved on ai/TS-1301`;\n- without a branch → message stays branch-free;\n- the publish-pipeline ask test now also pins `WIP preserved on ai/TS-1302` on the real `action()` path."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:7c334d3c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: the bug leg's ask-mode exit strips its own SM idempotency label while the ticket stays JQL-eligible — the SM re-dispatches the ask leg forever (~every 15 min)**\n\n`js/developBugAndCreatePR.js:425` — `completeNeedsInputPath` ends with:\n\n```js\nremoveLabels(ticketKey, params, tracker);\n```\n\nwhich removes both the WIP label **and** `customParams.removeLabel` — and `bug_development.json:23` sets that to `sm_bug_development_triggered`. The ask terminal also deliberately does **not** move the ticket (tests assert `moves: []`).\n\nNow trace the SM loop (`sm.json`, rule *\"Backlog / To Do / Ready For Development / In Development / In Rework Bugs → trigger bug_development\"*):\n\n- JQL matches the ticket **before and after** the ask leg (no status change; `In Development` / `Ready For Development` / `In Rework` are all in the rule's status list);\n- `skipIfLabel: sm_bug_development_triggered` — the **only** skip guard — was just stripped by the ask leg;\n- `ai_questions_asked` is **not** in this rule's `skipIfLabels` (only the `story_questions` rule skips on it);\n- `updated <= -15m` is satisfied again once the ask leg's label/comment writes age out.\n\nSo the next SM tick re-dispatches the leg → the agent re-runs, re-asks (the pre-flight scan covers *human* comments; its own prior bot question is not an answer) → `needs-input.md` again → green ask exit → label stripped again → **unbounded ~15-minute cycle**, each round burning a full AI leg and posting another question comment under the reporter's ticket.\n\nEvery pre-existing `removeLabels` call site is loop-safe because its terminal either leaves the rule's JQL (normal → In Review, blocked → Blocked, already-fixed → Done) or intends a retry (gh-742 reset, gh-1087 bounded probe). The ask terminal is the first that strips the guard **and** stays JQL-eligible without intending a retry. The story leg's ask exit keeps `sm_story_development_triggered` (that stickiness is what makes it loop-safe) and the batch leg's ask probe never calls `removeLabels` — this call is the odd one out.\n\n**Fix (either suffices; both is belt-and-braces):**\n1. In `completeNeedsInputPath`, drop the `removeLabels(...)` call (or remove only the WIP label) so the ask exit behaves like the story/batch ask exits — the stale `sm_bug_development_triggered` keeps the SM from re-firing until a human re-arms the ticket; **and/or**\n2. Add `\"ai_questions_asked\"` to the bug-development rule's `skipIfLabels` in `sm.json` so a waiting-on-reporter ticket is never re-dispatched.\n\nAdd a test pinning the ask exit's label behavior (today both ask tests pass `removeLabel` in `customParams` but assert nothing about it being kept/removed — which is why this slipped through a 7797-green suite)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:80e21063",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: the batch happy path never clears a stale `ai_questions_asked` from a previous ask round-trip**\n\nThe ask probe here (`js/developBugFixBatchAndCreatePR.js:171-173`) correctly adds `ai_questions_asked` to the epic and exits green. But the happy path below (PR created → `transitionTickets(..., IN_REVIEW)` → `addLabels(..., AI_DEVELOPED)`) never removes a stale `ai_questions_asked` left by an earlier ask round-trip — unlike the story leg, where `applyDevelopmentOutcomeLabels` and `finalizeNoChangesOutcome` both call `needsInputCommon.clearNeedsInputTicket`, and the bug leg, whose normal-fix path delegates into that same story pipeline.\n\nToday nothing breaks: the reviewer hand-off's ask gate in `scripts/hand-issue-to-reviewer.sh` is conditioned on `! ai_developed && ! status:In Review`, so a shipped batch PR is handed off regardless. But the epic keeps a permanently stale waiting-on-reporter label, and any future logic that trusts `ai_questions_asked` (e.g. the `story_questions` rule pattern, or reporting) reads a false \"waiting for human\" state.\n\nMirror the story leg: on the batch happy path (and ideally the batch skip/already-open terminal), best-effort `needsInputCommon.clearNeedsInputTicket(tracker, epicKey, LABELS.AI_QUESTIONS_ASKED)` for the epic (and the batch bugs, to match the symmetric `addLabels`)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:e6b0daf8",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: on the bug leg, the pr-already-open guard still preempts the ask probe — an ask stop on a rework leg with an existing PR is swallowed**\n\nThe ask probe's placement here (after the gh-775 shared resume gate, before the interrupted classification) is correct. But two earlier guards in `action()` return before it is ever reached — notably `resolvePrAlreadyOpenOutcome` (~line 705), which fires when a PR already exists for `ai/<ticket>` and moves the ticket to In Review.\n\nConcrete sequence: leg 1 develops and opens a PR → QA sends the ticket back to development → leg 2 re-analyzes and finds the ticket is actually missing an input (attachment, credential, contradiction) → the agent posts its question and writes `outputs/needs-input.md` → the pr-already-open guard returns first → the ticket moves to In Review and the ask stop is silently swallowed; the reporter's question is never registered by the pipeline (no `ai_questions_asked` label, no green needs-input outcome).\n\nThe story leg does not have this asymmetry: its no-changes recovery checks `askModeOutcome` before any terminal classification, so a needs-input stop wins even when a PR already exists.\n\nIf the ordering is deliberate (a PR existing means the review lane owns the ticket), consider at least letting the ask-mode outcome win over the pr-already-open outcome when `needs-input.md` is present — or posting the ask outcome as a secondary note. Otherwise hoist the probe above `resolvePrAlreadyOpenOutcome`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:780ac228",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: 3 blocking issues in the new inputs pre-flight (ask-mode) feature: the `input/` cleanup in `js/checkoutBranch.js` interpolates raw `git status --porcelain` output into `bash -c \"rm -rf …\"` and silently no-ops on quoted (attachment-style) names; `ai_questions_asked` is never removed, so after one ask round-trip the reviewer hand-off stays suppressed even when the ticket later ships a PR; and the pre-flight prompt is wired into the bug legs whose post-actions (`developBugAndCreatePR.js`, `developBugFixBatchAndCreatePR.js`) classify an ask-mode stop as an interrupted run. Unit suites pass (7779 green) but only cover the story leg and plain-name artifacts.\n\n**Key Issues**:\n1. 🚨 `js/checkoutBranch.js:118` — `rm -rf` built from untrusted porcelain bytes; malformed nested quoting makes the cleanup a silent no-op for any quoted path; use `git clean -fd -- input/` instead.\n2. 🚨 `scripts/hand-issue-to-reviewer.sh:18` — sticky `ai_questions_asked` label has no removal path; blocks `agent:review` on all later successful legs.\n3. 🚨 `bug_development.json:31` — ask-mode contract not implemented in the bug/batch pipelines the prompt now instructs to use it.\n4. 💡 `js/developTicketAndCreatePR.js:1543` — pushed WIP branch not referenced in the ask-mode outcome.\n\n**Next Steps**:\n1. Replace the parse+`rm -rf` loop with the fixed `git clean -fd -- input/` command and update the characterization tests.\n2. Strip `ai_questions_asked` when a leg proceeds past ask-mode (inverse of `markNeedsInputTicket`), or gate the sh early-exit behind the In Review/`ai_developed` guards.\n3. Teach the bug/batch post-actions the needs-input seam (or defer the prompt wiring until they can honor it); add the pre-flight file to `bug_fix_batch_development.json`'s chain if kept.\n4. Re-run `dmtools run js/unit-tests/run_all.json` after the fixes."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:b26b5166",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `9e8e2d2d385d7b5bd20b86f84438b3cfa82efe03`) Rework dispatched as a PR-anchored conflict rework leg (no linked issue): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:254a489b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head c463cc7d80ae69bb4ed2c13f52a2a59746e25e58 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:1aa4e3ec",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1313\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-01:89072aab",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-01",
+      "updatedAt": "2026-11-01",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES (re-review of the rework)\n\n**Summary**: All four round-1 blocking threads are verifiably fixed in this diff (constant `git clean -fd -- input/`, `ai_questions_asked` label lifecycle + re-ordered hand-off gate, ask-mode seams in both bug post-actions, branch named in the ask outcome) — full suite 7797 green. One **new** blocking issue in the new bug-leg ask code: `completeNeedsInputPath` strips `sm_bug_development_triggered` while the ticket stays eligible for the bug-development SM rule (which does not skip on `ai_questions_asked`), so an ask-mode bug ticket is re-dispatched by the SM forever, every ~15 minutes.\n\n**Key Issues**:\n1. ✅ Round-1 threads 1–4: verified fixed (see resolved threads; tests pin each fix).\n2. 🚨 `js/developBugAndCreatePR.js:425` — ask exit removes its own SM idempotency label → unbounded SM re-dispatch loop on ask-mode bug tickets.\n3. 💡 `js/developBugFixBatchAndCreatePR.js:173` — batch happy path leaves a stale `ai_questions_asked` on the epic (hand-off gate covers it; label hygiene only).\n4. 💡 `js/developBugAndCreatePR.js:755` — pr-already-open guard preempts the ask probe; a rework-leg ask stop with an existing PR is swallowed (story leg has no such asymmetry).\n\n**Next Steps**:\n1. Stop stripping `sm_bug_development_triggered` on the ask terminal (keep the WIP-label removal), and/or add `ai_questions_asked` to the bug-development rule's `skipIfLabels` in `sm.json`; pin the ask exit's label behavior in a test.\n2. Optional: clear the stale ask label on the batch happy path; let the ask probe win over the pr-already-open guard.\n3. Re-run `dmtools run js/unit-tests/run_all.json`."
+    }
+  ]
+}
