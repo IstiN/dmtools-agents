@@ -6,7 +6,7 @@ Right after reading the input files, run a QUICK (surface-level) go/no-go scan o
 - Essential statements contradict each other.
 
 If there ARE highlights — do NOT implement. Instead:
-1. Post ONE comment on the ticket asking for exactly the missing items. Be specific; propose nothing, assume nothing.
+1. Post ONE comment on the ticket asking for exactly the missing items. Be specific; propose nothing, assume nothing. If you had already committed work when the missing input surfaced, name the WIP branch (`ai/<ticket-key>`) in that comment so the reporter and the next leg know where the partial work lives.
 2. Write `outputs/needs-input.md` listing the missing items (same content as the comment).
 3. Make NO code changes and stop. The pipeline labels the ticket `ai_questions_asked` and ends the leg without a PR.
 

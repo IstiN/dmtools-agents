@@ -29,6 +29,10 @@ const gitStaging = require('./common/gitStaging.js');
 // with the story leg (both legs park the lane on a hard quota failure).
 var quotaBreaker = require('./common/quotaCircuitBreaker.js');
 var trackersModule = require('./common/trackers.js');
+// gh-1301: shared ask-mode cluster — the needs-input probe, the
+// ai_questions_asked label and the green needsInput outcome body are shared
+// with the story and batch legs (review round 1, bug-legs thread).
+var needsInputCommon = require('./common/needsInput.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -406,6 +410,23 @@ function parkQuotaPath(ticketKey, config, ticket, tracker, params, scm, classifi
 }
 
 /**
+ * gh-1301: the ask-mode outcome (outputs/needs-input.md present, response.md
+ * deliberately absent). MUST run before the interrupted classification: an
+ * ask leg is the documented pre-flight contract, not a crash. The WIP (if
+ * any) is preserved on the branch first, the ticket is labeled
+ * ai_questions_asked, SM idempotency labels go, and the leg ends GREEN —
+ * no reset, no dead letter, no PR, no false "interrupted" incident under
+ * the reporter's question.
+ */
+function completeNeedsInputPath(ticketKey, hasGitChanges, cliTool, config, ticket, tracker, params, expectedBranch) {
+    pushPreservedAnalysisWork(hasGitChanges, cliTool, config, ticket, ticketKey);
+    needsInputCommon.markNeedsInputTicket(tracker, ticketKey, LABELS.AI_QUESTIONS_ASKED);
+    console.log('✅', ticketKey, 'flagged missing inputs — labeled ' + LABELS.AI_QUESTIONS_ASKED + ', awaiting the reporter (no PR, no reset)');
+    removeLabels(ticketKey, params, tracker);
+    return needsInputCommon.needsInputOutcomeBody(ticketKey, expectedBranch);
+}
+
+/**
  * gh-1003: Path 3 interrupted-leg completion extracted from action — pushes
  * any partial work (planned by decidePartialPush), posts the informational
  * comment, resets the ticket for retry, removes SM labels and fails the run
@@ -727,6 +748,15 @@ function action(params) {
         // resetting for a guaranteed-fail retry (transient keeps gh-742).
         var quotaCls = quotaFailureClassificationOf(actualParams);
 
+        // gh-1301: ask-mode probe — outputs/needs-input.md present means the
+        // agent asked for the missing ticket inputs and stopped by contract.
+        // Classified BEFORE the interrupted path: no dead letter, no false
+        // "interrupted" comment, no Ready For Development reset.
+        if (!hasResponseMd && needsInputCommon.hasNeedsInputFile(outputFiles)) {
+            console.log('outputs/needs-input.md present — ask-mode leg: agent asked for missing inputs. No PR, no reset.');
+            return completeNeedsInputPath(ticketKey, hasGitChanges, cli_execute_command, config, actualParams.ticket, tracker, params, expectedBranch);
+        }
+
         if (!hasResponseMd) {
             // CLI agent did not finish (rate limit / crash). Push whatever partial work exists
             // (e.g. outputs/rca.md) and reset the ticket so SM can retry.
@@ -775,6 +805,8 @@ if (typeof module !== 'undefined' && module.exports) {
         completeBlockedPath,
         completeAlreadyFixedPath,
         completeInterruptedPath,
+        // gh-1301: ask-mode outcome — exported for direct characterization tests.
+        completeNeedsInputPath,
         // gh-1087: quota park path — exported for direct characterization tests.
         parkQuotaPath,
         // gh-1188: the PR park-label helper — exported for direct

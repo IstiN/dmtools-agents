@@ -25,6 +25,9 @@ function loadDevelopBugFix(mocks) {
     var g = Object.assign({}, defaults, mocks || {});
     var tracker = g.__tracker;
     var cli = g.cli_execute_command;
+    // gh-1301: the batch leg probes outputs/needs-input.md through the REAL
+    // outputFiles module wired to the same file_read mock as the script.
+    var realOutputFiles = loadModule('js/common/outputFiles.js', null, { file_read: g.file_read });
 
     var configLoaderMock = g.__configLoader || {
         loadProjectConfig: function() { return { formats: { prTitle: { development: '{key}' } } }; },
@@ -63,7 +66,9 @@ function loadDevelopBugFix(mocks) {
             './common/pullRequest.js': prMock,
             './prepareBugFixBatchContext.js': batchCtxMock,
             './config.js': configModule,
-            './common/bugFixBatchContext.js': shared
+            './common/bugFixBatchContext.js': shared,
+            './common/outputFiles.js': realOutputFiles,
+            './common/needsInput.js': loadModule('js/common/needsInput.js')
         }),
         g
     );
@@ -94,6 +99,39 @@ function devParams(overrides) {
 }
 
 suite('developBugFixBatchAndCreatePR — action', function() {
+
+    // ── gh-1301: ask-mode (inputs pre-flight) — the batch leg shares the
+    // contract: needs-input.md present → ai_questions_asked on the epic,
+    // green needsInput outcome, NO PR creation and NO board transitions.
+
+    test('gh-1301 ask-mode batch leg: needs-input.md → ai_questions_asked on the epic, no PR, no transitions', function() {
+        var cmds = [];
+        var prCalls = [];
+        var tracker = devTracker();
+        var mod = loadDevelopBugFix({
+            __tracker: tracker,
+            cli_execute_command: function(args) { cmds.push(args); return ''; },
+            __prHelper: {
+                cleanCommandOutput: function(o) { return o; },
+                createPullRequest: function(opts) { prCalls.push(opts); return { success: true, prUrl: 'https://github.com/acme/repo/pull/42' }; }
+            },
+            file_read: configBlockingFileRead({ 'outputs/needs-input.md': '## Missing inputs\n- batch scope contradicts the epic\n' })
+        });
+
+        var result = mod.action(devParams());
+
+        assert.equal(result.success, true, 'an ask leg is the contract — the run stays green');
+        assert.equal(result.needsInput, true, 'the outcome carries the needsInput marker');
+        assert.contains(result.message, 'PROJ-1');
+        assert.contains(result.message, 'WIP preserved on dev/PROJ-1-batch',
+            'the batch branch is named for the reporter');
+        assert.deepEqual(tracker.calls.addLabel, [{ key: 'PROJ-1', label: 'ai_questions_asked' }],
+            'the epic is labeled ai_questions_asked — the reviewer hand-off gate reads it');
+        assert.deepEqual(tracker.calls.moveToStatus, [], 'no In Review transition while awaiting the answer');
+        assert.deepEqual(tracker.calls.postComment, [], 'the agent already posted the question comment');
+        assert.equal(prCalls.length, 0, 'no PR creation on an ask-mode leg');
+        assert.equal(cmds.length, 0, 'no PR lookup even — the ask probe precedes the PR work');
+    });
 
     test('happy path — no existing PR: creates PR, moves epic+bugs to In Review, labels, posts comment', function() {
         var cmds = [];

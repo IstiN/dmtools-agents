@@ -101,25 +101,20 @@ function establishFeatureBranch(config, customParams, ticket) {
  * files and git refuses the checkout ("would be overwritten by checkout").
  * input/ is a per-run artifact drop — remove untracked collisions (tracked
  * files are untouched) so the re-run aligns with the existing branch,
- * mirroring the .codegraph guard pattern. Best-effort: probe/removal failures
+ * mirroring the .codegraph guard pattern. Best-effort: removal failures
  * warn and never block the checkout.
+ *
+ * The command is a CONSTANT: `git clean -fd -- input/` deletes untracked
+ * files/directories under input/ (no -x, so ignored files are untouched).
+ * Nothing from `git status` is parsed or interpolated — porcelain C-quotes
+ * non-trivial names (`?? "input/bad name.md"`), so a parse + `rm -rf`
+ * loop both no-oped on exactly the attachment-style names most likely to
+ * collide and embedded ticket-controlled bytes into a shell string
+ * (review round 1, blocking).
  */
 function dropUntrackedInputArtifacts() {
     try {
-        var statusOut = prHelper.cleanCommandOutput(
-            runCommandForProbes('git status --porcelain -- input/') || '');
-        var statusLines = statusOut.split('\n');
-        for (var si = 0; si < statusLines.length; si++) {
-            var statusLine = statusLines[si];
-            if (statusLine.substring(0, 2) === '??') {
-                var stalePath = statusLine.substring(3).trim();
-                if (!stalePath) continue;
-                console.log('Removing untracked per-run artifact before checkout:', stalePath);
-                try { cli_execute_command({ command: 'bash -c "rm -rf ' + stalePath + '"' }); } catch (e) {
-                    console.warn('Could not remove stale artifact ' + stalePath + ':', e);
-                }
-            }
-        }
+        runCommandForProbes('git clean -fd -- input/');
     } catch (e) {
         console.warn('Input-artifact cleanup before checkout failed:', e);
     }

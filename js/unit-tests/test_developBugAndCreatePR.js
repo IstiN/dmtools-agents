@@ -104,6 +104,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         },
         './common/autoStart.js': { triggerSmIfIdle: function () { } },
         './common/outputFiles.js': { readOutputFile: function () { return null; } },
+        './common/needsInput.js': loadModule('js/common/needsInput.js'),
         './cacheToReleases.js': {},
         './common/gitStaging.js': gitStagingModule,
         './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -120,6 +121,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/quotaCircuitBreaker.js': quotaBreakerModule,
         './configLoader.js': configLoaderModule,
         './common/outputFiles.js': outputFiles,
+        './common/needsInput.js': loadModule('js/common/needsInput.js'),
         './common/trackers.js': loadTrackersDev(allMocks),
         './developTicketAndCreatePR.js': {
             action: function() { return { success: true, path: 'delegated' }; },
@@ -163,6 +165,72 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
 }
 
 suite('developBugAndCreatePR', function() {
+
+    // ── gh-1301: ask-mode (inputs pre-flight) — the bug leg must honor the
+    // same contract as the story leg: needs-input.md present → ai_questions_asked
+    // label + green needsInput outcome, never the interrupted classification.
+
+    test('gh-1301 ask-mode with partial work: needs-input.md → label + green needsInput outcome, WIP preserved, no reset', function() {
+        var added = [];
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/needs-input.md') return '## Missing inputs\n- credentials not attached\n';
+                throw new Error('missing ' + args.path);
+            },
+            jira_add_label: function(args) { added.push(args.label); }
+            // default CLI mock: git status reports 'A  outputs/rca.md' → partial work present
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1307', fields: { summary: 'ask leg with rca', description: '', labels: [] } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+
+        assert.equal(result.success, true, 'an ask leg is the contract — the run stays green');
+        assert.equal(result.needsInput, true, 'the outcome carries the needsInput marker');
+        assert.contains(result.message, 'TS-1307');
+        assert.contains(result.message, 'WIP preserved on ai/TS-1307',
+            'the pushed branch is named for the reporter (review round 1, suggestion thread)');
+        assert.ok(loaded.commands.indexOf('git push -u origin ai/TS-1307 --force-with-lease') !== -1,
+            'partial analysis work (rca) is preserved on the branch before the ask-mode exit');
+        assert.ok(added.indexOf('ai_questions_asked') !== -1,
+            'the reviewer hand-off gate reads this label — it must be set on the bug ask leg too');
+        assert.deepEqual(loaded.moves, [], 'no Ready For Development reset while awaiting the answer');
+        assert.equal(loaded.comments.length, 0, 'no false interrupted incident under the question');
+    });
+
+    test('gh-1301 ask-mode without work: label + green outcome, nothing pushed, no reset', function() {
+        var added = [];
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/needs-input.md') return '## Missing inputs\n';
+                throw new Error('missing ' + args.path);
+            },
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('gh pr list --head ') === 0) return '';
+                if (args.command.indexOf('git check-ignore') === 0) throw new Error('Command execution failed (exit code 1)');
+                if (args.command === 'git status --porcelain') return '';
+                if (args.command === 'git branch --show-current') return 'ai/TS-1308';
+                return '';
+            },
+            jira_add_label: function(args) { added.push(args.label); }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1308', fields: { summary: 'clean ask leg', description: '', labels: [] } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.needsInput, true);
+        assert.deepEqual(added, ['ai_questions_asked'], 'exactly the ask-mode label');
+        assert.equal(loaded.commands.filter(function(cmd) { return cmd.indexOf('git push') === 0; }).length, 0,
+            'nothing to preserve — no push');
+        assert.deepEqual(loaded.moves, [], 'no status reset');
+        assert.equal(loaded.comments.length, 0, 'no interrupted comment');
+    });
 
     test('pushes interrupted partial work to development branch instead of main', function() {
         var loaded = loadDevelopBugAndCreatePR();
@@ -668,6 +736,7 @@ suite('developBugAndCreatePR', function() {
                         throw new Error('missing ' + args.path);
                     }
                 }),
+                './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './developTicketAndCreatePR.js': { action: function () { throw marked; }, classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); } },
                 './common/feedbackLoop.js': {
                     runQualityGates: function () { return { success: true }; },
@@ -810,6 +879,7 @@ function loadBugForMissingResponseResume(opts) {
             './common/feedbackLoop.js': realFeedbackLoop,
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': realOutputFiles,
+            './common/needsInput.js': loadModule('js/common/needsInput.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModuleLocal,
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
@@ -841,6 +911,7 @@ function loadBugForMissingResponseResume(opts) {
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': realOutputFiles,
+            './common/needsInput.js': loadModule('js/common/needsInput.js'),
             // SPY: a direct resumeOnceForMissingResponse call from the bug leg
             // is forbidden — the shared gate owns the resume (gh-775 review
             // round 1, IMPORTANT thread).
@@ -1297,6 +1368,7 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
                 './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
                 './configLoader.js': loaderWithScmStub,
                 './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), allMocks),
+                './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './common/trackers.js': loadTrackersDev(allMocks),
                 './developTicketAndCreatePR.js': {
                     action: function () { delegated++; return { success: true, path: 'delegated' }; },

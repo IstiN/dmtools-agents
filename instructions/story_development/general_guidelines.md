@@ -16,7 +16,10 @@ flowchart TD
     RUN --> PASS{Tests pass?}
     PASS -->|No| FIX["Fix failures and re-run tests"]
     FIX --> RUN
-    PASS -->|Yes| GITSTATUS["Run git status and review every new/modified file"]
+    PASS -->|Yes| POSTCHECK{"Integration readiness check:<br/>does the feature depend on external setup<br/>the repo does not contain?"}
+    POSTCHECK -->|Gaps found| CONCERNS["Write outputs/concerns.md:<br/>what is missing + what is needed to make it work"]
+    CONCERNS --> GITSTATUS["Run git status and review every new/modified file"]
+    POSTCHECK -->|Self-sufficient| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
     SECRETS -->|No| GUARD["⚠️ COMPLETION GUARD — prove work landed BEFORE writing the summary:<br/>git fetch origin &amp;&amp; git log &quot;origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD&quot; --oneline<br/>EMPTY result = work did NOT land — re-do or resume the work,<br/>NEVER report done from session memory or the base branch's tip"]
@@ -30,3 +33,5 @@ flowchart TD
 ## ⚠️ STEP 0 — INPUT COMPLETENESS PRE-FLIGHT (surface scan, before ANY work)
 
 Before any implementation, run the STEP 0 input-completeness pre-flight — see `instructions/common/input_completeness_preflight.md` (it is part of the prompt chain). The flowchart's PREFLIGHT node is that scan; an ask-mode stop ends the leg without a PR.
+
+Before finishing, run the COMPLETION POST-CHECK — see `instructions/common/completion_post_check.md`.

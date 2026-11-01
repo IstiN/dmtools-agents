@@ -377,7 +377,7 @@ suite('checkoutBranch — seam helpers (gh-1190)', function() {
         try {
             mod.checkoutDevBranch('ai/PROJ-1', 'master');
             assert.deepEqual(calls, [
-                'git status --porcelain -- input/',
+                'git clean -fd -- input/',
                 'git branch --list "ai/PROJ-1"',
                 'git checkout ai/PROJ-1'
             ], 'input/ artifact cleanup precedes the decision tree; local hit short-circuits before any ls-remote');
@@ -400,7 +400,7 @@ suite('checkoutBranch — seam helpers (gh-1190)', function() {
         });
         mod.checkoutDevBranch('ai/PROJ-1', 'master');
         assert.deepEqual(calls, [
-            'git status --porcelain -- input/',
+            'git clean -fd -- input/',
             'git branch --list "ai/PROJ-1"',
             'git ls-remote --heads origin ai/PROJ-1',
             'git checkout -b ai/PROJ-1 origin/ai/PROJ-1'
@@ -418,7 +418,7 @@ suite('checkoutBranch — seam helpers (gh-1190)', function() {
         try {
             mod.checkoutDevBranch('ai/PROJ-1', 'release/rc');
             assert.deepEqual(calls, [
-                'git status --porcelain -- input/',
+                'git clean -fd -- input/',
                 'git branch --list "ai/PROJ-1"',
                 'git ls-remote --heads origin ai/PROJ-1',
                 'git checkout release/rc',
@@ -435,104 +435,83 @@ suite('checkoutBranch — seam helpers (gh-1190)', function() {
 
 // ── gh-1301: untracked input/ artifact cleanup before the dev-branch checkout ──
 // A re-run leg (comment-resume, retry) regenerates input/<ticket>/ files the
-// ask-mode leg already pushed; git would refuse the checkout. The cleanup
-// drops untracked input/ collisions only.
+// ask-mode leg already pushed; git would refuse the checkout. The cleanup is
+// ONE CONSTANT command — `git clean -fd -- input/` — so no porcelain byte
+// (porcelain C-quotes non-trivial names: `?? "input/bad name.md"`) is ever
+// parsed or interpolated into a shell string (review round 1: the old
+// parse + `rm -rf` loop both no-oped on quoted paths and embedded
+// ticket-controlled bytes into a command).
 
 suite('checkoutBranch — input/ artifact cleanup (gh-1301)', function() {
+
+    var GIT_CLEAN_INPUT = 'git clean -fd -- input/';
 
     function loadWithStatus(statusLines) {
         var calls = [];
         var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
             cli_execute_command: function(opts) {
                 calls.push(opts.command);
-                if (opts.command === 'git status --porcelain -- input/') return statusLines;
-                return '';
+                return statusLines;
             }
         });
         return { mod: mod, calls: calls };
     }
 
-    test('dropUntrackedInputArtifacts: untracked input/ file → rm -rf recorded', function() {
+    test('dropUntrackedInputArtifacts: untracked input/ file → the single constant git clean', function() {
         var loaded = loadWithStatus('?? input/PROJ-1/old.md\n');
         loaded.mod.dropUntrackedInputArtifacts();
-        assert.deepEqual(loaded.calls, [
-            'git status --porcelain -- input/',
-            'bash -c "rm -rf input/PROJ-1/old.md"'
-        ], 'exactly one removal per untracked artifact, via the bash whitelist token');
+        assert.deepEqual(loaded.calls, [GIT_CLEAN_INPUT],
+            'one fixed command does the cleanup — nothing is parsed or interpolated');
     });
 
-    test('dropUntrackedInputArtifacts: clean status → no removal command', function() {
-        var loaded = loadWithStatus('');
+    test('dropUntrackedInputArtifacts: quoted porcelain names never reach a command (no rm -rf, no interpolation)', function() {
+        var loaded = loadWithStatus('?? "input/bad name.md"\n?? "input/$(touch pwned).md"\n');
         loaded.mod.dropUntrackedInputArtifacts();
-        assert.deepEqual(loaded.calls, ['git status --porcelain -- input/'],
-            'only the probe runs when input/ is clean');
+        assert.deepEqual(loaded.calls, [GIT_CLEAN_INPUT],
+            'attachment-style names are the collision case — the command must not depend on them');
+        assert.ok(loaded.calls.every(function(c) { return c.indexOf('rm -rf') === -1; }),
+            'no rm -rf may be built from porcelain output');
+        assert.ok(loaded.calls.every(function(c) { return c.indexOf("\x24") === -1 && c.indexOf("\"") === -1; }),
+            'no quoted/untrusted byte rides into the executed command');
     });
 
-    test('dropUntrackedInputArtifacts: tracked/modified lines are left alone, blank untracked path skipped', function() {
-        var loaded = loadWithStatus(' M input/PROJ-1/tracked.md\n?? \n?? input/PROJ-1/old.md\n');
+    test('dropUntrackedInputArtifacts: the command flags pin the semantics (untracked only, tracked and ignored untouched)', function() {
+        var loaded = loadWithStatus(' M input/PROJ-1/tracked.md\n');
         loaded.mod.dropUntrackedInputArtifacts();
-        assert.deepEqual(loaded.calls, [
-            'git status --porcelain -- input/',
-            'bash -c "rm -rf input/PROJ-1/old.md"'
-        ], 'only untracked (??) lines with a real path are removed');
+        assert.deepEqual(loaded.calls, [GIT_CLEAN_INPUT],
+            '-fd removes untracked files/directories; no -x keeps ignored files; tracked files are never touched');
     });
 
-    test('dropUntrackedInputArtifacts: removal failure warns instead of throwing', function() {
+    test('dropUntrackedInputArtifacts: clean failure warns instead of throwing', function() {
         var warnings = [];
         var originalWarn = console.warn;
         console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
         var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
             cli_execute_command: function(opts) {
-                if (opts.command === 'git status --porcelain -- input/') return '?? input/PROJ-1/old.md\n';
-                if (opts.command.indexOf('rm -rf') !== -1) throw new Error('rm: permission denied');
-                return '';
+                throw new Error('git clean failed');
             }
         });
         try {
             mod.dropUntrackedInputArtifacts();
-            assert.equal(warnings.length, 1, 'the removal failure is a warning');
-            assert.contains(warnings[0], 'Could not remove stale artifact input/PROJ-1/old.md');
-        } finally {
-            console.warn = originalWarn;
-        }
-    });
-
-    test('dropUntrackedInputArtifacts: status probe failure warns instead of throwing', function() {
-        var warnings = [];
-        var originalWarn = console.warn;
-        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
-        var calls = [];
-        var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
-            cli_execute_command: function(opts) {
-                calls.push(opts.command);
-                throw new Error('git down');
-            }
-        });
-        try {
-            mod.dropUntrackedInputArtifacts();
-            assert.equal(warnings.length, 1, 'the probe failure is a warning, not a throw');
+            assert.equal(warnings.length, 1, 'the cleanup failure is a warning');
             assert.contains(warnings[0], 'Input-artifact cleanup before checkout failed');
-            assert.ok(calls.every(function(c) { return c.indexOf('rm -rf') === -1; }),
-                'no removal attempt after a failed probe');
         } finally {
             console.warn = originalWarn;
         }
     });
 
-    test('checkoutDevBranch runs the input/ probe before the branch decision tree', function() {
+    test('checkoutDevBranch runs git clean before the branch decision tree', function() {
         var calls = [];
         var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
             cli_execute_command: function(opts) {
                 calls.push(opts.command);
-                if (opts.command === 'git status --porcelain -- input/') return '?? input/PROJ-1/old.md\n';
                 if (opts.command === 'git branch --list "ai/PROJ-1"') return 'ai/PROJ-1';
                 return '';
             }
         });
         mod.checkoutDevBranch('ai/PROJ-1', 'master');
-        assert.equal(calls[0], 'git status --porcelain -- input/');
-        assert.equal(calls[1], 'bash -c "rm -rf input/PROJ-1/old.md"');
-        assert.equal(calls[2], 'git branch --list "ai/PROJ-1"', 'the removal precedes the checkout decision tree');
+        assert.equal(calls[0], GIT_CLEAN_INPUT);
+        assert.equal(calls[1], 'git branch --list "ai/PROJ-1"', 'the cleanup precedes the checkout decision tree');
     });
 
 });

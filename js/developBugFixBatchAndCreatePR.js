@@ -12,6 +12,11 @@ var prHelper = require('./common/pullRequest.js');
 var batchContext = require('./prepareBugFixBatchContext.js');
 const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
 var bugFixBatchCtx = require('./common/bugFixBatchContext.js');
+// gh-1301: shared ask-mode cluster — the needs-input probe, the
+// ai_questions_asked label and the green needsInput outcome body are shared
+// with the story and bug legs (review round 1, bug-legs thread).
+var outputFiles = require('./common/outputFiles.js');
+var needsInputCommon = require('./common/needsInput.js');
 
 function findExistingPR(branchName) {
     try {
@@ -158,6 +163,16 @@ function action(params) {
 
         var branchName = configLoader.resolveBranchName(config, epic, 'development');
         console.log('Batch development branch:', branchName);
+
+        // gh-1301: ask-mode probe — outputs/needs-input.md present means the
+        // agent asked for the missing ticket inputs and stopped by contract.
+        // End GREEN before any PR work or board transitions: label the epic
+        // and wait for the reporter (no PR, no In Review move, no labels).
+        if (needsInputCommon.hasNeedsInputFile(outputFiles)) {
+            console.log('outputs/needs-input.md present — ask-mode batch leg: no PR, no transitions.');
+            needsInputCommon.markNeedsInputTicket(tracker, epicKey, LABELS.AI_QUESTIONS_ASKED);
+            return needsInputCommon.needsInputOutcomeBody(epicKey, branchName);
+        }
 
         var bugs = batchContext.findBugsInEpic(epicKey);
         console.log('Found', bugs.length, 'bug(s) in batch Epic', epicKey);

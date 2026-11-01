@@ -73,6 +73,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             './common/feedbackLoop.js': feedbackLoopStubWith(feedbackLoopOverrides),
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': outputFilesStubFor(),
+            './common/needsInput.js': loadModule('js/common/needsInput.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -106,6 +107,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks, feedbackLoopOverr
             './common/feedbackLoop.js': feedbackLoopStubWith(feedbackLoopOverrides),
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': outputFilesStubFor(),
+            './common/needsInput.js': loadModule('js/common/needsInput.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -450,6 +452,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 },
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': outputFilesStubFor(),
+                './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -527,6 +530,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 },
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': outputFilesStubFor(),
+                './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -604,6 +608,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 },
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': outputFilesStubFor(),
+                './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -752,6 +757,7 @@ function loadForLandingGuard(mocks, opts) {
                 // gh-1301: ask-mode seam — needsInputMd flips outputs/needs-input.md.
                 hasOutputFile: function () { return !!opts.needsInputMd; }
             },
+            './common/needsInput.js': loadModule('js/common/needsInput.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -961,6 +967,7 @@ function loadForPrTail(mocks, opts) {
                 // gh-1301: ask-mode seam — needsInputMd flips outputs/needs-input.md.
                 hasOutputFile: function () { return !!opts.needsInputMd; }
             },
+            './common/needsInput.js': loadModule('js/common/needsInput.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1324,6 +1331,7 @@ function loadForMissingResponseResume(opts) {
             './common/feedbackLoop.js': realFeedbackLoop,
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': realOutputFiles,
+            './common/needsInput.js': loadModule('js/common/needsInput.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1922,6 +1930,7 @@ function loadForOutcomePinning(mocks, opts) {
                 // gh-1301: ask-mode seam — needsInputMd flips outputs/needs-input.md.
                 hasOutputFile: function () { return !!opts.needsInputMd; }
             },
+            './common/needsInput.js': loadModule('js/common/needsInput.js'),
             './cacheToReleases.js': {
                 action: function () { telemetry.cache++; }
             },
@@ -2272,6 +2281,48 @@ suite('developTicketAndCreatePR > leg outcome characterization (gh-930)', functi
         assert.ok(removedLabels.indexOf('story_development_wip') !== -1, 'wip label removed');
         assert.equal(loaded.telemetry.cache, 1, 'cacheToReleases ran exactly once');
         assert.equal(loaded.telemetry.tokenUsage.length, 0, 'a throwing token-usage provider is non-fatal');
+    });
+
+    test('a resume leg that reaches PR creation strips the stale ai_questions_asked label (gh-1301)', function () {
+        var removedLabels = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-1305', 'https://github.com/acme/widgets/pull/1305'),
+            jira_remove_label: function (a) { removedLabels.push(a.label); }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1305', fields: { summary: 'resume after ask round-trip', description: '', labels: ['ai_questions_asked'] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.ok(removedLabels.indexOf('ai_questions_asked') !== -1,
+            'the label from the earlier ask round-trip must not gate the reviewer hand-off forever');
+    });
+
+    test('the no-changes outcome also strips a stale ai_questions_asked label (gh-1301)', function () {
+        var removedLabels = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: noChangesGitCommandMock('TS-1306', 'ai/TS-1306'),
+            jira_remove_label: function (a) { removedLabels.push(a.label); }
+        }, {
+            responseMd: '### Analysis\nNo changes were required.\n'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1306', fields: { summary: 'no changes after ask round-trip', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'analysis only'
+        });
+
+        assert.equal(result.success, true);
+        assert.ok(removedLabels.indexOf('ai_questions_asked') !== -1,
+            'the no-changes terminal proceeds past ask-mode — the stale label goes with it');
     });
 
     test('token usage provider records the comment with the initiator context', function () {
@@ -3189,6 +3240,23 @@ suite('developTicketAndCreatePR > inputs pre-flight (needs-input seams)', functi
         assert.equal(loaded.mod.askModeOutcome({ ticketKey: 'TS-1301' }), null);
     });
 
+    test('needsInputOutcome: names the pushed WIP branch when the caller provides it', function () {
+        var loaded = loadForOutcomePinning({}, { needsInputMd: '## Missing inputs\n' });
+
+        var outcome = loaded.mod.needsInputOutcome({ ticketKey: 'TS-1301', expectedBranch: 'ai/TS-1301' });
+        assert.contains(outcome.message, 'WIP preserved on ai/TS-1301',
+            'the outcome is the only pointer to the pushed partial work (review round 1)');
+        assert.contains(outcome.message, 'no PR created');
+    });
+
+    test('needsInputOutcome: without a branch the message stays branch-free', function () {
+        var loaded = loadForOutcomePinning({}, { needsInputMd: '## Missing inputs\n' });
+
+        var outcome = loaded.mod.needsInputOutcome({ ticketKey: 'TS-1301' });
+        assert.equal(outcome.message.indexOf('WIP preserved'), -1,
+            'no branch known at the seam — no invented branch name');
+    });
+
     test('publish-pipeline path: committed work + needs-input.md → green outcome, gates skipped, no PR', function () {
         var comments = [];
         var movedTo = [];
@@ -3218,6 +3286,8 @@ suite('developTicketAndCreatePR > inputs pre-flight (needs-input seams)', functi
 
         assert.equal(result.success, true);
         assert.equal(result.needsInput, true, 'the ask-mode outcome wins over PR creation');
+        assert.contains(result.message, 'WIP preserved on ai/TS-1302',
+            'the pushed branch is named where the partial work lives (review round 1)');
         assert.deepEqual(gateCalls, [], 'no gate may run on an ask-mode leg');
         assert.deepEqual(movedTo, [], 'the ticket stays with the reporter — no status move');
         assert.deepEqual(comments, [], 'the agent already posted the question comment');
@@ -3267,6 +3337,217 @@ suite('developTicketAndCreatePR > inputs pre-flight (needs-input seams)', functi
 
         assert.ok(caught && caught.interruptedReset === true,
             'no needs-input.md → the gh-742 interrupted-reset contract is unchanged');
+    });
+
+});
+
+// ─ Completion post-check: concerns seam (appendConcernsToCompletionComment /
+// mirrorConcernsIntoResponseBody) ─ Direct characterization tests of the two
+// post-processors that surface outputs/concerns.md (the seam split keeps the
+// changed callers complexity-flat for the CRAP ratchet).
+
+var CONCERNS_SAMPLE = 'Depends on an external scoring service that this repo does not provision.';
+
+// concerns.md detailed read as pure data (no branches in the builder): an
+// absent value reads as "no file", any other value rides the detailed
+// {content, path} shape. The unreadable-file case passes `concernsReader`
+// instead — a throwing reader exercises the read-failure branch.
+function concernsFileStub(concerns) {
+    return function () {
+        return concerns === undefined ? null : { content: concerns, path: 'outputs/concerns.md' };
+    };
+}
+
+// response.md read as pure data: an absent value reads as "no file".
+function responseMdStub(responseMd) {
+    return function () { return responseMd === undefined ? null : responseMd; };
+}
+
+// outputFiles stub table for the concerns-seam loader — plain data assembly,
+// no branches (the CRAP ratchet counts the test loaders too).
+function concernsSeamOutputFilesStub(opts) {
+    return {
+        readOutputFileDetailed: opts.concernsReader || concernsFileStub(opts.concerns),
+        readOutputFile: responseMdStub(opts.responseMd)
+    };
+}
+
+// Loader for the concerns-seam suite: readOutputFileDetailed (concerns.md) and
+// readOutputFile (response.md) are injectable via opts, and file_write /
+// jira_add_label come through the same global mocks the other loaders use
+// (file_write is absent in the node harness unless stubbed here). configLoader
+// is stubbed to load nothing so the tracker deterministically resolves to the
+// jira provider — the addLabel assertion must not depend on machine-local
+// project config or env. The loader itself stays a thin branch-free
+// composition: all optionality lives in the stub tables above.
+function loadForConcernsSeam(mocks, opts) {
+    opts = opts || {};
+    return (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+            './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
+            './common/submodules.js': {},
+            './common/feedbackLoop.js': feedbackLoopStubWith(),
+            './common/autoStart.js': { triggerSmIfIdle: function () { } },
+            './common/outputFiles.js': concernsSeamOutputFilesStub(opts),
+            './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModule,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
+            './configLoader.js': { loadProjectConfig: function () { return null; } },
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
+            ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })(Object.assign({
+            cli_execute_command: function () { return ''; },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        }, mocks || {}));
+}
+
+suite('developTicketAndCreatePR > completion post-check: concerns seam', function () {
+
+    test('concerns present → completion comment gains the concerns section and the ai_concerns label', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        }, { concerns: CONCERNS_SAMPLE });
+        var base = 'h3. Development Completed\n*Branch:* `ai/TS-21`\n';
+
+        var out = mod.appendConcernsToCompletionComment(base, 'TS-21');
+
+        assert.contains(out, 'h3. ⚠️ Concerns — may not work until resolved',
+            'the section header renders in the ticket markup flavor (jira → h3.)');
+        assert.contains(out, CONCERNS_SAMPLE, 'the concerns text itself rides the comment');
+        assert.deepEqual(labels, [{ key: 'TS-21', label: 'ai_concerns' }],
+            'the informational ai_concerns label is added');
+    });
+
+    test('concerns absent → comment unchanged, no label', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        });
+        var base = 'h3. Development Completed\n';
+
+        var out = mod.appendConcernsToCompletionComment(base, 'TS-21');
+
+        assert.equal(out, base, 'no concerns.md → the comment is returned byte-identical');
+        assert.deepEqual(labels, [], 'no label when there is nothing to flag');
+    });
+
+    test('blank concerns file counts as no concerns (comment unchanged, no label)', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        }, { concerns: '  \n' });
+        var base = 'h3. Development Completed\n';
+
+        assert.equal(mod.appendConcernsToCompletionComment(base, 'TS-21'), base);
+        assert.deepEqual(labels, []);
+    });
+
+    test('a label failure keeps the concerns section (the comment text is the durable signal)', function () {
+        var mod = loadForConcernsSeam({
+            jira_add_label: function () { throw new Error('tracker down'); }
+        }, { concerns: CONCERNS_SAMPLE });
+
+        var out = mod.appendConcernsToCompletionComment('h3. Development Completed\n', 'TS-21');
+
+        assert.contains(out, '⚠️ Concerns — may not work until resolved');
+        assert.contains(out, CONCERNS_SAMPLE);
+    });
+
+    test('an unreadable concerns file degrades to no concerns (never throws)', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        }, { concernsReader: function () { throw new Error('fs boom'); } });
+        var base = 'h3. Development Completed\n';
+
+        var out = mod.appendConcernsToCompletionComment(base, 'TS-21');
+
+        assert.equal(out, base, 'the read failure is a warn, not a leg failure');
+        assert.deepEqual(labels, []);
+    });
+
+    test('concerns present → response.md (PR body source) is rewritten with the appended section', function () {
+        var writes = [];
+        var responseMd = '### What changed\n- thing\n';
+        var mirrored = responseMd + '\n\n## ⚠️ Concerns — may not work until resolved\n\n' + CONCERNS_SAMPLE + '\n';
+        var mod = loadForConcernsSeam({
+            file_write: function (args) { writes.push(args); }
+        }, { concerns: CONCERNS_SAMPLE, responseMd: responseMd });
+
+        var out = mod.mirrorConcernsIntoResponseBody({ ticketKey: 'TS-22' }, responseMd);
+
+        assert.deepEqual(writes, [{ path: 'outputs/response.md', content: mirrored }],
+            'the PR body source file gains the concerns section');
+        assert.equal(out, mirrored,
+            'the caller keeps using the appended content (in-memory string matches the file)');
+    });
+
+    test('dedup guard: response.md already carrying the section is not appended twice', function () {
+        var writes = [];
+        var responseMd = '### What changed\n- thing\n\n## ⚠️ Concerns — may not work until resolved\n\nold concerns\n';
+        var mod = loadForConcernsSeam({
+            file_write: function (args) { writes.push(args); }
+        }, { concerns: CONCERNS_SAMPLE, responseMd: responseMd });
+
+        var out = mod.mirrorConcernsIntoResponseBody({ ticketKey: 'TS-22' }, responseMd);
+
+        assert.deepEqual(writes, [], 'the dedup guard skips the write');
+        assert.equal(out, responseMd, 'the in-memory content is left untouched');
+    });
+
+    test('concerns absent → response.md is not written', function () {
+        var writes = [];
+        var responseMd = '### What changed\n- thing\n';
+        var mod = loadForConcernsSeam({
+            file_write: function (args) { writes.push(args); }
+        }, { responseMd: responseMd });
+
+        var out = mod.mirrorConcernsIntoResponseBody({ ticketKey: 'TS-22' }, responseMd);
+
+        assert.deepEqual(writes, [], 'nothing to mirror → no write');
+        assert.equal(out, responseMd);
+    });
+
+    test('a failing response.md write keeps the mirror best-effort (content unchanged, no throw)', function () {
+        var responseMd = '### What changed\n- thing\n';
+        var mod = loadForConcernsSeam({
+            file_write: function () { throw new Error('disk full'); }
+        }, { concerns: CONCERNS_SAMPLE, responseMd: responseMd });
+
+        var out = mod.mirrorConcernsIntoResponseBody({ ticketKey: 'TS-22' }, responseMd);
+
+        assert.equal(out, responseMd, 'the mirror failure never fails the leg');
+    });
+
+    test('response.md unreadable while concerns exist → section still appended to an empty base', function () {
+        var writes = [];
+        var mirrored = '\n\n## ⚠️ Concerns — may not work until resolved\n\n' + CONCERNS_SAMPLE + '\n';
+        var mod = loadForConcernsSeam({
+            file_write: function (args) { writes.push(args); }
+        }, { concerns: CONCERNS_SAMPLE });
+
+        var out = mod.mirrorConcernsIntoResponseBody({ ticketKey: 'TS-22' }, 'fallback');
+
+        assert.deepEqual(writes, [{ path: 'outputs/response.md', content: mirrored }]);
+        assert.equal(out, mirrored);
+    });
+
+    test('readConcernsMd: trimmed text on success, null when blank or absent', function () {
+        var mod = loadForConcernsSeam({}, { concerns: '  ' + CONCERNS_SAMPLE + '  ' });
+        assert.equal(mod.readConcernsMd(), CONCERNS_SAMPLE, 'surrounding whitespace is trimmed');
+
+        var blankMod = loadForConcernsSeam({}, { concerns: '  ' });
+        assert.equal(blankMod.readConcernsMd(), null, 'a whitespace-only file reads as no concerns');
+
+        var absentMod = loadForConcernsSeam({}, {});
+        assert.equal(absentMod.readConcernsMd(), null, 'a missing file reads as no concerns');
     });
 
 });

@@ -21,7 +21,10 @@ flowchart TD
     VERIFY --> PASS{All tests pass?}
     PASS -->|No| ADJUST["Adjust fix and re-run tests"]
     ADJUST --> VERIFY
-    PASS -->|Yes| GITSTATUS["Run git status and review every new/modified file"]
+    PASS -->|Yes| POSTCHECK{"Integration readiness check:<br/>does the feature depend on external setup<br/>the repo does not contain?"}
+    POSTCHECK -->|Gaps found| CONCERNS["Write outputs/concerns.md:<br/>what is missing + what is needed to make it work"]
+    CONCERNS --> GITSTATUS["Run git status and review every new/modified file"]
+    POSTCHECK -->|Self-sufficient| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
     SECRETS -->|No| SUMMARY["Write concise bug fix summary to outputs/response.md — see output_rules.md"]
@@ -40,3 +43,5 @@ When this Bug has been sent back to development because a linked Test Case faile
 ## ⚠️ STEP 0 — INPUT COMPLETENESS PRE-FLIGHT (surface scan, before ANY work)
 
 Before any implementation, run the STEP 0 input-completeness pre-flight — see `instructions/common/input_completeness_preflight.md` (it is part of the prompt chain). The flowchart's PREFLIGHT node is that scan; an ask-mode stop ends the leg without a PR.
+
+Before finishing, run the COMPLETION POST-CHECK — see `instructions/common/completion_post_check.md`.

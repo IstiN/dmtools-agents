@@ -76,7 +76,31 @@ flowchart TD
 
 ---
 
-### [5] `./agents/instructions/bug_fix_batch_development/batch_scope.md`
+### [5] `./agents/instructions/common/input_completeness_preflight.md`
+
+# ⚠️ STEP 0 — INPUT COMPLETENESS PRE-FLIGHT (surface scan, before ANY work)
+
+Right after reading the input files, run a QUICK (surface-level) go/no-go scan of the ticket — title, description, and comments authored by humans. Do NOT deep-analyze. Flag only highlights that would force you to ASSUME:
+- The ticket references an attachment, image, screenshot, logo, design file, or external resource that is NOT present in the ticket context.
+- Referenced credentials, environment details, or access are missing.
+- Essential statements contradict each other.
+
+If there ARE highlights — do NOT implement. Instead:
+1. Post ONE comment on the ticket asking for exactly the missing items. Be specific; propose nothing, assume nothing. If you had already committed work when the missing input surfaced, name the WIP branch (`ai/<ticket-key>`) in that comment so the reporter and the next leg know where the partial work lives.
+2. Write `outputs/needs-input.md` listing the missing items (same content as the comment).
+3. Make NO code changes and stop. The pipeline labels the ticket `ai_questions_asked` and ends the leg without a PR.
+
+If there are NO highlights — continue with the normal flow.
+
+**Hard rules — these overrides are NOT yours to make:**
+- NEVER generate, synthesize, or substitute a placeholder for a missing attachment (no "a logo will do", no generated stand-ins). An unattended run is NOT a license to improvise.
+- NEVER assume a value for missing data "to keep the leg moving".
+- If missing information surfaces DURING implementation, stop the same way (comment + `outputs/needs-input.md`, no further code changes) instead of guessing.
+
+
+---
+
+### [6] `./agents/instructions/bug_fix_batch_development/batch_scope.md`
 
 # Bug-fix batch development scope
 
@@ -144,7 +168,7 @@ otherwise.
 
 ---
 
-### [6] `./agents/instructions/bug_development/general_guidelines.md`
+### [7] `./agents/instructions/bug_development/general_guidelines.md`
 
 ```mermaid
 flowchart TD
@@ -169,7 +193,10 @@ flowchart TD
     VERIFY --> PASS{All tests pass?}
     PASS -->|No| ADJUST["Adjust fix and re-run tests"]
     ADJUST --> VERIFY
-    PASS -->|Yes| GITSTATUS["Run git status and review every new/modified file"]
+    PASS -->|Yes| POSTCHECK{"Integration readiness check:<br/>does the feature depend on external setup<br/>the repo does not contain?"}
+    POSTCHECK -->|Gaps found| CONCERNS["Write outputs/concerns.md:<br/>what is missing + what is needed to make it work"]
+    CONCERNS --> GITSTATUS["Run git status and review every new/modified file"]
+    POSTCHECK -->|Self-sufficient| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
     SECRETS -->|No| SUMMARY["Write concise bug fix summary to outputs/response.md — see output_rules.md"]
@@ -189,10 +216,12 @@ When this Bug has been sent back to development because a linked Test Case faile
 
 Before any implementation, run the STEP 0 input-completeness pre-flight — see `instructions/common/input_completeness_preflight.md` (it is part of the prompt chain). The flowchart's PREFLIGHT node is that scan; an ask-mode stop ends the leg without a PR.
 
+Before finishing, run the COMPLETION POST-CHECK — see `instructions/common/completion_post_check.md`.
+
 
 ---
 
-### [7] `./agents/instructions/bug_development/tdd_approach.md`
+### [8] `./agents/instructions/bug_development/tdd_approach.md`
 
 ```mermaid
 flowchart TD
@@ -222,7 +251,7 @@ flowchart TD
 
 ---
 
-### [8] `./agents/instructions/bug_development/output_rules.md`
+### [9] `./agents/instructions/bug_development/output_rules.md`
 
 ```mermaid
 flowchart TD
@@ -253,7 +282,7 @@ flowchart TD
 
 ---
 
-### [9] `./agents/instructions/bug_development/formatting_rules.md`
+### [10] `./agents/instructions/bug_development/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -270,7 +299,7 @@ flowchart TD
 
 ---
 
-### [10] `./agents/instructions/bug_development/few_shots.md`
+### [11] `./agents/instructions/bug_development/few_shots.md`
 
 Example bug fix PR descriptions — follow this structure and brevity:
 
@@ -286,7 +315,7 @@ flowchart TD
 
 ---
 
-### [11] `./agents/instructions/common/dmtools_cli.md`
+### [12] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -324,7 +353,7 @@ flowchart TD
 
 ---
 
-### [12] `./agents/prompts/bash_tools.md`
+### [13] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -369,7 +398,7 @@ flowchart TD
 
 ---
 
-### [13] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
+### [14] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
 
 **HARD GATE — read before any tool call:**
 
