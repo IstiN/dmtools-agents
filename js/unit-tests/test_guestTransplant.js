@@ -980,6 +980,22 @@ suite('guestTransplant: rework round 3 — marker authentication (threads 13/17)
         assert.equal(sha.sha, SHA_A);
         assert.equal(sha.drifted, true);
     });
+
+    test('parseTransplantMarker picks the chronologically newest marker when comments are out of order', function () {
+        var older = {
+            body: mod.transplantMarkerComment({ state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42' }),
+            user: { login: 'ai-bot[bot]' },
+            created_at: '2026-10-31T22:41:08Z'
+        };
+        var newer = {
+            body: mod.transplantMarkerComment({ state: 'parked', source: 42, head: SHA_A, branch: 'ai/guest-42', reason: 'conflict' }),
+            user: { login: 'ai-bot[bot]' },
+            created_at: '2026-10-31T22:41:12Z'
+        };
+        // Simulate out-of-order array (newer appears before older)
+        var parsed = mod.parseTransplantMarker([newer, older], ML);
+        assert.equal(parsed.state, 'parked', 'created_at timestamp wins over array order');
+    });
 });
 
 suite('guestTransplant: rework round 3 — parked marker writer (threads 11/15)', function () {

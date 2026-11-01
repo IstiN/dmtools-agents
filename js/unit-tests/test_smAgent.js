@@ -17835,3 +17835,97 @@ suite('smAgent: arm_review skips when head only added machine merge(s) over revi
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:review']);
     });
 });
+suite('smAgent: transplant_guest_pr limit slot yield on noop/skip/conflict', function () {
+    var HEAD_1301 = 'facb208c1c99b70902c6b6d26c0acdf3ddb12f79';
+    var HEAD_1302 = '98e8a8740a523099062ed99c1c006dd7819aa6a8';
+    var MAIN_SHA = '4310fda5a6e93c22567ab31115ebc3e13a1ae2e7';
+    var MERGED_SHA = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+
+    var TRANSPLANT_RULE = {
+        id: 'guest-transplant',
+        source: 'github',
+        guestTransplant: true,
+        query: {
+            type: 'pr',
+            labels: ['po_accept'],
+            notLabels: ['agent:rework'],
+            notMachine: true,
+            crossRepo: true,
+            draft: false,
+            allowBlockedItems: true
+        },
+        localAction: 'transplant_guest_pr',
+        limit: 1
+    };
+
+    test('parked-unchanged candidate does not consume the limit:1 slot so the next po_accept PR transplants', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "IstiN", repo: "dmtools-agents" }, smGuestTransplant: {} };' },
+            captureConsole: true,
+            github: {
+                items: [
+                    {
+                        key: 'pr-1301',
+                        prNumber: 1301,
+                        title: 'feat(dev): inputs pre-flight',
+                        author: 'ajaxspace',
+                        labels: ['po_accept', 'blocked'],
+                        headRepo: 'ajaxspace/dmtools-agents',
+                        draft: false,
+                        pr: { headSha: HEAD_1301, state: 'OPEN' }
+                    },
+                    {
+                        key: 'pr-1302',
+                        prNumber: 1302,
+                        title: 'feat(dev): completion post-check',
+                        author: 'ajaxspace',
+                        labels: ['po_accept'],
+                        headRepo: 'ajaxspace/dmtools-agents',
+                        draft: false,
+                        pr: { headSha: HEAD_1302, state: 'OPEN' }
+                    }
+                ],
+                prComments: [
+                    {
+                        user: { login: 'dmtools-factory-bot[bot]' },
+                        created_at: '2026-10-31T22:41:12Z',
+                        body: '<!-- guest-transplant state="parked" source="1301" head="' + HEAD_1301 + '" branch="ai/guest-1301" reason="conflict" actor="ai-teammate" -->\n🧬 Guest transplant parked'
+                    }
+                ]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/issues/1301/events') !== -1 || c.indexOf('/issues/1302/events') !== -1) {
+                    return JSON.stringify([{ event: 'labeled', label: { name: 'po_accept' }, actor: { login: 'IstiN' }, created_at: '2026-10-31T22:36:48Z' }]);
+                }
+                if (c.indexOf('/branches/ai/guest-') !== -1) {
+                    throw new Error('404 Not Found');
+                }
+                if (c.indexOf('/branches/main --jq .commit.sha') !== -1) {
+                    return MAIN_SHA;
+                }
+                if (c.indexOf('/merges -X POST') !== -1) {
+                    return JSON.stringify({ sha: MERGED_SHA });
+                }
+                if (c.indexOf('/pulls -X POST') !== -1) {
+                    return JSON.stringify({ number: 1312 });
+                }
+                return '';
+            }
+        });
+
+        var res = sm.action({
+            jobParams: {
+                owner: 'IstiN',
+                repo: 'dmtools-agents',
+                machineAuthor: 'ai-teammate,dmtools-factory-bot',
+                smGuestTransplant: {},
+                rules: [TRANSPLANT_RULE]
+            }
+        });
+
+        assert.deepEqual(res.processedKeys, ['pr-1302'],
+            'parked-unchanged pr-1301 must yield the limit:1 slot so pr-1302 transplants in the same tick');
+    });
+});

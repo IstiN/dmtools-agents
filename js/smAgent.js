@@ -4723,9 +4723,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     console.log('  ⏸️  ' + key + ' guest-transplant inert (no smGuestTransplant) — skipped');
                     continue;
                 }
-                transplantGuestPrAction(effectiveRepoInfo, ticket, gCfg,
-                    verdictMachineLogins(effectiveConfig));
-                processedKeys.push(key);
+                if (transplantGuestPrAction(effectiveRepoInfo, ticket, gCfg,
+                    verdictMachineLogins(effectiveConfig))) {
+                    processedKeys.push(key);
+                }
             } catch (e) {
                 console.error('  ❌ transplant_guest_pr failed for ' + key + ': ' + (e.message || e));
             }
@@ -8566,7 +8567,6 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
         actorLogin: (Array.isArray(machineLogins) && machineLogins.length)
             ? machineLogins[0] : null,
         marker: marker,
-        marker: marker,
         branchExists: guestBranchExists(repoInfo, branch),
         openTransplantPr: guestOpenPrOnBranch(repoInfo, branch),
         // The E5 completion re-entry (GC sweep): the arm actor was vetted
@@ -8575,7 +8575,7 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
         completionRentry: ticket.completionRentry === true
     });
     console.log('  🧬 ' + seq.audit);
-    if (seq.decision !== 'transplant' && seq.decision !== 'complete-orphan') return;
+    if (!seq.steps || !seq.steps.length) return false;
 
     // A resume (thread: a tick that died between open_pr and close_pr)
     // carries the EXISTING machine PR number — the carry probe and the
@@ -8586,7 +8586,7 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
                     ? machineLogins[0] : null };
     if (dry) {
         guestRunSteps(repoInfo, cfg, seq.steps, ctx, true);
-        return;
+        return true;
     }
     try {
         // Pin the sha the transplant actually uses for the close comment:
@@ -8597,6 +8597,7 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
         ctx.usedSha = guestTransplantModule.sequenceHeadSha(seq) ||
             (shaInfo ? shaInfo.sha : null);
         guestRunSteps(repoInfo, cfg, seq.steps, ctx, false);
+        return true;
     } catch (eRun) {
         if (eRun && eRun.isMergeConflict === true) {
             console.log('  ⚠️  transplant merge conflict — parking the source (AC4)');
@@ -8605,7 +8606,7 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
                     cfg: cfg, source: { prNumber: prNumber }, headSha: ctx.usedSha,
                     actorLogin: ctx.actorLogin
                 }), ctx, false);
-            return;
+            return false;
         }
         throw eRun;
     }
