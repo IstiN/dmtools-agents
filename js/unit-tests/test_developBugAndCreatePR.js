@@ -232,6 +232,41 @@ suite('developBugAndCreatePR', function() {
         assert.equal(loaded.comments.length, 0, 'no interrupted comment');
     });
 
+    // gh-1301 re-review (round 2): the ask terminal must KEEP its SM idempotency
+    // label. sm_bug_development_triggered is the bug-development SM rule's only
+    // skip guard and the ticket stays JQL-eligible after an ask (no status
+    // move), so stripping it makes the SM re-dispatch the ask leg on every tick
+    // (~every 15 min) forever — the story leg's ask exit keeps its own label for
+    // exactly this reason.
+    test('gh-1301 re-review: ask exit keeps the SM idempotency label, removes only the WIP marker', function() {
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/needs-input.md') return '## Missing inputs\n';
+                throw new Error('missing ' + args.path);
+            },
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('gh pr list --head ') === 0) return '';
+                if (args.command.indexOf('git check-ignore') === 0) throw new Error('Command execution failed (exit code 1)');
+                if (args.command === 'git status --porcelain') return '';
+                if (args.command === 'git branch --show-current') return 'ai/TS-1309';
+                return '';
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1309', fields: { summary: 'ask leg', description: '', labels: [] } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        var removedLabels = loaded.removed.map(function(r) { return r.label; });
+        assert.ok(removedLabels.indexOf('sm_bug_development_triggered') === -1,
+            'the ask exit must KEEP sm_bug_development_triggered — stripping the SM skip guard while the ticket stays JQL-eligible re-dispatches the ask leg forever');
+        assert.ok(removedLabels.indexOf('bug_development_wip') !== -1,
+            'the per-leg WIP marker is still removed');
+    });
+
     test('pushes interrupted partial work to development branch instead of main', function() {
         var loaded = loadDevelopBugAndCreatePR();
 
@@ -1416,6 +1451,46 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
             { key: 'TS-77', label: 'bug_development_wip' },
             { key: 'TS-77', label: 'sm_bug_development_triggered' }
         ]);
+    });
+
+    // gh-1301 re-review (round 2): an ask-mode stop must win over the
+    // pr-already-open terminal. Leg 1 opened a PR, QA returned the ticket, leg 2
+    // finds an input is missing and writes needs-input.md — Path 0 returning
+    // first moved the ticket to In Review and silently swallowed the question
+    // (no label, no green needs-input outcome). The story leg's recovery checks
+    // askModeOutcome before every terminal for the same reason.
+    test('gh-1301 re-review: ask-mode stop wins over pr-already-open — no In Review swallow', function() {
+        var added = [];
+        var loaded = loadBugWithScmStub({
+            listPrs: function () {
+                return [{ number: 1, head: { ref: 'ai/TS-77' }, html_url: 'https://github.com/acme/widgets/pull/77' }];
+            }
+        }, function (args) {
+            if (args.command === 'git status --porcelain') return 'A  outputs/rca.md\n';
+            if (args.command.indexOf('git check-ignore') === 0) throw new Error('Command execution failed (exit code 1)');
+            if (args.command === 'git branch --show-current') return 'ai/TS-77';
+            return '';
+        }, {
+            file_read: function (args) {
+                if (args.path === 'outputs/needs-input.md') return '## Missing inputs\n- credentials not attached\n';
+                throw new Error('missing ' + args.path);
+            },
+            jira_add_label: function (args) { added.push(args.label); }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-77', fields: { summary: 'rework leg asks with a PR open', description: '', labels: [] } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+
+        assert.equal(result.success, true, 'the ask leg stays green');
+        assert.equal(result.needsInput, true, 'the ask outcome wins over pr_already_open');
+        assert.deepEqual(loaded.moves, [],
+            'the existing PR must not swallow the question via the In Review move');
+        assert.ok(added.indexOf('ai_questions_asked') !== -1,
+            'the question is registered on the ticket');
+        assert.equal(loaded.delegatedCount(), 0, 'no delegation on an ask terminal');
     });
 
     test('no matching open PR → development proceeds (delegated)', function () {

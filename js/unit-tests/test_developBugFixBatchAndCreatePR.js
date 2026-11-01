@@ -75,7 +75,7 @@ function loadDevelopBugFix(mocks) {
 }
 
 function devTracker(overrides) {
-    var calls = { getIssue: [], moveToStatus: [], addLabel: [], postComment: [] };
+    var calls = { getIssue: [], moveToStatus: [], addLabel: [], postComment: [], removeLabel: [] };
     var t = {
         calls: calls,
         getIssue: function(key, fields) {
@@ -84,7 +84,8 @@ function devTracker(overrides) {
         },
         moveToStatus: function(key, status) { calls.moveToStatus.push({ key: key, status: status }); },
         addLabel: function(key, label) { calls.addLabel.push({ key: key, label: label }); },
-        postComment: function(key, body) { calls.postComment.push({ key: key, body: body }); }
+        postComment: function(key, body) { calls.postComment.push({ key: key, body: body }); },
+        removeLabel: function(key, label) { calls.removeLabel.push({ key: key, label: label }); }
     };
     for (var k in (overrides || {})) { t[k] = overrides[k]; }
     return t;
@@ -171,6 +172,25 @@ suite('developBugFixBatchAndCreatePR — action', function() {
         assert.equal(tracker.calls.postComment.length, 1, 'one PR comment on the epic');
         assert.contains(tracker.calls.postComment[0].body, 'https://github.com/acme/repo/pull/42', 'comment carries the PR url');
         assert.contains(tracker.calls.postComment[0].body, 'PROJ-2, PROJ-3', 'comment lists linked bug keys');
+    });
+
+    // gh-1301 re-review (round 2): the batch happy path proceeds past ask-mode,
+    // so a stale ai_questions_asked from a previous ask round-trip must be
+    // cleared from the epic and the bugs — mirroring the story leg's
+    // clearNeedsInputTicket on its success tails.
+    test('gh-1301 re-review: happy path clears a stale ai_questions_asked from the epic and the bugs', function() {
+        var tracker = devTracker();
+        var mod = loadDevelopBugFix({
+            __tracker: tracker,
+            cli_execute_command: function(args) { return ''; }
+        });
+
+        var result = mod.action(devParams());
+
+        assert.equal(result, undefined, 'the happy path returns no outcome (unchanged contract)');
+        var cleared = tracker.calls.removeLabel.filter(function(r) { return r.label === 'ai_questions_asked'; });
+        assert.deepEqual(cleared.map(function(r) { return r.key; }).sort(), ['PROJ-1', 'PROJ-2', 'PROJ-3'],
+            'the stale ask label is cleared from the epic and every batch bug (symmetric with addLabels)');
     });
 
     test('existing PR — gh pr list returns a url: no PR created, transitions and comment still happen', function() {

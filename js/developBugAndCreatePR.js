@@ -89,12 +89,16 @@ function readHasResponseMd(ticketKey) {
     }
 }
 
-function removeLabels(ticketKey, params, tracker) {
+function removeWipLabel(ticketKey, params, tracker) {
     const wipLabel = params.metadata && params.metadata.contextId
         ? params.metadata.contextId + '_wip' : null;
     if (wipLabel) {
         try { tracker.removeLabel(ticketKey, wipLabel); } catch (e) {}
     }
+}
+
+function removeLabels(ticketKey, params, tracker) {
+    removeWipLabel(ticketKey, params, tracker);
 
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
@@ -422,7 +426,13 @@ function completeNeedsInputPath(ticketKey, hasGitChanges, cliTool, config, ticke
     pushPreservedAnalysisWork(hasGitChanges, cliTool, config, ticket, ticketKey);
     needsInputCommon.markNeedsInputTicket(tracker, ticketKey, LABELS.AI_QUESTIONS_ASKED);
     console.log('✅', ticketKey, 'flagged missing inputs — labeled ' + LABELS.AI_QUESTIONS_ASKED + ', awaiting the reporter (no PR, no reset)');
-    removeLabels(ticketKey, params, tracker);
+    // gh-1301 re-review: remove ONLY the per-leg WIP marker. The SM
+    // idempotency label (customParams.removeLabel) must stay: the ask terminal
+    // makes no status move, so the ticket stays eligible for the
+    // bug-development SM rule, and that label is the rule's only skip guard —
+    // stripping it re-dispatches the ask leg on every SM tick, forever. The
+    // story leg's ask exit keeps its own SM label for exactly this reason.
+    removeWipLabel(ticketKey, params, tracker);
     return needsInputCommon.needsInputOutcomeBody(ticketKey, expectedBranch);
 }
 
@@ -700,6 +710,24 @@ function action(params) {
         // it but failed to move the ticket to In Review (e.g. was interrupted).
         // Move to In Review now and skip development entirely.
         const expectedBranch = configLoader.resolveBranchName(config, actualParams.ticket, 'development');
+
+        // ── gh-1301 re-review: ask-mode probe runs BEFORE the pr-already-open
+        // guard. A needs-input stop on a rework leg with an existing PR must
+        // win — Path 0 returning first moved the ticket to In Review and
+        // silently swallowed the reporter's question (no label, no green
+        // needs-input outcome). The story leg's recovery checks askModeOutcome
+        // before every terminal for the same reason; running ahead of the
+        // gh-775 resume gate also means a bounded resume attempt is never
+        // burned fighting an intentional ask stop.
+        if (!readHasResponseMd(ticketKey) && needsInputCommon.hasNeedsInputFile(outputFiles)) {
+            console.log('outputs/needs-input.md present — ask-mode leg: agent asked for missing inputs. No PR, no reset.');
+            return completeNeedsInputPath(ticketKey, detectGitChanges(cli_execute_command), cli_execute_command, config, actualParams.ticket, tracker, params, expectedBranch);
+        }
+
+        // ── Path 0: PR already open — skip re-development ───────────────────
+        // If a PR already exists for this ticket's branch, the previous run created
+        // it but failed to move the ticket to In Review (e.g. was interrupted).
+        // Move to In Review now and skip development entirely.
         const prOpenResult = resolvePrAlreadyOpenOutcome(ticketKey, ctx.scm, expectedBranch, tracker, ctx.statuses, params);
         if (prOpenResult) {
             return prOpenResult;
@@ -748,14 +776,8 @@ function action(params) {
         // resetting for a guaranteed-fail retry (transient keeps gh-742).
         var quotaCls = quotaFailureClassificationOf(actualParams);
 
-        // gh-1301: ask-mode probe — outputs/needs-input.md present means the
-        // agent asked for the missing ticket inputs and stopped by contract.
-        // Classified BEFORE the interrupted path: no dead letter, no false
-        // "interrupted" comment, no Ready For Development reset.
-        if (!hasResponseMd && needsInputCommon.hasNeedsInputFile(outputFiles)) {
-            console.log('outputs/needs-input.md present — ask-mode leg: agent asked for missing inputs. No PR, no reset.');
-            return completeNeedsInputPath(ticketKey, hasGitChanges, cli_execute_command, config, actualParams.ticket, tracker, params, expectedBranch);
-        }
+        // (gh-1301: the ask-mode probe moved ABOVE the pr-already-open guard —
+        // an ask stop there must win; see the probe at the top of action().)
 
         if (!hasResponseMd) {
             // CLI agent did not finish (rate limit / crash). Push whatever partial work exists

@@ -187,6 +187,14 @@ function action(params) {
         transitionTickets(keysToUpdate, statuses.IN_REVIEW, tracker);
         addLabels(keysToUpdate, LABELS.AI_DEVELOPED, tracker);
 
+        // gh-1301 re-review: the happy path proceeds past ask-mode, so a stale
+        // ai_questions_asked left by a previous ask round-trip is cleared from
+        // the epic and every batch bug — mirroring the story leg's
+        // clearNeedsInputTicket success tails (symmetric with addLabels above).
+        keysToUpdate.forEach(function (key) {
+            needsInputCommon.clearNeedsInputTicket(tracker, key, LABELS.AI_QUESTIONS_ASKED);
+        });
+
         postPRCommentIfPossible(tracker, epicKey, prResult, bugs);
 
     } catch (error) {
