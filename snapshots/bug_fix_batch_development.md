@@ -173,9 +173,9 @@ otherwise.
 ```mermaid
 flowchart TD
     START([Bug ticket ready for fix]) --> READ["⚠️ MANDATORY: Read ALL input files FIRST — see instructions/common/input_context_reading.md"]
-    READ --> PREFLIGHT{"⚠️ STEP 0 input-completeness pre-flight:<br/>any missing attachment / reference / contradiction?"}
-    PREFLIGHT -->|Highlights - missing input| ASK["Post ONE comment asking for the missing items +<br/>write outputs/needs-input.md + STOP (no code changes)"]
-    ASK --> END_ASK([End - needs input - no PR])
+    READ --> PREFLIGHT{"⚠️ STEP 0 input-completeness pre-flight (bug + batch legs):<br/>missing attachment, broken reference, or contradiction?"}
+    PREFLIGHT -->|Highlights - missing input| ASK["Post ONE comment asking for the missing items +<br/>write outputs/needs-input.md + STOP before RCA/fix — developBugAndCreatePR and<br/>developBugFixBatchAndCreatePR classify this ask stop BEFORE any interrupted/reset path"]
+    ASK --> END_ASK([End - needs input - bug leg green, no PR])
     PREFLIGHT -->|Clean| RETURNED{Ticket returned to development?}
     RETURNED -->|Yes| PREV["Review previous PR diff and QA feedback in comments.md"]
     PREV --> RCA_RET["Write/Update RCA explaining why previous fix failed — see output_rules.md for rca.md format"]
@@ -212,9 +212,9 @@ When this Bug has been sent back to development because a linked Test Case faile
 2. If the failure is caused by a missing token, missing permission, missing secret, or any other access/credential/infra issue that you cannot fix in product code, write `outputs/blocked.json` and stop. Do **not** try to code a fix for an access problem.
 3. Only attempt a product-code fix when the failure is a genuine product regression.
 
-## ⚠️ STEP 0 — INPUT COMPLETENESS PRE-FLIGHT (surface scan, before ANY work)
+## ⚠️ STEP 0 — INPUT COMPLETENESS PRE-FLIGHT (bug + batch legs, before ANY work)
 
-Before any implementation, run the STEP 0 input-completeness pre-flight — see `instructions/common/input_completeness_preflight.md` (it is part of the prompt chain). The flowchart's PREFLIGHT node is that scan; an ask-mode stop ends the leg without a PR.
+Bug and bug-fix-batch legs run the STEP 0 input-completeness pre-flight defined in `instructions/common/input_completeness_preflight.md` (it is part of the prompt chain). On these legs the needs-input probe is implemented in `js/developBugAndCreatePR.js` and `js/developBugFixBatchAndCreatePR.js`: a `needs-input.md` stop is classified before the interrupted-leg reset, adds the `ai_questions_asked` label, preserves partial work on the `ai/<ticket>` branch, and ends the leg green without a PR.
 
 Before finishing, run the COMPLETION POST-CHECK — see `instructions/common/completion_post_check.md`.
 
