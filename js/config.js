@@ -52,6 +52,7 @@ const PRIORITIES = {
 const LABELS = {
     AI_GENERATED: 'ai_generated',
     AI_QUESTIONS_ASKED: 'ai_questions_asked',
+    AI_CONCERNS: 'ai_concerns',
     AI_SOLUTION_DESIGN_CREATED: 'ai_solution_design_created',
     AI_DEVELOPED: 'ai_developed',
     AI_PR_REVIEWED: 'ai_pr_reviewed',

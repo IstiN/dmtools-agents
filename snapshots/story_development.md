@@ -93,7 +93,10 @@ flowchart TD
     RUN --> PASS{Tests pass?}
     PASS -->|No| FIX["Fix failures and re-run tests"]
     FIX --> RUN
-    PASS -->|Yes| GITSTATUS["Run git status and review every new/modified file"]
+    PASS -->|Yes| POSTCHECK{"Integration readiness check:<br/>does the feature depend on external setup<br/>the repo does not contain?"}
+    POSTCHECK -->|Gaps found| CONCERNS["Write outputs/concerns.md:<br/>what is missing + what is needed to make it work"]
+    CONCERNS --> GITSTATUS["Run git status and review every new/modified file"]
+    POSTCHECK -->|Self-sufficient| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
     SECRETS -->|No| GUARD["⚠️ COMPLETION GUARD — prove work landed BEFORE writing the summary:<br/>git fetch origin &amp;&amp; git log &quot;origin/$(git rev-parse --abbrev-ref origin/HEAD | cut -d/ -f2)..HEAD&quot; --oneline<br/>EMPTY result = work did NOT land — re-do or resume the work,<br/>NEVER report done from session memory or the base branch's tip"]
@@ -103,6 +106,8 @@ flowchart TD
     REDO --> IMPLEMENT
     SUMMARY --> END([End — post-processing handles branch, commit and PR])
 ```
+
+Before finishing, run the COMPLETION POST-CHECK — see `instructions/common/completion_post_check.md`.
 
 
 ---
@@ -202,7 +207,27 @@ flowchart TD
 
 ---
 
-### [11] `./agents/instructions/story_development/formatting_rules.md`
+### [11] `./agents/instructions/common/completion_post_check.md`
+
+# ⚠️ COMPLETION POST-CHECK — integration readiness (before finishing)
+
+After implementation is done and all tests pass, run a quick integration-readiness scan of YOUR OWN change. Question it answers: **will this feature actually work in the target environment, or does it depend on external setup this repo does not contain?**
+
+Flag (as concerns) anything feature-blocking that is NOT code:
+- External services the code now depends on but that are not provisioned (Firebase, Apple/Google developer config, API backends, databases).
+- Missing configuration artifacts: `google-services.json`, `GoogleService-Info.plist`, client IDs / API keys / secrets, environment variables, `.entitlements`, URL scheme registrations, Gradle/Info.plist/manifest changes.
+- Referenced-but-absent external contracts: an endpoint that the provided API spec (e.g. swagger) does not define, a webhook URL that was never registered.
+
+**Do NOT flag code-quality, style, architecture, or test-coverage issues — the review agent owns those. Do not duplicate its work.**
+
+If there ARE concerns: write `outputs/concerns.md` — for each concern: (a) what the PR does, (b) what is missing, (c) concretely what is needed to make it work (exact file names, IDs, console/account steps). Short and factual; the pipeline appends it to the completion comment and the PR body and labels the ticket `ai_concerns`.
+
+If there are NO concerns: write nothing — no file, no label.
+
+
+---
+
+### [12] `./agents/instructions/story_development/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -215,7 +240,7 @@ flowchart TD
 
 ---
 
-### [12] `./agents/instructions/story_development/few_shots.md`
+### [13] `./agents/instructions/story_development/few_shots.md`
 
 Example PR descriptions — follow this structure and brevity:
 
@@ -230,7 +255,7 @@ flowchart TD
 
 ---
 
-### [13] `./agents/instructions/common/dmtools_cli.md`
+### [14] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -268,7 +293,7 @@ flowchart TD
 
 ---
 
-### [14] `./agents/instructions/common/session_ephemerality.md`
+### [15] `./agents/instructions/common/session_ephemerality.md`
 
 ```mermaid
 flowchart LR
@@ -287,7 +312,7 @@ implementation.
 
 ---
 
-### [15] `./agents/prompts/bash_tools.md`
+### [16] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -332,7 +357,7 @@ flowchart TD
 
 ---
 
-### [16] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
+### [17] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
 
 **HARD GATE — read before any tool call:**
 
