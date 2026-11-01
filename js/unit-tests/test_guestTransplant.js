@@ -424,6 +424,28 @@ suite('guestTransplant: transplantSequence — the happy path (AC1)', function (
         assert.equal(mod.diffFingerprint(''), null);
         assert.equal(mod.diffFingerprint({ junk: true }), null, 'non-text payloads are unusable');
     });
+
+    test('AC6: carryDecision filters carryLabels by sourceLabels when provided and unwraps raw/envelope diffs', function () {
+        var rawDiff = 'diff --git a/f.js b/f.js\n@@ -1 +1 @@\n-x\n+y\n';
+        assert.equal(mod.extractPrDiffText(rawDiff), rawDiff);
+        assert.equal(mod.extractPrDiffText(JSON.stringify({ result: rawDiff })), rawDiff);
+        assert.equal(mod.extractPrDiffText(JSON.stringify({ 'arg$1': rawDiff })), rawDiff);
+        assert.equal(mod.extractPrDiffText({ diff: rawDiff }), rawDiff);
+        assert.equal(mod.extractPrDiffText({}), null);
+        assert.equal(mod.extractPrDiffText('{broken json'), null);
+        assert.equal(mod.extractPrDiffText(null), null);
+        assert.equal(mod.extractPrDiffText(42), null);
+        assert.equal(mod.extractPrDiffText('not a diff'), null);
+
+        var partial = mod.carryDecision(rawDiff, rawDiff, baseCfg(), ['po_accept', 'ai_pr_reviewed']);
+        assert.equal(partial.carry, true);
+        assert.deepEqual(partial.labels, ['ai_pr_reviewed'], 'only carries verdict labels present on source PR');
+
+        var none = mod.carryDecision(rawDiff, rawDiff, baseCfg(), ['po_accept']);
+        assert.equal(none.carry, false);
+        assert.deepEqual(none.labels, []);
+        assert.equal(none.reason, 'no-source-verdict-labels');
+    });
 });
 
 suite('guestTransplant: parks and resets (AC4)', function () {

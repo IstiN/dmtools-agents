@@ -8365,17 +8365,16 @@ function guestPrDiffText(repoInfo, prNumber) {
             workspace: repoInfo.owner, repository: repoInfo.repo,
             pullRequestID: String(prNumber)
         });
-        var obj = mcpParse(raw);
-        if (typeof obj === 'string' && obj.length) return obj;
-        if (obj && typeof obj.diff === 'string' && obj.diff.length) return obj.diff;
+        var text = guestTransplantModule.extractPrDiffText(raw);
+        if (text) return text;
     } catch (e) { /* fall through */ }
     try {
         var raw2 = github_get_pr_diff({
             workspace: repoInfo.owner, repository: repoInfo.repo,
             pullRequestID: String(prNumber)
         });
-        var obj2 = mcpParse(raw2);
-        if (typeof obj2 === 'string' && obj2.length) return obj2;
+        var text2 = guestTransplantModule.extractPrDiffText(raw2);
+        if (text2) return text2;
     } catch (e2) { /* both tiers failed */ }
     return null;
 }
@@ -8467,7 +8466,7 @@ function guestApplyStep(repoInfo, cfg, s, ctx, dry) {
             // labels onto the new PR; anything else stays label-free.
             var sourceDiff = guestPrDiffText(repoInfo, ctx.sourcePrNumber);
             var newDiff = ctx.newPrNumber ? guestPrDiffText(repoInfo, ctx.newPrNumber) : null;
-            var decision = guestTransplantModule.carryDecision(sourceDiff, newDiff, cfg);
+            var decision = guestTransplantModule.carryDecision(sourceDiff, newDiff, cfg, ctx.sourceLabels);
             if (decision.carry && !dry) {
                 for (var li = 0; li < decision.labels.length; li++) {
                     tr.addLabel(ctx.newPrNumber, decision.labels[li]);
@@ -8580,8 +8579,8 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
     // A resume (thread: a tick that died between open_pr and close_pr)
     // carries the EXISTING machine PR number — the carry probe and the
     // close comment address it instead of opening a second PR.
-    var ctx = { sourcePrNumber: prNumber, usedSha: null,
-                newPrNumber: seq.resumePrNumber || null,
+    var ctx = { sourcePrNumber: prNumber, sourceLabels: ticket.labels || [],
+                usedSha: null, newPrNumber: seq.resumePrNumber || null,
                 actorLogin: (Array.isArray(machineLogins) && machineLogins.length)
                     ? machineLogins[0] : null };
     if (dry) {
