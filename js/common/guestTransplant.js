@@ -270,25 +270,31 @@ function parseTransplantMarker(comments, trustedLogins) {
     return _newestAllowedMarker(comments, allow);
 }
 
-function _commentTimestampMs(item) {
-    var raw = item && (item.created_at || item.created || item.createdAt);
-    return raw ? Date.parse(String(raw)) : NaN;
+function _commentCreatedIso(item) {
+    if (!item || typeof item !== 'object') return '';
+    return String(item.created_at || item.created || item.createdAt || '');
+}
+
+function _commentBodyText(item) {
+    if (typeof item === 'string') return item;
+    return item && item.body ? String(item.body) : '';
+}
+
+function _allowedCommentMarker(item, allow) {
+    if (!_authorAllowed(item, allow)) return null;
+    return _markerObject(_commentBodyText(item));
 }
 
 // The newest allowed comment body that carries a complete marker.
 function _newestAllowedMarker(comments, allow) {
     var found = null;
-    var bestTime = -Infinity;
+    var bestIso = '';
     for (var i = 0; i < comments.length; i++) {
-        if (!_authorAllowed(comments[i], allow)) continue;
-        var body = String((comments[i] && comments[i].body) || comments[i] || '');
-        var hit = _markerObject(body);
-        if (!hit) continue;
-        var ts = _commentTimestampMs(comments[i]);
-        var t = isNaN(ts) ? -1 : ts;
-        if (found === null || t >= bestTime) {
+        var hit = _allowedCommentMarker(comments[i], allow);
+        var iso = hit ? _commentCreatedIso(comments[i]) : null;
+        if (hit && iso >= bestIso) {
             found = hit;
-            bestTime = t;
+            bestIso = iso;
         }
     }
     return found;
