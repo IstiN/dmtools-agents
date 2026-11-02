@@ -682,6 +682,29 @@ suite('checkoutBranch — fresh leg input survives the checkout (gh-1318)', func
 // Pre-fix: git clean removed the fresh copy, the checkout restored STALE.
 // Post-fix: the fresh answer wins, the clean still ran, and the branch
 // stopped tracking input/ (heal).
+//
+// Runtime gate: the node coverage harness (quality.yml) executes
+// cli_execute_command with the PACK ROOT as cwd and ignores
+// workingDirectory — real git there would run against the agents repo
+// itself. The probe below detects that runtime and the suite self-skips;
+// the dmtools runner (the canonical green gate) runs the repro for real.
+
+var REAL_GIT_SUPPORTED = (function () {
+    try {
+        var tmp = String(cli_execute_command({ command: 'bash -c "mktemp -d"' })).trim();
+        var pwd = String(cli_execute_command({ command: 'bash -c "pwd"', workingDirectory: tmp })).trim();
+        cli_execute_command({ command: 'bash -c "rm -rf ' + tmp + '"' });
+        return pwd === tmp;
+    } catch (e) {
+        return false;
+    }
+})();
+
+function requireRealGitRuntime() {
+    if (REAL_GIT_SUPPORTED) return true;
+    assert.ok(true, 'skipped — this runtime ignores workingDirectory (node coverage harness); the real-git repro runs under the dmtools runner');
+    return false;
+}
 
 suite('checkoutBranch — gh-1318 repro over a real git repo', function() {
 
@@ -711,6 +734,7 @@ suite('checkoutBranch — gh-1318 repro over a real git repo', function() {
     }
 
     test('branch-tracked stale copy loses, tracker-regenerated fresh copy wins', function() {
+        if (!requireRealGitRuntime()) return;
         var repo = makeCollisionRepo();
         var calls = [];
         var excludeWrites = [];

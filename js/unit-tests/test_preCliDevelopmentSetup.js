@@ -1608,6 +1608,27 @@ suite('preCliDevelopmentSetup.writeDevBaseHead (gh-1308)', function () {
 
 suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318, real git)', function() {
 
+    // Runtime gate (see test_checkoutBranch.js): the node coverage harness
+    // runs cli_execute_command against the pack root and ignores
+    // workingDirectory — real git there would mutate the agents repo, so the
+    // suite self-skips; the dmtools runner executes the repro for real.
+    var REAL_GIT_SUPPORTED = (function () {
+        try {
+            var tmp = String(cli_execute_command({ command: 'bash -c "mktemp -d"' })).trim();
+            var pwd = String(cli_execute_command({ command: 'bash -c "pwd"', workingDirectory: tmp })).trim();
+            cli_execute_command({ command: 'bash -c "rm -rf ' + tmp + '"' });
+            return pwd === tmp;
+        } catch (e) {
+            return false;
+        }
+    })();
+
+    function requireRealGitRuntime() {
+        if (REAL_GIT_SUPPORTED) return true;
+        assert.ok(true, 'skipped — this runtime ignores workingDirectory (node coverage harness); the real-git repro runs under the dmtools runner');
+        return false;
+    }
+
     var FRESH = 'FRESH - reporter answered: credentials are testuser/testpass';
     var STALE = 'STALE - pre-answer ticket comments';
     var MOVE_MARKER = 'TRACKER: move to In Development';
@@ -1696,6 +1717,7 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
     }
 
     test('branch-tracked input/ collision no longer aborts — fresh copy wins, checkout completes', function() {
+        if (!requireRealGitRuntime()) return;
         var repo = makeCollisionRepo();
         var ctx = loadForRealGit(repo, {});
 
@@ -1711,6 +1733,7 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
     });
 
     test('the ticket moves to In Development only AFTER branch setup succeeded', function() {
+        if (!requireRealGitRuntime()) return;
         var repo = makeCollisionRepo();
         var ctx = loadForRealGit(repo, {});
 
@@ -1724,6 +1747,7 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
     });
 
     test('branch setup failure leaves the ticket OUT of In Development (no stranded status)', function() {
+        if (!requireRealGitRuntime()) return;
         var repo = makeCollisionRepo();
         var calls = [];
         var moves = [];
