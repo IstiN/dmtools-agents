@@ -46,15 +46,25 @@ function makeConfigLoaderStub(config, branchNameByRole, hookFn, hookLoadCalls) {
 var DEFAULT_PR_HELPER_STUB = loadModule('js/common/pullRequest.js',
     makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
 
+// gh-1318: checkoutDevBranch seeds .git/info/exclude through branchSetup's
+// file_read/file_write globals — those run against the PROCESS cwd (the real
+// agents repo) unless mocked. Every load guards them; tests that need the
+// recorded exclude writes pass __branchSetupFileMocks.
 function loadCheckoutBranch(configLoaderStub, mocks) {
+    var branchSetupFileMocks = (mocks && mocks.__branchSetupFileMocks) || {
+        file_read: function() { return ''; },
+        file_write: function() { return null; }
+    };
+    var moduleMocks = Object.assign({}, mocks || {});
+    delete moduleMocks.__branchSetupFileMocks;
     return loadModule(
         'js/checkoutBranch.js',
-        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, branchSetupFileMocks),
             './config.js': { GIT_CONFIG: {} },
             './configLoader.js': configLoaderStub,
             './common/pullRequest.js': DEFAULT_PR_HELPER_STUB
         }),
-        mocks || {}
+        moduleMocks
     );
 }
 

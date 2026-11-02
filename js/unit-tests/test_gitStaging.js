@@ -225,3 +225,72 @@ suite('gitStaging', function() {
         assert.notOk(gitStaging.isRuntimeArtifactStatusLine(null));
     });
 });
+
+// ── gh-1318: leg-context artifacts (input/, outputs/) ───────────────────────
+// A dev leg that ends in ask-mode pushed its own input/<ticket>/ copies onto
+// ai/<ticket> (the auto-save timer's git add -A had no input/outputs
+// exclusion). On re-run the tracker REGENERATES input/ — the branch-tracked
+// stale copy then either wins (checkoutBranch's clean) or refuses the
+// checkout outright (preCliDevelopmentSetup). input/ and outputs/ are
+// ephemeral leg context, not branch content: one canonical list + the same
+// untrack machinery as the runtime artifacts.
+
+suite('gitStaging leg-context artifacts (gh-1318)', function() {
+
+    test('LEG_CONTEXT_ARTIFACT_PATHS covers exactly the ephemeral leg dirs', function() {
+        assert.deepEqual(gitStaging.LEG_CONTEXT_ARTIFACT_PATHS, ['input', 'outputs']);
+    });
+
+    test('buildTrackedPathsCommand enumerates the given paths, no metacharacters (epam/dm.ai#679)', function() {
+        var cmd = gitStaging.buildTrackedPathsCommand(['input', 'outputs']);
+        assert.equal(cmd, 'git ls-files -- input outputs');
+        ['|', ';', '&&', '||', '`', '$(', '${', '>', '<', '\n'].forEach(function(bad) {
+            assert.equal(cmd.indexOf(bad), -1, JSON.stringify(cmd) + ' contains ' + JSON.stringify(bad));
+        });
+    });
+
+    test('buildTrackedArtifactsCommand still enumerates the runtime list (delegates to the generic builder)', function() {
+        assert.equal(gitStaging.buildTrackedArtifactsCommand(), 'git ls-files -- ' + ALL_ARTIFACTS.join(' '));
+    });
+
+    test('untrackTrackedPaths: only paths under the list are rm --cached, quoted', function() {
+        var calls = [];
+        var run = function(cmd) {
+            calls.push(cmd);
+            return 'input/PROJ-1/comments.md\noutputs/pr_base_branch.txt\ninputs-x.md\n';
+        };
+        var untracked = gitStaging.untrackTrackedPaths(run, ['input', 'outputs']);
+        assert.deepEqual(untracked, ['input/PROJ-1/comments.md', 'outputs/pr_base_branch.txt'],
+            'prefix match only — "inputs-x.md" is NOT a leg-context path');
+        assert.equal(calls.length, 2);
+        assert.equal(calls[0], 'git ls-files -- input outputs');
+        assert.equal(calls[1],
+            'git rm -r --cached --ignore-unmatch -- "input/PROJ-1/comments.md" "outputs/pr_base_branch.txt"',
+            'the rm stays --cached and --ignore-unmatch, paths quoted');
+    });
+
+    test('untrackTrackedPaths: nothing tracked → exactly one listing command, no rm', function() {
+        var calls = [];
+        gitStaging.untrackTrackedPaths(function(cmd) { calls.push(cmd); return ''; }, ['input']);
+        assert.deepEqual(calls, ['git ls-files -- input']);
+    });
+
+    test('untrackLegContextArtifacts runs the listing + rm with the leg-context list', function() {
+        var calls = [];
+        var untracked = gitStaging.untrackLegContextArtifacts(function(cmd) {
+            calls.push(cmd);
+            if (calls.length === 1) return 'input/gh-1318/request.md\n';
+            return '';
+        });
+        assert.equal(calls[0], 'git ls-files -- input outputs');
+        assert.contains(calls[1], 'git rm -r --cached --ignore-unmatch');
+        assert.contains(calls[1], '"input/gh-1318/request.md"');
+        assert.deepEqual(untracked, ['input/gh-1318/request.md']);
+    });
+
+    test('untrackLegContextArtifacts handles a run that throws (callers keep their own try/catch contract)', function() {
+        assert.throws(function() {
+            gitStaging.untrackLegContextArtifacts(function() { throw new Error('git down'); });
+        });
+    });
+});
