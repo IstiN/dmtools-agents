@@ -1438,3 +1438,76 @@ suite('dfManager liveness probe identity (gh-1317)', function() {
         assert.equal(df.triggered.length, 1, 'one SM re-trigger for the one stale ticket');
     });
 });
+
+// ── gh-1317 rework: ruleLabels extracted helper (pure units) ──────────────────
+// ci red b262886e: the quality.yml crap ratchet flagged the new ruleLabels
+// helper (CRAP 9 > threshold 8). These units pin its exact label-collection
+// contract so the complexity refactor that greens the gate stays
+// behavior-identical, exported like the other extracted helpers (gh-1227
+// pattern).
+
+suite('dfManager gh-1317 ruleLabels helper (pure units)', function() {
+    function dfm() { return makeDfManager().module; }
+
+    test('ruleLabels is exported (pure-unit helper, gh-1227 extraction pattern)', function() {
+        assert.equal(typeof dfm().ruleLabels, 'function');
+    });
+
+    test('null/undefined rule degrades to the empty list', function() {
+        var df = dfm();
+        assert.deepEqual(df.ruleLabels(null), []);
+        assert.deepEqual(df.ruleLabels(undefined), []);
+    });
+
+    test('empty rule yields no phantom labels', function() {
+        assert.deepEqual(dfm().ruleLabels({}), []);
+    });
+
+    test('single-label shapes: addLabel and skipIfLabel', function() {
+        var df = dfm();
+        assert.deepEqual(df.ruleLabels({ addLabel: 'l_add' }), ['l_add']);
+        assert.deepEqual(df.ruleLabels({ skipIfLabel: 'l_skip' }), ['l_skip']);
+    });
+
+    test('multi-label shapes: addLabels and skipIfLabels ride in list order', function() {
+        var df = dfm();
+        assert.deepEqual(df.ruleLabels({ addLabels: ['a1', 'a2'] }), ['a1', 'a2']);
+        assert.deepEqual(df.ruleLabels({ skipIfLabels: ['s1', 's2'] }), ['s1', 's2']);
+    });
+
+    test('combined rule: addLabel, skipIfLabel, addLabels, skipIfLabels in declaration order', function() {
+        assert.deepEqual(
+            dfm().ruleLabels({
+                addLabel: 'l_add',
+                skipIfLabel: 'l_skip',
+                addLabels: ['l_multi1', 'l_multi3'],
+                skipIfLabels: ['l_multi2']
+            }),
+            ['l_add', 'l_skip', 'l_multi1', 'l_multi3', 'l_multi2']);
+    });
+
+    test('undefined label fields contribute nothing (no undefined entries)', function() {
+        assert.deepEqual(
+            dfm().ruleLabels({ addLabel: 'l_add', addLabels: undefined, skipIfLabels: undefined }),
+            ['l_add']);
+    });
+
+    test('duplicate label inside one rule is kept twice (dedup stays the map builders job)', function() {
+        assert.deepEqual(dfm().ruleLabels({ addLabel: 'x', addLabels: ['x'] }), ['x', 'x']);
+    });
+
+    test('consumers keep first-entry semantics through ruleLabels (buildLabelRuleMap unchanged)', function() {
+        var ruleA = { addLabel: 'l_add', skipIfLabel: 'l_skip', addLabels: ['l_multi1'], skipIfLabels: ['l_multi2'] };
+        var ruleB = { addLabel: 'l_add' };
+        var map = dfm().buildLabelRuleMap([ruleA, ruleB]);
+        assert.equal(map.l_add, ruleA, 'first declaration wins');
+        assert.equal(Object.keys(map).length, 4, 'no phantom labels');
+    });
+
+    test('disabled rules are excluded by the callers, not by ruleLabels (collectLabelsFromRules)', function() {
+        var df = dfm();
+        assert.deepEqual(
+            df.collectLabelsFromRules([{ addLabel: 'on' }, { addLabel: 'off', enabled: false }]),
+            ['on']);
+    });
+});

@@ -189,14 +189,16 @@ function activeRunMatchesTicket(activeRuns, ticketKey, labels, labelRuleMap) {
 
 // The labels one rule claims (addLabel/skipIfLabel/addLabels/skipIfLabels).
 // Shared by the label→rules derivations below so a rule shape change lands
-// once.
+// once. Shape kept CRAP-ratchet-safe (quality.yml gates NEW functions at 8):
+// early return drops the per-field null guards and concat folds the two
+// forEach pushes — CC 6 at full coverage instead of the CC 9 that red the
+// ci b262886e gate.
 function ruleLabels(rule) {
+    if (!rule) return [];
     var labels = [];
-    if (rule && rule.addLabel) labels.push(rule.addLabel);
-    if (rule && rule.skipIfLabel) labels.push(rule.skipIfLabel);
-    (rule && rule.addLabels || []).forEach(function(label) { labels.push(label); });
-    (rule && rule.skipIfLabels || []).forEach(function(label) { labels.push(label); });
-    return labels;
+    if (rule.addLabel) labels.push(rule.addLabel);
+    if (rule.skipIfLabel) labels.push(rule.skipIfLabel);
+    return labels.concat(rule.addLabels || [], rule.skipIfLabels || []);
 }
 
 function collectLabelsFromRules(rules) {
@@ -755,6 +757,7 @@ if (typeof module !== 'undefined' && module.exports) {
         detectDuplicateRuns: detectDuplicateRuns,
         buildLabelStatusMap: buildLabelStatusMap,
         buildLabelRuleMap: buildLabelRuleMap,
+        ruleLabels: ruleLabels,
         ticketRunNeedles: ticketRunNeedles,
         extractStatusesFromJql: extractStatusesFromJql,
         extractExcludedStatusesFromJql: extractExcludedStatusesFromJql,
