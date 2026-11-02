@@ -1,0 +1,7 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": ".dmtools-scratch/probe.js",
+    "jobParams": {}
+  }
+}
