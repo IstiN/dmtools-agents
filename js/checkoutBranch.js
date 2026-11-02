@@ -17,6 +17,7 @@ const { GIT_CONFIG } = require('./config.js');
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
 var branchSetup = require('./common/branchSetup.js');
+var gitStaging = require('./common/gitStaging.js');
 
 // Adapter matching the (command, workingDir) signature of the
 // common/pullRequest.js probe helpers (gh-912) — this action always runs in

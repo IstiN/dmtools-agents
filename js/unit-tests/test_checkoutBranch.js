@@ -387,10 +387,17 @@ suite('checkoutBranch — seam helpers (gh-1190)', function() {
         try {
             mod.checkoutDevBranch('ai/PROJ-1', 'master');
             assert.deepEqual(calls, [
+                'bash -c "test -d input"',
+                'bash -c "rm -rf .input.branch-setup-bak"',
+                'bash -c "mv input .input.branch-setup-bak"',
                 'git clean -fd -- input/',
                 'git branch --list "ai/PROJ-1"',
-                'git checkout ai/PROJ-1'
-            ], 'input/ artifact cleanup precedes the decision tree; local hit short-circuits before any ls-remote');
+                'git checkout ai/PROJ-1',
+                'git ls-files -- input outputs',
+                'bash -c "test -d .input.branch-setup-bak"',
+                'bash -c "rm -rf input"',
+                'bash -c "mv .input.branch-setup-bak input"'
+            ], 'fresh input/ stashed before the clean (gh-1318), heal after checkout, restore last');
             assert.ok(logs.join('\n').indexOf('Branch exists locally, checking out: ai/PROJ-1') !== -1);
         } finally {
             console.log = originalLog;
@@ -410,10 +417,17 @@ suite('checkoutBranch — seam helpers (gh-1190)', function() {
         });
         mod.checkoutDevBranch('ai/PROJ-1', 'master');
         assert.deepEqual(calls, [
+            'bash -c "test -d input"',
+            'bash -c "rm -rf .input.branch-setup-bak"',
+            'bash -c "mv input .input.branch-setup-bak"',
             'git clean -fd -- input/',
             'git branch --list "ai/PROJ-1"',
             'git ls-remote --heads origin ai/PROJ-1',
-            'git checkout -b ai/PROJ-1 origin/ai/PROJ-1'
+            'git checkout -b ai/PROJ-1 origin/ai/PROJ-1',
+            'git ls-files -- input outputs',
+            'bash -c "test -d .input.branch-setup-bak"',
+            'bash -c "rm -rf input"',
+            'bash -c "mv .input.branch-setup-bak input"'
         ]);
     });
 
@@ -428,13 +442,20 @@ suite('checkoutBranch — seam helpers (gh-1190)', function() {
         try {
             mod.checkoutDevBranch('ai/PROJ-1', 'release/rc');
             assert.deepEqual(calls, [
+                'bash -c "test -d input"',
+                'bash -c "rm -rf .input.branch-setup-bak"',
+                'bash -c "mv input .input.branch-setup-bak"',
                 'git clean -fd -- input/',
                 'git branch --list "ai/PROJ-1"',
                 'git ls-remote --heads origin ai/PROJ-1',
                 'git checkout release/rc',
                 'git pull origin release/rc',
-                'git checkout -b ai/PROJ-1'
-            ], 'new branch starts from the (feature) base');
+                'git checkout -b ai/PROJ-1',
+                'git ls-files -- input outputs',
+                'bash -c "test -d .input.branch-setup-bak"',
+                'bash -c "rm -rf input"',
+                'bash -c "mv .input.branch-setup-bak input"'
+            ], 'new branch starts from the (feature) base; stash/restore wraps every route');
             assert.ok(logs.join('\n').indexOf('Creating new branch from release/rc: ai/PROJ-1') !== -1);
         } finally {
             console.log = originalLog;
@@ -510,7 +531,7 @@ suite('checkoutBranch — input/ artifact cleanup (gh-1301)', function() {
         }
     });
 
-    test('checkoutDevBranch runs git clean before the branch decision tree', function() {
+    test('checkoutDevBranch: the clean runs after the input stash and before the decision tree', function() {
         var calls = [];
         var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
             cli_execute_command: function(opts) {
@@ -520,8 +541,208 @@ suite('checkoutBranch — input/ artifact cleanup (gh-1301)', function() {
             }
         });
         mod.checkoutDevBranch('ai/PROJ-1', 'master');
-        assert.equal(calls[0], GIT_CLEAN_INPUT);
-        assert.equal(calls[1], 'git branch --list "ai/PROJ-1"', 'the cleanup precedes the checkout decision tree');
+        var cleanIdx = calls.indexOf(GIT_CLEAN_INPUT);
+        var stashIdx = calls.indexOf('bash -c "mv input .input.branch-setup-bak"');
+        var branchProbeIdx = calls.indexOf('git branch --list "ai/PROJ-1"');
+        assert.ok(cleanIdx !== -1, 'the constant clean still runs');
+        assert.ok(stashIdx !== -1 && stashIdx < cleanIdx,
+            'the fresh regenerated input/ is stashed away BEFORE the clean can touch it (gh-1318)');
+        assert.ok(branchProbeIdx !== -1 && cleanIdx < branchProbeIdx,
+            'the cleanup still precedes the checkout decision tree');
+    });
+
+});
+
+// ── gh-1318: fresh leg input wins over the branch-tracked stale copy ─────────
+// A dev leg that ended in ask-mode pushed ai/<ticket> WITH its own pre-answer
+// input/ snapshot (the timer's git add -A). The tracker regenerates input/
+// (with the reporter's answer) before the re-run leg — but the old
+// dropUntrackedInputArtifacts deleted that fresh copy and the checkout
+// restored the stale branch-tracked one: the answer never reached a leg.
+// Unit-level behavior: stash before clean, restore-over-checked-out-copy
+// after, and a leg-context heal (untrack + .git/info/exclude seed) so the
+// collision class disappears from the branch entirely.
+
+suite('checkoutBranch — fresh leg input survives the checkout (gh-1318)', function() {
+
+    var STASH_MV = 'bash -c "mv input .input.branch-setup-bak"';
+    var RESTORE_MV = 'bash -c "mv .input.branch-setup-bak input"';
+
+    test('stash failure degrades to the pre-gh-1318 behavior — clean still runs, nothing throws', function() {
+        var calls = [];
+        var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command === STASH_MV) throw new Error('read-only workspace');
+                if (opts.command === 'git branch --list "ai/PROJ-1"') return 'ai/PROJ-1';
+                return '';
+            }
+        });
+        mod.checkoutDevBranch('ai/PROJ-1', 'master');
+        assert.ok(calls.indexOf('git clean -fd -- input/') !== -1, 'the constant clean still ran');
+        assert.ok(calls.indexOf(RESTORE_MV) === -1, 'nothing was stashed → no restore');
+        assert.ok(calls.indexOf('git checkout ai/PROJ-1') !== -1, 'checkout completed');
+    });
+
+    test('checkout refusal still restores the fresh input (finally, not the happy path)', function() {
+        var calls = [];
+        var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command === 'git checkout ai/PROJ-1') throw new Error('untracked working tree files would be overwritten');
+                return '';
+            }
+        });
+        var threw = null;
+        try {
+            mod.checkoutDevBranch('ai/PROJ-1', 'master');
+        } catch (e) {
+            threw = e;
+        }
+        assert.ok(threw, 'the refusal propagates (action() logs it non-fatally)');
+        assert.ok(calls.indexOf(RESTORE_MV) !== -1, 'the fresh input comes back even when the checkout failed');
+        assert.ok(calls.indexOf('git ls-files -- input outputs') === -1,
+            'no heal runs when the checkout never succeeded (nothing was checked out to heal)');
+    });
+
+    test('heal: a branch still tracking leg context gets it untracked (quoted, --cached)', function() {
+        var calls = [];
+        var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command === 'git branch --list "ai/PROJ-1"') return 'ai/PROJ-1';
+                if (opts.command === 'git ls-files -- input outputs') {
+                    return 'input/PROJ-1/comments.md\noutputs/pr_base_branch.txt\n';
+                }
+                return '';
+            }
+        });
+        mod.checkoutDevBranch('ai/PROJ-1', 'master');
+        var rm = calls.filter(function(c) { return c.indexOf('git rm -r --cached --ignore-unmatch') === 0; })[0];
+        assert.ok(rm, 'poisoned branch is untracked in the same setup pass');
+        assert.contains(rm, '"input/PROJ-1/comments.md"');
+        assert.contains(rm, '"outputs/pr_base_branch.txt"');
+        var rmIdx = calls.indexOf(rm);
+        var restoreIdx = calls.indexOf(RESTORE_MV);
+        assert.ok(rmIdx !== -1 && restoreIdx !== -1 && rmIdx < restoreIdx,
+            'untrack (index-only) precedes the working-tree restore — the fresh copy is the last state');
+    });
+
+    test('heal: untrack failure is a warning and never blocks the checkout', function() {
+        var calls = [];
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
+                cli_execute_command: function(opts) {
+                    calls.push(opts.command);
+                    if (opts.command === 'git ls-files -- input outputs') throw new Error('git down');
+                    if (opts.command === 'git branch --list "ai/PROJ-1"') return 'ai/PROJ-1';
+                    return '';
+                }
+            });
+            mod.checkoutDevBranch('ai/PROJ-1', 'master');
+            assert.ok(calls.indexOf('git checkout ai/PROJ-1') !== -1, 'checkout completed');
+            assert.ok(calls.indexOf(RESTORE_MV) !== -1, 'restore still ran');
+            assert.ok(warnings.some(function(w) { return w.indexOf('leg context') !== -1; }),
+                'the failure names the leg-context heal: ' + warnings.join(' | '));
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('heal: clean branch (nothing tracked under input//outputs/) → listing only, no rm', function() {
+        var calls = [];
+        var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command === 'git branch --list "ai/PROJ-1"') return 'ai/PROJ-1';
+                return '';
+            }
+        });
+        mod.checkoutDevBranch('ai/PROJ-1', 'master');
+        assert.equal(calls.filter(function(c) { return c.indexOf('git rm') === 0; }).length, 0,
+            'nothing tracked → nothing to untrack');
+    });
+
+});
+
+// ── gh-1318 repro over a REAL git repo (the ticket's synthetic in-process run) ─
+// Drives checkoutBranch.action() in-process over a real temp repository —
+// every cli_execute_command git command executes for real, scoped to the
+// temp dir via workingDirectory. Scenario (ticket repro verbatim):
+//   1. main seeded; branch ai/BUG-1 committed input/TICKET/comments.md with
+//      the STALE pre-answer text (the ask-mode WIP snapshot)
+//   2. back on main, a FRESH untracked input/TICKET/comments.md carries the
+//      reporter's answer (what preCli regeneration produces)
+//   3. checkoutBranch.action() runs for BUG-1
+// Pre-fix: git clean removed the fresh copy, the checkout restored STALE.
+// Post-fix: the fresh answer wins, the clean still ran, and the branch
+// stopped tracking input/ (heal).
+
+suite('checkoutBranch — gh-1318 repro over a real git repo', function() {
+
+    var FRESH = 'FRESH - reporter answered: credentials are testuser/testpass';
+    var STALE = 'STALE - pre-answer ticket comments';
+
+    function git(cmd, dir) {
+        return cli_execute_command({ command: cmd, workingDirectory: dir });
+    }
+
+    function makeCollisionRepo() {
+        var tmp = String(cli_execute_command({ command: 'bash -c "mktemp -d"' })).trim();
+        git('git init', tmp);
+        var base = String(git('git symbolic-ref --short HEAD', tmp)).trim();
+        git('git config user.name "Test Agent"', tmp);
+        git('git config user.email "agent@example.com"', tmp);
+        file_write({ path: tmp + '/README.md', content: 'seed\n' });
+        git('git add README.md', tmp);
+        git('git commit -m seed', tmp);
+        git('git checkout -b ai/BUG-1', tmp);
+        file_write({ path: tmp + '/input/TICKET/comments.md', content: STALE });
+        git('git add -A', tmp);
+        git('git commit -m "ask-mode WIP snapshot"', tmp);
+        git('git checkout ' + base, tmp);
+        file_write({ path: tmp + '/input/TICKET/comments.md', content: FRESH });
+        return { tmp: tmp, base: base };
+    }
+
+    test('branch-tracked stale copy loses, tracker-regenerated fresh copy wins', function() {
+        var repo = makeCollisionRepo();
+        var calls = [];
+        var excludeWrites = [];
+        var configLoaderStub = {
+            loadProjectConfig: function() {
+                return makeConfig({ git: { baseBranch: repo.base, featureBranch: { enabled: false } } });
+            },
+            resolveBranchName: function(cfg, ticket, role) { return 'ai/BUG-1'; }
+        };
+        var mod = loadCheckoutBranch(configLoaderStub, {
+            __branchSetupFileMocks: {
+                file_read: function() { return ''; },
+                file_write: function(args) { excludeWrites.push(args); return null; }
+            },
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                return cli_execute_command({ command: opts.command, workingDirectory: repo.tmp });
+            }
+        });
+
+        mod.action({ ticket: { key: 'BUG-1' }, jobParams: { customParams: {} } });
+
+        assert.contains(calls.join('\n'), 'git clean -fd -- input/', 'the constant clean still ran');
+        assert.equal(String(git('git symbolic-ref --short HEAD', repo.tmp)).trim(), 'ai/BUG-1',
+            'the dev branch is checked out');
+        assert.contains(file_read({ path: repo.tmp + '/input/TICKET/comments.md' }), 'FRESH - reporter answered',
+            'the fresh reporter answer survived — the stale branch-tracked copy must not win');
+        assert.equal(String(git('git ls-files -- input outputs', repo.tmp)), '',
+            'the branch no longer tracks leg context (root-cause heal)');
+        var excludeContent = excludeWrites.filter(function(w) { return w.path === '.git/info/exclude'; })
+            .map(function(w) { return w.content; }).join('');
+        assert.contains(excludeContent, 'input/', 'input/ seeded into .git/info/exclude');
+        assert.contains(excludeContent, 'outputs/', 'outputs/ seeded into .git/info/exclude');
+        cli_execute_command({ command: 'bash -c "rm -rf ' + repo.tmp + '"' });
     });
 
 });

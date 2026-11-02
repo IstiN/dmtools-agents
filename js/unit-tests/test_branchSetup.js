@@ -631,10 +631,8 @@ suite('branchSetup — fresh leg input stash/restore (gh-1318)', function() {
         var present = {};
         present['input'] = true;
         var exec = makeDirExec(calls, present);
-        // rm of the stale backup always runs; its exit is irrelevant
         assert.equal(loadBranchSetup().stashFreshInput(exec), true);
         assert.deepEqual(calls, [
-            'bash -c "test -d ' + STASH_DIR + '"',
             'bash -c "test -d input"',
             'bash -c "rm -rf ' + STASH_DIR + '"',
             'bash -c "mv input ' + STASH_DIR + '"'
@@ -645,12 +643,12 @@ suite('branchSetup — fresh leg input stash/restore (gh-1318)', function() {
         var calls = [];
         assert.equal(loadBranchSetup().stashFreshInput(makeDirExec(calls, {})), false);
         assert.deepEqual(calls, [
-            'bash -c "test -d ' + STASH_DIR + '"',
-            'bash -c "test -d input"'
+            'bash -c "test -d input"',
+            'bash -c "test -d ' + STASH_DIR + '"'
         ], 'no input/ and no orphaned backup → pure probe, no side effects');
     });
 
-    test('stashFreshInput: orphaned backup with no input/ is recovered FIRST, then stashed again', function() {
+    test('stashFreshInput: fresh input/ alongside a stale leftover backup → backup discarded, fresh stashed', function() {
         var calls = [];
         var present = {};
         present['input'] = true;
@@ -658,27 +656,22 @@ suite('branchSetup — fresh leg input stash/restore (gh-1318)', function() {
         var exec = makeDirExec(calls, present);
         assert.equal(loadBranchSetup().stashFreshInput(exec), true);
         assert.deepEqual(calls, [
-            'bash -c "test -d ' + STASH_DIR + '"',
-            'bash -c "test -d input"',          // input present → recovery probe chain stops
+            'bash -c "test -d input"',
             'bash -c "rm -rf ' + STASH_DIR + '"',
             'bash -c "mv input ' + STASH_DIR + '"'
-        ]);
+        ], 'the fresh regenerated copy is the truth — the leftover backup is only ever recovery material');
     });
 
-    test('stashFreshInput: input/ absent but orphaned backup present → backup moved back (crash recovery)', function() {
+    test('stashFreshInput: input/ absent but a backup exists → the backup IS the stash (crash window)', function() {
         var calls = [];
         var present = {};
         present[STASH_DIR] = true;
         var exec = makeDirExec(calls, present);
         assert.equal(loadBranchSetup().stashFreshInput(exec), true);
         assert.deepEqual(calls, [
-            'bash -c "test -d ' + STASH_DIR + '"',
             'bash -c "test -d input"',
-            'bash -c "mv ' + STASH_DIR + ' input"',
-            'bash -c "test -d input"',
-            'bash -c "rm -rf ' + STASH_DIR + '"',
-            'bash -c "mv input ' + STASH_DIR + '"'
-        ], 'the only fresh copy was in the backup — recover it, then stash normally');
+            'bash -c "test -d ' + STASH_DIR + '"'
+        ], 'a previous setup crashed between stash and restore — restore will move the backup back');
     });
 
     test('stashFreshInput: mv failure warns and returns false (callers degrade to the old clean behavior)', function() {
@@ -773,25 +766,27 @@ suite('branchSetup.ensureLegContextLocalExcludes (gh-1318)', function() {
     test('seeds both input/ and outputs/ into .git/info/exclude when empty', function() {
         var mocks = makeFileMocks('');
         loadBranchSetup(mocks).ensureLegContextLocalExcludes();
-        assert.equal(mocks.writes.length, 2);
+        assert.equal(mocks.writes.length, 3, 'input/, outputs/ and the stash dir');
         assert.equal(mocks.writes[0].path, '.git/info/exclude');
         assert.contains(mocks.writes[0].content, 'input/');
         assert.contains(mocks.writes[1].content, 'outputs/');
     });
 
     test('idempotent: entries already present → no write', function() {
-        var existing = '# x\ninput/\noutputs/\n';
+        var existing = '# x\ninput/\noutputs/\n.input.branch-setup-bak/\n';
         var mocks = makeFileMocks(existing);
         loadBranchSetup(mocks).ensureLegContextLocalExcludes();
-        assert.equal(mocks.writes.length, 0, 'both entries present, nothing to do');
+        assert.equal(mocks.writes.length, 0, 'all entries present, nothing to do');
     });
 
-    test('partial state: only outputs/ present → input/ is appended', function() {
+    test('partial state: only outputs/ present → the missing entries are appended', function() {
         var mocks = makeFileMocks('# keep\noutputs/\n');
         loadBranchSetup(mocks).ensureLegContextLocalExcludes();
-        assert.equal(mocks.writes.length, 1);
-        assert.contains(mocks.writes[0].content, 'input/');
-        assert.contains(mocks.writes[0].content, 'outputs/', 'existing content preserved');
+        assert.equal(mocks.writes.length, 2);
+        var all = mocks.writes.map(function(w) { return w.content; }).join('');
+        assert.contains(all, 'input/');
+        assert.contains(all, '.input.branch-setup-bak/');
+        assert.contains(all, 'outputs/', 'existing content preserved');
     });
 
     test('the stash dir is seeded too — a crash between stash and restore must not leak it into a commit', function() {

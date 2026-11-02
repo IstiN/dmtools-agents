@@ -154,6 +154,113 @@ function ensureGitInfoExclude(entry, commentLine, warnMessage) {
     }
 }
 
+// ── gh-1318: fresh leg input/ stash — fresh regenerated context must win ────
+// The tracker regenerates input/ before every leg; a branch that already
+// carries an ask-mode WIP snapshot of the OLD input/ either refuses checkout
+// ("untracked working tree files would be overwritten") or gets the fresh
+// copy cleaned away and serves the stale pre-answer copy to the agent. The
+// fresh copy is stashed aside (mv, not cp — instant, no duplicate storage)
+// for the duration of branch setup and overlaid back afterwards, exactly
+// like the .codegraph guard. Recover-first: a setup that crashed between
+// stash and restore left the backup dir holding the only fresh copy.
+// Commands go through `bash -c` (builtins/rm/mv/test are not in the
+// cli_execute_command whitelist); one action per call — the metacharacter
+// guard forbids `;`/`&&` even inside the quotes.
+
+/** Backup dir name — hidden, outside input/, seeded into the local excludes. */
+var INPUT_STASH_DIR = '.input.branch-setup-bak';
+
+/** True when `dir` exists in the exec's working directory (probe failure = absent). */
+function testDirectoryExists(exec, dir) {
+    try {
+        exec('bash -c "test -d ' + dir + '"');
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * Move the freshly regenerated input/ aside for the duration of branch setup.
+ * Returns true when the stash is in place (callers must restore afterwards);
+ * false when there was nothing to stash or the move failed — the caller then
+ * degrades to its pre-guard behavior (clean/checkout as before), never a
+ * throw: a broken guard must not break branch setup.
+ *
+ * Crash window: a previous setup that died between stash and restore left
+ * INPUT_STASH_DIR holding the ONLY copy of the fresh input/ (input/ itself
+ * absent). That backup already IS the stash — it stays put and the restore
+ * moves it back into place; re-stashing a recovered copy would just churn
+ * two renames.
+ */
+function stashFreshInput(exec) {
+    if (testDirectoryExists(exec, 'input')) {
+        try {
+            exec('bash -c "rm -rf ' + INPUT_STASH_DIR + '"');
+            exec('bash -c "mv input ' + INPUT_STASH_DIR + '"');
+            return true;
+        } catch (e) {
+            console.warn('Could not stash fresh input/ before branch setup:', e);
+            return false;
+        }
+    }
+    if (testDirectoryExists(exec, INPUT_STASH_DIR)) {
+        console.log('input/ absent but the previous setup left a fresh-input backup in ' +
+            INPUT_STASH_DIR + ' — treating it as the stash (crash recovery)');
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Overlay the stashed fresh input/ back over whatever the checkout left
+ * behind — the branch-tracked stale snapshot (tracked copy → replaced), a
+ * refusal-leftover (nothing there → backup simply moves in), or a clean
+ * tree (same). `stashed` false is an absolute no-op; a vanished backup is a
+ * loud warning that never deletes the current input/ without a replacement.
+ */
+function restoreFreshInput(exec, stashed) {
+    if (!stashed) return;
+    if (!testDirectoryExists(exec, INPUT_STASH_DIR)) {
+        console.warn('Fresh input/ stash vanished during branch setup — leaving input/ as checked out');
+        return;
+    }
+    try {
+        exec('bash -c "rm -rf input"');
+        exec('bash -c "mv ' + INPUT_STASH_DIR + ' input"');
+        console.log('Fresh leg input/ restored over the branch-tracked copy');
+    } catch (e) {
+        console.warn('Could not restore fresh input/ after branch setup:', e);
+    }
+}
+
+/**
+ * gh-1318 root cause: input/, outputs/ and the input stash dir are ephemeral
+ * leg context, not branch content — seed them into .git/info/exclude so no
+ * `git add -A` (auto-save timer, final commit) ever stages them again.
+ * Local-only (never a committed .gitignore line), idempotent, best-effort.
+ * Note: file ops resolve against the process cwd — the job root, which is
+ * exactly the checkout that sees regenerated input/ in single-repo
+ * deployments (the collision case this seed exists for).
+ */
+function ensureLegContextLocalExcludes() {
+    ensureGitInfoExclude(
+        'input/',
+        '# Ticket leg input (regenerated per-run by the tracker) - must never be committed',
+        'Could not add input/ to .git/info/exclude:'
+    );
+    ensureGitInfoExclude(
+        'outputs/',
+        '# Job output artifacts (response.md, gate markers) - must never be committed',
+        'Could not add outputs/ to .git/info/exclude:'
+    );
+    ensureGitInfoExclude(
+        INPUT_STASH_DIR + '/',
+        '# input/ branch-setup stash (crash window must never leak into a commit)',
+        'Could not add ' + INPUT_STASH_DIR + '/ to .git/info/exclude:'
+    );
+}
+
 /** True when HEAD carries commits not in origin/<baseBranch> (`git cherry`). */
 function branchHasUniquePatches(prHelper, exec, baseBranch, warnMessage) {
     try {
@@ -318,6 +425,10 @@ if (typeof module !== 'undefined' && module.exports) {
         createFeatureBranch: createFeatureBranch,
         establishFeatureBranch: establishFeatureBranch,
         ensureGitInfoExclude: ensureGitInfoExclude,
+        stashFreshInput: stashFreshInput,
+        restoreFreshInput: restoreFreshInput,
+        ensureLegContextLocalExcludes: ensureLegContextLocalExcludes,
+        INPUT_STASH_DIR: INPUT_STASH_DIR,
         branchHasUniquePatches: branchHasUniquePatches,
         findMergeBase: findMergeBase,
         collectMergeTreeDetails: collectMergeTreeDetails,

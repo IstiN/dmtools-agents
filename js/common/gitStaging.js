@@ -42,13 +42,32 @@ var RUNTIME_ARTIFACT_PATHS = [
 ];
 
 /**
- * Command that lists which runtime artifacts git actually TRACKS (gh-683: only tracked paths are ever
+ * gh-1318: the tracker-regenerated leg context. input/ (ticket description,
+ * comments, answers) and outputs/ (response.md, markers) are ephemeral per-leg
+ * context — the tracker regenerates both before every leg — so they must never
+ * be committed to a work branch. Committing them is what created the
+ * stale-WIP collision in the first place: an ask-mode leg pushed its own
+ * pre-answer input/ snapshot onto ai/<ticket>, and the re-run leg either had
+ * its fresh copy cleaned away (checkoutBranch) or refused the checkout
+ * outright (preCliDevelopmentSetup). Paired with the .git/info/exclude seed
+ * (branchSetup.ensureLegContextLocalExcludes): the seed keeps `git add -A`
+ * from ever staging them again, the untrack heals branches that already
+ * carry them.
+ */
+var LEG_CONTEXT_ARTIFACT_PATHS = ['input', 'outputs'];
+
+/**
+ * Command that lists which of `paths` git actually TRACKS (gh-683: only tracked paths are ever
  * handed to `git rm`). A plain `git ls-files -- <paths>` — no pipe, `;` or `&&` — so it passes the
  * Java cli_execute_command shell-injection validator (epam/dm.ai#679: the old single-line
  * `ls-files | while read … git rm` form was rejected there on every run).
  */
+function buildTrackedPathsCommand(paths) {
+    return 'git ls-files -- ' + (paths || []).join(' ');
+}
+
 function buildTrackedArtifactsCommand() {
-    return 'git ls-files -- ' + RUNTIME_ARTIFACT_PATHS.join(' ');
+    return buildTrackedPathsCommand(RUNTIME_ARTIFACT_PATHS);
 }
 
 /**
@@ -62,23 +81,44 @@ function buildUntrackPathsCommand(paths) {
 }
 
 /**
- * Untracks already-poisoned runtime artifacts: lists the tracked ones, then removes only those from
+ * Untracks already-poisoned paths from `paths`: lists the tracked ones, then removes only those from
  * the index. Nothing tracked (the normal case) = exactly ONE command (the listing) and no rm, so an
  * untracked path is never named to `git rm`. Two plain commands instead of one shell pipeline, so the
  * same code runs under the Java validator and the Dart bridge.
  *
  * @param {function(string): *} run executes a command string (the site's own wrapper, in the right
  *        working directory) and returns its output; may throw — callers keep their own try/catch
+ * @param {string[]} paths the candidate paths (a listed line counts only when it equals one of them
+ *        or lives underneath it)
  * @returns {string[]} the paths that were untracked (empty when nothing was tracked)
  */
-function untrackRuntimeArtifacts(run) {
-    var listed = String(run(buildTrackedArtifactsCommand()) || '');
+function untrackTrackedPaths(run, paths) {
+    var candidates = paths || [];
+    var listed = String(run(buildTrackedPathsCommand(candidates)) || '');
     var tracked = listed.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) {
-        return l && RUNTIME_ARTIFACT_PATHS.some(function (a) { return l === a || l.indexOf(a + '/') === 0; });
+        return l && candidates.some(function (a) { return l === a || l.indexOf(a + '/') === 0; });
     });
     if (tracked.length === 0) return [];
     run(buildUntrackPathsCommand(tracked));
     return tracked;
+}
+
+/**
+ * Untracks already-poisoned runtime artifacts: lists the tracked ones, then removes only those from
+ * the index. See untrackTrackedPaths for the command contract.
+ */
+function untrackRuntimeArtifacts(run) {
+    return untrackTrackedPaths(run, RUNTIME_ARTIFACT_PATHS);
+}
+
+/**
+ * gh-1318: untrack branch-committed leg context (input/, outputs/) — the
+ * poisoned-branch half of the leg-context heal. Run right after the dev-branch
+ * checkout so the ticket's own regenerated context never rides the leg's
+ * commits again; pairs with branchSetup.ensureLegContextLocalExcludes.
+ */
+function untrackLegContextArtifacts(run) {
+    return untrackTrackedPaths(run, LEG_CONTEXT_ARTIFACT_PATHS);
 }
 
 /**
@@ -170,9 +210,13 @@ function isRuntimeArtifactStatusLine(line) {
 
 module.exports = {
     RUNTIME_ARTIFACT_PATHS: RUNTIME_ARTIFACT_PATHS,
+    LEG_CONTEXT_ARTIFACT_PATHS: LEG_CONTEXT_ARTIFACT_PATHS,
     buildTrackedArtifactsCommand: buildTrackedArtifactsCommand,
+    buildTrackedPathsCommand: buildTrackedPathsCommand,
     buildUntrackPathsCommand: buildUntrackPathsCommand,
+    untrackTrackedPaths: untrackTrackedPaths,
     untrackRuntimeArtifacts: untrackRuntimeArtifacts,
+    untrackLegContextArtifacts: untrackLegContextArtifacts,
     buildExclusionPathspecs: buildExclusionPathspecs,
     buildStagingPathspecs: buildStagingPathspecs,
     isRuntimeArtifactStatusLine: isRuntimeArtifactStatusLine
