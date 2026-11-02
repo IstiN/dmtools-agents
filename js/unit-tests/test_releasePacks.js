@@ -468,4 +468,15 @@ suite('gh-1276 / gh-1277 config-script bundling and gate wiring', function () {
         assert.equal(wf.indexOf('dist-prev'), -1,
             'agent-pack-release.yml must not carry forward previous release assets into every release (causes O(N) asset accumulation and GitHub secondary rate limit 403)');
     });
+
+    test('gh-1320: factory-setup asset packages run-teammate-local.sh and run-sm-local.sh', function () {
+        assert.ok(builder.indexOf("'run-teammate-local.sh'") !== -1,
+            'ci/release_packs.mjs must include scripts/run-teammate-local.sh in FACTORY_SETUP_SCRIPTS (#1320)');
+        assert.ok(builder.indexOf("'run-sm-local.sh'") !== -1,
+            'ci/release_packs.mjs must include scripts/run-sm-local.sh in FACTORY_SETUP_SCRIPTS (#1320)');
+        assert.ok(file_read({ path: 'scripts/run-teammate-local.sh' }).length > 0,
+            'scripts/run-teammate-local.sh must exist in repo');
+        assert.ok(file_read({ path: 'scripts/run-sm-local.sh' }).length > 0,
+            'scripts/run-sm-local.sh must exist in repo');
+    });
 });

@@ -99,6 +99,22 @@ const SHARED_PREFIXES = ['js/', 'instructions/', 'prompts/', 'scripts/'];
  *               parent-config fallback (pack launch.json stays primary)
  */
 const FACTORY_SETUP_LEGS = ['bug_development', 'story_development', 'pr_review', 'pr_rework'];
+const FACTORY_SETUP_SCRIPTS = [
+  'git-push-guard.sh',
+  'apply-review-verdict.sh',
+  'close-review-cycle.sh',
+  'close-rework-cycle.sh',
+  'hand-issue-to-reviewer.sh',
+  'publish-token-usage.sh',
+  'quarantine-fa-session.sh',
+  'restore-fa-session.sh',
+  'persist-fa-session.sh',
+  'persist-fa-memory.sh',
+  'collect-fa-crash-log.sh',
+  'fa-trace-watchdog.sh',
+  'run-teammate-local.sh',
+  'run-sm-local.sh',
+];
 
 // gh-1248: one recursive file listing shared by the SHA256SUMS inventory,
 // the require gate and the pack load probe (three byte-identical `walk`
@@ -129,20 +145,9 @@ function setupTouched() {
     (f) =>
       f.startsWith('setup/') ||
       f === 'ci/release_packs.mjs' ||
-      // Engine-side factory scripts ship in the factory-setup asset too —
-      // a change to any of them must re-cut the asset (awf flip depends on
-      // the pack landing first).
-      f === 'scripts/apply-review-verdict.sh' ||
-      f === 'scripts/close-review-cycle.sh' ||
-      f === 'scripts/close-rework-cycle.sh' ||
-      f === 'scripts/hand-issue-to-reviewer.sh' ||
-      f === 'scripts/publish-token-usage.sh' ||
-      f === 'scripts/quarantine-fa-session.sh' ||
-      f === 'scripts/restore-fa-session.sh' ||
-      f === 'scripts/persist-fa-session.sh' ||
-      f === 'scripts/persist-fa-memory.sh' ||
-      f === 'scripts/collect-fa-crash-log.sh' ||
-      f === 'scripts/fa-trace-watchdog.sh',
+      // Engine-side and local-runner factory scripts ship in the factory-setup
+      // asset too — a change to any of them must re-cut the asset.
+      FACTORY_SETUP_SCRIPTS.some((s) => f === `scripts/${s}`),
   );
 }
 
@@ -159,21 +164,10 @@ function buildFactorySetup() {
     // Engine-side factory scripts (awf de-bloat 2026-10-16): these carry SM
     // cycle logic, not factory-bootstrap glue — they belong to the engine
     // pack. Keep this list in sync with awf's call sites.
-    for (const engineScript of [
-      'git-push-guard.sh',
-      'apply-review-verdict.sh',
-      'close-review-cycle.sh',
-      'close-rework-cycle.sh',
-      'hand-issue-to-reviewer.sh',
-      'publish-token-usage.sh',
-      'quarantine-fa-session.sh',
-      'restore-fa-session.sh',
-      'persist-fa-session.sh',
-      'persist-fa-memory.sh',
-      'collect-fa-crash-log.sh',
-      'fa-trace-watchdog.sh',
-    ]) {
-      copyFileSync(join(ROOT, 'scripts', engineScript), join(staging, 'scripts', engineScript));
+    for (const engineScript of FACTORY_SETUP_SCRIPTS) {
+      const dest = join(staging, 'scripts', engineScript);
+      copyFileSync(join(ROOT, 'scripts', engineScript), dest);
+      chmodSync(dest, 0o755);
     }
     for (const leg of FACTORY_SETUP_LEGS) {
       copyFileSync(join(ROOT, `${leg}.json`), join(staging, 'configs', `${leg}.json`));
