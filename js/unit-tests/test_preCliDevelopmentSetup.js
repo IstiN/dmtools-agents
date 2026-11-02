@@ -1671,14 +1671,23 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
         };
     }
 
-    function loadForRealGit(repo, extraGlobals) {
-        var calls = [];
-        var fileWrites = [];
-        var mocks = Object.assign({
-            cli_execute_command: function(opts) {
-                calls.push(opts && opts.command);
-                return cli_execute_command(opts);
-            },
+    // CRAP ratchet (quality.yml): these real-git repro suites self-skip in the
+    // node coverage harness, so every helper below measures ~0% coverage there
+    // — CRAP = cc²·(1−cov)³ + cc then grows past the threshold 8 at cc = 3
+    // (gh-1318 rework: loadForRealGit scored 10.5). Keep EACH helper at
+    // cyclomatic complexity ≤ 2: the command spy owns the `opts && opts.command`
+    // guard, the mocks builder owns the `extraGlobals || {}` default, and the
+    // require map stays branch-free.
+    function makeRealGitCliSpy(calls) {
+        return function(opts) {
+            calls.push(opts && opts.command);
+            return cli_execute_command(opts);
+        };
+    }
+
+    function makeRealGitMocks(calls, fileWrites, extraGlobals) {
+        return Object.assign({
+            cli_execute_command: makeRealGitCliSpy(calls),
             jira_move_to_status: function(args) {
                 calls.push(MOVE_MARKER);
                 fileWrites.push({ path: '@move', content: JSON.stringify(args) });
@@ -1686,31 +1695,41 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
             file_write: function(args) { fileWrites.push(args); return null; },
             file_read: function() { return ''; }
         }, extraGlobals || {});
+    }
+
+    function makeRealGitRequireMap(repo, trackers, mocks) {
+        return makeRequire({
+            'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks),
+            'gitStaging.js': loadModule('js/common/gitStaging.js'),
+            './configLoader.js': make1314ConfigLoaderStub(repo),
+            './common/pullRequest.js': PR_HELPER_REAL,
+            './config.js': NOOP_CONFIG_JS,
+            './fetchQuestionsToInput.js': { action: function() {} },
+            './fetchLinkedTestsToInput.js': { action: function() {} },
+            './fetchParentContextToInput.js': { action: function() {} },
+            './restoreFromReleases.js': { action: function() {} },
+            './common/setupCommands.js': {
+                runSetupCommands: function() { return null; },
+                buildSetupWarningsMarkdown: function() { return null; },
+                truncateSetupError: function(s) { return String(s); }
+            },
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './common/commentMarkup.js': devCommentMarkupModule,
+            './common/trackers.js': trackers
+        });
+    }
+
+    function loadForRealGit(repo, extraGlobals) {
+        var calls = [];
+        var fileWrites = [];
+        var mocks = makeRealGitMocks(calls, fileWrites, extraGlobals);
         var trackers = loadModule('js/common/trackers.js', makeRequire({
             '../config.js': configModule,
             './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
         }), mocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
-            makeRequire({
-                'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks),
-                'gitStaging.js': loadModule('js/common/gitStaging.js'),
-                './configLoader.js': make1314ConfigLoaderStub(repo),
-                './common/pullRequest.js': PR_HELPER_REAL,
-                './config.js': NOOP_CONFIG_JS,
-                './fetchQuestionsToInput.js': { action: function() {} },
-                './fetchLinkedTestsToInput.js': { action: function() {} },
-                './fetchParentContextToInput.js': { action: function() {} },
-                './restoreFromReleases.js': { action: function() {} },
-                './common/setupCommands.js': {
-                    runSetupCommands: function() { return null; },
-                    buildSetupWarningsMarkdown: function() { return null; },
-                    truncateSetupError: function(s) { return String(s); }
-                },
-                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
-                './common/commentMarkup.js': devCommentMarkupModule,
-                './common/trackers.js': trackers
-            }),
+            makeRealGitRequireMap(repo, trackers, mocks),
             mocks
         );
         return { mod: mod, calls: calls, fileWrites: fileWrites };
