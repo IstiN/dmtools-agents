@@ -60,6 +60,7 @@ function loadCheckoutBranch(configLoaderStub, mocks) {
     return loadModule(
         'js/checkoutBranch.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, branchSetupFileMocks),
+            'gitStaging.js': loadModule('js/common/gitStaging.js'),
             './config.js': { GIT_CONFIG: {} },
             './configLoader.js': configLoaderStub,
             './common/pullRequest.js': DEFAULT_PR_HELPER_STUB
@@ -589,6 +590,7 @@ suite('checkoutBranch — fresh leg input survives the checkout (gh-1318)', func
         var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
             cli_execute_command: function(opts) {
                 calls.push(opts.command);
+                if (opts.command === 'git branch --list "ai/PROJ-1"') return 'ai/PROJ-1';
                 if (opts.command === 'git checkout ai/PROJ-1') throw new Error('untracked working tree files would be overwritten');
                 return '';
             }

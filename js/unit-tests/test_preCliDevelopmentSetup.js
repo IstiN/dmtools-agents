@@ -39,6 +39,7 @@ function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     return loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks || {}),
+            'gitStaging.js': loadModule('js/common/gitStaging.js'),
             './configLoader.js': configLoaderStub,
             './common/pullRequest.js': PR_HELPER_REAL,
             './config.js': NOOP_CONFIG_JS,
@@ -545,6 +546,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
         return loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, modMocks),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': makeActionConfigLoaderStub(config),
                 './common/pullRequest.js': PR_HELPER_REAL,
                 './config.js': NOOP_CONFIG_JS,
@@ -694,6 +696,7 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
         return loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, {}),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return makeConfig(); },
                     paramsForConfigLoad: function (p) { return p; }
@@ -927,6 +930,7 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
         return loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return config; },
                     paramsForConfigLoad: function (p) { return p; },
@@ -1158,6 +1162,7 @@ suite('preCliDevelopmentSetup — extracted helpers (gh-1042)', function() {
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return makeConfig(); },
                     paramsForConfigLoad: function (p) { return p; }
@@ -1660,7 +1665,33 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
             file_write: function(args) { fileWrites.push(args); return null; },
             file_read: function() { return ''; }
         }, extraGlobals || {});
-        var mod = loadPreCliDevelopmentSetup(make1314ConfigLoaderStub(repo), mocks);
+        var trackers = loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }), mocks);
+        var mod = loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
+                './configLoader.js': make1314ConfigLoaderStub(repo),
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './config.js': NOOP_CONFIG_JS,
+                './fetchQuestionsToInput.js': { action: function() {} },
+                './fetchLinkedTestsToInput.js': { action: function() {} },
+                './fetchParentContextToInput.js': { action: function() {} },
+                './restoreFromReleases.js': { action: function() {} },
+                './common/setupCommands.js': {
+                    runSetupCommands: function() { return null; },
+                    buildSetupWarningsMarkdown: function() { return null; },
+                    truncateSetupError: function(s) { return String(s); }
+                },
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+                './common/commentMarkup.js': devCommentMarkupModule,
+                './common/trackers.js': trackers
+            }),
+            mocks
+        );
         return { mod: mod, calls: calls, fileWrites: fileWrites };
     }
 

@@ -271,6 +271,13 @@ function untrackRuntimeArtifactsSafe(workingDir) {
  * tripping the guard every 5 minutes for 40+ minutes whenever the
  * kit was materialized AND gitignored, and the dev agent's work
  * died uncommitted with the runner.
+ * gh-1318: `input` + `outputs` ride the same probe — the tracker
+ * regenerates both before every leg, so committing them bakes a
+ * pre-answer ticket snapshot onto ai/<ticket> that either wins
+ * over (checkoutBranch) or refuses (preCliDevelopmentSetup) the
+ * next leg's fresh copy. Belt-and-suspenders beside the
+ * .git/info/exclude seed: ignored repo → probe drops them
+ * (gitignore owns it), unignored repo → the exclusion holds.
  */
 function stageWorkingTree(workingDir) {
     try {
@@ -281,7 +288,7 @@ function stageWorkingTree(workingDir) {
                     workingDirectory: workingDir,
                     expectNonZeroExit: args.expectNonZeroExit
                 });
-            }, ['factory-kit']),
+            }, ['factory-kit', 'input', 'outputs']),
             workingDirectory: workingDir
         });
         return true;

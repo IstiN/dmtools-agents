@@ -261,6 +261,33 @@ function ensureLegContextLocalExcludes() {
     );
 }
 
+/**
+ * gh-1318 leg-context heal, run by both dev-setup paths right after a
+ * successful dev-branch checkout:
+ * 1. seed the excludes (above) — keeps every later `git add` from staging
+ *    leg context, so ask-mode WIP snapshots stop carrying input/<ticket>/
+ *    onto the branch in the first place;
+ * 2. untrack leg context the branch ALREADY carries (a poisoned ask-mode
+ *    snapshot) — index-only, the working-tree copy stays, and the leg's
+ *    final commit pushes the untracking upstream.
+ * `exec` runs git commands in the checkout; `untrackLegContext` is
+ * js/common/gitStaging.untrackLegContextArtifacts (passed in — this module
+ * stays require-free). Both halves are best-effort: failures warn, never
+ * block the checkout.
+ */
+function healLegContextArtifacts(exec, untrackLegContext) {
+    ensureLegContextLocalExcludes();
+    try {
+        var untracked = untrackLegContext(exec);
+        if (untracked && untracked.length) {
+            console.log('Untracked branch-committed leg context (' + untracked.length +
+                ' path(s) under input/ or outputs/)');
+        }
+    } catch (e) {
+        console.warn('Could not untrack branch-committed leg context (non-fatal):', e);
+    }
+}
+
 /** True when HEAD carries commits not in origin/<baseBranch> (`git cherry`). */
 function branchHasUniquePatches(prHelper, exec, baseBranch, warnMessage) {
     try {
@@ -428,6 +455,7 @@ if (typeof module !== 'undefined' && module.exports) {
         stashFreshInput: stashFreshInput,
         restoreFreshInput: restoreFreshInput,
         ensureLegContextLocalExcludes: ensureLegContextLocalExcludes,
+        healLegContextArtifacts: healLegContextArtifacts,
         INPUT_STASH_DIR: INPUT_STASH_DIR,
         branchHasUniquePatches: branchHasUniquePatches,
         findMergeBase: findMergeBase,
