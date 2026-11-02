@@ -1248,3 +1248,193 @@ suite('dfManager gh-1227 extracted helpers (pure units)', function() {
             'audit');
     });
 });
+
+// ── gh-1317: the liveness probe must match the identity the dispatcher ───────
+// titled the run with. bug_development / bulk_bugs_creation rules dispatch
+// under rule.concurrencyKey, so their run titles (`agents/bug_development.json
+// : bug_development`) never contain the ticket key — the former key-only
+// probe raised stale-sm-label on LIVE legs and stripped the trigger label.
+
+suite('dfManager liveness probe identity (gh-1317)', function() {
+    // sm.json rules exercising both title shapes: pr_review (ticket-key
+    // titled) + bug_development (concurrencyKey-titled).
+    function smRulesFiles() {
+        return {
+            'agents/sm.json': JSON.stringify({
+                params: {
+                    jobParams: {
+                        rules: [
+                            {
+                                jql: "project = {jiraProject} AND status = 'In Review'",
+                                configFile: 'agents/pr_review.json',
+                                skipIfLabel: 'sm_story_review_triggered',
+                                addLabel: 'sm_story_review_triggered'
+                            },
+                            {
+                                jql: "project = {jiraProject} AND issuetype = 'Bug' AND status in ('In Development', 'In Progress')",
+                                configFile: 'agents/bug_development.json',
+                                concurrencyKey: 'bug_development',
+                                skipIfLabels: ['sm_bug_development_triggered', 'ai_questions_asked'],
+                                addLabel: 'sm_bug_development_triggered'
+                            }
+                        ]
+                    }
+                }
+            })
+        };
+    }
+
+    function ticket(key, status, label, updated) {
+        return {
+            key: key,
+            fields: {
+                status: { name: status },
+                labels: [label],
+                updated: updated || '2026-05-09T15:00:00.000Z'
+            }
+        };
+    }
+
+    // gh-1317 test hint: dispatch+46min, staleMinutes 45, autoRecover on.
+    function sweepParams() {
+        return {
+            jobParams: {
+                customParams: {
+                    autoRecover: true,
+                    nowMs: Date.parse('2026-05-09T15:46:00.000Z'),
+                    staleMinutes: 45
+                }
+            }
+        };
+    }
+
+    test('buildLabelRuleMap maps every rule label to its rule', function() {
+        var ruleA = { addLabel: 'l_add', skipIfLabel: 'l_skip', addLabels: ['l_multi1'], skipIfLabels: ['l_multi2'] };
+        var map = makeDfManager().module.buildLabelRuleMap([ruleA]);
+        assert.equal(map.l_add, ruleA);
+        assert.equal(map.l_skip, ruleA);
+        assert.equal(map.l_multi1, ruleA);
+        assert.equal(map.l_multi2, ruleA);
+        assert.equal(Object.keys(map).length, 4, 'no phantom labels');
+    });
+
+    test('buildLabelRuleMap skips disabled rules; first declaration wins duplicates', function() {
+        var df = makeDfManager().module;
+        var first = { addLabel: 'shared', concurrencyKey: 'first' };
+        var second = { addLabel: 'shared', concurrencyKey: 'second' };
+        var disabled = { addLabel: 'off', enabled: false };
+        var map = df.buildLabelRuleMap([first, second, disabled, null]);
+        assert.equal(map.shared, first, 'first declaration wins');
+        assert.equal(map.off, undefined, 'disabled rules claim nothing');
+        assert.deepEqual(df.buildLabelRuleMap([]), {});
+        assert.deepEqual(df.buildLabelRuleMap(null), {});
+    });
+
+    test('ticketRunNeedles: key always a needle, concurrencyKey joined per label', function() {
+        var df = makeDfManager().module;
+        var labelRuleMap = { sm_bug_development_triggered: { concurrencyKey: 'bug_development' },
+                             sm_story_review_triggered: {} };
+        assert.deepEqual(df.ticketRunNeedles('BUG-1', ['sm_bug_development_triggered'], labelRuleMap),
+            ['BUG-1', 'bug_development']);
+        assert.deepEqual(df.ticketRunNeedles('BUG-1', ['sm_bug_development_triggered'], null),
+            ['BUG-1'], 'missing map degrades to the key alone');
+        assert.deepEqual(df.ticketRunNeedles('BUG-1', ['sm_story_review_triggered'], labelRuleMap),
+            ['BUG-1'], 'rule without concurrencyKey adds no needle');
+        assert.deepEqual(df.ticketRunNeedles('BUG-1', ['unknown_label'], labelRuleMap),
+            ['BUG-1']);
+        assert.deepEqual(df.ticketRunNeedles('BUG-1', [], labelRuleMap), ['BUG-1']);
+        assert.deepEqual(df.ticketRunNeedles('BUG-1',
+            ['sm_bug_development_triggered', 'sm_story_review_triggered'], labelRuleMap),
+            ['BUG-1', 'bug_development'], 'needles stay unique');
+    });
+
+    test('gh-1317 test hint: concurrencyKey-titled live run does NOT strip the trigger label', function() {
+        var df = makeDfManager({
+            files: smRulesFiles(),
+            tickets: [ticket('BUG-1', 'In Development', 'sm_bug_development_triggered')],
+            runsByStatus: {
+                in_progress: [
+                    { status: 'in_progress', display_title: 'agents/bug_development.json : bug_development' }
+                ]
+            }
+        });
+
+        var report = df.action(sweepParams());
+
+        assert.equal(report.anomalies.length, 0, 'no stale-sm-label while the leg runs');
+        assert.equal(df.removedLabels.length, 0, 'the idempotency label must survive the sweep');
+        assert.equal(df.triggered.length, 0, 'no SM re-trigger while the run is in_progress');
+    });
+
+    test('inverse case: no matching run → strip proceeds as today (anomaly + label + SM trigger)', function() {
+        var df = makeDfManager({
+            files: smRulesFiles(),
+            tickets: [ticket('BUG-1', 'In Development', 'sm_bug_development_triggered')],
+            runsByStatus: { in_progress: [] }
+        });
+
+        var report = df.action(sweepParams());
+
+        assert.equal(report.anomalies.length, 1);
+        assert.equal(report.anomalies[0].type, 'stale-sm-label');
+        assert.equal(report.anomalies[0].ticketKey, 'BUG-1');
+        assert.deepEqual(df.removedLabels, [{ key: 'BUG-1', label: 'sm_bug_development_triggered' }]);
+        assert.equal(df.triggered.length, 1);
+    });
+
+    test('ticket-key-titled live run still counts as liveness evidence', function() {
+        var df = makeDfManager({
+            files: smRulesFiles(),
+            tickets: [ticket('BUG-1', 'In Development', 'sm_bug_development_triggered')],
+            runsByStatus: {
+                in_progress: [
+                    { status: 'in_progress', display_title: '▶ dev (SM) · BUG-1' }
+                ]
+            }
+        });
+
+        var report = df.action(sweepParams());
+
+        assert.equal(report.anomalies.length, 0, 'the ticket key remains a liveness needle');
+        assert.equal(df.removedLabels.length, 0);
+    });
+
+    test('control: ticket-key rule keeps today behavior (live run matched, no anomaly)', function() {
+        var df = makeDfManager({
+            files: smRulesFiles(),
+            tickets: [ticket('SIM-2', 'In Review', 'sm_story_review_triggered')],
+            runsByStatus: {
+                in_progress: [
+                    { status: 'in_progress', display_title: 'agents/pr_review.json : SIM-2' }
+                ]
+            }
+        });
+
+        var report = df.action(sweepParams());
+
+        assert.equal(report.anomalies.length, 0);
+        assert.equal(df.removedLabels.length, 0);
+    });
+
+    test('MULTI-ITEM sweep: concurrencyKey ticket stays live while the control ticket is stripped', function() {
+        var df = makeDfManager({
+            files: smRulesFiles(),
+            tickets: [
+                ticket('BUG-1', 'In Development', 'sm_bug_development_triggered'),
+                ticket('SIM-2', 'In Review', 'sm_story_review_triggered', '2026-05-09T14:00:00.000Z')
+            ],
+            runsByStatus: {
+                in_progress: [
+                    { status: 'in_progress', display_title: 'agents/bug_development.json : bug_development' }
+                ]
+            }
+        });
+
+        var report = df.action(sweepParams());
+
+        assert.equal(report.anomalies.length, 1, 'only SIM-2 is stale');
+        assert.equal(report.anomalies[0].ticketKey, 'SIM-2');
+        assert.deepEqual(df.removedLabels, [{ key: 'SIM-2', label: 'sm_story_review_triggered' }]);
+        assert.equal(df.triggered.length, 1, 'one SM re-trigger for the one stale ticket');
+    });
+});

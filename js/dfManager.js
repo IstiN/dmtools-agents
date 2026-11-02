@@ -160,20 +160,50 @@ function isFailedRun(run) {
     return runStatus(run) === 'completed' && runConclusion(run) === 'failure';
 }
 
-function activeRunMatchesTicket(activeRuns, ticketKey) {
-    return activeRuns.some(function(run) {
-        return runText(run).indexOf(ticketKey) !== -1;
+// gh-1317: run-text needles that count as liveness evidence for one ticket.
+// The ticket key stays a needle (a run naming the ticket is the strongest
+// live signal); every swept label whose owning rule dispatches under a
+// concurrencyKey adds that key — those runs are titled with it
+// (`agents/bug_development.json : bug_development`), so their text never
+// carries the ticket key and the former key-only probe stripped trigger
+// labels from LIVE legs (stale-sm-label mid-run → SM re-fire loop).
+function ticketRunNeedles(ticketKey, labels, labelRuleMap) {
+    var needles = {};
+    needles[ticketKey] = true;
+    (labels || []).forEach(function(label) {
+        var rule = labelRuleMap ? labelRuleMap[label] : null;
+        if (rule && rule.concurrencyKey) needles[rule.concurrencyKey] = true;
     });
+    return Object.keys(needles);
+}
+
+function activeRunMatchesTicket(activeRuns, ticketKey, labels, labelRuleMap) {
+    var needles = ticketRunNeedles(ticketKey, labels, labelRuleMap);
+    return activeRuns.some(function(run) {
+        var text = runText(run);
+        return needles.some(function(needle) {
+            return text.indexOf(needle) !== -1;
+        });
+    });
+}
+
+// The labels one rule claims (addLabel/skipIfLabel/addLabels/skipIfLabels).
+// Shared by the label→rules derivations below so a rule shape change lands
+// once.
+function ruleLabels(rule) {
+    var labels = [];
+    if (rule && rule.addLabel) labels.push(rule.addLabel);
+    if (rule && rule.skipIfLabel) labels.push(rule.skipIfLabel);
+    (rule && rule.addLabels || []).forEach(function(label) { labels.push(label); });
+    (rule && rule.skipIfLabels || []).forEach(function(label) { labels.push(label); });
+    return labels;
 }
 
 function collectLabelsFromRules(rules) {
     var labels = [];
     (rules || []).forEach(function(rule) {
         if (!rule || rule.enabled === false) return;
-        if (rule.addLabel) labels.push(rule.addLabel);
-        if (rule.skipIfLabel) labels.push(rule.skipIfLabel);
-        (rule.addLabels || []).forEach(function(label) { labels.push(label); });
-        (rule.skipIfLabels || []).forEach(function(label) { labels.push(label); });
+        labels = labels.concat(ruleLabels(rule));
     });
     return labels;
 }
@@ -210,17 +240,28 @@ function buildLabelStatusMap(rules) {
     var map = {};
     (rules || []).forEach(function(rule) {
         if (!rule || rule.enabled === false) return;
-        var labels = [];
-        if (rule.addLabel) labels.push(rule.addLabel);
-            if (rule.skipIfLabel) labels.push(rule.skipIfLabel);
-            (rule.addLabels || []).forEach(function(label) { labels.push(label); });
-            (rule.skipIfLabels || []).forEach(function(label) { labels.push(label); });
+        var labels = ruleLabels(rule);
         var includeStatuses = extractStatusesFromJql(rule.jql);
         var excludeStatuses = extractExcludedStatusesFromJql(rule.jql);
         labels.forEach(function(label) {
             if (!map[label]) map[label] = { include: [], exclude: [] };
             map[label].include = uniq(map[label].include.concat(includeStatuses));
             map[label].exclude = uniq(map[label].exclude.concat(excludeStatuses));
+        });
+    });
+    return map;
+}
+
+// gh-1317: label → the rule that declares it (first declaration wins, the
+// same first-entry semantics as buildLabelStatusMap). The liveness probe
+// reads each swept label's rule concurrencyKey — the identity SM dispatch
+// titled the run with.
+function buildLabelRuleMap(rules) {
+    var map = {};
+    (rules || []).forEach(function(rule) {
+        if (!rule || rule.enabled === false) return;
+        ruleLabels(rule).forEach(function(label) {
+            if (!map[label]) map[label] = rule;
         });
     });
     return map;
@@ -322,7 +363,7 @@ function detectStaleSmLabels(context) {
             return context.smLabelSet[label] === true;
         });
         if (!labels.length) return;
-        if (activeRunMatchesTicket(context.activeRuns, key)) return;
+        if (activeRunMatchesTicket(context.activeRuns, key, labels, context.labelRuleMap)) return;
 
         var age = ticketAgeMinutes(ticket, context.nowMs);
         var isOldEnough = age === null || age >= staleMinutes;
@@ -353,7 +394,7 @@ function detectStaleSmLabels(context) {
             labels: sourceStateLabels,
             ageMinutes: age,
             safeAction: 'remove-sm-labels-and-trigger-sm',
-            message: 'SM trigger label exists but no active workflow run contains the ticket key.'
+            message: 'SM trigger label exists but no active workflow run contains the ticket key or the rule concurrency key.'
         });
     });
 }
@@ -627,6 +668,7 @@ function buildContext(params, config, scm, tracker) {
         smLabels: labels,
         smLabelSet: labelSet,
         labelStatusMap: buildLabelStatusMap(rules),
+        labelRuleMap: buildLabelRuleMap(rules),
         tickets: tickets,
         ticketByKey: ticketByKey,
         prs: listOpenPrs(scm),
@@ -712,6 +754,8 @@ if (typeof module !== 'undefined' && module.exports) {
         buildReport: buildReport,
         detectDuplicateRuns: detectDuplicateRuns,
         buildLabelStatusMap: buildLabelStatusMap,
+        buildLabelRuleMap: buildLabelRuleMap,
+        ticketRunNeedles: ticketRunNeedles,
         extractStatusesFromJql: extractStatusesFromJql,
         extractExcludedStatusesFromJql: extractExcludedStatusesFromJql,
         isActiveRun: isActiveRun,
