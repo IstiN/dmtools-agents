@@ -127,6 +127,7 @@ function loadPreCli(workingDir) {
         'js/preCliDevelopmentSetup.js',
         makeRequire({
                 'branchSetup.js': bs,
+            'gitStaging.js': loadModule('js/common/gitStaging.js'),
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/pullRequest.js': PR_HELPER_REAL,
@@ -244,6 +245,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             'js/preCliDevelopmentSetup.js',
             makeRequire({
                 'branchSetup.js': bs,
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -314,6 +316,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             'js/preCliDevelopmentSetup.js',
             makeRequire({
                 'branchSetup.js': bs,
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -388,6 +391,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             'js/preCliDevelopmentSetup.js',
             makeRequire({
                 'branchSetup.js': bs,
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,

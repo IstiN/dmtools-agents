@@ -486,12 +486,16 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         // goes through the same probe — a static `:!factory-kit` exclusion
         // trips the very same guard when the kit is materialized AND
         // gitignored, silently starving the leg's commits.
+        // gh-1318: `input` + `outputs` ride the same probe — the tracker
+        // regenerates both before every leg, so the PR must never carry a
+        // ticket-snapshot copy (see js/common/gitStaging.js
+        // LEG_CONTEXT_ARTIFACT_PATHS).
         // gh-729: this line is the LAST visible step before the silent 23s
         // in live fa gh-1197 (run 37234028759) — the tail must log every
         // step so a stall/kill here is diagnosable from the job log.
         console.log('Staging working tree (check-ignore probe-filtered exclusions)...');
         runCmd({
-            command: 'git add . -- ' + gitStaging.buildStagingPathspecs(runCmd, ['factory-kit'])
+            command: 'git add . -- ' + gitStaging.buildStagingPathspecs(runCmd, ['factory-kit', 'input', 'outputs'])
         });
 
         // Check if there are changes to commit
