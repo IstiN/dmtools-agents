@@ -39,6 +39,7 @@ function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     return loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks || {}),
+            'gitStaging.js': loadModule('js/common/gitStaging.js'),
             './configLoader.js': configLoaderStub,
             './common/pullRequest.js': PR_HELPER_REAL,
             './config.js': NOOP_CONFIG_JS,
@@ -545,6 +546,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
         return loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, modMocks),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': makeActionConfigLoaderStub(config),
                 './common/pullRequest.js': PR_HELPER_REAL,
                 './config.js': NOOP_CONFIG_JS,
@@ -694,6 +696,7 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
         return loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, {}),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return makeConfig(); },
                     paramsForConfigLoad: function (p) { return p; }
@@ -927,6 +930,7 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
         return loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return config; },
                     paramsForConfigLoad: function (p) { return p; },
@@ -1158,6 +1162,7 @@ suite('preCliDevelopmentSetup — extracted helpers (gh-1042)', function() {
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return makeConfig(); },
                     paramsForConfigLoad: function (p) { return p; }
@@ -1590,4 +1595,204 @@ suite('preCliDevelopmentSetup.writeDevBaseHead (gh-1308)', function () {
         var mod = loadWithMocks(function () { throw new Error('git boom'); });
         assert.doesNotThrow(function () { mod.writeDevBaseHead('input/PROJ-1'); });
     });
+});
+
+// ── gh-1318: regenerated input/ wins over the branch-tracked stale copy ──────
+// Single-repo deployments have no cleaner in this setup path: the freshly
+// regenerated input/ collided with the ask-mode WIP snapshot's branch-tracked
+// input/ and `git checkout` REFUSED ("untracked working tree files would be
+// overwritten") — after moveTicketToInDevelopment had already stranded the
+// ticket. Real-git tests over a mktemp repo: the fresh copy is stashed aside
+// before branch setup and overlaid back afterwards; the status move happens
+// only after branch setup succeeds.
+
+suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318, real git)', function() {
+
+    // Runtime gate (see test_checkoutBranch.js): the node coverage harness
+    // runs cli_execute_command against the pack root and ignores
+    // workingDirectory — real git there would mutate the agents repo, so the
+    // suite self-skips; the dmtools runner executes the repro for real.
+    var REAL_GIT_SUPPORTED = (function () {
+        try {
+            var tmp = String(cli_execute_command({ command: 'bash -c "mktemp -d"' })).trim();
+            var pwd = String(cli_execute_command({ command: 'bash -c "pwd"', workingDirectory: tmp })).trim();
+            cli_execute_command({ command: 'bash -c "rm -rf ' + tmp + '"' });
+            return pwd === tmp;
+        } catch (e) {
+            return false;
+        }
+    })();
+
+    function requireRealGitRuntime() {
+        if (REAL_GIT_SUPPORTED) return true;
+        assert.ok(true, 'skipped — this runtime ignores workingDirectory (node coverage harness); the real-git repro runs under the dmtools runner');
+        return false;
+    }
+
+    var FRESH = 'FRESH - reporter answered: credentials are testuser/testpass';
+    var STALE = 'STALE - pre-answer ticket comments';
+    var MOVE_MARKER = 'TRACKER: move to In Development';
+
+    function git(cmd, dir) {
+        return cli_execute_command({ command: cmd, workingDirectory: dir });
+    }
+
+    function makeCollisionRepo() {
+        var tmp = String(cli_execute_command({ command: 'bash -c "mktemp -d"' })).trim();
+        git('git init', tmp);
+        var base = String(git('git symbolic-ref --short HEAD', tmp)).trim();
+        git('git config user.name "Test Agent"', tmp);
+        git('git config user.email "agent@example.com"', tmp);
+        file_write({ path: tmp + '/README.md', content: 'seed\n' });
+        git('git add README.md', tmp);
+        git('git commit -m seed', tmp);
+        git('git checkout -b ai/BUG-1', tmp);
+        file_write({ path: tmp + '/input/TICKET/comments.md', content: STALE });
+        git('git add -A', tmp);
+        git('git commit -m "ask-mode WIP snapshot"', tmp);
+        git('git checkout ' + base, tmp);
+        file_write({ path: tmp + '/input/TICKET/comments.md', content: FRESH });
+        return { tmp: tmp, base: base };
+    }
+
+    function make1314ConfigLoaderStub(repo) {
+        return {
+            loadProjectConfig: function() {
+                return makeConfig({
+                    git: { baseBranch: repo.base, featureBranch: { enabled: false } },
+                    workingDir: repo.tmp,
+                    tracker: { provider: 'jira' }
+                });
+            },
+            paramsForConfigLoad: function(p) { return p; },
+            resolveBranchName: function(cfg, ticket, role) { return 'ai/BUG-1'; },
+            resolvePRTargetBranch: function() { return repo.base; },
+            loadHookFn: function() { return null; }
+        };
+    }
+
+    // CRAP ratchet (quality.yml): these real-git repro suites self-skip in the
+    // node coverage harness, so every helper below measures ~0% coverage there
+    // — CRAP = cc²·(1−cov)³ + cc then grows past the threshold 8 at cc = 3
+    // (gh-1318 rework: loadForRealGit scored 10.5). Keep EACH helper at
+    // cyclomatic complexity ≤ 2: the command spy owns the `opts && opts.command`
+    // guard, the mocks builder owns the `extraGlobals || {}` default, and the
+    // require map stays branch-free.
+    function makeRealGitCliSpy(calls) {
+        return function(opts) {
+            calls.push(opts && opts.command);
+            return cli_execute_command(opts);
+        };
+    }
+
+    function makeRealGitMocks(calls, fileWrites, extraGlobals) {
+        return Object.assign({
+            cli_execute_command: makeRealGitCliSpy(calls),
+            jira_move_to_status: function(args) {
+                calls.push(MOVE_MARKER);
+                fileWrites.push({ path: '@move', content: JSON.stringify(args) });
+            },
+            file_write: function(args) { fileWrites.push(args); return null; },
+            file_read: function() { return ''; }
+        }, extraGlobals || {});
+    }
+
+    function makeRealGitRequireMap(repo, trackers, mocks) {
+        return makeRequire({
+            'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks),
+            'gitStaging.js': loadModule('js/common/gitStaging.js'),
+            './configLoader.js': make1314ConfigLoaderStub(repo),
+            './common/pullRequest.js': PR_HELPER_REAL,
+            './config.js': NOOP_CONFIG_JS,
+            './fetchQuestionsToInput.js': { action: function() {} },
+            './fetchLinkedTestsToInput.js': { action: function() {} },
+            './fetchParentContextToInput.js': { action: function() {} },
+            './restoreFromReleases.js': { action: function() {} },
+            './common/setupCommands.js': {
+                runSetupCommands: function() { return null; },
+                buildSetupWarningsMarkdown: function() { return null; },
+                truncateSetupError: function(s) { return String(s); }
+            },
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './common/commentMarkup.js': devCommentMarkupModule,
+            './common/trackers.js': trackers
+        });
+    }
+
+    function loadForRealGit(repo, extraGlobals) {
+        var calls = [];
+        var fileWrites = [];
+        var mocks = makeRealGitMocks(calls, fileWrites, extraGlobals);
+        var trackers = loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }), mocks);
+        var mod = loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRealGitRequireMap(repo, trackers, mocks),
+            mocks
+        );
+        return { mod: mod, calls: calls, fileWrites: fileWrites };
+    }
+
+    test('branch-tracked input/ collision no longer aborts — fresh copy wins, checkout completes', function() {
+        if (!requireRealGitRuntime()) return;
+        var repo = makeCollisionRepo();
+        var ctx = loadForRealGit(repo, {});
+
+        ctx.mod.action({ inputFolderPath: 'input/BUG-1', ticket: { key: 'BUG-1', fields: {} }, customParams: {} });
+
+        assert.ok(ctx.calls.indexOf('git checkout ai/BUG-1') !== -1, 'the collision checkout ran instead of refusing');
+        assert.equal(String(git('git symbolic-ref --short HEAD', repo.tmp)).trim(), 'ai/BUG-1',
+            'the dev branch is checked out');
+        assert.contains(file_read({ path: repo.tmp + '/input/TICKET/comments.md' }), 'FRESH - reporter answered',
+            'the fresh reporter answer wins over the branch-tracked stale snapshot');
+        assert.equal(String(git('git ls-files -- input outputs', repo.tmp)), '',
+            'the branch no longer tracks leg context (heal ran in the working dir)');
+    });
+
+    test('the ticket moves to In Development only AFTER branch setup succeeded', function() {
+        if (!requireRealGitRuntime()) return;
+        var repo = makeCollisionRepo();
+        var ctx = loadForRealGit(repo, {});
+
+        ctx.mod.action({ inputFolderPath: 'input/BUG-1', ticket: { key: 'BUG-1', fields: {} }, customParams: {} });
+
+        var checkoutIdx = ctx.calls.indexOf('git checkout ai/BUG-1');
+        var moveIdx = ctx.calls.indexOf(MOVE_MARKER);
+        assert.ok(checkoutIdx !== -1, 'branch setup ran');
+        assert.ok(moveIdx !== -1, 'the status move ran on the success path');
+        assert.ok(checkoutIdx < moveIdx, 'status move comes after the checkout (gh-1318 ordering)');
+    });
+
+    test('branch setup failure leaves the ticket OUT of In Development (no stranded status)', function() {
+        if (!requireRealGitRuntime()) return;
+        var repo = makeCollisionRepo();
+        var calls = [];
+        var moves = [];
+        var stub = make1314ConfigLoaderStub(repo);
+        stub.resolveBranchName = function() { throw new Error('branch resolve boom'); };
+        var mocks = {
+            cli_execute_command: function(opts) {
+                calls.push(opts && opts.command);
+                return cli_execute_command(opts);
+            },
+            jira_move_to_status: function(args) { moves.push(args); },
+            file_write: function() { return null; },
+            file_read: function() { return ''; }
+        };
+        var mod = loadPreCliDevelopmentSetup(stub, mocks);
+
+        var threw = null;
+        try {
+            mod.action({ inputFolderPath: 'input/BUG-1', ticket: { key: 'BUG-1', fields: {} }, customParams: {} });
+        } catch (e) {
+            threw = e;
+        }
+
+        assert.ok(threw, 'the setup failure still stops the leg');
+        assert.contains(threw.toString(), 'Git branch setup failed');
+        assert.equal(moves.length, 0, 'no In Development move — the ticket stays in the reporter\'s lane');
+    });
+
 });

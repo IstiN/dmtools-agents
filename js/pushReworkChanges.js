@@ -648,9 +648,12 @@ function commitAndPush(ticketKey, config, customParams) {
     // gh-1164: `factory-kit` is probe-filtered like the runtime artifacts —
     // a static `:!factory-kit` exclusion trips git add's ignored-pathspec
     // guard when the kit is materialized AND gitignored.
+    // gh-1318: `input` + `outputs` are probe-filtered too — tracker-
+    // regenerated leg context never belongs in a work branch (see
+    // js/common/gitStaging.js LEG_CONTEXT_ARTIFACT_PATHS).
     cmd('git add . -- ' + gitStaging.buildStagingPathspecs(function (args) {
         return cmd(args.command, args);
-    }, ['factory-kit']));
+    }, ['factory-kit', 'input', 'outputs']));
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);
     var hasChanges = commitStagedReworkChanges(cmd, status, config, ticketKey);

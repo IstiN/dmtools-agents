@@ -18,6 +18,7 @@ var restoreFromReleases = require('./restoreFromReleases.js');
 var setupCommands = require('./common/setupCommands.js');
 var baseBranchMarker = require('./common/baseBranchMarker.js');
 var branchSetup = require('./common/branchSetup.js');
+var gitStaging = require('./common/gitStaging.js');
 var trackersModule = require('./common/trackers.js');
 var commentMarkup = require('./common/commentMarkup.js');
 
@@ -300,6 +301,16 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
 
     stashGeneratedIndex();
 
+    // gh-1318: the freshly regenerated input/ IS the current truth — stash it
+    // aside for the duration of branch setup. A branch that already carries an
+    // ask-mode WIP snapshot of the OLD input/ used to make the checkout REFUSE
+    // ("untracked working tree files would be overwritten") and abort the leg;
+    // with the stash in place there is nothing untracked left to collide, and
+    // the restore below overlays the fresh copy over whatever the checked-out
+    // branch materialized. Restore runs in finally: even a failed checkout
+    // gives the reporter's answer back.
+    var stashedFreshInput = branchSetup.stashFreshInput(runCommandStr);
+
     try {
         configureSetupAuthor(config);
         fetchDevBranchRefs(branchName, rebaseBase);
@@ -314,8 +325,13 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
         }
 
         console.log('Branch ready:', branchName);
+        // gh-1318 root-cause heal: seed input//outputs into .git/info/exclude
+        // and untrack what the branch already carries — best-effort, only on
+        // a successful checkout (nothing was checked out otherwise).
+        branchSetup.healLegContextArtifacts(runCommandStr, gitStaging.untrackLegContextArtifacts);
     } finally {
         restoreGeneratedIndex();
+        branchSetup.restoreFreshInput(runCommandStr, stashedFreshInput);
     }
 }
 
@@ -690,17 +706,22 @@ function action(params) {
         var folder = actualParams.inputFolderPath;
         var ticketKey = parseTicketKeyOf(folder);
 
-        // 1. Move ticket to In Development
-        moveTicketToInDevelopment(config, customParams, ticketKey, statuses);
-
         // 1.5. Assert the dev-leg transition labels (gh-716): agent:dev ON,
         // stale agent:review / ai_developed cleared — so ANY dispatch path
         // (SM-armed or manual) shows the card on the factory board's
         // Development lane. GitHub deployments only; non-fatal.
         runDevTransitionAssertion(ticketKey, config, customParams);
 
-        // 2. Checkout or create feature branch
+        // 2. Checkout or create feature branch. gh-1318: this comes BEFORE the
+        // In Development move — a checkout that fails here used to strand the
+        // ticket in In Development with no branch, no recovery lane and only a
+        // setup-error comment. The status move below only runs for a branch
+        // that was actually prepared.
         checkoutBranchOrReport(config, customParams, ticketKey, actualParams, params);
+
+        // 2.5. Move ticket to In Development — only now, after branch setup
+        // succeeded (gh-1318 ordering).
+        moveTicketToInDevelopment(config, customParams, ticketKey, statuses);
 
         // Persist the resolved base branch to outputs/pr_base_branch.txt so that
         // quality-gate shell commands (static strings in the job's JSON config, unable

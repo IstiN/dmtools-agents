@@ -17,6 +17,7 @@ const { GIT_CONFIG } = require('./config.js');
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
 var branchSetup = require('./common/branchSetup.js');
+var gitStaging = require('./common/gitStaging.js');
 
 // Adapter matching the (command, workingDir) signature of the
 // common/pullRequest.js probe helpers (gh-912) — this action always runs in
@@ -94,15 +95,15 @@ function establishFeatureBranch(config, customParams, ticket) {
 }
 
 /**
- * gh-1301 resume-leg alignment: drop untracked input/ per-run artifacts
- * before the dev-branch checkout. A leg that ended in ask-mode pushes
- * ai/<ticket> with the session timer's auto-committed input/<ticket>/ copies;
- * a leg re-running the same ticket (comment-resume, retry) regenerates those
- * files and git refuses the checkout ("would be overwritten by checkout").
- * input/ is a per-run artifact drop — remove untracked collisions (tracked
- * files are untouched) so the re-run aligns with the existing branch,
- * mirroring the .codegraph guard pattern. Best-effort: removal failures
- * warn and never block the checkout.
+ * gh-1301: drop untracked input/ per-run artifacts before the dev-branch
+ * checkout. Since gh-1318 the fresh regenerated input/ is stashed aside
+ * (branchSetup.stashFreshInput) BEFORE this runs, so the clean can no longer
+ * destroy the reporter's answer — it now only ever sweeps leftovers when the
+ * stash itself failed (and otherwise no-ops while input/ is away). input/ is
+ * a per-run artifact drop — remove untracked collisions (tracked files are
+ * untouched) so the re-run aligns with the existing branch, mirroring the
+ * .codegraph guard pattern. Best-effort: removal failures warn and never
+ * block the checkout.
  *
  * The command is a CONSTANT: `git clean -fd -- input/` deletes untracked
  * files/directories under input/ (no -x, so ignored files are untouched).
@@ -121,12 +122,22 @@ function dropUntrackedInputArtifacts() {
 }
 
 /**
- * Dev-branch checkout decision tree: exists locally → plain checkout;
- * exists on remote → tracking checkout; absent → create from branchBase.
+ * gh-1318 root-cause heal (canonical copy: branchSetup.healLegContextArtifacts),
+ * run right after a successful dev-branch checkout: seed input//outputs into
+ * .git/info/exclude and untrack what the branch already carries — both
+ * best-effort.
  */
-function checkoutDevBranch(branchName, branchBase) {
-    dropUntrackedInputArtifacts();
+function healLegContextArtifacts() {
+    branchSetup.healLegContextArtifacts(runCommandForProbes, gitStaging.untrackLegContextArtifacts);
+}
 
+/**
+ * Dev-branch checkout decision tree only — stash/restore/heal live in
+ * checkoutDevBranch so every route is wrapped. Exists locally → plain
+ * checkout; exists on remote → tracking checkout; absent → create from
+ * branchBase.
+ */
+function runDevBranchCheckoutDecisionTree(branchName, branchBase) {
     var localBranches = readLocalBranchList(branchName, 'Error checking local branches:');
     if (localBranches.trim()) {
         // Branch exists locally — check it out
@@ -148,6 +159,22 @@ function checkoutDevBranch(branchName, branchBase) {
     cli_execute_command({ command: 'git checkout ' + branchBase });
     cli_execute_command({ command: 'git pull origin ' + branchBase });
     cli_execute_command({ command: 'git checkout -b ' + branchName });
+}
+
+function checkoutDevBranch(branchName, branchBase) {
+    // gh-1318: the freshly regenerated input/ IS the current truth — stash it
+    // aside so neither the clean below nor the checkout can destroy it, then
+    // restore it over any branch-tracked stale copy. Restore runs in finally:
+    // a failed checkout must still give the fresh input back.
+    var stashed = branchSetup.stashFreshInput(runCommandForProbes);
+    dropUntrackedInputArtifacts();
+
+    try {
+        runDevBranchCheckoutDecisionTree(branchName, branchBase);
+        healLegContextArtifacts();
+    } finally {
+        branchSetup.restoreFreshInput(runCommandForProbes, stashed);
+    }
 }
 
 function action(params) {

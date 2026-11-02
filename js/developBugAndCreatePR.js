@@ -266,7 +266,10 @@ function detectGitChanges(cliTool) {
         // probe (inside buildStagingPathspecs' extraPaths) — a static
         // exclusion trips the same ignored-pathspec guard when the kit
         // is materialized AND gitignored.
-        run('git add . -- ' + gitStaging.buildStagingPathspecs(cliTool, ['factory-kit']));
+        // gh-1318: `input` + `outputs` ride the same probe — tracker-
+        // regenerated leg context never belongs in the PR (see
+        // js/common/gitStaging.js LEG_CONTEXT_ARTIFACT_PATHS).
+        run('git add . -- ' + gitStaging.buildStagingPathspecs(cliTool, ['factory-kit', 'input', 'outputs']));
         const rawStatus = run('git status --porcelain') || '';
         return rawStatus.split('\n').filter(isMeaningfulStatusLine).length > 0;
     } catch (e) {

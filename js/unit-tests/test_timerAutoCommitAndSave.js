@@ -1244,3 +1244,56 @@ suite('timerAutoCommitAndSave — saveSessionArtefact edges (gh-1229)', function
         );
     });
 });
+
+// ── gh-1318: the timer never stages the tracker-regenerated leg context ──────
+// The ask-mode WIP snapshot that stranded gh-1318 existed because the
+// timer's `git add -A` had no input//outputs exclusion: the ticket's own
+// input/ folder rode every auto-save commit onto ai/<ticket>, and a re-run
+// leg then collided with (or was overwritten by) that stale branch-tracked
+// copy. input/ and outputs/ are ephemeral leg context, never branch content.
+
+suite('timerAutoCommitAndSave — leg-context staging exclusions (gh-1318)', function() {
+
+    function collectAddCall(checkIgnoreThrows) {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    if (checkIgnoreThrows) throw new Error('Command execution failed (exit code 1)');
+                    return '';
+                }
+                if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: { targetRepository: { workingDir: '/some/dir' } },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: ''
+        });
+        return cliCalls.filter(function(c) { return c.indexOf('git add -A') === 0; })[0];
+    }
+
+    test('a repo that does NOT ignore input//outputs gets exclusion pathspecs (seeding failed → defense holds)', function() {
+        var addCall = collectAddCall(true);
+        assert.ok(addCall, 'staging command present');
+        assert.contains(addCall, ':!input"', 'input/ never staged');
+        assert.contains(addCall, ':!input/**"');
+        assert.contains(addCall, ':!outputs"', 'outputs/ never staged');
+        assert.contains(addCall, ':!outputs/**"');
+    });
+
+    test('a repo that DOES ignore them (post-seed) gets no pathspec — the guard cannot fire, gitignore owns it', function() {
+        var addCall = collectAddCall(false);
+        assert.ok(addCall, 'staging command present');
+        assert.equal(addCall.indexOf(':!input'), -1,
+            'ignored paths must not appear in ANY pathspec (gh-683 ignored-pathspec guard)');
+        assert.equal(addCall.indexOf(':!outputs'), -1,
+            'ignored paths must not appear in ANY pathspec (gh-683 ignored-pathspec guard)');
+    });
+
+});
