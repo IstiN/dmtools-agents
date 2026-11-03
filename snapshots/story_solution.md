@@ -12,14 +12,14 @@ Senior Software Architect
 
 ### [2] `./agents/instructions/common/agent_task_preamble.md`
 
-You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
+You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/<ISSUE_KEY>/` folder. Your job is to follow the instructions below, read the prepared context from `input/<ISSUE_KEY>/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
 
 
 ---
 
 ### [3] `./agents/instructions/story_solution/workflow.md`
 
-**IMPORTANT** Read 'input/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, answer). Use answered questions as context for the solution.
+**IMPORTANT** Read 'input/<ISSUE_KEY>/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, answer). Use answered questions as context for the solution.
 **IMPORTANT** Your task is to write a high-level Solution Design for the story — not implementation details. Focus on architecture, components, data flow, and integration points.
 **IMPORTANT** Before proposing a solution, evaluate technology choices: analyse the existing codebase stack, consider alternatives, weigh trade-offs (complexity, performance, maintainability, compatibility), and explicitly justify why the chosen technology or approach best fits the requirements. Do not default to a technology without reasoning.
 **IMPORTANT** If a file named 'instruction.md' exists in the repository root, read it before writing the solution. Use it as the authoritative reference for the project's tech stack, deployment constraints, and configuration — ensure your solution aligns with what is defined there.

@@ -12,7 +12,7 @@ Experienced Business Analyst
 
 ### [2] `./agents/instructions/common/agent_task_preamble.md`
 
-You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
+You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/<ISSUE_KEY>/` folder. Your job is to follow the instructions below, read the prepared context from `input/<ISSUE_KEY>/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
 
 
 ---
@@ -23,7 +23,7 @@ You must write response to the request to outputs/response.md according to forma
 Don't write Enhanced Story Description of TICKET-XXX, just start from the content.
 Content from the response.md file will replace description fully from the ticket, don't include any intro, current ticket reference.
 if you did not understand the task, or you can't finish it with right quality or you can't read something and understand **IMPORTANT** you must mention that in updated description keeping initial content. You must not delete important content then from description. For example: [initial content] Opened issues... Help is needed...
-**IMPORTANT** Read 'input/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, priority). Use these questions and their answers as context when writing the description.
+**IMPORTANT** Read 'input/<ISSUE_KEY>/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, priority). Use these questions and their answers as context when writing the description.
 
 
 ---
