@@ -1079,6 +1079,10 @@ function recordNoRefBookkeeping(repoInfo, ticketKey, item, err, markKey) {
  */
 function runTeammateLocally(ticketKey, rule, effectiveConfig) {
     var resolvedCf = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
+    if (DRY) {
+        console.log('  [dry] 🖥️ local teammate ' + ticketKey + ' → ' + resolvedCf);
+        return true;
+    }
     // isLocal=true marks the encoded config with customParams.localTeammate=true so
     // any autoStartReview/autoStartRework chaining triggered by this job's postJSAction
     // (see js/common/autoStart.js) keeps running on this machine instead of dispatching

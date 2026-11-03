@@ -94,6 +94,7 @@ _Story Test Automation Rework Action_
   - `contentOutput`
   - `contentOutput.target`
   - `customStatuses`
+  - `dryRun`
   - `featureBranchEnabled`
   - `localTeammate`
   - `prSearchFnPath`
@@ -130,6 +131,7 @@ _Story Test Automation Rework Action_
 - `aiRepository` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `smFallback` _(used by JS action)_

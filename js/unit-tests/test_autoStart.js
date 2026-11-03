@@ -347,6 +347,46 @@ suite('triggerConfiguredWorkflowForTicket local-execution chaining', function() 
         assert.equal(result, false, 'a failed local dmtools run must be reported as a failure, not silently swallowed');
     });
 
+    test('dryRun skips writing encoded config file and executing cli_execute_command (gh-1323)', function() {
+        var executedCommands = [];
+        var writtenFiles = [];
+        var logs = [];
+        var autoStart = loadAutoStartHelper(
+            {
+                github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
+                github_trigger_workflow: function() {}
+            },
+            null,
+            {
+                file_write: function(opts) { writtenFiles.push(opts); },
+                cli_execute_command: function(opts) { executedCommands.push(opts); return ''; },
+                console: { log: function(m) { logs.push(m); }, warn: function() {}, error: function() {} }
+            }
+        );
+
+        var result = autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: 'SOHO-132',
+            config: { repository: { owner: 'example-org', repo: 'example-repo' } },
+            customParams: { localTeammate: true, dryRun: true },
+            configFile: 'agents/pr_rework.json'
+        });
+
+        assert.equal(result, true);
+        assert.equal(writtenFiles.length, 0, 'dryRun must not write encoded config file');
+        assert.equal(executedCommands.length, 0, 'dryRun must not execute cli_execute_command');
+        assert.ok(logs.some(function(l) { return l.indexOf('[dry]') !== -1 && l.indexOf('SOHO-132') !== -1; }),
+            'dryRun must log [dry] message');
+
+        var directResult = autoStart.triggerConfiguredJobLocally({
+            ticketKey: 'SOHO-133',
+            configFile: 'agents/pr_review.json',
+            dryRun: true
+        });
+        assert.equal(directResult, true);
+        assert.equal(writtenFiles.length, 0);
+        assert.equal(executedCommands.length, 0);
+    });
+
 });
 
 suite('triggerSmIfIdle', function() {

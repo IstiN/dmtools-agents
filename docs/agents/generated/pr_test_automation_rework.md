@@ -94,6 +94,7 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
   - `contentOutput`
   - `contentOutput.target`
   - `customStatuses`
+  - `dryRun`
   - `featureBranchEnabled`
   - `feedbackLoop`
   - `localTeammate`
@@ -137,6 +138,7 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 - `commentMarkup` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `projectKey` _(used by JS action)_
