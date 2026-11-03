@@ -223,14 +223,16 @@ suite('stampTcRoles: scoping — bugs only', function() {
     });
 
     test('a bug without a readable summary still stamps — the key is the guard scope', function() {
-        var m = stampMocks({ 'TS-5': 'body' }, { parentType: 'Bug', parentKey: 'BUG-1', parentSummary: null });
+        var m = stampMocks({ 'TS-5': 'body', 'TS-6': 'body' },
+            { parentType: 'Bug', parentKey: 'BUG-1', parentSummary: null });
         var mod = loadStampTcRoles(m);
 
         var result = mod.action(bugParentParams());
 
         assert.equal(result.success, true);
-        assert.equal(m.updatedDescriptions.length, 1);
-        assert.contains(m.updatedDescriptions[0].description, 'Regression guard: BUG-1',
+        assert.equal(m.updatedDescriptions.length, 2);
+        var guard = m.updatedDescriptions.filter(function(u) { return u.key === 'TS-6'; })[0];
+        assert.contains(guard.description, 'Regression guard: BUG-1',
             'the guard scope falls back to the bug key when the summary is missing');
     });
 });

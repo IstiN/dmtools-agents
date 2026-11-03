@@ -49,20 +49,9 @@ _tcDifferentialDispatcher.js — the gh-1345 scripted CI dispatcher for parked_
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
   - `maxReworkRounds`
   - `parkLabel`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
   - `tcRunCommand`
-  - `trackerProvider`
   - `workingDir`
 
 
@@ -73,20 +62,9 @@ _tcDifferentialDispatcher.js — the gh-1345 scripted CI dispatcher for parked_
 
 ## Custom params
 
-- `adoTextFormat` _(used by JS action)_
-- `branchCreateFnPath` _(used by JS action)_
-- `branchNamingFnPath` _(used by JS action)_
-- `configPath` _(used by JS action)_
-- `customStatuses` _(used by JS action)_
-- `featureBranchEnabled` _(used by JS action)_
 - `maxReworkRounds` _(used by JS action)_
 - `parkLabel` _(used by JS action)_
-- `prSearchFnPath` _(used by JS action)_
-- `scmProvider` _(used by JS action)_
-- `stageFallback` _(used by JS action)_
-- `targetRepository` _(used by JS action)_
 - `tcRunCommand` _(used by JS action)_
-- `trackerProvider` _(used by JS action)_
 - `workingDir` _(used by JS action)_
 
 ---

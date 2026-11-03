@@ -44,20 +44,31 @@ var ALLOWED_AUTHOR = { user: { login: 'ai-teammate' } };
 
 // ── fixtures: a bug ticket carrying a parked differential request ────────────
 
+// Option readers keep the fixture builders branch-free (CRAP ratchet): optOr
+// mirrors the `|| fallback` semantics, optGiven only substitutes undefined.
+function optOr(opts, key, fallback) {
+    return (opts && opts[key]) || fallback;
+}
+
+function optGiven(opts, key, fallback) {
+    var v = opts && opts[key];
+    return v === undefined ? fallback : v;
+}
+
 function parkedFinding(tcKey, opts) {
     opts = opts || {};
     return {
         tcKey: tcKey,
-        role: opts.role || 'regression-guard',
+        role: optOr(opts, 'role', 'regression-guard'),
         verdict: 'differential-rerun',
         reason: 'rerun-requested-on-last-green-build',
-        errorClass: opts.errorClass || 'assertion',
-        testPath: opts.testPath || ('testing/tests/' + tcKey + '/test.py'),
-        sha: opts.sha || 'cafed00dbee',
-        envFingerprint: opts.envFingerprint || null,
-        lastGreenSha: opts.lastGreenSha !== undefined ? opts.lastGreenSha : 'facade12345',
-        lastGreenEnvFingerprint: opts.lastGreenEnvFingerprint || null,
-        occurrences: opts.occurrences || 1
+        errorClass: optOr(opts, 'errorClass', 'assertion'),
+        testPath: optOr(opts, 'testPath', 'testing/tests/' + tcKey + '/test.py'),
+        sha: optOr(opts, 'sha', 'cafed00dbee'),
+        envFingerprint: optOr(opts, 'envFingerprint', null),
+        lastGreenSha: optGiven(opts, 'lastGreenSha', 'facade12345'),
+        lastGreenEnvFingerprint: optOr(opts, 'lastGreenEnvFingerprint', null),
+        occurrences: optOr(opts, 'occurrences', 1)
     };
 }
 
@@ -100,24 +111,33 @@ function ticketComments(opts) {
  * whose text contains a `throwsOn` substring throws (the git-level failure —
  * a checkout of an unknown SHA, say).
  */
+function throwIfTriggered(opts, cmd) {
+    var throwers = opts.throwsOn || [];
+    for (var i = 0; i < throwers.length; i++) {
+        if (cmd.indexOf(throwers[i]) !== -1) {
+            throw new Error(opts.throwMessage || ('command failed: ' + cmd));
+        }
+    }
+    return false;
+}
+
+function failingRun(opts, cmd) {
+    var failing = opts.tcFailsOn || (opts.tcFails ? 'pytest' : null);
+    if (failing && cmd.indexOf(failing) !== -1) {
+        throw new Error('exit code 1: 1 assertion failed');
+    }
+    if (cmd.indexOf('branch --show-current') !== -1) return 'bug-test-branch';
+    return 'ok';
+}
+
 function fakeShell(opts) {
     opts = opts || {};
     var calls = [];
     var shell = function(args) {
         var cmd = String((args && args.command) || '');
         calls.push(args);
-        var throwers = opts.throwsOn || [];
-        for (var i = 0; i < throwers.length; i++) {
-            if (cmd.indexOf(throwers[i]) !== -1) {
-                throw new Error(opts.throwMessage || ('command failed: ' + cmd));
-            }
-        }
-        var failing = opts.tcFailsOn || (opts.tcFails ? 'pytest' : null);
-        if (failing && cmd.indexOf(failing) !== -1) {
-            throw new Error('exit code 1: 1 assertion failed');
-        }
-        if (cmd.indexOf('branch --show-current') !== -1) return 'bug-test-branch';
-        return 'ok';
+        throwIfTriggered(opts, cmd);
+        return failingRun(opts, cmd);
     };
     shell.calls = calls;
     return shell;
@@ -247,7 +267,7 @@ suite('tcDifferentialDispatcher: green-on-old — the earned bounce', function()
 
         assert.ok(run.latestLedger, 'the updated ledger marker was posted');
         assert.equal(tcLedger.differentialRequests(run.latestLedger).length, 0);
-        assert.deepEqual(run.jira.unlabels, [{ key: 'BUG-1', label: 'tc_differential_pending' }]);
+        assert.deepEqual(labelNames(run.jira), ['sm_tc_differential_triggered', 'tc_differential_pending']);
         // the run registry is NOT rewritten by the dispatcher (the red streak
         // that created the request stays the bounce-cap input)
         var registryBodies = run.jira.comments.map(function(c) { return c.comment; })
@@ -274,7 +294,7 @@ suite('tcDifferentialDispatcher: red-on-old — failure predates the change', fu
         assert.equal(run.latestLedger.findings[0].verdict, 'maintenance');
         assert.equal(run.latestLedger.findings[0].reason, 'failure-predates-change');
         assert.equal(run.latestLedger.findings[0].evidence.differential, 'red');
-        assert.deepEqual(run.jira.unlabels, [{ key: 'BUG-1', label: 'tc_differential_pending' }]);
+        assert.deepEqual(labelNames(run.jira), ['sm_tc_differential_triggered', 'tc_differential_pending']);
     });
 });
 
@@ -287,7 +307,7 @@ suite('tcDifferentialDispatcher: the bounce cap escalates', function() {
         assert.deepEqual(run.jira.moves, [], 'the cap stops the loop — no move');
         var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
         assert.contains(body, 'Bounce cap reached');
-        assert.deepEqual(run.jira.unlabels, [{ key: 'BUG-1', label: 'tc_differential_pending' }]);
+        assert.deepEqual(labelNames(run.jira), ['sm_tc_differential_triggered', 'tc_differential_pending']);
     });
 });
 
@@ -381,7 +401,7 @@ suite('tcDifferentialDispatcher: several parked requests in one run', function()
         assert.deepEqual(run.jira.moves, [{ key: 'BUG-1', statusName: 'Ready For Development' }]);
         // both consumed — nothing stays parked, the label clears
         assert.equal(tcLedger.differentialRequests(run.latestLedger).length, 0);
-        assert.deepEqual(run.jira.unlabels, [{ key: 'BUG-1', label: 'tc_differential_pending' }]);
+        assert.deepEqual(labelNames(run.jira), ['sm_tc_differential_triggered', 'tc_differential_pending']);
         // the red sibling request landed as an open maintenance finding
         assert.equal(run.latestLedger.findings.filter(function(f) {
             return f.tcKey === 'TS-8' && f.verdict === 'maintenance';
@@ -412,7 +432,7 @@ suite('tcDifferentialDispatcher: nothing parked', function() {
         }));
         assert.equal(run.result.action, 'nothing_parked');
         assert.deepEqual(run.jira.moves, []);
-        assert.deepEqual(run.jira.unlabels, [{ key: 'BUG-1', label: 'tc_differential_pending' }]);
+        assert.deepEqual(labelNames(run.jira), ['sm_tc_differential_triggered', 'tc_differential_pending']);
     });
 });
 
@@ -424,11 +444,14 @@ var TRIGGER_LABEL = 'sm_tc_differential_triggered';
 function dispatchOnce(shell, findings, opts) {
     opts = opts || {};
     var jira = {
+        // the ticket's comment view — mutable so follow-up rounds can park
+        // fresh requests the way the automation leg would
+        ticketComments: ticketComments({ findings: findings, redRounds: opts.redRounds }),
         jira_get_ticket: function(args) {
             return { fields: {
                 summary: 'Checkout total wrong',
                 issuetype: { name: 'Bug' },
-                comment: { comments: ticketComments({ findings: findings, redRounds: opts.redRounds }) }
+                comment: { comments: jira.ticketComments }
             } };
         },
         jira_move_to_status: function(args) { jira.moves.push(args); },
@@ -474,7 +497,7 @@ suite('tcDifferentialDispatcher: trigger label lifecycle (the job lifts its own 
         // the SM rule re-adds its trigger label — the dispatcher must run
         // again (a stale trigger label would skip this tick forever).
         var jira = round1.jira;
-        jira.comments.push(Object.assign({}, ALLOWED_AUTHOR, { body: ledgerMarkerWith([parkedFinding('TS-9')]) }));
+        jira.ticketComments.push(Object.assign({}, ALLOWED_AUTHOR, { body: ledgerMarkerWith([parkedFinding('TS-9')]) }));
         var shell2 = fakeShell({});
         var mod = loadDispatcher(shell2, jira, {});
         var result = mod.action(dispatcherParams());
@@ -524,8 +547,11 @@ suite('tcDifferentialDispatcher: unconfigured machineAuthor allowlist', function
         assert.equal(result.success, true);
         assert.equal(result.action, 'unconfigured_parked');
         // the fail-closed parse cannot see the parked request — stripping the
-        // park label would orphan it and re-open the generator leg
-        assert.deepEqual(jira.unlabels, [], 'no label is stripped');
+        // park label would orphan it and re-open the generator leg. Only the
+        // job's own trigger lock drops, so the next tick retries once the
+        // allowlist is configured (no permanent lock on an unconfigured fleet).
+        assert.deepEqual(jira.unlabels, [{ key: 'BUG-1', label: 'sm_tc_differential_triggered' }],
+            'the park label STAYS — only the trigger lock drops for the retry');
         assert.deepEqual(jira.moves, []);
         assert.deepEqual(jira.comments, [], 'no ledger marker / report is posted');
         assert.equal(shell.calls.length, 0, 'nothing was executed');
@@ -604,7 +630,7 @@ suite('tcDifferentialDispatcher: sha/testPath validation before any shell comman
 
     test('safeSha / safeTestPath accept exactly the legitimate shapes', function() {
         assert.equal(validationMod.safeSha('facade12345'), 'facade12345');
-        assert.equal(validationMod.safeSha('ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789'), null, '65 hex chars');
+        assert.equal(validationMod.safeSha('ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789A'), null, '65 hex chars');
         assert.equal(validationMod.safeSha('facade1'), 'facade1');
         assert.equal(validationMod.safeSha('facad'), null, 'shorter than 7');
         assert.equal(validationMod.safeSha('main'), null);

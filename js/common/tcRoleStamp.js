@@ -82,34 +82,48 @@ function tcKeyOf(tc) {
  * lowest-key unmarked TC becomes the oracle and the rest become guards with
  * the bug summary as scope (falling back to the bug key).
  */
-function stampPlan(tcs, bugKey, bugSummary) {
-    var list = Array.isArray(tcs) ? tcs : [];
-    var hasOracle = false;
-    list.forEach(function(tc) {
+function hasOracleStamp(list, bugKey) {
+    var target = String(bugKey || '').toLowerCase();
+    var matches = list.filter(function(tc) {
         var marker = parseRoleMarker(descriptionOf(tc));
-        if (marker && marker.kind === 'verifies' &&
-            String(marker.key).toLowerCase() === String(bugKey || '').toLowerCase()) {
-            hasOracle = true;
-        }
+        return !!marker && marker.kind === 'verifies' &&
+            String(marker.key).toLowerCase() === target;
     });
+    return matches.length > 0;
+}
 
-    var scope = String(bugSummary || '').trim() || String(bugKey || '');
+/** The unmarked linked TCs in oracle-election order: lowest key first. */
+function unmarkedSorted(list) {
     var unmarked = list.filter(function(tc) { return !parseRoleMarker(descriptionOf(tc)); });
     unmarked.sort(function(a, b) {
         var d = numericKey(tcKeyOf(a)) - numericKey(tcKeyOf(b));
         return d !== 0 ? d : (tcKeyOf(a) < tcKeyOf(b) ? -1 : 1);
     });
+    return unmarked;
+}
 
+/** The marker for one unmarked TC: the oracle stamp, or the guard stamp. */
+function markerFor(isOracle, bugKey, scope) {
+    if (isOracle) return VERIFIES_PREFIX + ' ' + bugKey;
+    return GUARD_PREFIX + ' ' + scope;
+}
+
+/** The plan for the unmarked TCs in election order (first elects the oracle). */
+function planUnmarked(unmarked, oracleExists, bugKey, scope) {
     var plan = [];
+    var oracleTaken = oracleExists;
     unmarked.forEach(function(tc) {
-        if (!hasOracle) {
-            plan.push({ tcKey: tcKeyOf(tc), marker: VERIFIES_PREFIX + ' ' + bugKey });
-            hasOracle = true;
-        } else {
-            plan.push({ tcKey: tcKeyOf(tc), marker: GUARD_PREFIX + ' ' + scope });
-        }
+        var isOracle = !oracleTaken;
+        oracleTaken = true;
+        plan.push({ tcKey: tcKeyOf(tc), marker: markerFor(isOracle, bugKey, scope) });
     });
     return plan;
+}
+
+function stampPlan(tcs, bugKey, bugSummary) {
+    var list = Array.isArray(tcs) ? tcs : [];
+    var scope = String(bugSummary || '').trim() || String(bugKey || '');
+    return planUnmarked(unmarkedSorted(list), hasOracleStamp(list, bugKey), bugKey, scope);
 }
 
 /**
@@ -130,8 +144,12 @@ function stampedDescription(description, marker) {
  * { role, verifies, regressionGuard } fields shaped for the triage's
  * resolveTcRole — or {} when the description carries no marker (the
  * legacy-safe own-oracle fallback stays with the triage engine).
+ *
+ * NOT bug-scoped on purpose: a `Verifies: <other-bug>` stamp is exactly how
+ * sibling detection travels — tcTriage.resolveTcRole resolves it later, so
+ * this reader takes no bug key.
  */
-function roleFieldsFromDescription(description, bugKey) {
+function roleFieldsFromDescription(description) {
     var marker = parseRoleMarker(description);
     if (!marker) return {};
     if (marker.kind === 'verifies') {
@@ -145,12 +163,12 @@ function roleFieldsFromDescription(description, bugKey) {
  * their (stamped) descriptions. Entries without a marker pass through
  * untouched; null entries are preserved.
  */
-function annotateWithRoles(tcs, bugKey) {
+function annotateWithRoles(tcs) {
     var list = Array.isArray(tcs) ? tcs : [];
     return list.map(function(tc) {
         if (!tc) return tc;
         var fields = roleFieldsFromDescription(
-            (tc.fields && tc.fields.description) || tc.description || '', bugKey);
+            (tc.fields && tc.fields.description) || tc.description || '');
         if (!fields.role) return tc;
         var out = Object.assign({}, tc);
         Object.keys(fields).forEach(function(k) { out[k] = fields[k]; });

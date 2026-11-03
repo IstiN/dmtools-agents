@@ -31,23 +31,12 @@ _Pre-CLI Content Output Setup — shared pre-action for content-generating_
 
 - Source: `agents/js/preCliContentOutputSetup.js`
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `childQuestions`
-  - `configPath`
   - `contentOutput`
   - `contexts`
-  - `customStatuses`
-  - `featureBranchEnabled`
   - `fields`
   - `jql`
   - `parentContextFetch`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
-  - `trackerProvider`
 
 
 ### postJSAction: `writeContentOutput.js`
@@ -58,17 +47,7 @@ _Write Content Output — unified post-action for content-generating agents_
 - Side effects:
   - post ticket comment (via tracker)
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
-  - `configPath`
   - `contentOutput`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
   - `trackerProvider`
 
 
@@ -88,21 +67,11 @@ _Write Content Output — unified post-action for content-generating agents_
     "operationType": "replace"
   }
   ```
-- `adoTextFormat` _(used by JS action)_
-- `branchCreateFnPath` _(used by JS action)_
-- `branchNamingFnPath` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
-- `configPath` _(used by JS action)_
 - `contexts` _(used by JS action)_
-- `customStatuses` _(used by JS action)_
-- `featureBranchEnabled` _(used by JS action)_
 - `fields` _(used by JS action)_
 - `jql` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_
-- `prSearchFnPath` _(used by JS action)_
-- `scmProvider` _(used by JS action)_
-- `stageFallback` _(used by JS action)_
-- `targetRepository` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 
 ---

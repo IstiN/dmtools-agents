@@ -35,18 +35,18 @@ function customParamsOf(params) {
     return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
 }
 
+/** The ticket's `fields` — null/undefined normalize to {} (one accessor). */
+function ticketFields(ticketDetails) {
+    return (ticketDetails && ticketDetails.fields) || {};
+}
+
 function issueTypeName(ticketDetails) {
-    var fields = (ticketDetails && ticketDetails.fields) || {};
+    var fields = ticketFields(ticketDetails);
     return (fields.issuetype && fields.issuetype.name) || null;
 }
 
 function summaryOf(ticketDetails) {
-    var fields = (ticketDetails && ticketFields(ticketDetails)) || {};
-    return fields.summary || null;
-}
-
-function ticketFields(ticketDetails) {
-    return (ticketDetails && ticketDetails.fields) || {};
+    return ticketFields(ticketDetails).summary || null;
 }
 
 /** The linked TCs of the parent — key, summary and description in one query. */
@@ -62,10 +62,15 @@ function linkedTestCases(ticketKey, testCaseType) {
     }
 }
 
-/** A search result without a description falls back to the TC ticket read. */
-function descriptionOf(tc) {
+/** The description a search result already carries (null when it carries none). */
+function fieldsDescriptionOf(tc) {
     var fields = (tc && tc.fields) || {};
-    if (fields.description !== undefined && fields.description !== null) return fields.description;
+    if (fields.description === undefined || fields.description === null) return null;
+    return fields.description;
+}
+
+/** A search result without a description falls back to the TC ticket read. */
+function fetchedDescriptionOf(tc) {
     try {
         var details = getTracker().getIssue(tc.key);
         return ((details && details.fields && details.fields.description) || '');
@@ -75,6 +80,12 @@ function descriptionOf(tc) {
     }
 }
 
+function descriptionOf(tc) {
+    var own = fieldsDescriptionOf(tc);
+    if (own !== null) return own;
+    return fetchedDescriptionOf(tc);
+}
+
 function stampOne(tc, marker) {
     var current = descriptionOf(tc);
     var stamped = tcRoleStamp.stampedDescription(current, marker);
@@ -82,6 +93,23 @@ function stampOne(tc, marker) {
     getTracker().updateDescription(tc.key, stamped);
     console.log('✅ Stamped role marker onto', tc.key, ':', marker);
     return true;
+}
+
+/** The plan applied TC by TC — a tracker hiccup on one never blocks the rest. */
+function applyStampPlan(plan, linked) {
+    var byKey = {};
+    linked.forEach(function(tc) { if (tc && tc.key) byKey[tc.key] = tc; });
+    var stampedKeys = [];
+    plan.forEach(function(step) {
+        var tc = byKey[step.tcKey];
+        if (!tc) return;
+        try {
+            if (stampOne(tc, step.marker)) stampedKeys.push(step.tcKey);
+        } catch (e) {
+            console.warn('Failed to stamp', step.tcKey, '(non-fatal):', e);
+        }
+    });
+    return stampedKeys;
 }
 
 /**
@@ -98,19 +126,19 @@ function stampRoles(tracker, ticketKey, ticketDetails, testCaseType) {
         console.log('All linked Test Cases already carry role markers — nothing to stamp');
         return [];
     }
-    var byKey = {};
-    linked.forEach(function(tc) { if (tc && tc.key) byKey[tc.key] = tc; });
-    var stampedKeys = [];
-    plan.forEach(function(step) {
-        var tc = byKey[step.tcKey];
-        if (!tc) return;
-        try {
-            if (stampOne(tc, step.marker)) stampedKeys.push(step.tcKey);
-        } catch (e) {
-            console.warn('Failed to stamp', step.tcKey, '(non-fatal):', e);
-        }
-    });
-    return stampedKeys;
+    return applyStampPlan(plan, linked);
+}
+
+/** The stamping phase — non-fatal by contract: [] on any tracker failure. */
+function stampPhase(tracker, ticketKey, projectConfig) {
+    try {
+        var details = tracker.getIssue(ticketKey);
+        var testCaseType = (projectConfig.jira.issueTypes && projectConfig.jira.issueTypes.TEST_CASE) || 'Test Case';
+        return stampRoles(tracker, ticketKey, details, testCaseType);
+    } catch (e) {
+        console.warn('Role stamping skipped (non-fatal):', e);
+        return [];
+    }
 }
 
 function action(params) {
@@ -126,14 +154,7 @@ function action(params) {
 
         console.log('=== Stamping TC role markers for', ticketKey, '===');
 
-        var stampedKeys = [];
-        try {
-            var details = tracker.getIssue(ticketKey);
-            var testCaseType = (jiraConfig.issueTypes && jiraConfig.issueTypes.TEST_CASE) || 'Test Case';
-            stampedKeys = stampRoles(tracker, ticketKey, details, testCaseType);
-        } catch (e) {
-            console.warn('Role stamping skipped (non-fatal):', e);
-        }
+        var stampedKeys = stampPhase(tracker, ticketKey, projectConfig);
 
         // The generator leg's existing hand-off is preserved unchanged.
         var result = moveToDoneModule.action(params);

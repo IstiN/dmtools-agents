@@ -224,7 +224,8 @@ function writeLinkedTestCases(storyKey, testCases) {
     // gh-1345: the stamped first line becomes structured role fields
     // (role / verifies / regressionGuard) — the automation leg reads the
     // machine stamp, never agent prose. Unmarked entries pass through.
-    var annotated = tcRoleStamp.annotateWithRoles(testCases, storyKey);
+    // gh-1346 rework: not bug-scoped — sibling resolution stays with the triage.
+    var annotated = tcRoleStamp.annotateWithRoles(testCases);
     try {
         file_write({
             path: inputDir + '/linked_test_cases.json',

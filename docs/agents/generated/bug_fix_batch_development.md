@@ -33,18 +33,7 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `checkOpenPR`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
-  - `trackerProvider`
 
 ### preCliJSAction: `prepareBugFixBatchContext.js`
 
@@ -54,22 +43,11 @@ _Pre-CLI Bug-fix Batch Context Action_
 - Side effects:
   - move ticket to status (via tracker)
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `childQuestions`
-  - `configPath`
   - `contexts`
-  - `customStatuses`
-  - `featureBranchEnabled`
   - `fields`
   - `jql`
   - `parentContextFetch`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
-  - `trackerProvider`
 
 
 ### postJSAction: `developBugFixBatchAndCreatePR.js`
@@ -81,22 +59,11 @@ _Post-CLI Bug-fix Batch Development Action_
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `childQuestions`
-  - `configPath`
   - `contexts`
-  - `customStatuses`
-  - `featureBranchEnabled`
   - `fields`
   - `jql`
   - `parentContextFetch`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
-  - `trackerProvider`
 
 
 ## LLM step
@@ -107,18 +74,7 @@ _Post-CLI Bug-fix Batch Development Action_
 ## Custom params
 
 - `removeLabel`: `"sm_bug_fix_batch_development_triggered"`
-- `adoTextFormat` _(used by JS action)_
-- `branchCreateFnPath` _(used by JS action)_
-- `branchNamingFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
-- `configPath` _(used by JS action)_
-- `customStatuses` _(used by JS action)_
-- `featureBranchEnabled` _(used by JS action)_
-- `prSearchFnPath` _(used by JS action)_
-- `scmProvider` _(used by JS action)_
-- `stageFallback` _(used by JS action)_
-- `targetRepository` _(used by JS action)_
-- `trackerProvider` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `contexts` _(used by JS action)_
 - `fields` _(used by JS action)_

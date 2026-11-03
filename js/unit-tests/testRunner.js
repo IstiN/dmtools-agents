@@ -353,6 +353,9 @@ function makeDefaultConfigLoaderMock(extraConfig) {
             var result = {
                 jira: makeDefaultJiraConfig()
             };
+            if (cfg.machineAuthor) {
+                result.machineAuthor = cfg.machineAuthor;
+            }
             if (cfg.repository) {
                 result.repository = cfg.repository;
             }

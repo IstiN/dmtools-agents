@@ -34,18 +34,7 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `checkOpenPR`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
-  - `trackerProvider`
 
 ### preCliJSAction: `prepareBugCreationContext.js`
 
@@ -60,18 +49,7 @@ _Prepare Bug Creation Context (preCliJSAction for bug_creation agent)_
 - Side effects:
   - post ticket comment (via tracker)
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
   - `openBugsJql`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
-  - `trackerProvider`
 
 
 ### postJSAction: `postBugCreation.js`
@@ -85,17 +63,7 @@ _Post Bug Creation Action (postJSAction for bug_creation agent)_
   - move ticket to status (via tracker)
   - create ticket (via tracker)
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
   - `removeLabel`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
   - `trackerProvider`
 
 
@@ -108,17 +76,7 @@ _Post Bug Creation Action (postJSAction for bug_creation agent)_
 
 - `openBugsJql`: `"project = {jiraProject} AND issuetype in (Bug) AND status not in ({status.DONE:Done})"`
 - `removeLabel`: `"sm_bug_creation_triggered"`
-- `adoTextFormat` _(used by JS action)_
-- `branchCreateFnPath` _(used by JS action)_
-- `branchNamingFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
-- `configPath` _(used by JS action)_
-- `customStatuses` _(used by JS action)_
-- `featureBranchEnabled` _(used by JS action)_
-- `prSearchFnPath` _(used by JS action)_
-- `scmProvider` _(used by JS action)_
-- `stageFallback` _(used by JS action)_
-- `targetRepository` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 
 ---

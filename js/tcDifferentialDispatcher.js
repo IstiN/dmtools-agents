@@ -24,7 +24,9 @@
  *                        stays visible in every ledger digest.
  *   4. posts the updated ledger marker (the parked section disappears as the
  *      dispatcher consumes the requests) and clears the park label when
- *      nothing remains parked.
+ *      nothing remains parked — together with the SM rule's trigger label:
+ *      the job manages its own lock's full lifecycle (the quotaParkProbe
+ *      liftPark pattern), so a later park on the same bug dispatches again.
  *
  * customParams:
  *   workingDir        — the target-repo checkout the TC scripts run in
@@ -35,6 +37,13 @@
  *                       the ticket carries one explanation comment;
  *   maxReworkRounds   — the bounce cap (default: tcTriage default);
  *   parkLabel         — the SM-matching label (default tc_differential_pending).
+ *
+ * Ledger-controlled strings (testPath / lastGreenSha travel from a machine
+ * comment in the target repo into this shell) are validated BEFORE any
+ * command is built — a failed check routes to the fail-safe `unavailable`.
+ * An unconfigured machineAuthor allowlist bails BEFORE reading the ledger:
+ * the fail-closed parse cannot see parked requests, so stripping the park
+ * label here would orphan them (and re-open the generator leg).
  *
  * GraalJS-clean (var + plain functions, JSON-safe data); every require is
  * hoisted (gh-823). Tests: js/unit-tests/test_tcDifferentialDispatcher.js.
@@ -55,9 +64,24 @@ var initTracker = trackerHolder.initTracker;
 var getTracker = trackerHolder.getTracker;
 
 var PARK_LABEL_DEFAULT = 'tc_differential_pending';
+// The SM rule's in-flight crash-guard label (sm.json) — removed by this job
+// when nothing remains parked, exactly like quotaParkProbe.liftPark removes
+// its dispatch trigger labels. The SM-side add stays the crash guard.
+var TRIGGER_LABEL_DEFAULT = 'sm_tc_differential_triggered';
 var MAX_DISPATCHES_PER_TICK = 10;
 var COMMAND_OUTPUT_TAIL = 200;
 var RESOLVE_VIA_GREEN = 'differential-rerun-dispatcher:green-on-last-green';
+
+// A git SHA and a script path are the only ledger-controlled strings that
+// ever reach the shell — anything else routes to the `unavailable` fail-safe.
+var SHA_RE = /^[0-9a-f]{7,64}$/i;
+var UNSAFE_PATH_RE = /[\s;&|<>$`\\'"\n]/;
+var UNAVAILABLE_SHA_DETAIL =
+    'the request carries no usable lastGreenSha — a 7-64 hex git SHA is required, ' +
+    'the recorded value is rejected before any command is built';
+var UNAVAILABLE_PATH_DETAIL =
+    'the request carries an unsafe or missing testPath — no shell metacharacters, ' +
+    'no leading dash, no relative escape';
 
 // ── inputs (the quotaParkProbe resolveInputs shape) ──────────────────────────
 
@@ -84,6 +108,29 @@ function maxReworkRoundsOf(customParams) {
     return n > 0 ? n : tcTriage.DEFAULT_MAX_REWORK_ROUNDS;
 }
 
+// ── ledger-controlled input validation (defense-in-depth) ────────────────────
+
+/**
+ * A lastGreenSha is executable only as a git object name: 7-64 hex chars.
+ * Anything else (a branch name, an option, shell metacharacters) is rejected.
+ */
+function safeSha(value) {
+    var s = String(value || '').trim();
+    return SHA_RE.test(s) ? s : null;
+}
+
+/**
+ * A testPath is substituted into the configured run command: shell
+ * metacharacters, option-like leading dashes and relative escapes are
+ * rejected — a plain repo-relative path is all the run needs.
+ */
+function safeTestPath(value) {
+    var s = String(value || '').trim();
+    if (!s) return null;
+    if (s.charAt(0) === '-' || s.indexOf('..') !== -1) return null;
+    return UNSAFE_PATH_RE.test(s) ? null : s;
+}
+
 // ── the scripted run (the verdict) ────────────────────────────────────────────
 
 /**
@@ -96,6 +143,18 @@ function buildRunCommand(template, testPath) {
     var p = String(testPath || '').trim();
     if (!t || !p) return null;
     return t.replace('{testPath}', p);
+}
+
+/**
+ * The validated run inputs for one request, or the `unavailable` fail-safe
+ * (nothing was decided, nothing was executed) when a value is unusable.
+ */
+function validateRunInputs(request) {
+    var sha = safeSha(request.lastGreenSha);
+    if (!sha) return { outcome: 'unavailable', detail: UNAVAILABLE_SHA_DETAIL };
+    var testPath = safeTestPath(request.testPath);
+    if (!testPath) return { outcome: 'unavailable', detail: UNAVAILABLE_PATH_DETAIL };
+    return { sha: sha, testPath: testPath };
 }
 
 function runShell(command, workingDir) {
@@ -123,56 +182,92 @@ function bestEffort(command, workingDir) {
     }
 }
 
+/** The current branch of the checkout — the restore target ('' when unknown). */
+function currentBranchOf(workingDir) {
+    try {
+        var branchOut = runShell(gitCommand('branch --show-current', workingDir), workingDir);
+        return String(branchOut || '').trim().split('\n')[0].trim();
+    } catch (e) {
+        console.warn('Could not read the current branch (no restore step):', commandTail(e));
+        return '';
+    }
+}
+
+function restoreCommandOf(workingDir) {
+    var branch = currentBranchOf(workingDir);
+    return branch ? gitCommand('checkout ' + branch, workingDir) : null;
+}
+
+/**
+ * The scripted core: fetch (best effort for shallow clones), checkout the
+ * validated SHA, run the single TC — a red run is evidence, not an error.
+ */
+function checkoutAndRun(sha, command, workingDir) {
+    // best effort: a shallow/sparse clone may not know the old SHA yet.
+    bestEffort(gitCommand('fetch origin ' + sha, workingDir), workingDir);
+    try {
+        runShell(gitCommand('checkout ' + sha, workingDir), workingDir);
+    } catch (e) {
+        return { outcome: 'unavailable', detail: 'checkout of ' + sha + ' failed: ' + commandTail(e) };
+    }
+    try {
+        runShell(command, workingDir);
+        return { outcome: 'green' };
+    } catch (e) {
+        // the run is the verdict — a red run on the old build is evidence,
+        // the failure summary travels with the route.
+        console.warn('TC red on the last-green build:', commandTail(e));
+        return { outcome: 'red' };
+    }
+}
+
 /**
  * Runs one parked request on its last-green build.
  * Returns { outcome: 'green'|'red', command } or
  *         { outcome: 'unavailable', detail } (nothing was decided).
  */
 function runDifferential(request, workingDir, runTemplate) {
-    var sha = request.lastGreenSha;
-    if (!sha) {
-        return { outcome: 'unavailable', detail: 'the request carries no lastGreenSha — nothing to checkout' };
-    }
-    var command = buildRunCommand(runTemplate, request.testPath);
+    var inputs = validateRunInputs(request);
+    if (inputs.outcome === 'unavailable') return inputs;
+    var command = buildRunCommand(runTemplate, inputs.testPath);
     if (!command) {
         return { outcome: 'unavailable',
             detail: 'no tcRunCommand configured — set customParams.tcRunCommand (a template with a {testPath} placeholder)' };
     }
-
-    var checkout = gitCommand('checkout ' + sha, workingDir);
-    var restore = null;
-    try {
-        var branchOut = runShell(gitCommand('branch --show-current', workingDir), workingDir);
-        var branch = String(branchOut || '').trim().split('\n')[0].trim();
-        if (branch) restore = gitCommand('checkout ' + branch, workingDir);
-    } catch (e) {
-        console.warn('Could not read the current branch (no restore step):', commandTail(e));
-    }
-
-    // best effort: a shallow/sparse clone may not know the old SHA yet.
-    bestEffort(gitCommand('fetch origin ' + sha, workingDir), workingDir);
-
-    try {
-        runShell(checkout, workingDir);
-    } catch (e) {
-        return { outcome: 'unavailable', detail: 'checkout of ' + sha + ' failed: ' + commandTail(e) };
-    }
-
-    var outcome;
-    try {
-        runShell(command, workingDir);
-        outcome = 'green';
-    } catch (e) {
-        // the run is the verdict — a red run on the old build is evidence,
-        // the failure summary travels with the route.
-        outcome = 'red';
-        console.warn('TC red on the last-green build:', commandTail(e));
-    }
-    if (restore) bestEffort(restore, workingDir);
-    return { outcome: outcome, command: command };
+    var restore = restoreCommandOf(workingDir);
+    var run = checkoutAndRun(inputs.sha, command, workingDir);
+    if (run.outcome !== 'unavailable' && restore) bestEffort(restore, workingDir);
+    if (run.outcome === 'unavailable') return run;
+    return { outcome: run.outcome, command: command };
 }
 
 // ── mechanical routing (tcTriage continuation) ───────────────────────────────
+
+/** The recorded build evidence of a parked request, for the triage input. */
+function requestEvidence(request) {
+    return {
+        current: { sha: request.sha || null, envFingerprint: request.envFingerprint || null },
+        lastGreen: { sha: request.lastGreenSha || null, envFingerprint: request.lastGreenEnvFingerprint || null }
+    };
+}
+
+/** The triage input for a dispatcher outcome. */
+function dispatcherInput(request, outcome, redRounds, maxReworkRounds) {
+    var evidence = requestEvidence(request);
+    return {
+        tcKey: request.tcKey,
+        role: request.role === 'sibling-guard' ? tcTriage.ROLE_SIBLING : tcTriage.ROLE_GUARD,
+        validated: true,
+        current: evidence.current,
+        lastGreen: evidence.lastGreen,
+        differential: outcome,
+        redRounds: redRounds,
+        maxReworkRounds: maxReworkRounds,
+        errorClass: request.errorClass || 'unknown',
+        testPath: request.testPath || '',
+        failureSummary: request.failureSummary || null
+    };
+}
 
 /**
  * The triage verdict for one dispatcher outcome: the parked request's
@@ -181,19 +276,41 @@ function runDifferential(request, workingDir, runTemplate) {
  * request defaults to guard (only validated guards ever park a request).
  */
 function dispatcherVerdict(request, outcome, redRounds, maxReworkRounds) {
-    return tcTriage.triageDifferentialOutcome({
-        tcKey: request.tcKey,
-        role: request.role === 'sibling-guard' ? tcTriage.ROLE_SIBLING : tcTriage.ROLE_GUARD,
-        validated: true,
-        current: { sha: request.sha || null, envFingerprint: request.envFingerprint || null },
-        lastGreen: { sha: request.lastGreenSha || null, envFingerprint: request.lastGreenEnvFingerprint || null },
-        differential: outcome,
-        redRounds: redRounds,
-        maxReworkRounds: maxReworkRounds,
+    return tcTriage.triageDifferentialOutcome(
+        dispatcherInput(request, outcome, redRounds, maxReworkRounds));
+}
+
+/**
+ * The request identity + evidence fields shared by every dispatcher ledger
+ * entry (the SAME finding identity refreshes — occurrences advance, the
+ * stall stays visible in every digest without duplicating).
+ */
+function evidenceFieldsOf(request) {
+    return {
+        role: request.role || null,
         errorClass: request.errorClass || 'unknown',
         testPath: request.testPath || '',
-        failureSummary: request.failureSummary || null
-    });
+        sha: request.sha || null,
+        envFingerprint: request.envFingerprint || null,
+        lastGreenSha: request.lastGreenSha || null,
+        lastGreenEnvFingerprint: request.lastGreenEnvFingerprint || null
+    };
+}
+
+function baseLedgerEntry(request, verdict, reason) {
+    var f = evidenceFieldsOf(request);
+    return {
+        tcKey: request.tcKey,
+        role: f.role,
+        verdict: verdict,
+        reason: reason,
+        errorClass: f.errorClass,
+        testPath: f.testPath,
+        sha: f.sha,
+        envFingerprint: f.envFingerprint,
+        lastGreenSha: f.lastGreenSha,
+        lastGreenEnvFingerprint: f.lastGreenEnvFingerprint
+    };
 }
 
 /**
@@ -202,19 +319,10 @@ function dispatcherVerdict(request, outcome, redRounds, maxReworkRounds) {
  * without duplicating).
  */
 function unavailableBump(request, detail) {
-    return {
-        tcKey: request.tcKey,
-        role: request.role || null,
-        verdict: tcMaintenanceLedger.VERDICT_DIFFERENTIAL,
-        reason: request.reason || 'rerun-requested-on-last-green-build',
-        errorClass: request.errorClass || 'unknown',
-        testPath: request.testPath || '',
-        note: 'dispatcher could not run: ' + detail,
-        sha: request.sha || null,
-        envFingerprint: request.envFingerprint || null,
-        lastGreenSha: request.lastGreenSha || null,
-        lastGreenEnvFingerprint: request.lastGreenEnvFingerprint || null
-    };
+    var entry = baseLedgerEntry(request, tcMaintenanceLedger.VERDICT_DIFFERENTIAL,
+        request.reason || 'rerun-requested-on-last-green-build');
+    entry.note = 'dispatcher could not run: ' + detail;
+    return entry;
 }
 
 /**
@@ -223,20 +331,11 @@ function unavailableBump(request, detail) {
  * owns it now).
  */
 function maintenanceEntry(request, verdict) {
-    var entry = verdict.ledgerEntry || {};
-    return {
-        tcKey: request.tcKey,
-        role: request.role || null,
-        verdict: entry.verdict || 'maintenance',
-        reason: entry.reason || 'failure-predates-change',
-        errorClass: request.errorClass || 'unknown',
-        testPath: request.testPath || '',
-        sha: request.sha || null,
-        envFingerprint: request.envFingerprint || null,
-        lastGreenSha: request.lastGreenSha || null,
-        lastGreenEnvFingerprint: request.lastGreenEnvFingerprint || null,
-        evidence: { differential: 'red' }
-    };
+    var planned = verdict.ledgerEntry || {};
+    var entry = baseLedgerEntry(request, planned.verdict || 'maintenance',
+        planned.reason || 'failure-predates-change');
+    entry.evidence = { differential: 'red' };
+    return entry;
 }
 
 // ── tracker side effects (quiet — never fail the tick on a write) ────────────
@@ -278,6 +377,12 @@ function moveBugToDevelopmentQuietly(tracker, ticketKey, statuses) {
     }
 }
 
+/** Nothing remains parked: lift the park label and the job's trigger lock. */
+function clearDispatchLabels(tracker, ticketKey, parkLabel) {
+    removeLabelQuietly(tracker, ticketKey, parkLabel);
+    removeLabelQuietly(tracker, ticketKey, TRIGGER_LABEL_DEFAULT);
+}
+
 // ── the report ────────────────────────────────────────────────────────────────
 
 /**
@@ -285,63 +390,123 @@ function moveBugToDevelopmentQuietly(tracker, ticketKey, statuses) {
  * surfaces the automation leg uses (bounce / escalation) plus the ledger
  * digest (the parked section — remaining stalls stay visible).
  */
-function buildReportComment(bounced, escalated, maintained, stalled, ledger) {
+function buildReportComment(routes, ledger) {
     var sections = [];
-    if (bounced.length) sections.push(tcTriage.buildBounceComment(bounced));
-    if (escalated.length) sections.push(tcTriage.buildEscalationComment(escalated));
-    if (maintained.length) sections.push('The scripted differential rerun (gh-1345) ran the failing TC on its last-green build and it fails there too — ' +
+    if (routes.bounced.length) sections.push(tcTriage.buildBounceComment(routes.bounced));
+    if (routes.escalated.length) sections.push(tcTriage.buildEscalationComment(routes.escalated));
+    if (routes.maintained.length) sections.push('The scripted differential rerun (gh-1345) ran the failing TC on its last-green build and it fails there too — ' +
         'the failure predates the change; the finding stays in the TC maintenance ledger.');
-    stalled.forEach(function(s) {
+    routes.stalled.forEach(function(s) {
         sections.push('The differential rerun for ' + s.tcKey + ' could not run' +
             (s.detail ? ' — ' + s.detail : '') + '. The request stays parked and visible in the maintenance-ledger digest.');
     });
+    if (routes.deferred > 0) {
+        sections.push(MAX_DISPATCHES_PER_TICK + '-request-per-tick cap: ' + routes.deferred +
+            ' parked request(s) deferred to the next tick.');
+    }
     sections.push(tcMaintenanceLedger.buildDigestComment(ledger));
     return sections.join('\n\n');
 }
 
-function routeNameOf(bounced, escalated, maintained, stalled) {
-    var routes = (bounced.length ? 1 : 0) + (escalated.length ? 1 : 0) +
-        (maintained.length ? 1 : 0) + (stalled.length ? 1 : 0);
-    if (routes > 1) return 'mixed';
-    if (bounced.length) return 'bounced';
-    if (escalated.length) return 'escalated';
-    if (maintained.length) return 'maintained';
-    return 'stalled';
+function routeNameOf(routes) {
+    var names = [];
+    if (routes.bounced.length) names.push('bounced');
+    if (routes.escalated.length) names.push('escalated');
+    if (routes.maintained.length) names.push('maintained');
+    if (routes.stalled.length) names.push('stalled');
+    return names.length > 1 ? 'mixed' : (names[0] || 'stalled');
 }
 
 // ── the action ────────────────────────────────────────────────────────────────
 
-function dispatchRequests(requests, vars) {
-    var bounced = [], escalated = [], maintained = [], stalled = [];
-    var bounded = requests.slice(0, MAX_DISPATCHES_PER_TICK);
-    bounded.forEach(function(request) {
-        var run = runDifferential(request, vars.workingDir, vars.runTemplate);
-        if (run.outcome === 'unavailable') {
-            // one explanation per stall; the occurrences bump keeps later
-            // quiet attempts from spamming the ticket.
-            if ((request.occurrences || 1) > 1) {
-                vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, unavailableBump(request, run.detail));
-                console.log('⏳ Differential request for', request.tcKey, 'still unavailable — stays parked (quiet)');
-                return;
-            }
-            vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, unavailableBump(request, run.detail));
-            stalled.push({ tcKey: request.tcKey, detail: run.detail });
+/** The per-request route: unavailable → parked bump; else the triage verdict. */
+function routeOne(request, vars, routes) {
+    var run = runDifferential(request, vars.workingDir, vars.runTemplate);
+    if (run.outcome === 'unavailable') {
+        vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, unavailableBump(request, run.detail));
+        // one explanation per stall; the occurrences bump keeps later
+        // quiet attempts from spamming the ticket.
+        if ((request.occurrences || 1) > 1) {
+            console.log('⏳ Differential request for', request.tcKey, 'still unavailable — stays parked (quiet)');
             return;
         }
-        var verdict = dispatcherVerdict(request, run.outcome,
-            tcRunRegistry.redRoundsOf(vars.registry, request.tcKey), vars.maxRework);
-        console.log('Differential outcome for', request.tcKey, 'on the last-green build:', run.outcome, '→', verdict.action);
-        if (verdict.action === tcTriage.ACTION_BOUNCE || verdict.action === tcTriage.ACTION_ESCALATE) {
-            // the request is consumed — the bounce/escalation is the record
-            vars.ledger = tcMaintenanceLedger.resolveFindings(vars.ledger, [request.id], RESOLVE_VIA_GREEN);
-            if (verdict.action === tcTriage.ACTION_BOUNCE) bounced.push(verdict);
-            else escalated.push(verdict);
-        } else {
-            vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, maintenanceEntry(request, verdict));
-            maintained.push(verdict);
-        }
+        routes.stalled.push({ tcKey: request.tcKey, detail: run.detail });
+        return;
+    }
+    var verdict = dispatcherVerdict(request, run.outcome,
+        tcRunRegistry.redRoundsOf(vars.registry, request.tcKey), vars.maxRework);
+    console.log('Differential outcome for', request.tcKey, 'on the last-green build:', run.outcome, '→', verdict.action);
+    if (verdict.action === tcTriage.ACTION_BOUNCE || verdict.action === tcTriage.ACTION_ESCALATE) {
+        // the request is consumed — the bounce/escalation is the record
+        vars.ledger = tcMaintenanceLedger.resolveFindings(vars.ledger, [request.id], RESOLVE_VIA_GREEN);
+        if (verdict.action === tcTriage.ACTION_BOUNCE) routes.bounced.push(verdict);
+        else routes.escalated.push(verdict);
+        return;
+    }
+    vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, maintenanceEntry(request, verdict));
+    routes.maintained.push(verdict);
+}
+
+function dispatchRequests(requests, vars) {
+    var routes = { bounced: [], escalated: [], maintained: [], stalled: [], deferred: 0 };
+    var bounded = requests.slice(0, MAX_DISPATCHES_PER_TICK);
+    routes.deferred = requests.length - bounded.length;
+    bounded.forEach(function(request) {
+        routeOne(request, vars, routes);
     });
-    return { bounced: bounced, escalated: escalated, maintained: maintained, stalled: stalled };
+    return routes;
+}
+
+function dispatchVarsOf(inputs, config) {
+    return {
+        workingDir: workingDirOf(inputs.customParams, config),
+        runTemplate: inputs.customParams.tcRunCommand || null,
+        maxRework: maxReworkRoundsOf(inputs.customParams),
+        registry: null,
+        ledger: null
+    };
+}
+
+/**
+ * The gh-1345 deployment guard: with an empty machineAuthor allowlist the
+ * bookkeeping parse fails closed (reads nothing) — a parked request the
+ * parse cannot see would lose its park label here and be orphaned (the
+ * generator rule would re-dispatch it). Bail BEFORE any read or write: the
+ * trigger label drops so the next tick retries once the allowlist is fixed;
+ * the park label stays and the stall stays digest-visible.
+ */
+function unconfiguredGuardResult(params, config, tracker, ticketKey) {
+    var warning = bugBookkeeping.triageAllowlistWarning(params, config);
+    if (!warning) return null;
+    console.warn(warning);
+    removeLabelQuietly(tracker, ticketKey, TRIGGER_LABEL_DEFAULT);
+    return { success: true, action: 'unconfigured_parked', ticketKey: ticketKey };
+}
+
+/** The ledger marker + route report + label tail of a dispatching run. */
+function reportRoutes(tracker, ticketKey, vars, originalLedger, routes) {
+    var ledgerChanged = JSON.stringify(vars.ledger) !== JSON.stringify(originalLedger);
+    postMarkerQuietly(tracker, ticketKey, ledgerChanged,
+        tcMaintenanceLedger.buildLedgerMarker(vars.ledger), 'TC maintenance ledger');
+    var hasRoutes = routes.bounced.length || routes.escalated.length ||
+        routes.maintained.length || routes.stalled.length;
+    if (hasRoutes) {
+        postCommentQuietly(tracker, ticketKey, buildReportComment(routes, vars.ledger));
+    }
+}
+
+function dispatchResult(routes, ticketKey, dispatched) {
+    return {
+        success: true,
+        action: routeNameOf(routes),
+        ticketKey: ticketKey,
+        dispatched: dispatched,
+        deferred: routes.deferred,
+        bouncedTestCases: routes.bounced.map(function(v) { return v.tcKey; }),
+        maintainedTestCases: routes.maintained.map(function(v) { return v.tcKey; }),
+        escalatedTestCases: routes.escalated.map(function(v) { return v.tcKey; }),
+        stalledTestCases: routes.stalled.map(function(s) { return s.tcKey; })
+    };
 }
 
 function action(params) {
@@ -355,60 +520,36 @@ function action(params) {
     initTracker(config, inputs.customParams);
     var tracker = getTracker();
 
-    var parkLabel = parkLabelOf(inputs.customParams);
-    var vars = {
-        workingDir: workingDirOf(inputs.customParams, config),
-        runTemplate: inputs.customParams.tcRunCommand || null,
-        maxRework: maxReworkRoundsOf(inputs.customParams),
-        registry: null,
-        ledger: null
-    };
-
     console.log('=== TC differential dispatcher for', ticketKey, '===');
 
+    var guard = unconfiguredGuardResult(params, config, tracker, ticketKey);
+    if (guard) return guard;
+
+    var parkLabel = parkLabelOf(inputs.customParams);
+    var vars = dispatchVarsOf(inputs, config);
     var bookkeeping = bugBookkeeping.loadBugBookkeeping(tracker, ticketKey, params, config);
     vars.registry = bookkeeping.registry;
     vars.ledger = bookkeeping.ledger;
 
     var requests = tcMaintenanceLedger.differentialRequests(vars.ledger);
     if (!requests.length) {
-        removeLabelQuietly(tracker, ticketKey, parkLabel);
+        clearDispatchLabels(tracker, ticketKey, parkLabel);
         return { success: true, action: 'nothing_parked', ticketKey: ticketKey };
     }
 
     console.log('Dispatching', requests.length, 'parked differential request(s) — the scripted run is the verdict');
     var routes = dispatchRequests(requests, vars);
 
-    var ledgerChanged = JSON.stringify(vars.ledger) !== JSON.stringify(bookkeeping.ledger);
-    postMarkerQuietly(tracker, ticketKey, ledgerChanged,
-        tcMaintenanceLedger.buildLedgerMarker(vars.ledger), 'TC maintenance ledger');
-
     var statuses = resolveStatuses(inputs.customParams, config.jira && config.jira.statuses);
     if (routes.bounced.length) {
         moveBugToDevelopmentQuietly(tracker, ticketKey, statuses);
     }
-
-    var remaining = tcMaintenanceLedger.differentialRequests(vars.ledger);
-    var hasRoutes = routes.bounced.length || routes.escalated.length ||
-        routes.maintained.length || routes.stalled.length;
-    if (hasRoutes) {
-        postCommentQuietly(tracker, ticketKey,
-            buildReportComment(routes.bounced, routes.escalated, routes.maintained, routes.stalled, vars.ledger));
-    }
-    if (!remaining.length) {
-        removeLabelQuietly(tracker, ticketKey, parkLabel);
+    reportRoutes(tracker, ticketKey, vars, bookkeeping.ledger, routes);
+    if (!tcMaintenanceLedger.differentialRequests(vars.ledger).length) {
+        clearDispatchLabels(tracker, ticketKey, parkLabel);
     }
 
-    return {
-        success: true,
-        action: routeNameOf(routes.bounced, routes.escalated, routes.maintained, routes.stalled),
-        ticketKey: ticketKey,
-        dispatched: requests.length,
-        bouncedTestCases: routes.bounced.map(function(v) { return v.tcKey; }),
-        maintainedTestCases: routes.maintained.map(function(v) { return v.tcKey; }),
-        escalatedTestCases: routes.escalated.map(function(v) { return v.tcKey; }),
-        stalledTestCases: routes.stalled.map(function(s) { return s.tcKey; })
-    };
+    return dispatchResult(routes, ticketKey, requests.length);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -417,6 +558,9 @@ if (typeof module !== 'undefined' && module.exports) {
         buildRunCommand: buildRunCommand,
         dispatcherVerdict: dispatcherVerdict,
         runDifferential: runDifferential,
-        PARK_LABEL_DEFAULT: PARK_LABEL_DEFAULT
+        safeSha: safeSha,
+        safeTestPath: safeTestPath,
+        PARK_LABEL_DEFAULT: PARK_LABEL_DEFAULT,
+        TRIGGER_LABEL_DEFAULT: TRIGGER_LABEL_DEFAULT
     };
 }
