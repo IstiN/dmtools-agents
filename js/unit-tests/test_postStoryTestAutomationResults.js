@@ -1008,7 +1008,10 @@ suite('postStoryTestAutomationResults: gh-1329 guard triage', function() {
             run: function() {
                 return module.action({
                     ticket: { key: 'BUG-150', fields: { summary: 'Guard red bug', issuetype: { name: 'Bug' } } },
-                    jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered', machineAuthor: 'ai-teammate' } }
+                    jobParams: {
+                        machineAuthor: 'ai-teammate',
+                        customParams: { removeLabel: 'sm_story_test_automation_triggered' }
+                    }
                 });
             }
         };
