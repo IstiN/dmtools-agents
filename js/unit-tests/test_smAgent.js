@@ -8996,6 +8996,55 @@ suite('smAgent: forceLocalTeammate CLI override', function() {
         assert.equal(localRunCommands(sm).length, 0);
     });
 
+    test('dryRun:true with forceLocalTeammate:true does not call file_write or cli_execute_command and logs [dry] (gh-1323)', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }],
+            captureConsole: true
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/story_development.json' })
+        ]);
+        params.jobParams.dryRun = true;
+        params.jobParams.forceLocalTeammate = true;
+
+        var result = sm.action(params);
+
+        assert.equal(result.processed, 1);
+        assert.equal(sm.capturedFileWrites.length, 0, 'dryRun must not call file_write');
+        assert.equal(sm.capturedCliCommands.length, 0, 'dryRun must not call cli_execute_command');
+        assert.equal(sm.capturedTriggers.length, 0, 'dryRun must not dispatch workflow');
+        assert.ok(sm.capturedLogs.some(function(l) {
+            return l.indexOf('[dry] 🖥️ local teammate P-1 → agents/story_development.json') !== -1;
+        }), 'logs [dry] local teammate message');
+    });
+
+    test('dryRun:true with localTeammate:true does not call file_write or cli_execute_command and logs [dry] (gh-1323)', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-2', fields: { labels: [] } }],
+            captureConsole: true
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true
+            })
+        ]);
+        params.jobParams.dryRun = true;
+
+        var result = sm.action(params);
+
+        assert.equal(result.processed, 1);
+        assert.equal(sm.capturedFileWrites.length, 0, 'dryRun must not call file_write');
+        assert.equal(sm.capturedCliCommands.length, 0, 'dryRun must not call cli_execute_command');
+        assert.ok(sm.capturedLogs.some(function(l) {
+            return l.indexOf('[dry] 🖥️ local teammate P-2 → agents/story_development.json') !== -1;
+        }), 'logs [dry] local teammate message');
+    });
+
 });
 
 // ── localExecution module loading ─────────────────────────────────────────────

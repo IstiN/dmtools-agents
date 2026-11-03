@@ -218,6 +218,10 @@ function triggerConfiguredJobLocally(options) {
     var customParams = options.customParams || {};
     var projectKey = options.projectKey || deriveProjectKey(customParams);
     var label = options.label || configFile;
+    if (options.dryRun || customParams.dryRun) {
+        console.log('  [dry] 🖥️ local auto-chain ' + ticketKey + ' → ' + configFile);
+        return true;
+    }
 
     // isLocal=true propagates customParams.localTeammate=true into the chained job
     // too, so if IT also auto-starts a further stage, that stays local as well.
@@ -346,7 +350,8 @@ function triggerConfiguredWorkflowForTicket(options) {
             config: ctx.config,
             customParams: ctx.customParams,
             projectKey: projectKey,
-            label: ctx.label
+            label: ctx.label,
+            dryRun: options.dryRun
         });
     }
 
