@@ -772,3 +772,152 @@ suite('input-prep injection text (next round context)', function() {
         assert.equal(r.buildFindingsInjection(null), null);
     });
 });
+
+// ── gh-1343 rework: the marker payload is sanitization-safe ──────────────────
+//
+// The registry rides inside an HTML comment (`<!-- dmtools:finding-registry
+// {json} -->`) whose parser cuts at the FIRST ` -->`. Reviewer-supplied free
+// text (withdrawReason, fixHunk) travels in that payload, and mermaid-style
+// arrows ("not a defect: A --> B is handled upstream") are pervasive in this
+// repo's comment style. A raw `-->` inside a string field visually terminates
+// the comment on GitHub AND makes the next round's parse fail — the round's
+// registry becomes unreadable and latestRegistry silently falls back to the
+// previous round, losing the reviewer's verdict.
+//
+// Contract: every string field entering the payload is marker-safe (the built
+// body contains exactly ONE ` -->` — the real suffix), the registry still
+// parses back, and the reason text stays readable for display.
+suite('marker-safe payload — a --> in reviewer text cannot corrupt the registry marker', function() {
+
+    function regWithWithdrawn(r, disposition) {
+        var policy = r.resolveIdentityPolicy({}, null);
+        var reg1 = r.applyRound(r.emptyRegistry(), { at: '2026-11-03T10:00:00Z',
+            findings: [finding('src/auth.ts', 'nothing validates a token', 'BLOCKING', 45)] }, policy).registry;
+        return r.applyRound(reg1, { at: '2026-11-03T11:00:00Z', findings: [],
+            dispositions: [disposition] }, policy);
+    }
+
+    test('a withdrawReason containing --> still round-trips through the marker', function() {
+        var r = loadRegistry();
+        var out = regWithWithdrawn(r,
+            { n: 1, status: 'withdrawn', reason: 'not a defect: A --> B is handled upstream' });
+        assert.equal(out.registry.items[0].status, 'withdrawn');
+        assert.contains(out.registry.items[0].withdrawReason, '-->',
+            'the in-memory reason keeps the reviewer text verbatim');
+        var body = r.buildRegistryComment(out.registry);
+        assert.ok(body.indexOf('<!-- dmtools:finding-registry ') === 0, 'house marker prefix');
+        assert.equal(body.split(' -->').length - 1, 1,
+            'exactly one marker suffix — the injected --> was sanitized away');
+        var parsed = r.latestRegistry([machineComment(body)]);
+        assert.ok(parsed, 'the round-2 registry still parses (state cannot silently revert)');
+        assert.equal(parsed.registry.items[0].status, 'withdrawn', 'the withdrawal survives');
+        assert.ok(parsed.registry.items[0].withdrawReason.indexOf('A') !== -1 &&
+            parsed.registry.items[0].withdrawReason.indexOf('B') !== -1,
+            'the reason text is preserved for display');
+        assert.ok(parsed.registry.items[0].withdrawReason.indexOf('-->') === -1,
+            'no raw --> inside the parsed payload');
+    });
+
+    test('a fixHunk containing --> and <!-- cannot terminate the marker early', function() {
+        var r = loadRegistry();
+        var out = regWithWithdrawn(r,
+            { n: 1, status: 'fixed', hunk: 'src/auth.ts:40-55 — added validateToken() <!-- guard --> upstream' });
+        assert.equal(out.registry.items[0].status, 'fixed');
+        var body = r.buildRegistryComment(out.registry);
+        assert.equal(body.split(' -->').length - 1, 1, 'exactly one marker suffix');
+        assert.equal(body.split('<!--').length - 1, 1, 'exactly one marker prefix');
+        var parsed = r.latestRegistry([machineComment(body)]);
+        assert.ok(parsed, 'the registry still parses');
+        assert.equal(parsed.registry.items[0].status, 'fixed', 'the fixing hunk survives');
+        assert.ok(parsed.registry.items[0].fixHunk.indexOf('validateToken()') !== -1,
+            'the hunk text is preserved for display');
+    });
+
+    test('the escalation census renders the withdrawal reason without raw marker sequences', function() {
+        var r = loadRegistry();
+        var out = regWithWithdrawn(r,
+            { n: 1, status: 'withdrawn', reason: 'not a defect: A --> B is handled upstream' });
+        var text = r.buildEscalationPacketComment(out.registry);
+        assert.ok(text.indexOf('\uD83D\uDEA8') !== -1, 'the BLOCKING withdrawal is listed');
+        assert.equal(text.split('-->').length - 1, 0, 'no raw --> in the visible census');
+        assert.ok(text.indexOf('A') !== -1 && text.indexOf('B') !== -1, 'the reason stays readable');
+    });
+});
+
+suite('normalizePrCommentList — the one comment-shape ladder behind both wiring sites', function() {
+
+    test('a JSON string payload parses to the comment array', function() {
+        var r = loadRegistry();
+        var raw = JSON.stringify([{ body: 'a' }, { body: 'b' }]);
+        assert.deepEqual(r.normalizePrCommentList(raw), [{ body: 'a' }, { body: 'b' }]);
+    });
+
+    test('an already-parsed array passes through unchanged', function() {
+        var r = loadRegistry();
+        var raw = [{ body: 'a' }];
+        assert.deepEqual(r.normalizePrCommentList(raw), [{ body: 'a' }]);
+    });
+
+    test('{comments: [...]} and {items: [...]} envelopes unwrap', function() {
+        var r = loadRegistry();
+        assert.deepEqual(r.normalizePrCommentList({ comments: [{ body: 'c' }] }), [{ body: 'c' }]);
+        assert.deepEqual(r.normalizePrCommentList({ items: [{ body: 'i' }] }), [{ body: 'i' }]);
+    });
+
+    test('a shapeless object, null and undefined yield []', function() {
+        var r = loadRegistry();
+        assert.deepEqual(r.normalizePrCommentList({}), []);
+        assert.deepEqual(r.normalizePrCommentList(null), []);
+        assert.deepEqual(r.normalizePrCommentList(undefined), []);
+    });
+
+    test('a broken JSON string throws — the error policy stays at the call site', function() {
+        var r = loadRegistry();
+        assert.throws(function() { r.normalizePrCommentList('{broken'); });
+    });
+});
+
+suite('stemWord suffix-rule boundaries (contentWords)', function() {
+
+    function wordsOf(r, text) {
+        return r.contentWords(r.normalizeClaim(text));
+    }
+
+    test('ies → y only above the length guard (studies → study, ties falls through)', function() {
+        var r = loadRegistry();
+        assert.deepEqual(wordsOf(r, 'studies show'), ['study', 'show'], 'ies rule applies');
+        assert.deepEqual(wordsOf(r, 'ties bind'), ['ti', 'bind'],
+            'ties (length 4) misses the ies guard and drops the es suffix first');
+    });
+
+    test('es → stripped above the length guard (boxes → box, yes stays)', function() {
+        var r = loadRegistry();
+        assert.deepEqual(wordsOf(r, 'boxes open'), ['box', 'open'], 'es rule applies');
+        assert.deepEqual(wordsOf(r, 'yes please'), ['yes', 'please'], 'length 3 misses the es guard');
+    });
+
+    test('s → stripped above the length guard (tokens → token, is stays)', function() {
+        var r = loadRegistry();
+        assert.deepEqual(wordsOf(r, 'tokens expire'), ['token', 'expire'], 's rule applies');
+        assert.deepEqual(wordsOf(r, 'is done'), ['done'], 'length 2 misses the s guard (and is a stopword)');
+    });
+
+    test('ing → stripped above the length guard (missing → miss, king stays)', function() {
+        var r = loadRegistry();
+        assert.deepEqual(wordsOf(r, 'missing validation'), ['miss', 'validation'], 'ing rule applies; tion has no rule');
+        assert.deepEqual(wordsOf(r, 'king reused'), ['king', 'reus'],
+            'length 4 misses the ing guard; ed rule applies to reused');
+    });
+
+    test('ed → stripped above the length guard (validated → validat, red stays)', function() {
+        var r = loadRegistry();
+        assert.deepEqual(wordsOf(r, 'validated tokens'), ['validat', 'token'], 'ed rule applies');
+        assert.deepEqual(wordsOf(r, 'red flag'), ['red', 'flag'], 'length 3 misses the ed guard');
+    });
+
+    test('a word matching no rule passes through unchanged', function() {
+        var r = loadRegistry();
+        assert.deepEqual(wordsOf(r, 'retry swallows'), ['retry', 'swallow'],
+            'retry has no applicable suffix rule');
+    });
+});

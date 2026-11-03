@@ -157,13 +157,24 @@ function normalizeClaim(text) {
 
 // Light suffix stemming — 'validates'/'validated' meet at 'validat'. Starts
 // strict by design (gh-1332 failure modes: relax only with the confirm step
-// attached).
+// attached). Table-driven so every guard is explicit data: the FIRST matching
+// rule wins, and `min` is the strict minimum length the rule requires —
+// 'ties' (length 4) misses the ies rule and falls through to the es rule.
+var STEMMING_RULES = [
+    { suffix: 'ies', min: 4, cut: 3, append: 'y' },
+    { suffix: 'es', min: 3, cut: 2 },
+    { suffix: 's', min: 3, cut: 1 },
+    { suffix: 'ing', min: 4, cut: 3 },
+    { suffix: 'ed', min: 3, cut: 2 }
+];
+
 function stemWord(w) {
-    if (w.length > 4 && /ies$/.test(w)) return w.substring(0, w.length - 3) + 'y';
-    if (w.length > 3 && /es$/.test(w)) return w.substring(0, w.length - 2);
-    if (w.length > 3 && /s$/.test(w)) return w.substring(0, w.length - 1);
-    if (w.length > 4 && /ing$/.test(w)) return w.substring(0, w.length - 3);
-    if (w.length > 3 && /ed$/.test(w)) return w.substring(0, w.length - 2);
+    for (var i = 0; i < STEMMING_RULES.length; i++) {
+        var rule = STEMMING_RULES[i];
+        if (w.length > rule.min && w.substring(w.length - rule.suffix.length) === rule.suffix) {
+            return w.substring(0, w.length - rule.cut) + (rule.append || '');
+        }
+    }
     return w;
 }
 
@@ -312,6 +323,47 @@ function blankClaim(claim) {
 // ── two-stage matching: propose (mechanical), confirm (reviewer) ─────────────
 
 /**
+ * Stage-1 scoring: every OPEN item in scope (same-file unless diff scope),
+ * ranked by claim similarity (ties by item n — stable, oldest identity wins).
+ */
+function rankedOpenMatches(registry, claim, file, policy) {
+    var ranked = [];
+    openItems(registry).forEach(function(item) {
+        if (policy.candidateScope !== 'diff' && item.file !== file) return;
+        var sim = claimSimilarity(claim, item.claim);
+        if (sim <= 0) return;
+        ranked.push({ item: item, similarity: sim });
+    });
+    ranked.sort(function(a, b) {
+        if (b.similarity !== a.similarity) return b.similarity - a.similarity;
+        return (a.item.n || 0) - (b.item.n || 0);
+    });
+    return ranked;
+}
+
+// Invariant 1, stage-1 scope: auto-merge needs a near-identical claim in
+// the SAME file at the SAME severity class. Cross-file or cross-class
+// matches (the reviewer may have re-classed the defect) can only become
+// candidates — the reviewer disposes, and the merge escalates (invariant 2).
+function isAutoMerge(best, file, severity) {
+    return !!best &&
+        best.similarity >= AUTO_MERGE_SIMILARITY &&
+        best.item.file === file &&
+        severityClassOf(best.item.severity) === severity;
+}
+
+// The ranked proposals the reviewer is ASKED about (never merges on its own).
+function topProposals(ranked, policy) {
+    var proposed = [];
+    ranked.forEach(function(r) {
+        if (proposed.length >= policy.candidatesPerFinding) return;
+        if (r.similarity < policy.candidateThreshold) return;
+        proposed.push(r);
+    });
+    return proposed;
+}
+
+/**
  * Stage 1 for one new finding against the OPEN items. Returns
  *   { outcome: 'auto-merge', target, similarity, ranked }  — near-identical
  *       claim, same file, same severity class (invariant 1; the best match);
@@ -326,33 +378,12 @@ function matchFinding(registry, finding, policy) {
     var file = fileOf(finding);
     var claim = normalizeClaim(claimOf(finding));
     var severity = severityClassOf(finding && finding.severity);
-    var ranked = [];
-    openItems(registry).forEach(function(item) {
-        if (policy.candidateScope !== 'diff' && item.file !== file) return;
-        var sim = claimSimilarity(claim, item.claim);
-        if (sim <= 0) return;
-        ranked.push({ item: item, similarity: sim });
-    });
-    ranked.sort(function(a, b) {
-        if (b.similarity !== a.similarity) return b.similarity - a.similarity;
-        return (a.item.n || 0) - (b.item.n || 0);
-    });
+    var ranked = rankedOpenMatches(registry, claim, file, policy);
     var best = ranked[0] || null;
-    // Invariant 1, stage-1 scope: auto-merge needs a near-identical claim in
-    // the SAME file at the SAME severity class. Cross-file or cross-class
-    // matches (the reviewer may have re-classed the defect) can only become
-    // candidates — the reviewer disposes, and the merge escalates (invariant 2).
-    if (best && best.similarity >= AUTO_MERGE_SIMILARITY &&
-        best.item.file === file &&
-        severityClassOf(best.item.severity) === severity) {
+    if (isAutoMerge(best, file, severity)) {
         return { outcome: 'auto-merge', target: best.item, similarity: best.similarity, ranked: ranked };
     }
-    var proposed = [];
-    ranked.forEach(function(r) {
-        if (proposed.length >= policy.candidatesPerFinding) return;
-        if (r.similarity < policy.candidateThreshold) return;
-        proposed.push(r);
-    });
+    var proposed = topProposals(ranked, policy);
     if (proposed.length) {
         return { outcome: 'candidate', ranked: proposed, bestSimilarity: proposed[0].similarity };
     }
@@ -371,25 +402,35 @@ function historyEntry(round, action, via) {
     return entry;
 }
 
-// Merges a re-raised/confirmed finding into an open identity: severity can
-// only escalate (invariant 2), a later-round re-raise of an open identity is
-// the re-introduced transition, and the lazy line re-anchor keeps the newest
-// known location.
-function mergeIntoItem(item, finding, round, at, note) {
+// Invariant 2: merges can only escalate, never de-escalate.
+function escalateSeverity(item, finding, round) {
     var severity = severityClassOf(finding && finding.severity);
     if (severityRank(severity) > severityRank(item.severity)) {
         item.severity = severity;
         item.history.push(historyEntry(round, 'severity-escalated'));
     }
-    if (round > (item.raisedRound || 0) && item.status === STATUS_OPEN) {
-        item.status = STATUS_REINTRODUCED;
-        item.history.push(historyEntry(round, 're-introduced', note || 're-raise'));
-    } else {
-        item.history.push(historyEntry(round, 're-raised', note || 're-raise'));
-    }
-    item.lastSeenAt = at;
+}
+
+// The lazy line re-anchor keeps the newest known location.
+function reanchorLine(item, finding) {
     var line = lineOf(finding);
     if (line) item.lastLine = line;
+}
+
+// Merges a re-raised/confirmed finding into an open identity: severity can
+// only escalate (invariant 2), a later-round re-raise of an open identity is
+// the re-introduced transition.
+function mergeIntoItem(item, finding, round, at, note) {
+    var via = note || 're-raise';
+    escalateSeverity(item, finding, round);
+    if (round > (item.raisedRound || 0) && item.status === STATUS_OPEN) {
+        item.status = STATUS_REINTRODUCED;
+        item.history.push(historyEntry(round, 're-introduced', via));
+    } else {
+        item.history.push(historyEntry(round, 're-raised', via));
+    }
+    item.lastSeenAt = at;
+    reanchorLine(item, finding);
     return item;
 }
 
@@ -416,36 +457,43 @@ function createIdentity(registry, finding, round, at) {
     return item;
 }
 
-// One disposition: 'fixed' (hunk cited), 'withdrawn' (reason REQUIRED — a
-// reasonless withdrawal is rejected, never silently applied), 're-introduced'
-// (open items only). Returns null when nothing applied.
+function applyFixedDisposition(item, disposition, round, at) {
+    item.status = STATUS_FIXED;
+    item.fixHunk = disposition.hunk || null;
+    item.resolvedAt = at;
+    item.history.push(historyEntry(round, 'fixed'));
+    return item;
+}
+
+// Invariant 3: a reasonless withdrawal is REJECTED — silently dropping a
+// defect is not allowed.
+function applyWithdrawnDisposition(item, disposition, round, at, outcome) {
+    if (!disposition.reason || !String(disposition.reason).trim()) {
+        outcome.rejectedWithdrawals.push({ n: item.n, reasonMissing: true });
+        return null;
+    }
+    item.status = STATUS_WITHDRAWN;
+    item.withdrawReason = String(disposition.reason).trim();
+    item.resolvedAt = at;
+    item.history.push(historyEntry(round, 'withdrawn'));
+    return item;
+}
+
+// Open items only — a resolved identity cannot be re-opened by a disposition.
+function applyReintroducedDisposition(item, round) {
+    if (!isOpenStatus(item.status)) return null;
+    item.status = STATUS_REINTRODUCED;
+    item.history.push(historyEntry(round, 're-introduced', 'reviewer'));
+    return item;
+}
+
+// One disposition: 'fixed' (hunk cited), 'withdrawn' (reason REQUIRED), or
+// 're-introduced' (open items only). Returns null when nothing applied.
 function applyDisposition(item, disposition, round, at, outcome) {
     var status = String(disposition.status || '').toLowerCase();
-    if (status === STATUS_FIXED) {
-        item.status = STATUS_FIXED;
-        item.fixHunk = disposition.hunk || null;
-        item.resolvedAt = at;
-        item.history.push(historyEntry(round, 'fixed'));
-        return item;
-    }
-    if (status === STATUS_WITHDRAWN) {
-        if (!disposition.reason || !String(disposition.reason).trim()) {
-            // Invariant 3: silently dropping a defect is not allowed.
-            outcome.rejectedWithdrawals.push({ n: item.n, reasonMissing: true });
-            return null;
-        }
-        item.status = STATUS_WITHDRAWN;
-        item.withdrawReason = String(disposition.reason).trim();
-        item.resolvedAt = at;
-        item.history.push(historyEntry(round, 'withdrawn'));
-        return item;
-    }
-    if (status === STATUS_REINTRODUCED) {
-        if (!isOpenStatus(item.status)) return null;
-        item.status = STATUS_REINTRODUCED;
-        item.history.push(historyEntry(round, 're-introduced', 'reviewer'));
-        return item;
-    }
+    if (status === STATUS_FIXED) return applyFixedDisposition(item, disposition, round, at);
+    if (status === STATUS_WITHDRAWN) return applyWithdrawnDisposition(item, disposition, round, at, outcome);
+    if (status === STATUS_REINTRODUCED) return applyReintroducedDisposition(item, round);
     outcome.unknownDispositions.push({ n: disposition.n, status: disposition.status || null });
     return null;
 }
