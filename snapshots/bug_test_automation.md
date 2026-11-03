@@ -686,7 +686,7 @@ Use tracker-specific format:
 - Do NOT modify feature code.
 - Each new `testing/tests/{TC_KEY}/` folder must contain `README.md` and `config.yaml`.
 - Focus tests on the bug regression scenario.
-- **Failure attribution**: a red Test Case is not automatically a product failure — it may be a stale test, an environment shift or a flake. Record the evidence (`errorClass`, `retryStatus`, `differential`, `acVerdict`); the pipeline triages and only an attributed regression returns the bug to development. Never bounce a bug from the automation leg.
+- **Failure attribution**: a red Test Case is not automatically a product failure — it may be a stale test, an environment shift or a flake. Record the triage evidence: `errorClass`, `retryStatus`, `differential`, `acVerdict`. The pipeline triages and only an attributed regression returns the bug to development. Never bounce a bug from the automation leg.
 
 
 ---
