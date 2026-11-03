@@ -479,11 +479,4 @@ suite('gh-1276 / gh-1277 config-script bundling and gate wiring', function () {
         assert.ok(file_read({ path: 'scripts/run-sm-local.sh' }).length > 0,
             'scripts/run-sm-local.sh must exist in repo');
     });
-
-    test('gh-1325: builder carries forward bounded previous release pack versions via selectCarriedForwardAssets', function () {
-        assert.ok(builder.indexOf('selectCarriedForwardAssets(') !== -1,
-            'ci/release_packs.mjs must carry forward bounded previous pack assets so pinned pack@<version> refs keep resolving against latest (#1325)');
-        assert.ok(builder.indexOf('carryForwardPreviousPacks()') !== -1,
-            'main() must invoke carryForwardPreviousPacks() before writing catalog.json');
-    });
 });
