@@ -194,7 +194,8 @@ suite('preCliStoryTestAutomationSetup', function() {
                     { jira_search_by_jql: function() { return []; }, cli_execute_command: function() { return ''; }, file_write: function() {} }
                 ),
                 './common/githubHelpers.js': githubHelpers,
-                './common/scm.js': { createScm: function() { return {}; } }
+                './common/scm.js': { createScm: function() { return {}; } },
+                './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js', makeRequire({}))
             }),
             { jira_search_by_jql: function() { return []; }, cli_execute_command: function(opts) {
                 if (opts.command === 'git branch --list "test/TS-212"') return '  test/TS-212';
@@ -269,7 +270,8 @@ suite('preCliStoryTestAutomationSetup', function() {
                     { jira_search_by_jql: function() { return []; }, cli_execute_command: function() { return ''; }, file_write: function() {} }
                 ),
                 './common/githubHelpers.js': githubHelpers,
-                './common/scm.js': { createScm: function() { return {}; } }
+                './common/scm.js': { createScm: function() { return {}; } },
+                './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js', makeRequire({}))
             }),
             { jira_search_by_jql: function() { return []; }, cli_execute_command: ts213CliMock, file_write: outerMocks.file_write }
         );
@@ -656,7 +658,8 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
                     { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }
                 ),
                 './common/githubHelpers.js': githubHelpers,
-                './common/scm.js': { createScm: function() { return {}; } }
+                './common/scm.js': { createScm: function() { return {}; } },
+                './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js', makeRequire({}))
             }),
             helperMocks
         );
@@ -781,7 +784,8 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
                 './configLoader.js': loadModule('js/configLoader.js', makeRequire({ './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } }),
                 './common/pullRequest.js': loadModule('js/common/pullRequest.js', makeRequire({ './config.js': configModule, './mergeState.js': loadModule('js/common/mergeState.js'), './common/mergeState.js': loadModule('js/common/mergeState.js') }), { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }),
                 './common/githubHelpers.js': githubHelpers,
-                './common/scm.js': { createScm: function() { return {}; } }
+                './common/scm.js': { createScm: function() { return {}; } },
+                './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js', makeRequire({}))
             }),
             outerMocks
         );
@@ -824,7 +828,8 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
                 './configLoader.js': loadModule('js/configLoader.js', makeRequire({ './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } }),
                 './common/pullRequest.js': loadModule('js/common/pullRequest.js', makeRequire({ './config.js': configModule, './mergeState.js': loadModule('js/common/mergeState.js'), './common/mergeState.js': loadModule('js/common/mergeState.js') }), { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }),
                 './common/githubHelpers.js': githubHelpers,
-                './common/scm.js': { createScm: function() { return {}; } }
+                './common/scm.js': { createScm: function() { return {}; } },
+                './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js', makeRequire({}))
             }),
             outerMocks
         );
