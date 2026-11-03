@@ -1,7 +1,7 @@
 ```mermaid
 flowchart TD
     G1["Question descriptions must follow the tracker-specific format"]
-    G4["Read input/existing_questions.json to avoid duplicates"]
+    G4["Read input/<ISSUE_KEY>/existing_questions.json to avoid duplicates"]
 
     subgraph CODEGRAPH["⚠️ MANDATORY: Investigate codebase BEFORE writing any question"]
         CG1["Run codegraph BEFORE writing questions — no exceptions"]

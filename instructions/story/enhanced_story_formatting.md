@@ -24,6 +24,6 @@ flowchart TD
     SECTIONS --> RULES
 ```
 
-**IMPORTANT**: Read `input/existing_questions.json` for answered questions as context. Use `dmtools` CLI commands for full ticket details.
+**IMPORTANT**: Read `input/<ISSUE_KEY>/existing_questions.json` for answered questions as context. Use `dmtools` CLI commands for full ticket details.
 
 **IMPORTANT**: Check child tickets and parent story for better context using the appropriate `dmtools` search command.
