@@ -12,9 +12,9 @@ Unrunnable requests (no checkout target, no run command configured) stay parked 
 
 ## Parameters
 
-- `customParams.tcRunCommand` — the single-TC command template with a `{testPath}` placeholder (e.g. `pytest {testPath}`). Required for any request to run; without it all requests stay parked with an explanation comment.
-- `customParams.workingDir` — the target-repo checkout the TC scripts and git commands run in (default: project config `workingDir`).
-- `customParams.maxReworkRounds` — the earned-bounce cap before owner escalation (default: the triage engine's default).
-- `customParams.parkLabel` — the SM-matching park label (default `tc_differential_pending`). When overridden, the SM rule's JQL (`labels = tc_differential_pending`) must be overridden to match.
+- `tcRunCommand` (customParams) — the single-TC command template with a `{testPath}` placeholder (e.g. `pytest {testPath}`). Required for any request to run; without it all requests stay parked with an explanation comment.
+- `workingDir` (customParams) — the target-repo checkout the TC scripts and git commands run in (default: project config `workingDir`).
+- `maxReworkRounds` (customParams) — the earned-bounce cap before owner escalation (default: the triage engine's default).
+- `parkLabel` (customParams) — the SM-matching park label (default `tc_differential_pending`). When overridden, the SM rule's JQL (`labels = tc_differential_pending`) must be overridden to match.
 
 The corresponding SM rule lives in `sm.json` (`Parked differential rerun requests → scripted CI dispatch`): it matches bugs carrying the park label, stamps its own `sm_tc_differential_triggered` crash-recovery label, and runs before the bug TC-generator rule so a parked bug is settled before a fresh generation dispatch (the generator rule also skips `tc_differential_pending` bugs).
