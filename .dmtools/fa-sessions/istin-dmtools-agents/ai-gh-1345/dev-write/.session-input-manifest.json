@@ -1,0 +1,241 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-03T18:05:42.766Z",
+  "ticketKey": "pr-1346",
+  "headSha": "e0cc017503f2931b90fd8db98d9bcda9159f13d7",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:352c848e3cff4b44",
+      "size": 51379
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:f7397d01837efc76",
+      "size": 4683342
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:752e2e594b508c21",
+      "size": 1773
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:9427b8c81a73b35a",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:8c1c625057334875",
+      "size": 28042
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:374526c81fa9c77c",
+      "size": 14189
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:4beae51acb743357",
+      "size": 3200
+    },
+    "request.md": {
+      "hash": "fnv1a64:91d138483844692b",
+      "size": 2855
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:58c2c028b0658232",
+      "size": 1972
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:0df4b18bc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:a274bff58331c27b",
+      "size": 2938
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:91d138483844692b",
+      "size": 2855
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6zQwOs",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/tcDifferentialDispatcher.js:347",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: CI `crap` ratchet is red on head e0cc017 — \"CRAP ratchet failed: CRAP may only decrease\", 14 new functions over the threshold (8), exit code 2**\n\nThis PR introduces 14 functions above the CRAP threshold (per the CI run https://github.com/IstiN/dmtools-agents/actions/runs/41683524472/job/126083177822):\n\n```\nNEW > 8  js/common/tcRoleStamp.js::stampPlan: 12\nNEW > 8  js/stampTcRoles.js::descriptionOf: 10.3\nNEW > 8  js/stampTcRoles.js::stampRoles: 9\nNEW > 8  js/stampTcRoles.js::action: 9.2\nNEW > 8  js/tcDifferentialDispatcher.js::runDifferential: 9\nNEW > 8  js/tcDifferentialDispatcher.js::dispatcherVerdict: 9\nNEW > 8  js/tcDifferentialDispatcher.js::unavailableBump: 9\nNEW > 8  js/tcDifferentialDispatcher.js::maintenanceEntry: 11\nNEW > 8  js/tcDifferentialDispatcher.js::routeNameOf: 9\nNEW > 8  js/tcDifferentialDispatcher.js::action: 12\nNEW > 8  js/unit-tests/test_stampTcRoles.js::stampMocks: 9\nNEW > 8  js/unit-tests/test_tcDifferentialDispatcher.js::parkedFinding: 10\nNEW > 8  js/unit-tests/test_tcDifferentialDispatcher.js::fakeShell: 13\nNEW > 8  js/unit-tests/test_tcDifferentialDispatcher.js::shell: 12\n```\n\nAt 100% coverage these values equal cyclomatic complexity, so only refactoring lowers them — coverage additions cannot. Suggested splits:\n\n- `tcDifferentialDispatcher.js::action` (CC 12) → extract the \"nothing parked\" early-return, the ledger marker post, and the report/label-clear tail into named helpers.\n- `maintenanceEntry` / `unavailableBump` (CC 9–11) → both build ledger entries from `request` + extras; extract one shared `evidenceFieldsOf(request)` and keep the verdict-specific fields local.\n- `tcRoleStamp.stampPlan` (CC 12) → split oracle election and guard planning into two functions.\n- Test fixtures (`fakeShell` CC 13, `shell` 12, `parkedFinding` 10, `stampMocks` 9) → split the option matching / defaulting into small helpers.\n\nNote the unit tests themselves are green (verified locally: all 738 touched-suite tests + the 50 new ones pass) — only the ratchet gate fails."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zQwS5",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "sm.json:93",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `sm_tc_differential_triggered` is never removed — the dispatcher can never run twice for the same bug**\n\nThe SM rule stamps `sm_tc_differential_triggered` (`addLabel`, sm.json:94) and skips while it is present (`skipIfLabel`, sm.json:93) — but nothing in this PR ever removes it:\n\n- `js/tcDifferentialDispatcher.js::action` removes only the park label (`removeLabelQuietly(tracker, ticketKey, parkLabel)` at lines 375 and 399); `grep -rn \"sm_tc_differential_triggered\"` finds no removal anywhere.\n- The repo doctrine is that the job manages its own trigger label's full lifecycle: `js/quotaParkProbe.js` `liftPark()` (lines 117–123) removes the park label **and** the trigger labels on completion, and `js/smAgent.js:1289–1293` documents the pattern (\"the job manages the label's full lifecycle — add is implied by dispatch, remove happens on its own completion\").\n\nConsequences — all three break the PR's own stated design:\n\n1. **The documented retry loop never runs.** For an unavailable request the dispatcher posts one explanation and stays parked; your test states the intent explicitly: *\"still parked — the label stays so the next tick retries\"* (test_tcDifferentialDispatcher.js, stall suite). But the next tick is **skipped** by `skipIfLabel`, so the quiet-bump path (`occurrences > 1` in `dispatchRequests`) is unreachable in production and `occurrences` never advances past 2 (the test manufactures it by re-appending).\n2. **A consumed bug is dead for all future rounds.** After a bounce/maintenance resolves the request and clears `tc_differential_pending`, any later park on the same bug re-adds `tc_differential_pending` — but the rule skips on the stale lock, while the generator rule now also skips `tc_differential_pending` bugs (sm.json:200). Result: no dispatcher, no generator, permanent attribution stall for that bug.\n3. **A crash mid-dispatch locks forever** — the opposite of crash recovery.\n\nFix (follow the `quotaParkProbe.liftPark` precedent): in `action`, after the routes are posted and nothing remains parked, remove `sm_tc_differential_triggered` alongside the park label (keep the SM-side add as the in-flight crash guard). Add a unit test that a second `parkedFinding` round-trip dispatches again."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zQwW1",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/tcDifferentialDispatcher.js:375",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: a fail-closed (empty machineAuthor) ledger read silently strips the park label from genuinely parked bugs**\n\n`bugBookkeeping.loadBugBookkeeping` fails closed: with no configured machine-author allowlist it degrades to `tcMaintenanceLedger.emptyLedger()` (bugBookkeeping.js:57–61, \"no configured machine identity trusts nothing\"). In this dispatcher that empty ledger means `differentialRequests(...)` returns `[]`, and this branch then **removes `tc_differential_pending` from the bug** and returns `nothing_parked`:\n\n```js\nvar requests = tcMaintenanceLedger.differentialRequests(vars.ledger);\nif (!requests.length) {\n    removeLabelQuietly(tracker, ticketKey, parkLabel);\n    return { success: true, action: 'nothing_parked', ticketKey: ticketKey };\n}\n```\n\nThe bug may carry a genuinely parked request that the fail-closed parse refused to read. After the label is stripped:\n\n- the dispatcher rule's JQL (`labels = tc_differential_pending`) no longer matches → the request is orphaned forever;\n- the generator rule's new skip on `tc_differential_pending` (sm.json:200) no longer applies → a fresh TC generation dispatch fires on a bug whose differential request was never resolved — exactly the unattributed re-dispatch this PR exists to prevent.\n\nNo marker is posted (`ledgerChanged` is false), no comment is posted — the park label vanishes silently. This contradicts the PR's own contract (\"the dispatcher never bounces on unavailable evidence … stays parked fail-safe\") and the deploy note you added to `docs/machine-factory-integration.md` explicitly anticipates deployments running TC triage with an empty allowlist (the guard warning exists for that case — but `triageAllowlistWarning` is wired only into `postStoryTestAutomationResults`, not here).\n\nFix: at `action` startup, resolve the allowlist (reuse `bugBookkeeping.triageAllowlistWarning(params, config)`); when it resolves empty, log the warning and bail out **without** clearing the park label (e.g. `action: 'unconfigured_parked'`), leaving the stall digest-visible. Optionally distinguish \"empty ledger because fail-closed\" from \"no findings\" via the authorLogins you already pass to the loader."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zQwZY",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/tcDifferentialDispatcher.js:142",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: ledger-controlled strings are interpolated into shell commands without validation**\n\nThe dispatcher's verdict inputs travel from the TC maintenance ledger marker (a ticket comment) straight into shell commands:\n\n- `buildRunCommand` (js/tcDifferentialDispatcher.js:98) substitutes `{testPath}` — the ledger finding's `testPath`, harvested from test-run output in the target repo — into `tcRunCommand`, then `runDifferential` executes it via `cli_execute_command`. A `testPath` containing `;`, `&&`, `$(...)`, backticks, or an option-like leading `-` changes what the factory shell runs.\n- `runDifferential` interpolates `request.lastGreenSha` unvalidated: `git -C <dir> checkout <sha>` (line 142) and `git -C <dir> fetch origin <sha>` (line 153). A non-SHA value with shell metacharacters injects commands; a value starting with `-` is argument injection into git.\n\nMitigations that already exist: the ledger parse is fail-closed against the machineAuthor allowlist, so only machine-authored markers are read. But those markers embed strings produced by the target repo's own test output/file paths — a repo that accepts external contributions — and `cli_execute_command` runs in the factory's shell context, which is broader than the repo checkout. Defense-in-depth is cheap here, and the codebase already has the perfect landing spot: the `unavailable` route.\n\nSuggested validation before building any command:\n\n```js\nvar SHA_RE = /^[0-9a-f]{7,64}$/i;\nfunction safeSha(sha) { return SHA_RE.test(String(sha || '').trim()) ? String(sha).trim() : null; }\nfunction safeTestPath(p) {\n    var s = String(p || '').trim();\n    if (!s || /[\\s;&|<>$`\\\\\\\"'\\n]/.test(s) || s.indexOf('..') !== -1) return null;\n    return s;\n}\n```\n\nA failed check routes to the existing `{ outcome: 'unavailable', detail: '...' }` fail-safe (stays parked, digest-visible) instead of executing anything."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zQwcU",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/tcRoleStamp.js:134",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: unused `bugKey` parameter in `roleFieldsFromDescription`**\n\n```js\nfunction roleFieldsFromDescription(description, bugKey) {\n    var marker = parseRoleMarker(description);\n    if (!marker) return {};\n    if (marker.kind === 'verifies') {\n        return { role: 'verifies', verifies: marker.key };\n    }\n    return { role: 'regression guard', regressionGuard: true };\n}\n```\n\n`bugKey` is never used, yet the signature suggests the reader performs sibling detection (`Verifies: <other-bug>` → sibling) at this layer. That resolution actually happens later in `tcTriage.resolveTcRole` — which is fine — but the parameter misleads callers into thinking the annotation is bug-scoped. Either drop the parameter, or use it to also return e.g. `isSibling` so the automation leg's input carries the resolved relationship. `annotateWithRoles` (its only caller) passes `storyKey` today, so dropping it is a one-line cleanup plus test touch-ups."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zQwfv",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "docs/agents/generated/tc_differential_dispatcher.md:52",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: generated doc lists 11 customParams the dispatcher never reads**\n\n`tc_differential_dispatcher.json` ships `\"customParams\": {}`, and `js/tcDifferentialDispatcher.js` reads exactly four: `tcRunCommand`, `workingDir`, `maxReworkRounds`, `parkLabel`. The generated doc's Parameters and \"Custom params\" sections (this file, lines ~48–64 and ~76–90) list 15, including `adoTextFormat`, `branchCreateFnPath`, `branchNamingFnPath`, `prSearchFnPath`, `scmProvider`, `stageFallback`, `targetRepository`, `trackerProvider`, `featureBranchEnabled`, `configPath`, `customStatuses` — none of which the dispatcher consumes.\n\nA deployer configuring this job from the doc will hunt for knobs that do not exist (and may set `parkLabel` without realizing the SM rule's JQL must be overridden in lockstep — that caveat the human doc does carry, the generated one doesn't). The human doc (`docs/agents/tc_differential_dispatcher.md`) has the correct four — worth checking why `agentDocGenerator.js` over-collects for JSRunner configs so the next generated agent doc doesn't inherit the noise."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zQwj_",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/stampTcRoles.js:43",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `summaryOf` / `ticketFields` — duplicated field accessor**\n\n```js\nfunction summaryOf(ticketDetails) {\n    var fields = (ticketDetails && ticketFields(ticketDetails)) || {};\n    return fields.summary || null;\n}\n\nfunction ticketFields(ticketDetails) {\n    return (ticketDetails && ticketDetails.fields) || {};\n}\n```\n\n`ticketFields(ticketDetails)` already normalizes null/undefined to `{}`, so the outer `(... && ...) || {}` in `summaryOf` re-does the same guard twice. One accessor suffices:\n\n```js\nfunction summaryOf(ticketDetails) {\n    return ticketFields(ticketDetails).summary || null;\n}\n```\n\nSame file, `issueTypeName` keeps its own `(ticketDetails && ticketDetails.fields) || {}` — a third copy of the same normalization. Consolidating on `ticketFields` everywhere removes the duplication."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zQwn5",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/tcDifferentialDispatcher.js:316",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: say it in the report when the per-tick dispatch cap truncates requests**\n\n`dispatchRequests` processes only `requests.slice(0, MAX_DISPATCHES_PER_TICK)` (10 per tick); anything beyond stays parked for a later tick — reasonable pacing. But the route report posted to the ticket is built purely from the routed subsets, so a bug with 12 parked requests shows a report about 10 with no hint that 2 were deferred this tick (they remain visible only in the ledger digest).\n\nOne line fixes the observability gap:\n\n```js\nif (requests.length > bounded.length) {\n    sections.push(MAX_DISPATCHES_PER_TICK + '-request-per-tick cap: ' +\n        (requests.length - bounded.length) + ' parked request(s) deferred to the next tick.');\n}\n```\n\n(pass `requests.length` into `buildReportComment`, or return the truncated count from `dispatchRequests`)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:5e10424f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: CI `crap` ratchet is red on head e0cc017 — \"CRAP ratchet failed: CRAP may only decrease\", 14 new functions over the threshold (8), exit code 2**\n\nThis PR introduces 14 functions above the CRAP threshold (per the CI run https://github.com/IstiN/dmtools-agents/actions/runs/41683524472/job/126083177822):\n\n```\nNEW > 8  js/common/tcRoleStamp.js::stampPlan: 12\nNEW > 8  js/stampTcRoles.js::descriptionOf: 10.3\nNEW > 8  js/stampTcRoles.js::stampRoles: 9\nNEW > 8  js/stampTcRoles.js::action: 9.2\nNEW > 8  js/tcDifferentialDispatcher.js::runDifferential: 9\nNEW > 8  js/tcDifferentialDispatcher.js::dispatcherVerdict: 9\nNEW > 8  js/tcDifferentialDispatcher.js::unavailableBump: 9\nNEW > 8  js/tcDifferentialDispatcher.js::maintenanceEntry: 11\nNEW > 8  js/tcDifferentialDispatcher.js::routeNameOf: 9\nNEW > 8  js/tcDifferentialDispatcher.js::action: 12\nNEW > 8  js/unit-tests/test_stampTcRoles.js::stampMocks: 9\nNEW > 8  js/unit-tests/test_tcDifferentialDispatcher.js::parkedFinding: 10\nNEW > 8  js/unit-tests/test_tcDifferentialDispatcher.js::fakeShell: 13\nNEW > 8  js/unit-tests/test_tcDifferentialDispatcher.js::shell: 12\n```\n\nAt 100% coverage these values equal cyclomatic complexity, so only refactoring lowers them — coverage additions cannot. Suggested splits:\n\n- `tcDifferentialDispatcher.js::action` (CC 12) → extract the \"nothing parked\" early-return, the ledger marker post, and the report/label-clear tail into named helpers.\n- `maintenanceEntry` / `unavailableBump` (CC 9–11) → both build ledger entries from `request` + extras; extract one shared `evidenceFieldsOf(request)` and keep the verdict-specific fields local.\n- `tcRoleStamp.stampPlan` (CC 12) → split oracle election and guard planning into two functions.\n- Test fixtures (`fakeShell` CC 13, `shell` 12, `parkedFinding` 10, `stampMocks` 9) → split the option matching / defaulting into small helpers.\n\nNote the unit tests themselves are green (verified locally: all 738 touched-suite tests + the 50 new ones pass) — only the ratchet gate fails."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:0308faba",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `sm_tc_differential_triggered` is never removed — the dispatcher can never run twice for the same bug**\n\nThe SM rule stamps `sm_tc_differential_triggered` (`addLabel`, sm.json:94) and skips while it is present (`skipIfLabel`, sm.json:93) — but nothing in this PR ever removes it:\n\n- `js/tcDifferentialDispatcher.js::action` removes only the park label (`removeLabelQuietly(tracker, ticketKey, parkLabel)` at lines 375 and 399); `grep -rn \"sm_tc_differential_triggered\"` finds no removal anywhere.\n- The repo doctrine is that the job manages its own trigger label's full lifecycle: `js/quotaParkProbe.js` `liftPark()` (lines 117–123) removes the park label **and** the trigger labels on completion, and `js/smAgent.js:1289–1293` documents the pattern (\"the job manages the label's full lifecycle — add is implied by dispatch, remove happens on its own completion\").\n\nConsequences — all three break the PR's own stated design:\n\n1. **The documented retry loop never runs.** For an unavailable request the dispatcher posts one explanation and stays parked; your test states the intent explicitly: *\"still parked — the label stays so the next tick retries\"* (test_tcDifferentialDispatcher.js, stall suite). But the next tick is **skipped** by `skipIfLabel`, so the quiet-bump path (`occurrences > 1` in `dispatchRequests`) is unreachable in production and `occurrences` never advances past 2 (the test manufactures it by re-appending).\n2. **A consumed bug is dead for all future rounds.** After a bounce/maintenance resolves the request and clears `tc_differential_pending`, any later park on the same bug re-adds `tc_differential_pending` — but the rule skips on the stale lock, while the generator rule now also skips `tc_differential_pending` bugs (sm.json:200). Result: no dispatcher, no generator, permanent attribution stall for that bug.\n3. **A crash mid-dispatch locks forever** — the opposite of crash recovery.\n\nFix (follow the `quotaParkProbe.liftPark` precedent): in `action`, after the routes are posted and nothing remains parked, remove `sm_tc_differential_triggered` alongside the park label (keep the SM-side add as the in-flight crash guard). Add a unit test that a second `parkedFinding` round-trip dispatches again."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:c6e9d3fe",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: a fail-closed (empty machineAuthor) ledger read silently strips the park label from genuinely parked bugs**\n\n`bugBookkeeping.loadBugBookkeeping` fails closed: with no configured machine-author allowlist it degrades to `tcMaintenanceLedger.emptyLedger()` (bugBookkeeping.js:57–61, \"no configured machine identity trusts nothing\"). In this dispatcher that empty ledger means `differentialRequests(...)` returns `[]`, and this branch then **removes `tc_differential_pending` from the bug** and returns `nothing_parked`:\n\n```js\nvar requests = tcMaintenanceLedger.differentialRequests(vars.ledger);\nif (!requests.length) {\n    removeLabelQuietly(tracker, ticketKey, parkLabel);\n    return { success: true, action: 'nothing_parked', ticketKey: ticketKey };\n}\n```\n\nThe bug may carry a genuinely parked request that the fail-closed parse refused to read. After the label is stripped:\n\n- the dispatcher rule's JQL (`labels = tc_differential_pending`) no longer matches → the request is orphaned forever;\n- the generator rule's new skip on `tc_differential_pending` (sm.json:200) no longer applies → a fresh TC generation dispatch fires on a bug whose differential request was never resolved — exactly the unattributed re-dispatch this PR exists to prevent.\n\nNo marker is posted (`ledgerChanged` is false), no comment is posted — the park label vanishes silently. This contradicts the PR's own contract (\"the dispatcher never bounces on unavailable evidence … stays parked fail-safe\") and the deploy note you added to `docs/machine-factory-integration.md` explicitly anticipates deployments running TC triage with an empty allowlist (the guard warning exists for that case — but `triageAllowlistWarning` is wired only into `postStoryTestAutomationResults`, not here).\n\nFix: at `action` startup, resolve the allowlist (reuse `bugBookkeeping.triageAllowlistWarning(params, config)`); when it resolves empty, log the warning and bail out **without** clearing the park label (e.g. `action: 'unconfigured_parked'`), leaving the stall digest-visible. Optionally distinguish \"empty ledger because fail-closed\" from \"no findings\" via the authorLogins you already pass to the loader."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:f5a9568f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: ledger-controlled strings are interpolated into shell commands without validation**\n\nThe dispatcher's verdict inputs travel from the TC maintenance ledger marker (a ticket comment) straight into shell commands:\n\n- `buildRunCommand` (js/tcDifferentialDispatcher.js:98) substitutes `{testPath}` — the ledger finding's `testPath`, harvested from test-run output in the target repo — into `tcRunCommand`, then `runDifferential` executes it via `cli_execute_command`. A `testPath` containing `;`, `&&`, `$(...)`, backticks, or an option-like leading `-` changes what the factory shell runs.\n- `runDifferential` interpolates `request.lastGreenSha` unvalidated: `git -C <dir> checkout <sha>` (line 142) and `git -C <dir> fetch origin <sha>` (line 153). A non-SHA value with shell metacharacters injects commands; a value starting with `-` is argument injection into git.\n\nMitigations that already exist: the ledger parse is fail-closed against the machineAuthor allowlist, so only machine-authored markers are read. But those markers embed strings produced by the target repo's own test output/file paths — a repo that accepts external contributions — and `cli_execute_command` runs in the factory's shell context, which is broader than the repo checkout. Defense-in-depth is cheap here, and the codebase already has the perfect landing spot: the `unavailable` route.\n\nSuggested validation before building any command:\n\n```js\nvar SHA_RE = /^[0-9a-f]{7,64}$/i;\nfunction safeSha(sha) { return SHA_RE.test(String(sha || '').trim()) ? String(sha).trim() : null; }\nfunction safeTestPath(p) {\n    var s = String(p || '').trim();\n    if (!s || /[\\s;&|<>$`\\\\\\\"'\\n]/.test(s) || s.indexOf('..') !== -1) return null;\n    return s;\n}\n```\n\nA failed check routes to the existing `{ outcome: 'unavailable', detail: '...' }` fail-safe (stays parked, digest-visible) instead of executing anything."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:d6413db8",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: unused `bugKey` parameter in `roleFieldsFromDescription`**\n\n```js\nfunction roleFieldsFromDescription(description, bugKey) {\n    var marker = parseRoleMarker(description);\n    if (!marker) return {};\n    if (marker.kind === 'verifies') {\n        return { role: 'verifies', verifies: marker.key };\n    }\n    return { role: 'regression guard', regressionGuard: true };\n}\n```\n\n`bugKey` is never used, yet the signature suggests the reader performs sibling detection (`Verifies: <other-bug>` → sibling) at this layer. That resolution actually happens later in `tcTriage.resolveTcRole` — which is fine — but the parameter misleads callers into thinking the annotation is bug-scoped. Either drop the parameter, or use it to also return e.g. `isSibling` so the automation leg's input carries the resolved relationship. `annotateWithRoles` (its only caller) passes `storyKey` today, so dropping it is a one-line cleanup plus test touch-ups."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:b7856d16",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: generated doc lists 11 customParams the dispatcher never reads**\n\n`tc_differential_dispatcher.json` ships `\"customParams\": {}`, and `js/tcDifferentialDispatcher.js` reads exactly four: `tcRunCommand`, `workingDir`, `maxReworkRounds`, `parkLabel`. The generated doc's Parameters and \"Custom params\" sections (this file, lines ~48–64 and ~76–90) list 15, including `adoTextFormat`, `branchCreateFnPath`, `branchNamingFnPath`, `prSearchFnPath`, `scmProvider`, `stageFallback`, `targetRepository`, `trackerProvider`, `featureBranchEnabled`, `configPath`, `customStatuses` — none of which the dispatcher consumes.\n\nA deployer configuring this job from the doc will hunt for knobs that do not exist (and may set `parkLabel` without realizing the SM rule's JQL must be overridden in lockstep — that caveat the human doc does carry, the generated one doesn't). The human doc (`docs/agents/tc_differential_dispatcher.md`) has the correct four — worth checking why `agentDocGenerator.js` over-collects for JSRunner configs so the next generated agent doc doesn't inherit the noise."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:0c46732b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `summaryOf` / `ticketFields` — duplicated field accessor**\n\n```js\nfunction summaryOf(ticketDetails) {\n    var fields = (ticketDetails && ticketFields(ticketDetails)) || {};\n    return fields.summary || null;\n}\n\nfunction ticketFields(ticketDetails) {\n    return (ticketDetails && ticketDetails.fields) || {};\n}\n```\n\n`ticketFields(ticketDetails)` already normalizes null/undefined to `{}`, so the outer `(... && ...) || {}` in `summaryOf` re-does the same guard twice. One accessor suffices:\n\n```js\nfunction summaryOf(ticketDetails) {\n    return ticketFields(ticketDetails).summary || null;\n}\n```\n\nSame file, `issueTypeName` keeps its own `(ticketDetails && ticketDetails.fields) || {}` — a third copy of the same normalization. Consolidating on `ticketFields` everywhere removes the duplication."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:7d9d072e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: say it in the report when the per-tick dispatch cap truncates requests**\n\n`dispatchRequests` processes only `requests.slice(0, MAX_DISPATCHES_PER_TICK)` (10 per tick); anything beyond stays parked for a later tick — reasonable pacing. But the route report posted to the ticket is built purely from the routed subsets, so a bug with 12 parked requests shows a report about 10 with no hint that 2 were deferred this tick (they remain visible only in the ledger digest).\n\nOne line fixes the observability gap:\n\n```js\nif (requests.length > bounded.length) {\n    sections.push(MAX_DISPATCHES_PER_TICK + '-request-per-tick cap: ' +\n        (requests.length - bounded.length) + ' parked request(s) deferred to the next tick.');\n}\n```\n\n(pass `requests.length` into `buildReportComment`, or return the truncated count from `dispatchRequests`)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:ede31fd3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head e0cc017503f2931b90fd8db98d9bcda9159f13d7 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:1c40edca",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: Solid, well-tested feature (738+50 unit tests green locally), but 3 blocking issues must be fixed first: the `crap` CI ratchet is red on this head (14 new over-threshold functions), the `sm_tc_differential_triggered` lock label is never removed so the dispatcher can never run twice for the same bug, and a fail-closed (empty `machineAuthor`) ledger read makes the dispatcher silently strip `tc_differential_pending` from genuinely parked bugs.\n\n**Key Issues**:\n- 🚨 `crap` gate red — \"CRAP may only decrease\", 14 new functions over threshold 8 (`js/tcDifferentialDispatcher.js::action` 12, `tcRoleStamp.stampPlan` 12, test fixtures up to 13)\n- 🚨 Dispatcher lock label `sm_tc_differential_triggered` never removed (`js/tcDifferentialDispatcher.js` removes only the park label) — breaks the documented stall-retry loop and kills all future dispatches for the bug; `quotaParkProbe.liftPark` is the established fix pattern\n- 🚨 Empty machineAuthor allowlist → `loadBugBookkeeping` fails closed → dispatcher clears the park label and un-blocks the generator on unparsed parked requests (violates the PR's own fail-safe contract)\n- ⚠️ `testPath`/`lastGreenSha` from ledger markers interpolated into shell commands (`git checkout <sha>`, `tcRunCommand` substitution) without validation\n- 💡 Unused `bugKey` param in `tcRoleStamp.roleFieldsFromDescription`; generated doc lists 11 customParams the dispatcher never reads; `summaryOf`/`ticketFields` duplication; per-tick dispatch cap is silent in the ticket report\n\n**Next Steps**:\n1. Fix the 3 blockers (refactor over-threshold functions; remove the trigger label on dispatcher completion; guard/bail the dispatcher when the allowlist resolves empty) — the lock-label and allowlist fixes both need new unit tests\n2. Add sha/testPath validation routing to the existing `unavailable` fail-safe\n3. Optional polish per the inline threads"
+    }
+  ]
+}
