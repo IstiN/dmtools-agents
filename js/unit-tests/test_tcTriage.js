@@ -286,3 +286,52 @@ suite('tcTriage: verdict evidence + comments', function() {
         assert.contains(comment, 'escalat');
     });
 });
+
+suite('tcTriage: missing fingerprint evidence never defaults to flaky (gh-1329 review)', function() {
+
+    var validatedGuard = {
+        tcKey: 'TS-20',
+        role: triage.ROLE_GUARD,
+        validated: true,
+        current: { sha: 'sha-green', envFingerprint: null },
+        lastGreen: { sha: 'sha-green', envFingerprint: null },
+        maxReworkRounds: 2,
+        redRounds: 0
+    };
+
+    test('AC: same-build red with NO env fingerprints on either side is NOT auto-flaky — the differential rerun must attribute it', function() {
+        var v = triage.triageFailure(Object.assign({}, validatedGuard, {
+            current: { sha: 'sha-green', envFingerprint: null },
+            lastGreen: { sha: 'sha-green', envFingerprint: null }
+        }));
+        assert.equal(v.action, triage.ACTION_DIFFERENTIAL);
+        assert.equal(v.reason, 'rerun-requested-on-last-green-build');
+    });
+
+    test('AC: same-build red with a fingerprint on only ONE side is not proven flaky either', function() {
+        var v = triage.triageFailure(Object.assign({}, validatedGuard, {
+            current: { sha: 'sha-green', envFingerprint: 'env-1' },
+            lastGreen: { sha: 'sha-green', envFingerprint: null }
+        }));
+        assert.equal(v.action, triage.ACTION_DIFFERENTIAL);
+        assert.notEqual(v.reason, 'flaky-same-build');
+    });
+
+    test('same-build red with BOTH fingerprints equal stays flaky-same-build (evidence, not default)', function() {
+        var v = triage.triageFailure(Object.assign({}, validatedGuard, {
+            current: { sha: 'sha-green', envFingerprint: 'env-1' },
+            lastGreen: { sha: 'sha-green', envFingerprint: 'env-1' }
+        }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'flaky-same-build');
+    });
+
+    test('same-build red with BOTH fingerprints differing stays environment-shift', function() {
+        var v = triage.triageFailure(Object.assign({}, validatedGuard, {
+            current: { sha: 'sha-green', envFingerprint: 'env-2' },
+            lastGreen: { sha: 'sha-green', envFingerprint: 'env-1' }
+        }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'environment-shift');
+    });
+});
