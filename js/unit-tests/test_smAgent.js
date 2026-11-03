@@ -66,7 +66,8 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
             './common/tcRunRegistry.js': unreadable,
             './common/tcMaintenanceLedger.js': unreadable,
             './common/tcTriage.js': unreadable,
-            './common/bugBookkeeping.js': unreadable
+            './common/bugBookkeeping.js': unreadable,
+            './common/jobTicketInputs.js': unreadable
         };
     }
     var shapes = loadModule('js/common/ticketKeyShapes.js', makeRequire({}), {});
@@ -110,7 +111,10 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
                 './reviewVerdicts.js': reviewVerdictsReal()
             }), {}),
             './machineAuthor.js': machineAuthorReal()
-        }), {})
+        }), {}),
+        // gh-1345 rework: the shared SM-job ticket inputs — both localExecution
+        // jobs require it; the sandbox helper layer resolves it to real exports.
+        './common/jobTicketInputs.js': loadModule('js/common/jobTicketInputs.js', makeRequire({}), {})
     };
 }
 
@@ -14517,7 +14521,8 @@ suite('smAgent: runLocalAction require shim (gh-908)', function() {
             'js/common/tcRunRegistry.js',
             'js/common/tcMaintenanceLedger.js',
             'js/common/tcTriage.js',
-            'js/common/bugBookkeeping.js'
+            'js/common/bugBookkeeping.js',
+            'js/common/jobTicketInputs.js'
         ].forEach(function(expectedPath) {
             assert.ok(closure.indexOf(expectedPath) !== -1,
                 'sm pack closure must contain ' + expectedPath + ' for localExecution (gh-1299)');
