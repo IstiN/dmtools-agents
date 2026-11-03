@@ -9,3 +9,4 @@ Automates and executes all linked Test Case tickets for a Bug in `Ready For Test
 - `checkOpenPR` — skips the run if an open test PR already exists for the bug.
 - `customStatuses` — overrides default tracker status names for bug/test transitions.
 - `autoStartReview` / `autoStartReviewConfigFile` — dispatches the bug test PR review config once the PR is opened.
+- `maxReworkRounds` — consecutive attributed-red rounds a TC may accumulate before an earned bounce escalates to the owner instead of re-bouncing the bug (default 2).

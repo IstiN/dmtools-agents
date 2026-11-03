@@ -45,7 +45,7 @@ Write `outputs/story_test_automation_result.json` in a single `Write` call (do N
 - `results` must list every linked Test Case from `linked_test_cases.json`.
 - `failedDescriptionFile` and `failureSummary` are required for every `failed` entry.
 - `testPath` is required for every `passed` entry and omitted for `skipped` or `irrelevant`.
-- **Triage metadata (gh-1329)** — on bugs, the pipeline attributes failures before bouncing:
+- **Triage metadata** — on bugs, the pipeline attributes failures before bouncing:
   - `errorClass` is REQUIRED on every `failed` entry — classify from the failure evidence you already have (`element-not-found`, `assertion`, `timeout`, `navigation`, `crash`, or `unknown` when genuinely unclassifiable).
   - `envFingerprint` — when you can identify the environment the run used (store/config revision, data seed), record it; it is the baseline the triage compares against the last green run.
   - `retryStatus` — you already re-run a failed test once to confirm it: record `green` when that re-run passed, `red` when it failed again.

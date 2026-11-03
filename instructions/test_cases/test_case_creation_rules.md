@@ -77,7 +77,7 @@ flowchart TD
     MAX --> FORBIDDEN
 ```
 
-### Role stamping (gh-1329 — mandatory for bug TCs)
+### Role stamping (mandatory for bug TCs)
 
 Every Test Case generated for a Bug carries its role in the description, so the
 automation pipeline can attribute failures before bouncing the bug:

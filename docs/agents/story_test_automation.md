@@ -9,3 +9,4 @@ Bulk-automates all Test Cases linked to a Story in `Ready For Testing` on branch
 - `checkOpenPR` — guards against duplicate story test PRs.
 - `customStatuses` — maps logical story/test statuses to project-specific tracker statuses.
 - `autoStartReview` / `autoStartReviewConfigFile` — chains the story test review agent after PR creation.
+- `maxReworkRounds` — consecutive attributed-red rounds a TC may accumulate before an earned bounce escalates to the owner instead of re-bouncing the bug (default 2; applies on bug runs of this action).

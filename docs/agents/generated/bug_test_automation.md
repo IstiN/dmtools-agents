@@ -9,6 +9,7 @@ Automates and executes all linked Test Case tickets for a Bug in `Ready For Test
 - `checkOpenPR` — skips the run if an open test PR already exists for the bug.
 - `customStatuses` — overrides default tracker status names for bug/test transitions.
 - `autoStartReview` / `autoStartReviewConfigFile` — dispatches the bug test PR review config once the PR is opened.
+- `maxReworkRounds` — consecutive attributed-red rounds a TC may accumulate before an earned bounce escalates to the owner instead of re-bouncing the bug (default 2).
 
 _Human doc: [`agents/docs/agents/bug_test_automation.md`](agents/docs/agents/bug_test_automation.md)_
 
@@ -92,6 +93,7 @@ _Post Story Test Automation Results Action_
   - `dryRun`
   - `featureBranchEnabled`
   - `localTeammate`
+  - `maxReworkRounds`
   - `prSearchFnPath`
   - `projectKey`
   - `removeLabel`
@@ -129,6 +131,7 @@ _Post Story Test Automation Results Action_
 - `contentOutput.target` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
+- `maxReworkRounds` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `smFallback` _(used by JS action)_
 
