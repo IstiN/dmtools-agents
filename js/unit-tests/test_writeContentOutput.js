@@ -1436,3 +1436,102 @@ suite('writeContentOutput — failure comment and token usage on failure (gh-126
         }
     });
 });
+
+suite('writeContentOutput — thenAction fallback resolution from project-local script (gh-1327)', function() {
+    function loadWithStrictRequire(mocks, exactMap, attempts) {
+        var baseMap = {
+            './common/trackers.js': loadTrackersWc(mocks),
+            './common/contentOutput.js': loadContentOutputLib(mocks),
+            './common/outputFiles.js': { readOutputFile: function() { return 'content'; } },
+            './common/jiraHelpers.js': { assignForReview: function() { throw new Error('must not run'); } },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './config.js': { STATUSES: { IN_REVIEW: 'In Review' } },
+            './configLoader.js': { loadProjectConfig: function() { return {}; } }
+        };
+        Object.keys(exactMap || {}).forEach(function(k) { baseMap[k] = exactMap[k]; });
+        return loadModule('js/writeContentOutput.js', function(id) {
+            if (attempts) attempts.push(id);
+            if (Object.prototype.hasOwnProperty.call(baseMap, id)) return baseMap[id];
+            throw new Error('Failed to load module: ' + id);
+        }, mocks);
+    }
+
+    test('buildThenActionCandidates includes agentsDir/js, agents/js, and js fallbacks', function() {
+        var mod = loadWriteContentOutput({});
+        assert.deepEqual(
+            mod.buildThenActionCandidates('assignForSolutionArchitecture.js', { jobParams: { agentsDir: 'custom/agents/' } }),
+            [
+                './assignForSolutionArchitecture.js',
+                'custom/agents/js/assignForSolutionArchitecture.js',
+                'agents/js/assignForSolutionArchitecture.js',
+                'js/assignForSolutionArchitecture.js'
+            ]
+        );
+        assert.deepEqual(
+            mod.buildThenActionCandidates('assignForSolutionArchitecture.js', {}),
+            [
+                './assignForSolutionArchitecture.js',
+                'agents/js/assignForSolutionArchitecture.js',
+                'js/assignForSolutionArchitecture.js'
+            ]
+        );
+    });
+
+    test('falls back to agentsDir/js/<thenAction> when ./<thenAction> fails', function() {
+        var attempts = [];
+        var chainedCalled = false;
+        var mocks = { jira_update_field: function() {} };
+        var mod = loadWithStrictRequire(mocks, {
+            '/opt/pack/agents/js/assignForSolutionArchitecture.js': {
+                action: function() { chainedCalled = true; return { success: true }; }
+            }
+        }, attempts);
+        var result = mod.action(makeParams({
+            jobParams: { agentsDir: '/opt/pack/agents/' },
+            customParams: { contentOutput: {
+                target: 'jira_field', field: 'Acceptance Criteria',
+                thenAction: 'assignForSolutionArchitecture.js'
+            } }
+        }));
+        assert.equal(result.success, true);
+        assert.equal(chainedCalled, true);
+        assert.equal(attempts.indexOf('./assignForSolutionArchitecture.js') !== -1, true);
+        assert.equal(attempts.indexOf('/opt/pack/agents/js/assignForSolutionArchitecture.js') !== -1, true);
+    });
+
+    test('falls back to agents/js/<thenAction> and js/<thenAction> when ./<thenAction> fails without agentsDir', function() {
+        var attempts = [];
+        var chainedCalled = false;
+        var mocks = { jira_update_field: function() {} };
+        var mod = loadWithStrictRequire(mocks, {
+            'agents/js/assignForSolutionArchitecture.js': {
+                action: function() { chainedCalled = true; return { success: true }; }
+            }
+        }, attempts);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: {
+                target: 'jira_field', field: 'Acceptance Criteria',
+                thenAction: 'assignForSolutionArchitecture.js'
+            } }
+        }));
+        assert.equal(result.success, true);
+        assert.equal(chainedCalled, true);
+        assert.deepEqual(attempts.slice(-2), [
+            './assignForSolutionArchitecture.js',
+            'agents/js/assignForSolutionArchitecture.js'
+        ]);
+    });
+
+    test('rethrows original ./<thenAction> error when all candidate paths fail', function() {
+        var mocks = { jira_update_field: function() {}, jira_post_comment: function() {} };
+        var mod = loadWithStrictRequire(mocks, {}, null);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: {
+                target: 'jira_field', field: 'Acceptance Criteria',
+                thenAction: 'missingAction.js'
+            } }
+        }));
+        assert.equal(result.success, false);
+        assert.contains(result.error, './missingAction.js');
+    });
+});
