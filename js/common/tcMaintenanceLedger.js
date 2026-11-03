@@ -217,6 +217,11 @@ function openFindings(l) {
     return l.findings.filter(function(f) { return f.status === STATUS_OPEN; });
 }
 
+// The SM-routing label that anchors a parked differential request to the
+// scripted dispatcher rule (gh-1345): the automation leg adds it when a run
+// parks a request, the dispatcher clears it when nothing remains parked.
+var PARK_LABEL = 'tc_differential_pending';
+
 // The parked differential-rerun verdict (tcTriage ACTION_DIFFERENTIAL): the
 // finding that awaits the scripted CI dispatcher — never a sweep item.
 var VERDICT_DIFFERENTIAL = 'differential-rerun';
@@ -451,6 +456,8 @@ if (typeof module !== 'undefined' && module.exports) {
         latestLedger: latestLedger,
         buildDigestComment: buildDigestComment,
         VERDICT_DIFFERENTIAL: VERDICT_DIFFERENTIAL,
+        PARK_LABEL: PARK_LABEL,
+        differentialRequests: differentialRequests
         differentialRequests: differentialRequests
     };
 }
