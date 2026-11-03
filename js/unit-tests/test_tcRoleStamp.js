@@ -125,16 +125,17 @@ suite('tcRoleStamp: stampPlan — one oracle, the rest guards', function() {
         assert.equal(plan[0].marker, 'Verifies: BUG-1');
     });
 
-    test('an oracle marking a DIFFERENT bug does not count as this bug oracle', function() {
+    test('a sibling marker (Verifies: BUG-2) is KEPT — only the unmarked TC gets this oracle', function() {
         var plan = stamp.stampPlan([
             { key: 'TS-5', fields: { description: 'Verifies: BUG-2\nbody' } },
             { key: 'TS-6', fields: { description: 'unmarked' } }
         ], 'BUG-1', 'Scope');
-        assert.equal(plan.length, 2);
-        assert.equal(plan[0].tcKey, 'TS-5');
+        // the sibling marker pins another bug's behavior (creation rules) —
+        // it must never be overwritten; BUG-1 still needs its own oracle and
+        // the lowest-key unmarked TC is elected.
+        assert.equal(plan.length, 1);
+        assert.equal(plan[0].tcKey, 'TS-6');
         assert.equal(plan[0].marker, 'Verifies: BUG-1');
-        assert.equal(plan[1].tcKey, 'TS-6');
-        assert.equal(plan[1].marker, 'Regression guard: Scope');
     });
 
     test('empty input produces an empty plan', function() {
@@ -208,7 +209,8 @@ suite('tcRoleStamp: roleFieldsFromDescription — the automation leg reads the s
         assert.equal(annotated[1].role, 'regression guard');
         assert.equal(annotated[1].regressionGuard, true);
         assert.equal(annotated[2].role, undefined);
-        assert.equal(annotated[2].description, 'plain');
+        assert.deepEqual(annotated[2], { key: 'TS-7', fields: { description: 'plain' } },
+            'an unmarked entry passes through untouched');
     });
 
     test('annotateWithRoles tolerates missing entries and empty lists', function() {
@@ -217,5 +219,6 @@ suite('tcRoleStamp: roleFieldsFromDescription — the automation leg reads the s
         var annotated = stamp.annotateWithRoles([null, { key: 'TS-5' }], 'BUG-1');
         assert.equal(annotated.length, 2);
         assert.equal(annotated[0], null);
+        assert.deepEqual(annotated[1], { key: 'TS-5' }, 'an unmarked entry passes through untouched');
     });
 });
