@@ -307,18 +307,9 @@ function findingFromDevClaim(claim, opts) {
 
 // ── marker persistence (the house dmtools: marker pattern) ───────────────────
 
-// Marker-hostile sequences: an embedded `-->` would terminate the HTML
-// comment and an embedded `<!--` would shadow the prefix search (the same
-// hazard the gh-1332 registry handles). A zero-width space breaks both.
-function markerSafe(text) {
-    return String(text || '')
-        .replace(/-->/g, '--\u200b>')
-        .replace(/<!--/g, '<!\u200b--');
-}
-
-function markerSafeReplacer(key, value) {
-    return typeof value === 'string' ? markerSafe(value) : value;
-}
+// Marker hygiene (escaping) and the parse walk live in reviewVerdicts — the
+// shared dmtools: marker plumbing (gh-1329 rework, gh-1251 duplication
+// ratchet): this module keeps only its MARKER_PREFIX and payload adapter.
 
 function ledgerPayload(l) {
     return {
@@ -345,7 +336,7 @@ function ledgerNote(l) {
  */
 function buildLedgerMarker(l) {
     if (!l || !Array.isArray(l.findings)) return null;
-    return MARKER_PREFIX + JSON.stringify(ledgerPayload(l), markerSafeReplacer) + MARKER_SUFFIX + '\n' + ledgerNote(l);
+    return MARKER_PREFIX + JSON.stringify(ledgerPayload(l), reviewVerdicts.markerSafeReplacer) + MARKER_SUFFIX + '\n' + ledgerNote(l);
 }
 
 function ledgerFromPayload(parsed) {
@@ -357,9 +348,6 @@ function ledgerFromPayload(parsed) {
     };
 }
 
-// The atMs-based records order is the reviewVerdicts marker-convention one.
-var ledgerTimestampComparator = reviewVerdicts.markerRecordComparator;
-
 /**
  * Parses ALL ledger records from a ticket comments payload — comments:
  * [{body}] (author fields consulted only when opts.authorLogins is passed).
@@ -369,17 +357,11 @@ var ledgerTimestampComparator = reviewVerdicts.markerRecordComparator;
  * Returns records oldest-first.
  */
 function parseLedgerComments(comments, opts) {
-    if (!opts || !Array.isArray(opts.authorLogins) || opts.authorLogins.length === 0) return [];
-    var records = reviewVerdicts.collectAllowedRecords(comments, opts, function(item) {
-        var l = ledgerFromPayload(reviewVerdicts.extractMarkerJson(
-            item && item.body, MARKER_PREFIX, MARKER_SUFFIX));
-        return l ? { ledger: l, at: l.at } : null;
-    });
-    records.forEach(function(rec) {
-        rec.atMs = Date.parse(rec.at);
-    });
-    records.sort(ledgerTimestampComparator);
-    return records;
+    return reviewVerdicts.parseMarkerComments(comments, opts, MARKER_PREFIX, MARKER_SUFFIX,
+        function(parsed) {
+            var l = ledgerFromPayload(parsed);
+            return l ? { ledger: l, at: l.at } : null;
+        }, true);
 }
 
 /**

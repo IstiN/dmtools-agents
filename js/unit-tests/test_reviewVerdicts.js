@@ -792,3 +792,109 @@ suite('reviewVerdicts — parser internals characterization (gh-1196)', function
             '(suggestions do not justify a rework arm; the approval stands)');
     });
 });
+
+// ── gh-1329 rework: the shared dmtools: marker plumbing ─────────────────────
+// The three machine-marker modules (findingRegistry, tcRunRegistry,
+// tcMaintenanceLedger) carried byte-identical copies of the marker-hygiene
+// escaping and the parse-records walk — the gh-1251 duplication ratchet
+// flagged all three (tcRunRegistry at 7.29% was this PR's red gate). The
+// shared helpers live here, beside the walk's other halves
+// (collectAllowedRecords / extractMarkerJson / markerRecordComparator);
+// every marker module now delegates. Pure regression pins below.
+
+suite('reviewVerdicts — shared marker plumbing (gh-1329 rework, thread 11)', function () {
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
+
+    var PREFIX = '<!-- dmtools:shared-test ';
+    var SUFFIX = ' -->';
+
+    function payloadComment(payload, login) {
+        return { body: PREFIX + JSON.stringify(payload) + SUFFIX, user: { login: login || 'ai-teammate' } };
+    }
+
+    test('markerSafe neutralizes the marker-hostile sequences', function () {
+        assert.equal(rv.markerSafe('plain text'), 'plain text', 'plain text is untouched');
+        assert.equal(rv.markerSafe(''), '', 'empty string stays empty');
+        assert.equal(rv.markerSafe(null), '', 'null degrades to empty');
+        var closed = rv.markerSafe('a --> b');
+        assert.equal(closed.indexOf('-->'), -1, 'an embedded --> cannot terminate the HTML comment');
+        var open = rv.markerSafe('a <!-- b');
+        assert.equal(open.indexOf('<!--'), -1, 'an embedded <!-- cannot shadow the prefix search');
+        assert.equal(rv.markerSafe('a --> b'), 'a --\u200b> b', 'the zero-width-space break shape is pinned');
+        assert.equal(rv.markerSafe('a <!-- b'), 'a <!\u200b-- b', 'the zero-width-space break shape is pinned');
+    });
+
+    test('markerSafeReplacer escapes only strings inside a payload', function () {
+        var out = JSON.stringify({ s: 'x --> y', n: 3, b: false, arr: ['-->'] }, rv.markerSafeReplacer);
+        assert.equal(out.indexOf('-->'), -1, 'no raw --> survives anywhere in the payload');
+        assert.contains(out, '3', 'numbers pass through');
+        assert.contains(out, '--\u200b>', 'strings and nested array strings are escaped');
+    });
+
+    test('an escaped payload round-trips through extractMarkerJson', function () {
+        var payload = { note: 'nested <!-- marker --> inside' };
+        var body = PREFIX + JSON.stringify(payload, rv.markerSafeReplacer) + SUFFIX;
+        var parsed = rv.extractMarkerJson(body, PREFIX, SUFFIX);
+        assert.ok(parsed, 'the marker still parses');
+        assert.contains(parsed.note, '\u200b', 'the break is still in the stored text');
+        assert.equal(parsed.note.indexOf('<!--'), -1, 'but the hostile sequence is broken');
+    });
+
+    test('parseMarkerComments walks trusted markers, stamps atMs and sorts oldest-first', function () {
+        var records = rv.parseMarkerComments([
+            payloadComment({ v: 1, at: '2026-01-03T00:00:00.000Z' }),
+            { body: 'prose, not a marker' },
+            payloadComment({ v: 2, at: '2026-01-01T00:00:00.000Z' }, 'rando'),
+            payloadComment({ v: 3, at: '2026-01-02T00:00:00.000Z' })
+        ], { authorLogins: ['ai-teammate'] }, PREFIX, SUFFIX, function (parsed) {
+            return parsed ? { payload: parsed, at: parsed.at } : null;
+        });
+        assert.equal(records.length, 2, 'prose and untrusted comments are skipped');
+        assert.equal(records[0].payload.v, 3, 'oldest trusted marker first');
+        assert.equal(records[1].payload.v, 1);
+        assert.equal(records[0].atMs, Date.parse('2026-01-02T00:00:00.000Z'), 'atMs is stamped from the payload at');
+    });
+
+    test('parseMarkerComments fail-closed mode: no allowlist trusts nothing', function () {
+        var comments = [payloadComment({ v: 1, at: '2026-01-01T00:00:00.000Z' })];
+        var adapter = function (parsed) { return parsed ? { payload: parsed, at: parsed.at } : null; };
+        assert.deepEqual(rv.parseMarkerComments(comments, {}, PREFIX, SUFFIX, adapter, true), [],
+            'empty allowlist object → []');
+        assert.deepEqual(rv.parseMarkerComments(comments, { authorLogins: [] }, PREFIX, SUFFIX, adapter, true), [],
+            'empty allowlist array → []');
+        assert.deepEqual(rv.parseMarkerComments(comments, null, PREFIX, SUFFIX, adapter, true), [],
+            'no opts at all → []');
+        assert.deepEqual(rv.parseMarkerComments(comments, undefined, PREFIX, SUFFIX, adapter, true), [],
+            'undefined opts → []');
+    });
+
+    test('parseMarkerComments shape-agnostic mode (findingRegistry parity): no allowlist still extracts', function () {
+        var comments = [payloadComment({ v: 7, at: '2026-01-01T00:00:00.000Z' })];
+        var records = rv.parseMarkerComments(comments, {}, PREFIX, SUFFIX, function (parsed) {
+            return parsed ? { payload: parsed, at: parsed.at } : null;
+        }, false);
+        assert.equal(records.length, 1, 'the legacy PR-registry caller keeps its open walk');
+        assert.equal(records[0].payload.v, 7);
+    });
+
+    test('parseMarkerComments tolerates null/undefined comments and adapter rejections', function () {
+        var adapter = function (parsed) { return parsed && parsed.keep ? { payload: parsed, at: parsed.at } : null; };
+        var records = rv.parseMarkerComments([
+            null,
+            payloadComment({ keep: false, at: '2026-01-01T00:00:00.000Z' }),
+            payloadComment({ keep: true, at: '2026-01-01T00:00:00.000Z' })
+        ], { authorLogins: ['ai-teammate'] }, PREFIX, SUFFIX, adapter, true);
+        assert.equal(records.length, 1, 'null comments and null adapter results are skipped');
+    });
+
+    test('parseMarkerComments unparseable timestamps sink to payload order (comparator parity)', function () {
+        var records = rv.parseMarkerComments([
+            payloadComment({ v: 'later', at: '2026-02-01T00:00:00.000Z' }),
+            payloadComment({ v: 'broken', at: 'not-a-date' })
+        ], { authorLogins: ['ai-teammate'] }, PREFIX, SUFFIX, function (parsed) {
+            return parsed ? { payload: parsed, at: parsed.at } : null;
+        });
+        assert.equal(records[0].payload.v, 'broken', 'the unparseable timestamp sinks to the front');
+        assert.equal(records[1].payload.v, 'later');
+    });
+});

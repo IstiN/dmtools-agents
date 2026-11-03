@@ -142,19 +142,9 @@ function recordFailure(prev, tcKey, info) {
 
 // ── marker persistence (the house dmtools: marker pattern) ───────────────────
 
-// Marker-hostile sequences: an embedded `-->` would terminate the HTML
-// comment and an embedded `<!--` would shadow the prefix search. A
-// zero-width space breaks both while staying invisible (same hazard
-// handling as the gh-1332 registry).
-function markerSafe(text) {
-    return String(text || '')
-        .replace(/-->/g, '--\u200b>')
-        .replace(/<!--/g, '<!\u200b--');
-}
-
-function markerSafeReplacer(key, value) {
-    return typeof value === 'string' ? markerSafe(value) : value;
-}
+// Marker hygiene (escaping) and the parse walk live in reviewVerdicts — the
+// shared dmtools: marker plumbing (gh-1329 rework, gh-1251 duplication
+// ratchet): this module keeps only its MARKER_PREFIX and payload adapter.
 
 function registryPayload(r) {
     return {
@@ -185,7 +175,7 @@ function registryNote(r) {
  */
 function buildRegistryMarker(r) {
     if (!r || !r.tcs || typeof r.tcs !== 'object') return null;
-    return MARKER_PREFIX + JSON.stringify(registryPayload(r), markerSafeReplacer) + MARKER_SUFFIX + '\n' + registryNote(r);
+    return MARKER_PREFIX + JSON.stringify(registryPayload(r), reviewVerdicts.markerSafeReplacer) + MARKER_SUFFIX + '\n' + registryNote(r);
 }
 
 function registryFromPayload(parsed) {
@@ -197,9 +187,6 @@ function registryFromPayload(parsed) {
     };
 }
 
-// The atMs-based records order is the reviewVerdicts marker-convention one.
-var registryTimestampComparator = reviewVerdicts.markerRecordComparator;
-
 /**
  * Parses ALL registry records from a ticket comments payload. FAILS CLOSED:
  * no configured machine-identity allowlist trusts nothing (the
@@ -207,17 +194,11 @@ var registryTimestampComparator = reviewVerdicts.markerRecordComparator;
  * Returns records oldest-first.
  */
 function parseRegistryComments(comments, opts) {
-    if (!opts || !Array.isArray(opts.authorLogins) || opts.authorLogins.length === 0) return [];
-    var records = reviewVerdicts.collectAllowedRecords(comments, opts, function(item) {
-        var r = registryFromPayload(reviewVerdicts.extractMarkerJson(
-            item && item.body, MARKER_PREFIX, MARKER_SUFFIX));
-        return r ? { registry: r, at: r.at } : null;
-    });
-    records.forEach(function(rec) {
-        rec.atMs = Date.parse(rec.at);
-    });
-    records.sort(registryTimestampComparator);
-    return records;
+    return reviewVerdicts.parseMarkerComments(comments, opts, MARKER_PREFIX, MARKER_SUFFIX,
+        function(parsed) {
+            var r = registryFromPayload(parsed);
+            return r ? { registry: r, at: r.at } : null;
+        }, true);
 }
 
 /**
