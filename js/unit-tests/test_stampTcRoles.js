@@ -59,10 +59,9 @@ function stampMocks(tcDescriptions, opts) {
         getIssueCalls: [],
         jira_search_by_jql: function(args) {
             var issues = Object.keys(tcDescriptions).map(function(key) {
-                var hideInSearch = opts.searchWithoutDescription && opts.searchWithoutDescription[key];
                 return { key: key, fields: {
                     summary: key + ' summary',
-                    description: hideInSearch ? null : (tcDescriptions[key] === undefined ? null : tcDescriptions[key])
+                    description: searchDescriptionOf(key, tcDescriptions, opts)
                 } };
             });
             return JSON.stringify({ issues: issues });
@@ -74,13 +73,28 @@ function stampMocks(tcDescriptions, opts) {
         jira_get_ticket: function(args) {
             m.getIssueCalls.push(args.key);
             if (opts.parentType && String(args.key) === opts.parentKey) {
-                return { fields: { issuetype: { name: opts.parentType }, summary: opts.parentSummary || 'Checkout total wrong' } };
+                return { fields: parentFieldsOf(opts) };
             }
             var desc = tcDescriptions[args.key];
             return { fields: { description: desc === undefined ? null : desc, summary: args.key + ' summary' } };
         }
     };
     return m;
+}
+
+/** Search-result description for one TC: null when hidden or absent. */
+function searchDescriptionOf(key, tcDescriptions, opts) {
+    var hidden = opts.searchWithoutDescription && opts.searchWithoutDescription[key];
+    if (hidden) return null;
+    var raw = tcDescriptions[key];
+    return raw === undefined ? null : raw;
+}
+
+/** The parent bug details: summary null when the test pins parentSummary: null. */
+function parentFieldsOf(opts) {
+    var fields = { issuetype: { name: opts.parentType } };
+    fields.summary = opts.parentSummary === undefined ? 'Checkout total wrong' : opts.parentSummary;
+    return fields;
 }
 
 function bugParentParams() {
@@ -206,6 +220,18 @@ suite('stampTcRoles: scoping — bugs only', function() {
         assert.equal(result.success, true);
         assert.equal(m.updatedDescriptions.length, 0);
         assert.deepEqual(m.moves, [{ key: 'BUG-1', statusName: 'Done' }]);
+    });
+
+    test('a bug without a readable summary still stamps — the key is the guard scope', function() {
+        var m = stampMocks({ 'TS-5': 'body' }, { parentType: 'Bug', parentKey: 'BUG-1', parentSummary: null });
+        var mod = loadStampTcRoles(m);
+
+        var result = mod.action(bugParentParams());
+
+        assert.equal(result.success, true);
+        assert.equal(m.updatedDescriptions.length, 1);
+        assert.contains(m.updatedDescriptions[0].description, 'Regression guard: BUG-1',
+            'the guard scope falls back to the bug key when the summary is missing');
     });
 });
 

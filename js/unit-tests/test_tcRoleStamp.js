@@ -174,27 +174,35 @@ suite('tcRoleStamp: stampedDescription', function() {
 
 suite('tcRoleStamp: roleFieldsFromDescription — the automation leg reads the stamp', function() {
 
+    test('the annotation is not bug-scoped (the triage resolves siblings later) — one-arg signature', function() {
+        // gh-1346 rework: the unused bugKey parameter is gone — the parameter
+        // suggested a sibling resolution this layer never performs
+        // (tcTriage.resolveTcRole owns that).
+        assert.equal(stamp.roleFieldsFromDescription.length, 1);
+        assert.equal(stamp.annotateWithRoles.length, 1);
+    });
+
     test('a Verifies stamp resolves to the explicit verifies role fields', function() {
-        var f = stamp.roleFieldsFromDescription('Verifies: BUG-1\nbody', 'BUG-1');
+        var f = stamp.roleFieldsFromDescription('Verifies: BUG-1\nbody');
         assert.equal(f.role, 'verifies');
         assert.equal(f.verifies, 'BUG-1');
     });
 
     test('a Regression guard stamp resolves to the guard role fields', function() {
-        var f = stamp.roleFieldsFromDescription('Regression guard: totals\nbody', 'BUG-1');
+        var f = stamp.roleFieldsFromDescription('Regression guard: totals\nbody');
         assert.equal(f.role, 'regression guard');
         assert.equal(f.regressionGuard, true);
     });
 
     test('a Verifies stamp naming ANOTHER bug carries that key (sibling detection)', function() {
-        var f = stamp.roleFieldsFromDescription('Verifies: BUG-2\nbody', 'BUG-1');
+        var f = stamp.roleFieldsFromDescription('Verifies: BUG-2\nbody');
         assert.equal(f.role, 'verifies');
         assert.equal(f.verifies, 'BUG-2');
     });
 
     test('an unmarked description yields no role fields (legacy own-oracle fallback)', function() {
-        assert.deepEqual(stamp.roleFieldsFromDescription('h4. Objective\nthing', 'BUG-1'), {});
-        assert.deepEqual(stamp.roleFieldsFromDescription(null, 'BUG-1'), {});
+        assert.deepEqual(stamp.roleFieldsFromDescription('h4. Objective\nthing'), {});
+        assert.deepEqual(stamp.roleFieldsFromDescription(null), {});
     });
 
     test('annotateWithRoles stamps role fields onto every linked entry (multi-item)', function() {
@@ -202,7 +210,7 @@ suite('tcRoleStamp: roleFieldsFromDescription — the automation leg reads the s
             { key: 'TS-5', fields: { description: 'Verifies: BUG-1\nbody' } },
             { key: 'TS-6', fields: { description: 'Regression guard: totals\nbody' } },
             { key: 'TS-7', fields: { description: 'plain' } }
-        ], 'BUG-1');
+        ]);
         assert.equal(annotated.length, 3);
         assert.equal(annotated[0].role, 'verifies');
         assert.equal(annotated[0].verifies, 'BUG-1');
@@ -214,9 +222,9 @@ suite('tcRoleStamp: roleFieldsFromDescription — the automation leg reads the s
     });
 
     test('annotateWithRoles tolerates missing entries and empty lists', function() {
-        assert.deepEqual(stamp.annotateWithRoles([], 'BUG-1'), []);
-        assert.deepEqual(stamp.annotateWithRoles(null, 'BUG-1'), []);
-        var annotated = stamp.annotateWithRoles([null, { key: 'TS-5' }], 'BUG-1');
+        assert.deepEqual(stamp.annotateWithRoles([]), []);
+        assert.deepEqual(stamp.annotateWithRoles(null), []);
+        var annotated = stamp.annotateWithRoles([null, { key: 'TS-5' }]);
         assert.equal(annotated.length, 2);
         assert.equal(annotated[0], null);
         assert.deepEqual(annotated[1], { key: 'TS-5' }, 'an unmarked entry passes through untouched');

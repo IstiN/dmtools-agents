@@ -171,4 +171,25 @@ suite('agentDocsCoverage', function() {
         }
     });
 
+    test('the tc_differential_dispatcher doc documents the dispatcher knobs, not plumbing channels', function() {
+        // gh-1346 rework: the generated doc must list the customParams the
+        // dispatcher actually reads — the generic tracker/config plumbing
+        // channels (documented nowhere as dispatcher knobs) are noise.
+        var doc = readText('docs/agents/generated/tc_differential_dispatcher.md');
+        if (!doc) throw new Error('missing docs/agents/generated/tc_differential_dispatcher.md');
+        ['tcRunCommand', 'workingDir', 'maxReworkRounds', 'parkLabel'].forEach(function(p) {
+            if (doc.indexOf('`' + p + '`') === -1) {
+                throw new Error('the dispatcher doc does not document customParams.' + p);
+            }
+        });
+        ['adoTextFormat', 'branchCreateFnPath', 'branchNamingFnPath', 'prSearchFnPath', 'scmProvider',
+            'stageFallback', 'targetRepository', 'trackerProvider', 'featureBranchEnabled',
+            'configPath', 'customStatuses'].forEach(function(p) {
+            if (doc.indexOf('`' + p + '`') !== -1) {
+                throw new Error('the dispatcher doc still lists the plumbing channel customParams.' + p +
+                    ' (regenerate: node js/agentDocGenerator.js)');
+            }
+        });
+    });
+
 });
