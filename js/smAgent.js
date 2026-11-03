@@ -252,6 +252,10 @@ var tcRunRegistryModule = require('./common/tcRunRegistry.js');
 var tcMaintenanceLedgerModule = require('./common/tcMaintenanceLedger.js');
 var tcTriageModule = require('./common/tcTriage.js');
 var bugBookkeepingModule = require('./common/bugBookkeeping.js');
+// gh-1345 rework: the shared SM-job ticket inputs (resolveInputs + the
+// missing-key guard) — both localExecution jobs (dispatcher + quota probe)
+// require it, so it must be on the sandbox helper layer too.
+var jobTicketInputsModule = require('./common/jobTicketInputs.js');
 // gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
 // already recorded THIS tick. The already-parked guard in
 // recordDispatchFailure reads the query-time label snapshot — within one
@@ -1415,7 +1419,8 @@ function runLocalAction(jsPath, ticket, agentParams) {
         { id: 'tcRunRegistry.js', varName: '_trr', fallbackExpr: helperFallbackExpr(tcRunRegistryModule, 'tcRunRegistryModule') },
         { id: 'tcMaintenanceLedger.js', varName: '_tml', fallbackExpr: helperFallbackExpr(tcMaintenanceLedgerModule, 'tcMaintenanceLedgerModule') },
         { id: 'tcTriage.js', varName: '_ttg', fallbackExpr: helperFallbackExpr(tcTriageModule, 'tcTriageModule') },
-        { id: 'bugBookkeeping.js', varName: '_bbk', fallbackExpr: helperFallbackExpr(bugBookkeepingModule, 'bugBookkeepingModule') }
+        { id: 'bugBookkeeping.js', varName: '_bbk', fallbackExpr: helperFallbackExpr(bugBookkeepingModule, 'bugBookkeepingModule') },
+        { id: 'jobTicketInputs.js', varName: '_jti', fallbackExpr: helperFallbackExpr(jobTicketInputsModule, 'jobTicketInputsModule') }
     ];
     var helperBlocks = '';
     for (var hmi = 0; hmi < helperModules.length; hmi++) {
@@ -1444,6 +1449,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
         '      if (id.indexOf("tcMaintenanceLedger.js") !== -1) return _tml.exports;\n' +
         '      if (id.indexOf("tcTriage.js") !== -1) return _ttg.exports;\n' +
         '      if (id.indexOf("bugBookkeeping.js") !== -1) return _bbk.exports;\n' +
+        '      if (id.indexOf("jobTicketInputs.js") !== -1) return _jti.exports;\n' +
         '      return _cm.exports;\n' +
         '    }';
 

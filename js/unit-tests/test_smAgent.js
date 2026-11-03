@@ -18182,6 +18182,7 @@ suite('smAgent: runLocalAction TC-maintenance helper layer (gh-1345)', function(
         'var bugBookkeeping = require("./common/bugBookkeeping.js");',
         'var quotaBreaker = require("./common/quotaCircuitBreaker.js");',
         'var commentMarkup = require("./common/commentMarkup.js");',
+        'var jobTicketInputs = require("./common/jobTicketInputs.js");',
         'module.exports.action = function() {',
         '    return {',
         '        triageDifferentialOutcome: typeof tcTriage.triageDifferentialOutcome,',
@@ -18189,7 +18190,9 @@ suite('smAgent: runLocalAction TC-maintenance helper layer (gh-1345)', function(
         '        latestRegistry: typeof tcRunRegistry.latestRegistry,',
         '        loadBugBookkeeping: typeof bugBookkeeping.loadBugBookkeeping,',
         '        parkLabelOf: typeof quotaBreaker.parkLabelOf,',
-        '        forTicket: typeof commentMarkup.forTicket',
+        '        forTicket: typeof commentMarkup.forTicket,',
+        '        resolveInputs: typeof jobTicketInputs.resolveInputs,',
+        '        missingTicketKeyResult: typeof jobTicketInputs.missingTicketKeyResult',
         '    };',
         '};'
     ].join('\n');
@@ -18205,6 +18208,9 @@ suite('smAgent: runLocalAction TC-maintenance helper layer (gh-1345)', function(
         assert.equal(result.loadBugBookkeeping, 'function', 'bugBookkeeping.js exports must reach the action');
         assert.equal(result.parkLabelOf, 'function', 'quotaCircuitBreaker.js exports must reach the action (probe dep)');
         assert.equal(result.forTicket, 'function', 'commentMarkup.js exports must reach the action (probe dep)');
+        assert.equal(result.resolveInputs, 'function', 'jobTicketInputs.js exports must reach the action (dispatcher + probe dep) — ' +
+            'an unregistered id falls back to config.js and the first member call dies with a TypeError');
+        assert.equal(result.missingTicketKeyResult, 'function', 'jobTicketInputs.js missingTicketKeyResult must reach the action');
     });
 
     test('IT: live tcDifferentialDispatcher.js runs end-to-end through the sandbox (gh-1345)', function() {
