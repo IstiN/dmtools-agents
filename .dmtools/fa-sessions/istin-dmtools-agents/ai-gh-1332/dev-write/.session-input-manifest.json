@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-03T09:18:42.656Z",
+  "ticketKey": "pr-1343",
+  "headSha": "06e63285e0cc8ca7fb3fce2b29ae2d714cd78744",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:41d4caf1d3661fd6",
+      "size": 51210
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:b0209bd55310fddd",
+      "size": 4563384
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:4dce0f284b508c21",
+      "size": 1773
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:0f0ddccc60077551",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:4a4d1ecf9fd3ac7b",
+      "size": 18857
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:77c5c11d29962c6e",
+      "size": 8765
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:81bebe8df5203d16",
+      "size": 3157
+    },
+    "request.md": {
+      "hash": "fnv1a64:b4cc15d85a5644e3",
+      "size": 2813
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:767cb396b4fd9844",
+      "size": 1401
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:586cecd1c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:9748c3ebd91a9300",
+      "size": 2919
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:b4cc15d85a5644e3",
+      "size": 2813
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6zC-8f",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/findingRegistry.js:467",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: Red CI — `crap` ratchet failed on head 06e63285**\n\nThe `crap` check ([run 41605922893 / job 125815661074](https://github.com/IstiN/dmtools-agents/actions/runs/41605922893/job/125815661074)) fails with `CRAP ratchet failed: CRAP may only decrease.` — **12 new functions over the CRAP 8 threshold**, all introduced by this PR:\n\n```\nNEW > 8  js/common/findingRegistry.js::stemWord: 11.7        (cov 81.8%)\nNEW > 8  js/common/findingRegistry.js::matchFinding: 16.1\nNEW > 8  js/common/findingRegistry.js::mergeIntoItem: 9\nNEW > 8  js/common/findingRegistry.js::applyDisposition: 10.2\nNEW > 8  js/common/findingRegistry.js::applyRound: 33        (CC 33!)\nNEW > 8  js/common/findingRegistry.js::buildRegistryComment: 9\nNEW > 8  js/common/findingRegistry.js::registryFromPayload: 10.1\nNEW > 8  js/common/findingRegistry.js::resolveIdentityPolicy: 10\nNEW > 8  js/common/findingRegistry.js::buildEscalationPacket: 9\nNEW > 8  js/postPRReviewComments.js::prCommentsForRegistry: 10\nNEW > 8  js/postPRReviewComments.js::stampFindingRegistry: 9\nNEW > 8  js/postPRReviewComments.js::postFindingRegistryUpdate: 10\n0 regression(s), 12 new over threshold, 0 improvement(s), 0 removed\n##[error]Process completed with exit code 2.\n```\n\nThe unit suite itself is green (7966 passed, 0 failed) — only the complexity ratchet is red, so this is a pure refactor, not a behavior change.\n\nSuggested fix (the house pattern from `js/common/reworkConsumption.js` — \"gh-1195 CRAP split: named parse/order helpers\"):\n\n- **`applyRound` (CC 33)** — extract the three phases into named helpers: `resolvePreviousPending(reg, confirmations, round, at, outcome)`, `applyDispositions(reg, dispositions, round, at, outcome)`, `registerFindings(reg, findings, round, at, policy, outcome)`, then keep `applyRound` as the orchestrator + `rounds[]` bookkeeping.\n- **`matchFinding` (CC 16)** — extract `rankOpenItems(registry, finding, policy)` and `isAutoMerge(best, file, severity)`.\n- **`prCommentsForRegistry` / `stampFindingRegistry` / `postFindingRegistryUpdate`** — each has a small try/catch + shape-normalization ladder; extract the raw→array normalization (it is also duplicated in `preparePRForReview.js`, see the separate comment).\n- **`stemWord` (cov 81.8%)** — add the missing branch tests (the `ies`/`es`/`s`/`ing`/`ed` guard boundaries) to raise coverage and drop CRAP below 8.\n\nPlease re-run CI after the split; the CRAP ratchet accepts only decreasing totals."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zC-_y",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/findingRegistry.js:578",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `-->` in `withdrawReason`/`fixHunk` corrupts the registry marker — state silently reverts and payload text leaks onto the PR**\n\nThe marker protocol embeds the registry payload as JSON inside an HTML comment (`<!-- dmtools:finding-registry {json} -->`). Claims are safe — `normalizeClaim` strips punctuation — but `applyDisposition` stores `disposition.reason` and `disposition.hunk` **raw** (`item.withdrawReason = String(disposition.reason).trim()`), and `buildRegistryComment` serializes them verbatim into the payload. Neither HTML comments nor `extractMarkerJson`'s suffix search can tolerate a `-->` sequence:\n\n1. **On GitHub**, the comment visually terminates at the injected `-->`; the JSON tail leaks into the visible PR thread as garbage text.\n2. **On the next round**, `reviewVerdicts.extractMarkerJson` cuts the payload at the **first** ` -->`, `JSON.parse` fails, `registryFromPayload` returns null, the record is skipped — and `latestRegistry` silently falls back to the **previous** round's registry. The reviewer's withdrawal (and everything else registered in the corrupting round) is lost, so the finding stays open and must be re-answered.\n\nVerified repro against this branch (mermaid arrows are pervasive in this repo's comment style, so a reason like `\"not a defect: A --> B is handled upstream\"` is a realistic trigger):\n\n```\nround 2: withdraw F1 with reason \"not a defect: A --> B is handled upstream\"\nbuildRegistryComment(...) → \"<!-- dmtools:finding-registry {...,\\\"withdrawReason\\\":\\\"not a defect: A --> B is handled upstream\\\"...} -->\"\nlatestRegistry([that comment], allow) → null          ← round-2 registry unparseable\nextractMarkerJson → null (JSON.parse failed)          ← falls back to round 1\n```\n\nSuggested fix — sanitize at the boundary where strings enter the payload (either in `applyDisposition` or in `buildRegistryComment` before `JSON.stringify`), e.g. strip or replace marker-hostile sequences from every embedded string field (`withdrawReason`, `fixHunk`, and any future free-text):\n\n```js\nfunction markerSafe(text) {\n    return String(text || '').replace(/-->/g, '--\\u200b>').replace(/<!--/g, '\\u200b');\n}\n```\n\n(and assert the built body contains exactly one marker suffix, or reject/strip on serialization). The escalation-comment renderer (`buildEscalationPacketComment`) echoes raw reasons too — same treatment there keeps the visible census well-formed.\n\nThe unit suite has no round-trip test for marker-hostile payload content — worth adding alongside the fix (`withdrawReason` containing `-->` must still parse back, with the sanitized text preserved for display)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zC_Cb",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postPRReviewComments.js:1093",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: comment-list normalization duplicated across the two wiring sites**\n\n`prCommentsForRegistry` (postPRReviewComments.js:1093) and `prCommentListForRegistry` (preparePRForReview.js:243) implement the same \"raw comments → array\" ladder (`typeof raw === 'string' ? JSON.parse : raw`, then `Array.isArray(obj) ? obj : (obj.comments || obj.items || [])`) with only the error policy differing (catch-and-null vs let-the-caller's-catch-handle). Two independent copies of a parse ladder are exactly the kind of thing that drifts — e.g. if the payload gains another envelope shape, one site gets fixed and the other silently keeps returning `[]`.\n\nConsider hoisting one helper (e.g. `normalizePrCommentList(raw)` in `findingRegistry.js`, or a shared `js/common/` leaf both files already require) and keeping the try/catch policy at each call site. This also conveniently removes three of the twelve over-threshold CRAP functions flagged by the red `crap` gate."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zC_F8",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postPRReviewComments.js:1145",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: unused `repoInfo` parameter**\n\n`postFindingRegistryUpdate(ctx, pr, repoInfo, reviewData)` never reads `repoInfo` — the body only uses `ctx`, `pr` and `reviewData`. Either drop the parameter (and update the single call site in `postGitHubReview`) or, if the intent was to reuse the existing `isMachineAuthored({ author: pr.author }, …, repoOwnerOf(repoInfo))` owner carve-out for release-bump PRs, wire it in — as written it just suggests a dependency that isn't there."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zC_Iy",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_postPRReviewComments.js:189",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: duplicate object key — the first `'./common/findingRegistry.js'` entry is dead**\n\nThis require map declares the same key twice (lines 188–189 here, and again at lines 2135–2136 in the gh-926 suite):\n\n```js\n'./common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': … }), {}),\n'./common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({\n    './machineAuthor.js': machineAuthorReal(),\n    './reviewVerdicts.js': …\n}), {}),\n```\n\nIn JS the second key silently wins, so behavior is fine — but the first literal is dead weight (looks like a rebase artifact from the require-map fix). Deleting the first entry at both sites keeps the maps readable; no test change needed since both spellings are equivalent."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:46736226",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: Red CI — `crap` ratchet failed on head 06e63285**\n\nThe `crap` check ([run 41605922893 / job 125815661074](https://github.com/IstiN/dmtools-agents/actions/runs/41605922893/job/125815661074)) fails with `CRAP ratchet failed: CRAP may only decrease.` — **12 new functions over the CRAP 8 threshold**, all introduced by this PR:\n\n```\nNEW > 8  js/common/findingRegistry.js::stemWord: 11.7        (cov 81.8%)\nNEW > 8  js/common/findingRegistry.js::matchFinding: 16.1\nNEW > 8  js/common/findingRegistry.js::mergeIntoItem: 9\nNEW > 8  js/common/findingRegistry.js::applyDisposition: 10.2\nNEW > 8  js/common/findingRegistry.js::applyRound: 33        (CC 33!)\nNEW > 8  js/common/findingRegistry.js::buildRegistryComment: 9\nNEW > 8  js/common/findingRegistry.js::registryFromPayload: 10.1\nNEW > 8  js/common/findingRegistry.js::resolveIdentityPolicy: 10\nNEW > 8  js/common/findingRegistry.js::buildEscalationPacket: 9\nNEW > 8  js/postPRReviewComments.js::prCommentsForRegistry: 10\nNEW > 8  js/postPRReviewComments.js::stampFindingRegistry: 9\nNEW > 8  js/postPRReviewComments.js::postFindingRegistryUpdate: 10\n0 regression(s), 12 new over threshold, 0 improvement(s), 0 removed\n##[error]Process completed with exit code 2.\n```\n\nThe unit suite itself is green (7966 passed, 0 failed) — only the complexity ratchet is red, so this is a pure refactor, not a behavior change.\n\nSuggested fix (the house pattern from `js/common/reworkConsumption.js` — \"gh-1195 CRAP split: named parse/order helpers\"):\n\n- **`applyRound` (CC 33)** — extract the three phases into named helpers: `resolvePreviousPending(reg, confirmations, round, at, outcome)`, `applyDispositions(reg, dispositions, round, at, outcome)`, `registerFindings(reg, findings, round, at, policy, outcome)`, then keep `applyRound` as the orchestrator + `rounds[]` bookkeeping.\n- **`matchFinding` (CC 16)** — extract `rankOpenItems(registry, finding, policy)` and `isAutoMerge(best, file, severity)`.\n- **`prCommentsForRegistry` / `stampFindingRegistry` / `postFindingRegistryUpdate`** — each has a small try/catch + shape-normalization ladder; extract the raw→array normalization (it is also duplicated in `preparePRForReview.js`, see the separate comment).\n- **`stemWord` (cov 81.8%)** — add the missing branch tests (the `ies`/`es`/`s`/`ing`/`ed` guard boundaries) to raise coverage and drop CRAP below 8.\n\nPlease re-run CI after the split; the CRAP ratchet accepts only decreasing totals."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:d943d477",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `-->` in `withdrawReason`/`fixHunk` corrupts the registry marker — state silently reverts and payload text leaks onto the PR**\n\nThe marker protocol embeds the registry payload as JSON inside an HTML comment (`<!-- dmtools:finding-registry {json} -->`). Claims are safe — `normalizeClaim` strips punctuation — but `applyDisposition` stores `disposition.reason` and `disposition.hunk` **raw** (`item.withdrawReason = String(disposition.reason).trim()`), and `buildRegistryComment` serializes them verbatim into the payload. Neither HTML comments nor `extractMarkerJson`'s suffix search can tolerate a `-->` sequence:\n\n1. **On GitHub**, the comment visually terminates at the injected `-->`; the JSON tail leaks into the visible PR thread as garbage text.\n2. **On the next round**, `reviewVerdicts.extractMarkerJson` cuts the payload at the **first** ` -->`, `JSON.parse` fails, `registryFromPayload` returns null, the record is skipped — and `latestRegistry` silently falls back to the **previous** round's registry. The reviewer's withdrawal (and everything else registered in the corrupting round) is lost, so the finding stays open and must be re-answered.\n\nVerified repro against this branch (mermaid arrows are pervasive in this repo's comment style, so a reason like `\"not a defect: A --> B is handled upstream\"` is a realistic trigger):\n\n```\nround 2: withdraw F1 with reason \"not a defect: A --> B is handled upstream\"\nbuildRegistryComment(...) → \"<!-- dmtools:finding-registry {...,\\\"withdrawReason\\\":\\\"not a defect: A --> B is handled upstream\\\"...} -->\"\nlatestRegistry([that comment], allow) → null          ← round-2 registry unparseable\nextractMarkerJson → null (JSON.parse failed)          ← falls back to round 1\n```\n\nSuggested fix — sanitize at the boundary where strings enter the payload (either in `applyDisposition` or in `buildRegistryComment` before `JSON.stringify`), e.g. strip or replace marker-hostile sequences from every embedded string field (`withdrawReason`, `fixHunk`, and any future free-text):\n\n```js\nfunction markerSafe(text) {\n    return String(text || '').replace(/-->/g, '--\\u200b>').replace(/<!--/g, '\\u200b');\n}\n```\n\n(and assert the built body contains exactly one marker suffix, or reject/strip on serialization). The escalation-comment renderer (`buildEscalationPacketComment`) echoes raw reasons too — same treatment there keeps the visible census well-formed.\n\nThe unit suite has no round-trip test for marker-hostile payload content — worth adding alongside the fix (`withdrawReason` containing `-->` must still parse back, with the sanitized text preserved for display)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:f131da1a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: comment-list normalization duplicated across the two wiring sites**\n\n`prCommentsForRegistry` (postPRReviewComments.js:1093) and `prCommentListForRegistry` (preparePRForReview.js:243) implement the same \"raw comments → array\" ladder (`typeof raw === 'string' ? JSON.parse : raw`, then `Array.isArray(obj) ? obj : (obj.comments || obj.items || [])`) with only the error policy differing (catch-and-null vs let-the-caller's-catch-handle). Two independent copies of a parse ladder are exactly the kind of thing that drifts — e.g. if the payload gains another envelope shape, one site gets fixed and the other silently keeps returning `[]`.\n\nConsider hoisting one helper (e.g. `normalizePrCommentList(raw)` in `findingRegistry.js`, or a shared `js/common/` leaf both files already require) and keeping the try/catch policy at each call site. This also conveniently removes three of the twelve over-threshold CRAP functions flagged by the red `crap` gate."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:5185b2cf",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: unused `repoInfo` parameter**\n\n`postFindingRegistryUpdate(ctx, pr, repoInfo, reviewData)` never reads `repoInfo` — the body only uses `ctx`, `pr` and `reviewData`. Either drop the parameter (and update the single call site in `postGitHubReview`) or, if the intent was to reuse the existing `isMachineAuthored({ author: pr.author }, …, repoOwnerOf(repoInfo))` owner carve-out for release-bump PRs, wire it in — as written it just suggests a dependency that isn't there."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:97776e79",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: duplicate object key — the first `'./common/findingRegistry.js'` entry is dead**\n\nThis require map declares the same key twice (lines 188–189 here, and again at lines 2135–2136 in the gh-926 suite):\n\n```js\n'./common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': … }), {}),\n'./common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({\n    './machineAuthor.js': machineAuthorReal(),\n    './reviewVerdicts.js': …\n}), {}),\n```\n\nIn JS the second key silently wins, so behavior is fine — but the first literal is dead weight (looks like a rebase artifact from the require-map fix). Deleting the first entry at both sites keeps the maps readable; no test change needed since both spellings are equivalent."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:d8ea9775",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 06e63285e0cc8ca7fb3fce2b29ae2d714cd78744 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:e1261d33",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: Two blockers: the `crap` CI gate is red on head 06e63285 (12 new over-threshold functions in `findingRegistry.js`/`postPRReviewComments.js`), and a verified marker-payload corruption path — a `-->` in a reviewer-supplied `withdrawReason`/`fixHunk` breaks the HTML-comment marker, silently reverting dedup state and leaking JSON onto the PR. The registry design itself (propose/confirm matching, escalate-only merges, fail-closed machine-author gate) is sound, additive, and well tested (7966 passed / 0 failed in CI; the only local failure is a pre-existing env-dependent `sessionDelta` test this PR doesn't touch).\n\n**Key Issues**:\n- 🚨 **BLOCKING** — Red CI: `crap` ratchet failed, `CRAP may only decrease` (applyRound CC 33, matchFinding 16.1, +10 more; refactor per the gh-1195 split pattern)\n- 🚨 **BLOCKING** — `withdrawReason`/`fixHunk` are stored raw and serialized into the `<!-- dmtools:finding-registry … -->` marker; an embedded `-->` makes the next round's parse fail (repro included in the thread) — sanitize marker-hostile sequences at the payload boundary\n- 💡 SUGGESTION ×3 — duplicated comment-list normalization across the two wiring sites, unused `repoInfo` param, duplicate object keys in two test require maps\n\n**Next Steps**:\n1. Split the over-threshold functions into named helpers (gh-1195 house pattern) and re-run the `crap` gate\n2. Sanitize/escape `-->`/`<!--` in every free-text field embedded in the registry marker + add a round-trip test for marker-hostile content\n3. Cosmetic: dedupe the comment-list helper, drop the unused param, remove the dead duplicate require-map keys\n\n**Notes**: PR description metrics are stale — `test_findingRegistry.js` holds 57 tests (not 65) and CI ran 7966 (not 7949); the described \"identity SHA-256\" is implemented as double FNV-1a (fine for per-PR scope, just describe it accurately). Ticket ACs (fingerprinting, propose/confirm dedup, fixed/withdrawn/re-introduced lifecycle, census, fail-closed allowlist, 3-site wiring) are all implemented and covered."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    }
+  ]
+}
