@@ -216,6 +216,34 @@ function authorAllowed(item, allow) {
     return false;
 }
 
+// gh-1343 rework: the shared trusted-marker walk — allowlist gate plus a
+// per-comment extract with the payload index recorded as the order tiebreak.
+// `extract(item, i)` returns the record, or null for a foreign/unparseable
+// marker (skipped). One walk for every dmtools: marker family member.
+function collectAllowedRecords(comments, opts, extract) {
+    var list = Array.isArray(comments) ? comments : [];
+    var allow = authorAllowlist(opts);
+    var records = [];
+    for (var i = 0; i < list.length; i++) {
+        if (allow && !authorAllowed(list[i], allow)) continue;
+        var rec = extract(list[i], i);
+        if (!rec) continue;
+        rec.order = i;
+        records.push(rec);
+    }
+    return records;
+}
+
+// gh-1343 rework: the atMs-based records order (findingRegistry parity) —
+// payload order as the tiebreak; unparseable/absent timestamps sink to the
+// front (NaN comparisons are always false, so handle them explicitly).
+function markerRecordComparator(a, b) {
+    var aTime = isNaN(a.atMs) ? -1 : a.atMs;
+    var bTime = isNaN(b.atMs) ? -1 : b.atMs;
+    if (aTime !== bTime) return aTime < bTime ? -1 : 1;
+    return (a.order || 0) - (b.order || 0);
+}
+
 // gh-1196: the records order — oldest-first, payload order as the tiebreak.
 function verdictTimestampComparator(a, b) {
     var ta = Date.parse(a.at), tb = Date.parse(b.at);
@@ -228,16 +256,9 @@ function verdictTimestampComparator(a, b) {
 }
 
 function parseVerdictRecords(comments, opts) {
-    var list = Array.isArray(comments) ? comments : [];
-    var allow = authorAllowlist(opts);
-    var records = [];
-    for (var i = 0; i < list.length; i++) {
-        if (allow && !authorAllowed(list[i], allow)) continue;
-        var rec = extractVerdictRecord(list[i] && list[i].body);
-        if (!rec) continue;
-        rec.order = i;
-        records.push(rec);
-    }
+    var records = collectAllowedRecords(comments, opts, function(item) {
+        return extractVerdictRecord(item && item.body);
+    });
     records.sort(verdictTimestampComparator);
     return records;
 }
@@ -588,6 +609,12 @@ if (typeof module !== 'undefined' && module.exports) {
         MARKER_PREFIX: MARKER_PREFIX,
         MARKER_SUFFIX: MARKER_SUFFIX,
         extractMarkerJson: extractMarkerJson,
+        commentAuthorLogin: commentAuthorLogin,
+        trustedLogin: trustedLogin,
+        authorAllowlist: authorAllowlist,
+        authorAllowed: authorAllowed,
+        collectAllowedRecords: collectAllowedRecords,
+        markerRecordComparator: markerRecordComparator,
         VERDICTS: VERDICTS,
         LABEL_APPROVED: LABEL_APPROVED,
         LABEL_REWORK: LABEL_REWORK,

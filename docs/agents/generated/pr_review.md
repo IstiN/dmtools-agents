@@ -81,6 +81,8 @@ _Prepare PR for Review Action (preCliJSAction for pr_review agent)_
   - `jql`
   - `parentContextFetch`
   - `prSearchFnPath`
+  - `reviewPolicy`
+  - `reviewPolicy.identity`
   - `scmProvider`
   - `stageFallback`
   - `targetRepository`
@@ -120,6 +122,8 @@ _Post PR Review Comments Action_
   - `prSearchFnPath`
   - `projectKey`
   - `removeLabel`
+  - `reviewPolicy`
+  - `reviewPolicy.identity`
   - `scmProvider`
   - `smFallback`
   - `stageFallback`
@@ -160,6 +164,8 @@ _Post PR Review Comments Action_
 - `fields` _(used by JS action)_
 - `jql` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_
+- `reviewPolicy` _(used by JS action)_
+- `reviewPolicy.identity` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `autoStartRework` _(used by JS action)_
 - `autoStartReworkConfigFile` _(used by JS action)_

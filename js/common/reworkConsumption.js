@@ -176,13 +176,11 @@ function collectMarkerRecords(comments, prefix, allow) {
  * Timestamp order, payload order as tiebreak (reviewVerdicts parity):
  * callers ask for the NEWEST marker — payload order alone is arbitrary
  * when several markers carry the same clock tick. Unparsable timestamps
- * (NaN → -1) sink to the front.
+ * (NaN → -1) sink to the front. The body is reviewVerdicts's shared
+ * markerRecordComparator — one records order for the marker family.
  */
 function compareMarkerRecords(a, b) {
-    var aTime = isNaN(a.atMs) ? -1 : a.atMs;
-    var bTime = isNaN(b.atMs) ? -1 : b.atMs;
-    if (aTime !== bTime) return aTime < bTime ? -1 : 1;
-    return (a.order || 0) - (b.order || 0);
+    return reviewVerdicts.markerRecordComparator(a, b);
 }
 
 function parseMarkers(comments, prefix, opts) {

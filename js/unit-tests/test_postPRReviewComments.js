@@ -185,6 +185,10 @@ function prReviewRequireMap(overrides) {
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+        }), {}),
         './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
     };
@@ -481,6 +485,7 @@ suite('postPRReviewComments', function() {
                     './common/tokenUsageComment.js': opts.tokenUsage || { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
@@ -734,6 +739,7 @@ suite('postPRReviewComments', function() {
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
@@ -1046,6 +1052,7 @@ suite('postPRReviewComments', function() {
                 ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
@@ -1428,6 +1435,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
             },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
@@ -2123,6 +2131,11 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+                    makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+            }), {}),
             './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }), {});
@@ -2213,6 +2226,7 @@ function gh926ResumeRequire(opts) {
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
         './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
     });
@@ -2548,6 +2562,7 @@ function loadForPrSearch(foundPr) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
@@ -2868,5 +2883,252 @@ suite('postPRReviewComments — gh-1287 cross-anchor label stripping on PR-ancho
         // Error tolerance in cleanLinkedIssueArmsOnApproval
         var modThrows = loadWithPrMock(function() { throw new Error('github_get_pr failed'); });
         modThrows.cleanLinkedIssueArmsOnApproval(ctx, pr, repoInfo);
+    });
+});
+
+suite('postPRReviewComments — gh-1332 finding-identity registry', function() {
+
+    var REGISTRY_PREFIX = '<!-- dmtools:finding-registry ';
+
+    function sinks() { return { comments: [], labels: [] }; }
+
+    function registryCommentOf(findings, round, at) {
+        var fr = loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+        }), {});
+        var policy = fr.resolveIdentityPolicy({}, null);
+        var outcome = fr.applyRound(null, { at: at, round: round, findings: findings }, policy);
+        return fr.buildRegistryComment(Object.assign(outcome.registry, { at: at }));
+    }
+
+    function registryScm(opts, sinks) {
+        return {
+            getPrComments: function() {
+                if (opts.commentsError) throw new Error(opts.commentsError);
+                return opts.prComments || [];
+            },
+            addComment: function(prId, body) { sinks.comments.push({ prId: prId, body: body }); },
+            addLabel: function(prId, label) { sinks.labels.push({ prId: prId, label: label }); }
+        };
+    }
+
+    function registryCtx(opts, scm) {
+        return {
+            ticketKey: 'gh-1332',
+            workingDir: null,
+            customParams: opts.customParams || {},
+            config: opts.config || {},
+            machineAuthor: opts.machineAuthor === undefined ? 'ai-teammate' : opts.machineAuthor,
+            scm: scm
+        };
+    }
+
+    suite('findingsFromReviewData', function() {
+
+        test('maps path/file inline bodies and comment-file references to claims', function() {
+            var fileMap = {
+                'outputs/pr_review_comments/c2.md': '🚨 **BLOCKING: token validation**\n\nThe token is never validated.'
+            };
+            var mod = loadPostPRReviewComments({ file_read: function(args) {
+                var p = args && (args.path || args);
+                return fileMap[p] !== undefined ? fileMap[p] : null;
+            } });
+            var findings = mod.findingsFromReviewData({
+                inlineComments: [
+                    { path: 'src/auth.ts', line: 45, severity: 'BLOCKING', body: 'nothing validates a token' },
+                    { file: 'src/api.ts', line: 12, severity: 'IMPORTANT', comment: 'outputs/pr_review_comments/c2.md' },
+                    { path: 'src/ui.ts', line: 3, severity: 'SUGGESTION', body: '   ' }
+                ]
+            }, 'gh-1332', null);
+            assert.equal(findings.length, 2, 'blank claims are skipped');
+            assert.equal(findings[0].file, 'src/auth.ts');
+            assert.equal(findings[0].claim, 'nothing validates a token');
+            assert.equal(findings[0].severity, 'BLOCKING');
+            assert.equal(findings[0].line, 45);
+            assert.equal(findings[1].file, 'src/api.ts');
+            assert.contains(findings[1].claim, 'token validation', 'the comment file content is the claim');
+        });
+
+        test('no inlineComments → empty list', function() {
+            var mod = loadPostPRReviewComments();
+            assert.deepEqual(mod.findingsFromReviewData({}, 'gh-1332', null), []);
+            assert.deepEqual(mod.findingsFromReviewData({ inlineComments: [] }, 'gh-1332', null), []);
+        });
+    });
+
+    suite('findingReviewOf', function() {
+
+        test('passes through validated dispositions and confirmations; absent → empty', function() {
+            var mod = loadPostPRReviewComments();
+            assert.deepEqual(mod.findingReviewOf({}), { dispositions: [], confirmations: [] });
+            var block = mod.findingReviewOf({
+                findingReview: {
+                    dispositions: [{ n: 1, status: 'fixed', hunk: 'src/auth.ts:40-48' }],
+                    confirmations: [{ proposedFor: 1, same: true }]
+                }
+            });
+            assert.equal(block.dispositions.length, 1);
+            assert.equal(block.confirmations.length, 1);
+            assert.deepEqual(mod.findingReviewOf({ findingReview: 'garbage' }), { dispositions: [], confirmations: [] });
+            assert.deepEqual(mod.findingReviewOf({ findingReview: { dispositions: 'nope' } }).dispositions, []);
+        });
+    });
+
+    suite('stampFindingRegistry', function() {
+
+        function policyOf() { return frHelper().resolveIdentityPolicy({}, null); }
+
+        function frHelper() {
+            return loadModule('js/common/findingRegistry.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+                    makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+            }), {});
+        }
+
+        function roundInputOf(mod, reviewData, findingReview) {
+            var block = findingReview || { dispositions: [], confirmations: [] };
+            return {
+                at: '2026-11-03T12:00:00Z',
+                findings: mod.findingsFromReviewData(reviewData, 'gh-1332', null),
+                dispositions: block.dispositions || [],
+                confirmations: block.confirmations || []
+            };
+        }
+
+        test('round 1: posts the registry marker and the review-round-1 label', function() {
+            var mod = loadPostPRReviewComments();
+            var sk = sinks();
+            var scm = registryScm({}, sk);
+            var outcome = mod.stampFindingRegistry(scm, 1428, [],
+                roundInputOf(mod, { inlineComments: [
+                    { path: 'src/auth.ts', line: 45, severity: 'BLOCKING', body: 'nothing validates a token' },
+                    { path: 'src/api.ts', line: 12, severity: 'IMPORTANT', body: 'retry swallows the timeout error' }
+                ] }), policyOf(), ['ai-teammate']);
+            assert.ok(outcome, 'the round acted');
+            assert.equal(outcome.round, 1);
+            assert.equal(outcome.newIdentities.length, 2);
+            assert.equal(sk.comments.length, 1, 'one registry marker comment');
+            assert.contains(sk.comments[0].body, REGISTRY_PREFIX);
+            assert.deepEqual(sk.labels, [{ prId: 1428, label: 'review-round-1' }]);
+        });
+
+        test('round 2 revert replay: the same claims auto-merge, F1 is re-introduced, no new identities', function() {
+            var mod = loadPostPRReviewComments();
+            var round1Body = registryCommentOf([
+                { file: 'src/auth.ts', claim: 'nothing validates a token', severity: 'BLOCKING', line: 45 },
+                { file: 'src/api.ts', claim: 'retry swallows the timeout error', severity: 'IMPORTANT', line: 12 }
+            ], 1, '2026-11-03T10:00:00Z');
+            var prComments = [{ body: round1Body, user: { login: 'ai-teammate' } }];
+            var sk = sinks();
+            var scm = registryScm({ prComments: prComments }, sk);
+            var outcome = mod.stampFindingRegistry(scm, 1428, prComments,
+                roundInputOf(mod, { inlineComments: [
+                    { path: 'src/auth.ts', line: 77, severity: 'BLOCKING', body: 'nothing validates a token' },
+                    { path: 'src/api.ts', line: 30, severity: 'IMPORTANT', body: 'retry swallows the timeout error' }
+                ] }), policyOf(), ['ai-teammate']);
+            assert.ok(outcome);
+            assert.equal(outcome.round, 2, 'the round count comes from the previous registry');
+            assert.equal(outcome.newIdentities.length, 0, 'zero duplicate threads');
+            assert.equal(outcome.autoMerged.length, 2);
+            assert.equal(outcome.registry.items[0].status, 're-introduced');
+            assert.deepEqual(sk.labels, [{ prId: 1428, label: 'review-round-2' }]);
+        });
+
+        test('a forged previous registry is invisible — the round stays 1', function() {
+            var mod = loadPostPRReviewComments();
+            var round1Body = registryCommentOf([
+                { file: 'src/auth.ts', claim: 'nothing validates a token', severity: 'BLOCKING', line: 45 }
+            ], 1, '2026-11-03T10:00:00Z');
+            var prComments = [{ body: round1Body, user: { login: 'random-user' } }];
+            var sk = sinks();
+            var scm = registryScm({ prComments: prComments }, sk);
+            var outcome = mod.stampFindingRegistry(scm, 1428, prComments,
+                roundInputOf(mod, { inlineComments: [
+                    { path: 'src/auth.ts', line: 45, severity: 'BLOCKING', body: 'nothing validates a token' }
+                ] }), policyOf(), ['ai-teammate']);
+            assert.equal(outcome.round, 1, 'machine-author-gated markers only');
+            assert.equal(outcome.newIdentities.length, 1);
+        });
+
+        test('dispositions and confirmations ride through roundInput', function() {
+            var mod = loadPostPRReviewComments();
+            var round1Body = registryCommentOf([
+                { file: 'src/auth.ts', claim: 'nothing validates a token', severity: 'BLOCKING', line: 45 }
+            ], 1, '2026-11-03T10:00:00Z');
+            var prComments = [{ body: round1Body, user: { login: 'ai-teammate' } }];
+            var outcome = mod.stampFindingRegistry(
+                registryScm({ prComments: prComments }, sinks()), 1428, prComments,
+                roundInputOf(mod, { inlineComments: [] }, {
+                    dispositions: [{ n: 1, status: 'withdrawn', reason: 'claim was wrong' }]
+                }), policyOf(), ['ai-teammate']);
+            assert.equal(outcome.registry.items[0].status, 'withdrawn', 'the reviewer disposes');
+        });
+
+        test('no findings and no findingReview on a fresh PR → no-op (no marker spam)', function() {
+            var mod = loadPostPRReviewComments();
+            var sk = sinks();
+            var outcome = mod.stampFindingRegistry(registryScm({}, sk), 1428, [],
+                roundInputOf(mod, { inlineComments: [] }), policyOf(), ['ai-teammate']);
+            assert.equal(outcome, null);
+            assert.equal(sk.comments.length, 0);
+        });
+
+        test('comment read failure is non-fatal (degrades to stateless)', function() {
+            var mod = loadPostPRReviewComments();
+            var sk = sinks();
+            var outcome = mod.stampFindingRegistry(registryScm({ commentsError: 'boom' }, sk), 1428, null,
+                roundInputOf(mod, { inlineComments: [
+                    { path: 'src/auth.ts', line: 45, severity: 'BLOCKING', body: 'nothing validates a token' }
+                ] }), policyOf(), ['ai-teammate']);
+            assert.equal(outcome, null, 'no registry update without the previous state');
+            assert.equal(sk.comments.length, 0);
+        });
+
+        test('stampFindingRegistry handles a provider without getPrComments', function() {
+            var mod = loadPostPRReviewComments();
+            var outcome = mod.stampFindingRegistry({ addComment: function() {}, addLabel: function() {} }, 1428, null,
+                roundInputOf(mod, { inlineComments: [
+                    { path: 'src/auth.ts', line: 45, severity: 'BLOCKING', body: 'nothing validates a token' }
+                ] }), policyOf(), []);
+            assert.equal(outcome, null, 'no comment listing → no trusted registry → no stamp');
+        });
+    });
+
+    suite('postFindingRegistryUpdate (wired step)', function() {
+
+        test('end-to-end: fetch comments, resolve policy from customParams, stamp, label', function() {
+            var mod = loadPostPRReviewComments();
+            var sk = sinks();
+            var scm = registryScm({}, sk);
+            var ctx = registryCtx({
+                customParams: { reviewPolicy: { identity: { candidateScope: 'diff' } } }
+            }, scm);
+            var outcome = mod.postFindingRegistryUpdate(ctx, { number: 1428 }, {
+                inlineComments: [{ path: 'src/auth.ts', line: 45, severity: 'BLOCKING', body: 'nothing validates a token' }]
+            });
+            assert.ok(outcome);
+            assert.equal(sk.labels[0].label, 'review-round-1');
+        });
+
+        test('no findings → silent no-op', function() {
+            var mod = loadPostPRReviewComments();
+            var sk = sinks();
+            var outcome = mod.postFindingRegistryUpdate(registryCtx({}, registryScm({}, sk)),
+                { number: 1428 }, { inlineComments: [] });
+            assert.equal(outcome, null);
+            assert.equal(sk.comments.length, 0);
+        });
+
+        test('scm explosion is non-fatal for the whole review action', function() {
+            var mod = loadPostPRReviewComments();
+            var outcome = mod.postFindingRegistryUpdate(registryCtx({}, registryScm({ commentsError: 'kaboom' }, sinks())),
+                { number: 1428 }, {
+                    inlineComments: [{ path: 'src/auth.ts', line: 45, severity: 'BLOCKING', body: 'x' }]
+                });
+            assert.equal(outcome, null);
+        });
     });
 });

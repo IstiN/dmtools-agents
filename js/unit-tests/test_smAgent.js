@@ -524,6 +524,12 @@ function makeSmAgent(opts) {
                 './machineAuthor.js': machineAuthorReal(),
                 './reviewVerdicts.js': reviewVerdictsReal()
             })),
+            // gh-1332: the finding-identity registry — the loop-guard
+            // escalation packet carries its convergence census.
+            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            })),
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
             // gh-1249: the shared workflow-run probe family — pure leaf, loaded real.
@@ -1295,6 +1301,45 @@ suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
         assert.contains(body, '2/2', 'the escalation names the spent no-op budget');
         assert.contains(body, 'rework-loop-escalated', 'the escalation names the gating label');
         assert.equal(sm.capturedTriggers.length, 0, 'the guard never dispatches a rework leg');
+    });
+
+    // gh-1332: the escalation packet carries the finding-identity census —
+    // the per-round new-identity series and the BLOCKING withdrawal reasons.
+    test('the escalation packet appends the finding-identity census when the PR carries a registry', function () {
+        var fr = loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': reviewVerdictsReal()
+        }), {});
+        var policy = fr.resolveIdentityPolicy({}, null);
+        var round1 = fr.applyRound(fr.emptyRegistry(), { at: '2026-11-03T10:00:00Z', findings: [
+            { file: 'src/a.ts', claim: 'nothing validates a token', severity: 'BLOCKING', line: 1 },
+            { file: 'src/b.ts', claim: 'retry swallows the timeout error', severity: 'IMPORTANT', line: 2 }
+        ] }, policy).registry;
+        var round2 = fr.applyRound(round1, { at: '2026-11-03T11:00:00Z', findings: [
+            { file: 'src/c.ts', claim: 'error banner never clears', severity: 'SUGGESTION', line: 3 }
+        ], dispositions: [
+            { n: 1, status: 'withdrawn', reason: 'owner says this is by design' }
+        ] }, policy).registry;
+        var registryBody = fr.buildRegistryComment(Object.assign(round2, { at: '2026-11-03T11:00:00Z' }));
+
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [devItem(1364, HEAD)],
+                pr: { number: 1364, body: 'Closes #1363', head: { sha: HEAD } },
+                prComments: [lapComment(HEAD, 1), lapComment(HEAD, 2),
+                    { user: { login: 'ai-teammate' }, body: registryBody }]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents', noopLapMax: 2,
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrComments.length, 1, 'one escalation comment');
+        var body = sm.capturedPrComments[0].body;
+        assert.contains(body, '\uD83D\uDED1 rework no-op loop guard', 'the 🛑 guard comment still leads');
+        assert.contains(body, 'Finding-identity census', 'the packet rides on the escalation');
+        assert.contains(body, 'round 1: 2, round 2: 1', 'the per-round new-identity series is visible');
+        assert.contains(body, 'owner says this is by design',
+            'the BLOCKING withdrawal reason is visible (invariant 3)');
     });
 
     test('the escalation posts ONCE per head — repeated ticks stay quiet (no comment spam)', function () {

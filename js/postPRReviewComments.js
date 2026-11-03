@@ -25,6 +25,11 @@ const tokenUsageComment = require('./common/tokenUsageComment.js');
 var gh = require('./common/githubHelpers.js');
 const commentMarkup = require('./common/commentMarkup.js');
 var reviewVerdicts = require('./common/reviewVerdicts.js');
+// gh-1332 (hoisted, never lazy — the gh-823 pack-require rule): the
+// finding-identity registry — the review-round dedup. The round's structured
+// inlineComments already carry path/severity/claim, so registering the round
+// mechanically costs no extra agent work.
+var findingRegistry = require('./common/findingRegistry.js');
 var reviewSpecClaims = require('./common/reviewSpecClaims.js');
 var reviewHelpers = require('./postStoryTestAutomationReviewHelpers.js');
 // The runtime's input folder name for a ticket (input/gh-N for a GitHub key): the Java runtime
@@ -1032,6 +1037,154 @@ function stampVerdictRecord(scm, prNumber, headSha, isApproved, recommendation, 
                 ', head ' + String(headSha).substring(0, 7) + ')');
 }
 
+// ═══════════════ gh-1332 finding-identity registry ═══════════════
+//
+// The review-round dedup: this round's structured inlineComments already
+// carry path/severity/claim, so registering the round mechanically (marker
+// comment on the PR, same dmtools: marker family as the verdict record)
+// costs no extra agent work. The next round's context prep injects the
+// registry ("previously raised findings F1–Fn…"), so re-raised defects
+// re-introduce their identity instead of minting duplicate threads.
+
+/**
+ * The round's findings in registry input shape: file/claim/severity/line
+ * from inlineComments, with the claim resolved through the same path the
+ * poster uses (inline body or the referenced comment file). Findings without
+ * a usable claim are skipped — an identity needs an assertable defect.
+ */
+function findingsFromReviewData(reviewData, ticketKey, workingDir) {
+    var inline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
+    var findings = [];
+    inline.forEach(function(inlineComment) {
+        var file = inlineTargetOf(inlineComment);
+        var claim = resolveInlineComment(inlineComment, ticketKey, workingDir);
+        if (!file || !claim || !String(claim).trim()) return;
+        findings.push({
+            file: file,
+            claim: String(claim),
+            severity: inlineComment.severity,
+            line: inlineComment.line
+        });
+    });
+    return findings;
+}
+
+/**
+ * The reviewer's structured answer to the previous round's registry:
+ * { dispositions: [{n, status: fixed|withdrawn|re-introduced, hunk?, reason?}],
+ *   confirmations: [{proposedFor, same}] }. Absent or malformed → empty
+ *   arrays (the registry treats silence as new, never as merge).
+ */
+function findingReviewOf(reviewData) {
+    var block = reviewData && reviewData.findingReview;
+    var out = { dispositions: [], confirmations: [] };
+    if (!block || typeof block !== 'object') return out;
+    if (Array.isArray(block.dispositions)) out.dispositions = block.dispositions;
+    if (Array.isArray(block.confirmations)) out.confirmations = block.confirmations;
+    return out;
+}
+
+/**
+ * PR comments for the registry read. Returns null when the provider cannot
+ * list comments (no getPrComments, read failure) — without a trusted
+ * previous state the stamp is SKIPPED (fail-closed: a provider that cannot
+ * list must not re-post round 1 every round). The shape ladder is the shared
+ * normalizePrCommentList — the catch-and-null policy lives here.
+ */
+function prCommentsForRegistry(scm, prNumber) {
+    if (!scm || typeof scm.getPrComments !== 'function') return null;
+    try {
+        return findingRegistry.normalizePrCommentList(scm.getPrComments(prNumber));
+    } catch (e) {
+        console.warn('finding-identity registry: comment read failed (non-fatal):', e.message || e);
+        return null;
+    }
+}
+
+function addFindingRoundLabel(scm, prNumber, label) {
+    try {
+        scm.addLabel(prNumber, label);
+        console.log('✅ Added review-round label:', label);
+    } catch (e) {
+        console.warn('finding-identity registry: label add failed (non-fatal):', e.message || e);
+    }
+}
+
+// The previous registry off the PR comments (an empty machine-logins list
+// trusts nothing — fail-closed).
+function previousRegistryOf(prComments, machineLogins) {
+    return findingRegistry.latestRegistry(prComments || [], { authorLogins: machineLogins || [] });
+}
+
+function logRegistryRoundOutcome(outcome) {
+    console.log('✅ Finding-identity registry advanced to round ' + outcome.round +
+        ' (new: ' + outcome.newIdentities.length + ', auto-merged: ' + outcome.autoMerged.length +
+        ', candidates: ' + outcome.candidates.length + ')');
+}
+
+/**
+ * Applies one registry round (previous state from prComments, this round's
+ * findings + the reviewer's dispositions/confirmations), posts the advanced
+ * registry marker and the review-round-N label. Returns the outcome, or null
+ * when the round was a no-op or the previous state was unavailable.
+ */
+function stampFindingRegistry(scm, prNumber, prComments, roundInput, policy, machineLogins) {
+    if (prComments === null) {
+        console.warn('finding-identity registry: PR comments unavailable — registry update skipped (non-fatal)');
+        return null;
+    }
+    var previous = previousRegistryOf(prComments, machineLogins);
+    var outcome = findingRegistry.applyRound(
+        previous ? previous.registry : null, roundInput, policy || findingRegistry.resolveIdentityPolicy({}, null));
+    if (!outcome) return null;
+    var body = findingRegistry.buildRegistryComment(
+        Object.assign(outcome.registry, { at: roundInput.at || new Date().toISOString() }));
+    if (!body) return null;
+    scm.addComment(prNumber, body);
+    addFindingRoundLabel(scm, prNumber, findingRegistry.reviewRoundLabel(outcome.round));
+    logRegistryRoundOutcome(outcome);
+    return outcome;
+}
+
+/**
+ * This round's registry input (findings + the reviewer's dispositions and
+ * confirmations), or null when the review registered nothing at all.
+ */
+function findingRoundInputOf(ctx, reviewData) {
+    var findings = findingsFromReviewData(reviewData, ctx.ticketKey, ctx.workingDir);
+    var reviewBlock = findingReviewOf(reviewData);
+    if (!findings.length && !reviewBlock.dispositions.length && !reviewBlock.confirmations.length) {
+        return null;
+    }
+    return {
+        at: new Date().toISOString(),
+        findings: findings,
+        dispositions: reviewBlock.dispositions,
+        confirmations: reviewBlock.confirmations
+    };
+}
+
+/**
+ * The wired post-review step: collect this round's findings, read the
+ * previous registry off the PR, advance it. Non-fatal end to end — a lost
+ * registry round degrades to the old stateless behavior.
+ */
+function postFindingRegistryUpdate(ctx, pr, reviewData) {
+    try {
+        if (!pr || !pr.number) return null;
+        var roundInput = findingRoundInputOf(ctx, reviewData);
+        if (!roundInput) return null;
+        var comments = prCommentsForRegistry(ctx.scm, pr.number);
+        if (comments === null) return null;
+        return stampFindingRegistry(ctx.scm, pr.number, comments, roundInput,
+            findingRegistry.resolveIdentityPolicy(ctx.customParams, ctx.config),
+            machineAuthorModule.machineAuthorLogins(ctx.machineAuthor));
+    } catch (e) {
+        console.warn('finding-identity registry update failed (non-fatal):', e.message || e);
+        return null;
+    }
+}
+
 /**
  * Post review results to the ticket (Jira/ADO/GitHub depending on the probed provider)
  * @param {Object} tracker - trackers.js provider instance
@@ -1594,6 +1747,10 @@ function postGitHubReview(ctx, pr, repoInfo, reviewData, isApproved, recommendat
     // (head sha + effective verdict + census) the tick reconciles
     // per head — see js/common/reviewVerdicts.js.
     postVerdictRecord(ctx.scm, repoInfo, pr.number, isApproved, recommendation, issueCounts, scmProviderOf(ctx.config));
+
+    // gh-1332 finding-identity registry: the round's findings are registered
+    // mechanically against the previous rounds (dedup across review legs).
+    postFindingRegistryUpdate(ctx, pr, reviewData);
 
     // Step 5: Two-state outcome
     applyPRApprovalOutcome(ctx, pr, isApproved, recommendation);
@@ -2171,6 +2328,11 @@ if (typeof module !== 'undefined' && module.exports) {
         postInlineComment,
         postGeneralComment,
         postVerdictRecord,
+        findingsFromReviewData,
+        findingReviewOf,
+        prCommentsForRegistry,
+        stampFindingRegistry,
+        postFindingRegistryUpdate,
         resolveApprovedThreads,
         parseDiffLineInfo,
         isFileDeletedInDiff,

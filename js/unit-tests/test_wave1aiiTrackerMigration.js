@@ -46,6 +46,11 @@ function w2LoadPR(rec) {
         './common/commentMarkup.js': loadModule('js/common/commentMarkup.js', makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') })),
         './fetchParentContextToInput.js': {},
         './common/trackers.js': w2Trackers(rec.mocks),
+        './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+        }), {}),
         './common/forkCheckout.js': loadModule('js/common/forkCheckout.js',
             makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js') }))
     }), Object.assign({ config: {} }, rec.mocks));

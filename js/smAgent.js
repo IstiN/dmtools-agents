@@ -186,6 +186,11 @@ var reworkConsumptionModule = require('./common/reworkConsumption.js');
 // marker math. The threads-armed arm_rework path had NO bound (live dart
 // #424: 7 no-op legs / 2h starved the whole queue).
 var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
+// gh-1332 (hoisted, never lazy — the gh-823 pack-require rule): the
+// finding-identity registry — the review-round dedup. The loop-guard
+// escalation packet carries its census: the per-round new-identity series
+// (the convergence signal) and BLOCKING withdrawal reasons.
+var findingRegistryModule = require('./common/findingRegistry.js');
 // gh-1114 (hoisted, never lazy — the gh-823 pack-require rule): the SM tick
 // layering — the sm_github.json rule-id → layer map (L0 hygiene → L5 close),
 // the L2 verdict-action set the movedThisTick guard defers, and the
@@ -2125,8 +2130,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             try {
                                 githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(
                                     ticket.prNumber,
-                                    reworkLoopGuardModule.buildEscalationComment(
-                                        noopHead, noopDecision.laps, noopDecision.maxLaps));
+                                    findingEscalationComment(
+                                        reworkLoopGuardModule.buildEscalationComment(
+                                            noopHead, noopDecision.laps, noopDecision.maxLaps),
+                                        noopComments, noopAllow));
                             } catch (eComment) {
                                 console.warn('  ⚠️ ' + key + ' loop-guard escalation comment failed: ' + (eComment.message || eComment));
                             }
@@ -6424,6 +6431,19 @@ function prCommentList(repoInfo, prNumber) {
         console.warn('  ⚠️ gh-840: comment read failed (fail-closed): ' + (e.message || e));
         return [];
     }
+}
+
+// gh-1332: the escalation packet's finding-identity census — the per-round
+// NEW-identity series (an owner distinguishes reviewer instability, "2 new ⚠️
+// per round on the same diff", from genuine churn in seconds) and every
+// BLOCKING withdrawal with its reason (invariant 3: visible, never silent).
+// Returns the escalation comment unchanged when the PR carries no trusted
+// registry — the packet is additive, the 🛑 guard comment stays leading.
+function findingEscalationComment(escalationBody, prComments, allow) {
+    var record = findingRegistryModule.latestRegistry(prComments || [], allow);
+    var packet = record ? findingRegistryModule.buildEscalationPacketComment(record.registry) : null;
+    if (!packet) return escalationBody;
+    return escalationBody + '\n' + packet;
 }
 
 // gh-840 audit log — called from processRule's two consumeLabels branches
