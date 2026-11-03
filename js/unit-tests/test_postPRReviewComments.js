@@ -185,7 +185,6 @@ function prReviewRequireMap(overrides) {
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
-        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
             './machineAuthor.js': machineAuthorReal(),
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
@@ -2132,7 +2131,6 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
-            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
                 './machineAuthor.js': machineAuthorReal(),
                 './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
@@ -3108,7 +3106,7 @@ suite('postPRReviewComments — gh-1332 finding-identity registry', function() {
             var ctx = registryCtx({
                 customParams: { reviewPolicy: { identity: { candidateScope: 'diff' } } }
             }, scm);
-            var outcome = mod.postFindingRegistryUpdate(ctx, { number: 1428 }, { owner: 'o', repo: 'r' }, {
+            var outcome = mod.postFindingRegistryUpdate(ctx, { number: 1428 }, {
                 inlineComments: [{ path: 'src/auth.ts', line: 45, severity: 'BLOCKING', body: 'nothing validates a token' }]
             });
             assert.ok(outcome);
@@ -3119,7 +3117,7 @@ suite('postPRReviewComments — gh-1332 finding-identity registry', function() {
             var mod = loadPostPRReviewComments();
             var sk = sinks();
             var outcome = mod.postFindingRegistryUpdate(registryCtx({}, registryScm({}, sk)),
-                { number: 1428 }, { owner: 'o', repo: 'r' }, { inlineComments: [] });
+                { number: 1428 }, { inlineComments: [] });
             assert.equal(outcome, null);
             assert.equal(sk.comments.length, 0);
         });
@@ -3127,7 +3125,7 @@ suite('postPRReviewComments — gh-1332 finding-identity registry', function() {
         test('scm explosion is non-fatal for the whole review action', function() {
             var mod = loadPostPRReviewComments();
             var outcome = mod.postFindingRegistryUpdate(registryCtx({}, registryScm({ commentsError: 'kaboom' }, sinks())),
-                { number: 1428 }, { owner: 'o', repo: 'r' }, {
+                { number: 1428 }, {
                     inlineComments: [{ path: 'src/auth.ts', line: 45, severity: 'BLOCKING', body: 'x' }]
                 });
             assert.equal(outcome, null);

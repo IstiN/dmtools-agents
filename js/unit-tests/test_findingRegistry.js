@@ -378,6 +378,23 @@ suite('AC3 — paraphrase replay: candidate proposed, reviewer confirms, merged'
         assert.equal(out3.registry.items.length, 2);
     });
 
+    test('a confirmation naming a MISSING proposedFor promotes (never merges, never crashes)', function() {
+        var r = loadRegistry();
+        var reg1 = r.applyRound(r.emptyRegistry(), {
+            at: '2026-11-03T10:00:00Z',
+            findings: [finding('src/auth.ts', 'nothing validates a token', 'BLOCKING', 45)]
+        }, r.resolveIdentityPolicy({}, null)).registry;
+        var reg2 = r.applyRound(reg1, { at: '2026-11-03T11:00:00Z',
+            findings: [finding('src/auth.ts', 'the token is never validated', 'BLOCKING', 51)] },
+            r.resolveIdentityPolicy({}, null)).registry;
+        var out3 = r.applyRound(reg2, { at: '2026-11-03T12:00:00Z', findings: [],
+            confirmations: [{ proposedFor: 99, same: true }] },
+            r.resolveIdentityPolicy({}, null));
+        assert.equal(out3.promoted.length, 1, 'a resolved/missing merge target cannot absorb the finding');
+        assert.equal(out3.confirmedMerges.length, 0);
+        assert.equal(out3.registry.items.length, 2);
+    });
+
     test('confirmation keys on the proposed item n (several candidates stay distinct)', function() {
         var r = loadRegistry();
         var reg1 = r.applyRound(r.emptyRegistry(), {

@@ -1088,14 +1088,13 @@ function findingReviewOf(reviewData) {
  * PR comments for the registry read. Returns null when the provider cannot
  * list comments (no getPrComments, read failure) — without a trusted
  * previous state the stamp is SKIPPED (fail-closed: a provider that cannot
- * list must not re-post round 1 every round).
+ * list must not re-post round 1 every round). The shape ladder is the shared
+ * normalizePrCommentList — the catch-and-null policy lives here.
  */
 function prCommentsForRegistry(scm, prNumber) {
     if (!scm || typeof scm.getPrComments !== 'function') return null;
     try {
-        var raw = scm.getPrComments(prNumber);
-        var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
-        return Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        return findingRegistry.normalizePrCommentList(scm.getPrComments(prNumber));
     } catch (e) {
         console.warn('finding-identity registry: comment read failed (non-fatal):', e.message || e);
         return null;
@@ -1111,6 +1110,18 @@ function addFindingRoundLabel(scm, prNumber, label) {
     }
 }
 
+// The previous registry off the PR comments (an empty machine-logins list
+// trusts nothing — fail-closed).
+function previousRegistryOf(prComments, machineLogins) {
+    return findingRegistry.latestRegistry(prComments || [], { authorLogins: machineLogins || [] });
+}
+
+function logRegistryRoundOutcome(outcome) {
+    console.log('✅ Finding-identity registry advanced to round ' + outcome.round +
+        ' (new: ' + outcome.newIdentities.length + ', auto-merged: ' + outcome.autoMerged.length +
+        ', candidates: ' + outcome.candidates.length + ')');
+}
+
 /**
  * Applies one registry round (previous state from prComments, this round's
  * findings + the reviewer's dispositions/confirmations), posts the advanced
@@ -1122,7 +1133,7 @@ function stampFindingRegistry(scm, prNumber, prComments, roundInput, policy, mac
         console.warn('finding-identity registry: PR comments unavailable — registry update skipped (non-fatal)');
         return null;
     }
-    var previous = findingRegistry.latestRegistry(prComments || [], { authorLogins: machineLogins || [] });
+    var previous = previousRegistryOf(prComments, machineLogins);
     var outcome = findingRegistry.applyRound(
         previous ? previous.registry : null, roundInput, policy || findingRegistry.resolveIdentityPolicy({}, null));
     if (!outcome) return null;
@@ -1131,10 +1142,26 @@ function stampFindingRegistry(scm, prNumber, prComments, roundInput, policy, mac
     if (!body) return null;
     scm.addComment(prNumber, body);
     addFindingRoundLabel(scm, prNumber, findingRegistry.reviewRoundLabel(outcome.round));
-    console.log('✅ Finding-identity registry advanced to round ' + outcome.round +
-        ' (new: ' + outcome.newIdentities.length + ', auto-merged: ' + outcome.autoMerged.length +
-        ', candidates: ' + outcome.candidates.length + ')');
+    logRegistryRoundOutcome(outcome);
     return outcome;
+}
+
+/**
+ * This round's registry input (findings + the reviewer's dispositions and
+ * confirmations), or null when the review registered nothing at all.
+ */
+function findingRoundInputOf(ctx, reviewData) {
+    var findings = findingsFromReviewData(reviewData, ctx.ticketKey, ctx.workingDir);
+    var reviewBlock = findingReviewOf(reviewData);
+    if (!findings.length && !reviewBlock.dispositions.length && !reviewBlock.confirmations.length) {
+        return null;
+    }
+    return {
+        at: new Date().toISOString(),
+        findings: findings,
+        dispositions: reviewBlock.dispositions,
+        confirmations: reviewBlock.confirmations
+    };
 }
 
 /**
@@ -1142,23 +1169,16 @@ function stampFindingRegistry(scm, prNumber, prComments, roundInput, policy, mac
  * previous registry off the PR, advance it. Non-fatal end to end — a lost
  * registry round degrades to the old stateless behavior.
  */
-function postFindingRegistryUpdate(ctx, pr, repoInfo, reviewData) {
+function postFindingRegistryUpdate(ctx, pr, reviewData) {
     try {
         if (!pr || !pr.number) return null;
-        var findings = findingsFromReviewData(reviewData, ctx.ticketKey, ctx.workingDir);
-        var reviewBlock = findingReviewOf(reviewData);
-        if (!findings.length && !reviewBlock.dispositions.length && !reviewBlock.confirmations.length) {
-            return null;
-        }
+        var roundInput = findingRoundInputOf(ctx, reviewData);
+        if (!roundInput) return null;
         var comments = prCommentsForRegistry(ctx.scm, pr.number);
         if (comments === null) return null;
-        return stampFindingRegistry(ctx.scm, pr.number, comments, {
-            at: new Date().toISOString(),
-            findings: findings,
-            dispositions: reviewBlock.dispositions,
-            confirmations: reviewBlock.confirmations
-        }, findingRegistry.resolveIdentityPolicy(ctx.customParams, ctx.config),
-        machineAuthorModule.machineAuthorLogins(ctx.machineAuthor));
+        return stampFindingRegistry(ctx.scm, pr.number, comments, roundInput,
+            findingRegistry.resolveIdentityPolicy(ctx.customParams, ctx.config),
+            machineAuthorModule.machineAuthorLogins(ctx.machineAuthor));
     } catch (e) {
         console.warn('finding-identity registry update failed (non-fatal):', e.message || e);
         return null;
@@ -1730,7 +1750,7 @@ function postGitHubReview(ctx, pr, repoInfo, reviewData, isApproved, recommendat
 
     // gh-1332 finding-identity registry: the round's findings are registered
     // mechanically against the previous rounds (dedup across review legs).
-    postFindingRegistryUpdate(ctx, pr, repoInfo, reviewData);
+    postFindingRegistryUpdate(ctx, pr, reviewData);
 
     // Step 5: Two-state outcome
     applyPRApprovalOutcome(ctx, pr, isApproved, recommendation);

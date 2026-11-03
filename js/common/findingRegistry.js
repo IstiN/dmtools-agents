@@ -271,6 +271,11 @@ function emptyRegistry() {
     return { v: REGISTRY_VERSION, next: 1, items: [], pending: [], rounds: [] };
 }
 
+// The list-or-nothing shape used by payloads, round inputs and comment lists.
+function arrayOrEmpty(value) {
+    return Array.isArray(value) ? value : [];
+}
+
 function isOpenStatus(status) {
     return OPEN_STATUSES.indexOf(status) !== -1;
 }
@@ -512,16 +517,98 @@ function applyDisposition(item, disposition, round, at, outcome) {
  *   confirmations  — [{proposedFor: n, same: true|false}]
  * }
  */
-function applyRound(prev, roundInput, policy) {
-    var input = roundInput || {};
-    var at = input.at || new Date().toISOString();
-    var reg = deepCopyRegistry(prev);
-    var findings = Array.isArray(input.findings) ? input.findings : [];
-    var dispositions = Array.isArray(input.dispositions) ? input.dispositions : [];
-    var confirmations = Array.isArray(input.confirmations) ? input.confirmations : [];
-    var round = parseInt(input.round, 10) || nextRoundOf(reg);
 
-    var outcome = {
+// The reviewer's one-word verdict for a pending candidate (null = unconfirmed).
+function confirmationFor(confirmations, proposedFor) {
+    var found = null;
+    confirmations.forEach(function(c) {
+        if (parseInt(c && c.proposedFor, 10) === proposedFor) found = c;
+    });
+    return found;
+}
+
+// Confirmed candidates merge into their proposed identity (severity
+// escalates — invariant 2); declined AND unconfirmed candidates are NEW
+// (invariant 1). A candidate whose proposed identity is missing or resolved
+// meanwhile promotes too — resolved items are not merge targets.
+function resolveConfirmedCandidate(reg, candidate, confirmed, round, at, outcome) {
+    var target = (confirmed && confirmed.same === true) ? itemById(reg, candidate.proposedFor) : null;
+    if (target && isOpenStatus(target.status)) {
+        mergeIntoItem(target, candidate, round, at, 'confirmed');
+        outcome.confirmedMerges.push({ n: target.n, similarity: candidate.similarity });
+        return;
+    }
+    var promotedItem = createIdentity(reg, candidate, candidate.round || round, candidate.at || at);
+    promotedItem.history.push(historyEntry(round, 'promoted-candidate'));
+    outcome.promoted.push(promotedItem.n);
+}
+
+function resolvePreviousPending(reg, previousPending, confirmations, round, at, outcome) {
+    previousPending.forEach(function(candidate) {
+        resolveConfirmedCandidate(
+            reg, candidate, confirmationFor(confirmations, candidate.proposedFor), round, at, outcome);
+    });
+}
+
+function applyDispositions(reg, dispositions, round, at, outcome) {
+    dispositions.forEach(function(d) {
+        var item = itemById(reg, d && d.n);
+        if (!item) {
+            outcome.unknownDispositions.push({ n: d && d.n, status: (d && d.status) || null });
+            return;
+        }
+        applyDisposition(item, d, round, at, outcome);
+    });
+}
+
+function queueCandidate(reg, f, ranked, round, at) {
+    var claim = normalizeClaim(claimOf(f));
+    ranked.forEach(function(r) {
+        reg.pending.push({
+            file: fileOf(f), claim: claim, severity: severityClassOf(f.severity),
+            line: lineOf(f), similarity: r.similarity, proposedFor: r.item.n,
+            round: round, at: at
+        });
+    });
+}
+
+// Stage 1 for one finding: skip blanks, auto-merge, queue candidates, or mint
+// a new identity (the default — the cheap error direction).
+function registerFinding(reg, f, round, at, policy, outcome) {
+    if (!f || !fileOf(f) || blankClaim(claimOf(f))) {
+        outcome.skippedFindings.push({ file: f ? fileOf(f) : null });
+        return;
+    }
+    var match = matchFinding(reg, f, policy);
+    if (match.outcome === 'auto-merge') {
+        mergeIntoItem(match.target, f, round, at, 'auto-merge');
+        outcome.autoMerged.push({ n: match.target.n, similarity: match.similarity });
+        return;
+    }
+    if (match.outcome === 'candidate') {
+        queueCandidate(reg, f, match.ranked, round, at);
+        outcome.candidates.push({ proposedFor: match.ranked[0].item.n, similarity: match.ranked[0].similarity });
+        return;
+    }
+    var item = createIdentity(reg, f, round, at);
+    outcome.newIdentities.push(item.n);
+}
+
+function registerFindings(reg, findings, round, at, policy, outcome) {
+    findings.forEach(function(f) {
+        registerFinding(reg, f, round, at, policy, outcome);
+    });
+}
+
+// A round that proposed, confirmed, disposed or skipped anything stamps its
+// rounds[] entry; complete silence is a no-op (null).
+function roundActed(findings, dispositions, confirmations, hadPending, outcome) {
+    return findings.length > 0 || dispositions.length > 0 || confirmations.length > 0 ||
+        hadPending || outcome.skippedFindings.length > 0;
+}
+
+function emptyOutcome(reg, round) {
+    return {
         registry: reg,
         round: round,
         newIdentities: [],
@@ -533,76 +620,27 @@ function applyRound(prev, roundInput, policy) {
         unknownDispositions: [],
         skippedFindings: []
     };
+}
+
+function applyRound(prev, roundInput, policy) {
+    var input = roundInput || {};
+    var at = input.at || new Date().toISOString();
+    var reg = deepCopyRegistry(prev);
+    var findings = arrayOrEmpty(input.findings);
+    var dispositions = arrayOrEmpty(input.dispositions);
+    var confirmations = arrayOrEmpty(input.confirmations);
+    var round = parseInt(input.round, 10) || nextRoundOf(reg);
+    var outcome = emptyOutcome(reg, round);
 
     var hadPending = Array.isArray(reg.pending) && reg.pending.length > 0;
-    var previousPending = reg.pending || [];
+    var previousPending = arrayOrEmpty(reg.pending);
     reg.pending = [];
 
-    // Stage 2: the reviewer disposes of every pending candidate. Confirmed
-    // candidates merge into their proposed identity (severity escalates —
-    // invariant 2); declined AND unconfirmed candidates are NEW (invariant 1).
-    // A candidate whose proposed identity resolved meanwhile promotes too —
-    // resolved items are not merge targets.
-    previousPending.forEach(function(candidate) {
-        var confirmed = null;
-        confirmations.forEach(function(c) {
-            if (parseInt(c && c.proposedFor, 10) === candidate.proposedFor) confirmed = c;
-        });
-        var target = confirmed && confirmed.same === true ? itemById(reg, candidate.proposedFor) : null;
-        if (target && isOpenStatus(target.status)) {
-            var asFinding = { file: candidate.file, claim: candidate.claim, severity: candidate.severity, line: candidate.line };
-            mergeIntoItem(target, asFinding, round, at, 'confirmed');
-            outcome.confirmedMerges.push({ n: target.n, similarity: candidate.similarity });
-            return;
-        }
-        var promotedItem = createIdentity(reg, {
-            file: candidate.file, claim: candidate.claim, severity: candidate.severity, line: candidate.line
-        }, candidate.round || round, candidate.at || at);
-        promotedItem.history.push(historyEntry(round, 'promoted-candidate'));
-        outcome.promoted.push(promotedItem.n);
-    });
+    resolvePreviousPending(reg, previousPending, confirmations, round, at, outcome);
+    applyDispositions(reg, dispositions, round, at, outcome);
+    registerFindings(reg, findings, round, at, policy, outcome);
 
-    // Reviewer dispositions on previously raised findings.
-    dispositions.forEach(function(d) {
-        var item = itemById(reg, d && d.n);
-        if (!item) {
-            outcome.unknownDispositions.push({ n: d && d.n, status: (d && d.status) || null });
-            return;
-        }
-        applyDisposition(item, d, round, at, outcome);
-    });
-
-    // Stage 1: propose matches for this round's findings.
-    findings.forEach(function(f) {
-        if (!f || !fileOf(f) || blankClaim(claimOf(f))) {
-            outcome.skippedFindings.push({ file: f ? fileOf(f) : null });
-            return;
-        }
-        var match = matchFinding(reg, f, policy);
-        if (match.outcome === 'auto-merge') {
-            mergeIntoItem(match.target, f, round, at, 'auto-merge');
-            outcome.autoMerged.push({ n: match.target.n, similarity: match.similarity });
-            return;
-        }
-        if (match.outcome === 'candidate') {
-            var claim = normalizeClaim(claimOf(f));
-            match.ranked.forEach(function(r) {
-                reg.pending.push({
-                    file: fileOf(f), claim: claim, severity: severityClassOf(f.severity),
-                    line: lineOf(f), similarity: r.similarity, proposedFor: r.item.n,
-                    round: round, at: at
-                });
-            });
-            outcome.candidates.push({ proposedFor: match.ranked[0].item.n, similarity: match.ranked[0].similarity });
-            return;
-        }
-        var item = createIdentity(reg, f, round, at);
-        outcome.newIdentities.push(item.n);
-    });
-
-    var acted = findings.length > 0 || dispositions.length > 0 || confirmations.length > 0 ||
-        hadPending || outcome.skippedFindings.length > 0;
-    if (!acted) return null;
+    if (!roundActed(findings, dispositions, confirmations, hadPending, outcome)) return null;
 
     reg.rounds.push({
         round: round, at: at, raised: findings.length,
@@ -617,6 +655,48 @@ function applyRound(prev, roundInput, policy) {
 
 // ── marker persistence (the house dmtools: marker pattern) ───────────────────
 
+// Marker-hostile sequences: an embedded `-->` would terminate the HTML comment
+// (visually on GitHub, and for the next round's suffix-search parse — the
+// registry would silently revert to the previous round), and an embedded
+// `<!--` would shadow the marker prefix search. A zero-width space breaks
+// both sequences while staying invisible in the rendered text.
+function markerSafe(text) {
+    return String(text || '')
+        .replace(/-->/g, '--\u200b>')
+        .replace(/<!--/g, '<!\u200b--');
+}
+
+// Every string entering the payload is marker-safe — withdrawReason, fixHunk
+// and any future free-text field (reviewer text is data, not protocol).
+function markerSafeReplacer(key, value) {
+    return typeof value === 'string' ? markerSafe(value) : value;
+}
+
+function registryPayload(registry) {
+    return {
+        v: registry.v || REGISTRY_VERSION,
+        at: registry.at || new Date().toISOString(),
+        next: registry.next || 1,
+        items: registry.items,
+        pending: arrayOrEmpty(registry.pending),
+        rounds: arrayOrEmpty(registry.rounds)
+    };
+}
+
+function openItemCount(items) {
+    var open = 0;
+    items.forEach(function(i) {
+        if (isOpenStatus(i.status)) open++;
+    });
+    return open;
+}
+
+function registryNote(open, pendingCount) {
+    return '\uD83E\uDD16 Finding-identity registry (gh-1332) — ' + open +
+        ' open finding identit' + (open === 1 ? 'y' : 'ies') + ', ' + pendingCount +
+        ' candidate(s) pending confirmation. Machine-managed review-round bookkeeping; please do not edit or reply.';
+}
+
 /**
  * Builds the registry marker comment for a round: the machine-parseable
  * one-line payload plus a short provider-independent human note. Returns null
@@ -625,19 +705,9 @@ function applyRound(prev, roundInput, policy) {
  */
 function buildRegistryComment(registry) {
     if (!registry || !Array.isArray(registry.items)) return null;
-    var payload = {
-        v: registry.v || REGISTRY_VERSION,
-        at: registry.at || new Date().toISOString(),
-        next: registry.next || 1,
-        items: registry.items,
-        pending: Array.isArray(registry.pending) ? registry.pending : [],
-        rounds: Array.isArray(registry.rounds) ? registry.rounds : []
-    };
-    var open = payload.items.filter(function(i) { return isOpenStatus(i.status); }).length;
-    var note = '\uD83E\uDD16 Finding-identity registry (gh-1332) — ' + open +
-        ' open finding identit' + (open === 1 ? 'y' : 'ies') + ', ' + payload.pending.length +
-        ' candidate(s) pending confirmation. Machine-managed review-round bookkeeping; please do not edit or reply.';
-    return MARKER_PREFIX + JSON.stringify(payload) + MARKER_SUFFIX + '\n' + note;
+    var payload = registryPayload(registry);
+    var note = registryNote(openItemCount(payload.items), payload.pending.length);
+    return MARKER_PREFIX + JSON.stringify(payload, markerSafeReplacer) + MARKER_SUFFIX + '\n' + note;
 }
 
 function commentAuthorLogin(item) {
@@ -662,6 +732,13 @@ function authorAllowlist(opts) {
     return (opts && Array.isArray(opts.authorLogins)) ? opts.authorLogins : null;
 }
 
+function normalizeOpenStatuses(items) {
+    items.forEach(function(i) {
+        if (!isOpenStatus(i.status)) return;
+        if (!i.status) i.status = STATUS_OPEN;
+    });
+}
+
 function registryFromPayload(parsed) {
     if (!parsed || !Array.isArray(parsed.items)) return null;
     var reg = {
@@ -669,13 +746,10 @@ function registryFromPayload(parsed) {
         at: String(parsed.at || ''),
         next: parseInt(parsed.next, 10) || (parsed.items.length + 1),
         items: parsed.items,
-        pending: Array.isArray(parsed.pending) ? parsed.pending : [],
-        rounds: Array.isArray(parsed.rounds) ? parsed.rounds : []
+        pending: arrayOrEmpty(parsed.pending),
+        rounds: arrayOrEmpty(parsed.rounds)
     };
-    reg.items.forEach(function(i) {
-        if (!isOpenStatus(i.status)) return;
-        if (!i.status) i.status = STATUS_OPEN;
-    });
+    normalizeOpenStatuses(reg.items);
     return reg;
 }
 
@@ -684,6 +758,18 @@ function registryTimestampComparator(a, b) {
     var bTime = isNaN(b.atMs) ? -1 : b.atMs;
     if (aTime !== bTime) return aTime < bTime ? -1 : 1;
     return (a.order || 0) - (b.order || 0);
+}
+
+/**
+ * The PR comments list shape shared by both wiring sites (the post-review
+ * stamping and the context-prep injection): a JSON string payload parses,
+ * {comments}/{items} envelopes unwrap, anything else is []. Throws on a
+ * broken JSON string — the error policy (catch-and-null vs caller-handled)
+ * stays at each call site.
+ */
+function normalizePrCommentList(raw) {
+    var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
+    return Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
 }
 
 /**
@@ -746,14 +832,23 @@ function positiveIntOr(value, fallback) {
  * escalate-on-merge) are NOT knobs — they are carried as constants so a
  * config-shaped gaming path cannot exist.
  */
-function resolveIdentityPolicy(customParams, config) {
-    var knob = (customParams && customParams.reviewPolicy && customParams.reviewPolicy.identity) ||
-        (config && config.reviewPolicy && config.reviewPolicy.identity) || {};
+function identityKnob(customParams, config) {
+    var fromParams = customParams && customParams.reviewPolicy && customParams.reviewPolicy.identity;
+    var fromConfig = config && config.reviewPolicy && config.reviewPolicy.identity;
+    return fromParams || fromConfig || {};
+}
+
+function candidateThresholdOf(knob) {
     var threshold = namedThreshold(knob.claimSimilarityThreshold);
     if (threshold === null) threshold = numericThreshold(knob.claimSimilarityThreshold);
     if (threshold === null) threshold = CANDIDATE_THRESHOLDS[DEFAULT_CANDIDATE_THRESHOLD_NAME];
+    return threshold;
+}
+
+function resolveIdentityPolicy(customParams, config) {
+    var knob = identityKnob(customParams, config);
     return {
-        candidateThreshold: threshold,
+        candidateThreshold: candidateThresholdOf(knob),
         candidateScope: knob.candidateScope === 'diff' ? 'diff' : 'same-file',
         candidatesPerFinding: positiveIntOr(knob.candidatesPerFinding, 1),
         autoMergeSimilarity: AUTO_MERGE_SIMILARITY,
@@ -769,27 +864,32 @@ function resolveIdentityPolicy(customParams, config) {
  * genuine churn without ever Goodharting the review) and every BLOCKING
  * withdrawal with its reason (invariant 3: visible, never silent).
  */
+function blockingWithdrawals(items) {
+    return items.filter(function(i) {
+        return i.status === STATUS_WITHDRAWN && severityClassOf(i.severity) === 'BLOCKING';
+    }).map(function(i) {
+        return {
+            n: i.n, id: i.id, file: i.file, severity: i.severity,
+            claim: i.claim, reason: i.withdrawReason || '', at: i.resolvedAt || ''
+        };
+    });
+}
+
 function buildEscalationPacket(registry) {
-    var rounds = (registry && Array.isArray(registry.rounds)) ? registry.rounds : [];
-    var items = (registry && Array.isArray(registry.items)) ? registry.items : [];
+    var rounds = arrayOrEmpty(registry && registry.rounds);
+    var items = arrayOrEmpty(registry && registry.items);
     return {
         rounds: rounds.map(function(r) {
             return { round: r.round, newIdentities: r.newIdentities || 0 };
         }),
-        blockingWithdrawals: items.filter(function(i) {
-            return i.status === STATUS_WITHDRAWN && severityClassOf(i.severity) === 'BLOCKING';
-        }).map(function(i) {
-            return {
-                n: i.n, id: i.id, file: i.file, severity: i.severity,
-                claim: i.claim, reason: i.withdrawReason || '', at: i.resolvedAt || ''
-            };
-        })
+        blockingWithdrawals: blockingWithdrawals(items)
     };
 }
 
 /**
  * Renders the packet as a visible comment section; null when there is
- * nothing to report (no rounds — the registry never ran here).
+ * nothing to report (no rounds — the registry never ran here). Withdrawal
+ * reasons are marker-safe — reviewer text is echoed, never protocol.
  */
 function buildEscalationPacketComment(registry) {
     var packet = buildEscalationPacket(registry);
@@ -798,7 +898,7 @@ function buildEscalationPacketComment(registry) {
         packet.rounds.map(function(r) { return 'round ' + r.round + ': ' + r.newIdentities; }).join(', ') + '.'];
     packet.blockingWithdrawals.forEach(function(w) {
         lines.push('\uD83D\uDEA8 F' + w.n + ' (' + w.severity + ') ' + w.file +
-            ' \u2014 withdrawn: "' + w.reason + '" (no fixing hunk cited)');
+            ' \u2014 withdrawn: "' + markerSafe(w.reason) + '" (no fixing hunk cited)');
     });
     return lines.join('\n');
 }
@@ -883,6 +983,7 @@ if (typeof module !== 'undefined' && module.exports) {
         matchFinding: matchFinding,
         applyRound: applyRound,
         buildRegistryComment: buildRegistryComment,
+        normalizePrCommentList: normalizePrCommentList,
         parseRegistryComments: parseRegistryComments,
         latestRegistry: latestRegistry,
         resolveIdentityPolicy: resolveIdentityPolicy,

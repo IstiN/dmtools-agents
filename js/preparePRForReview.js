@@ -240,11 +240,12 @@ function machineAuthorLoginsOf(ctx) {
 
 // The PR comments list shape, or null when the provider cannot list comments
 // (no getPrComments, transport failure) — the injection then skips quietly.
+// The shape ladder is the shared normalizePrCommentList; unlike the stamping
+// site there is no catch here — a broken payload throws into this step's own
+// non-fatal catch (writeFindingRegistryContext below).
 function prCommentListForRegistry(scm, prNumber) {
     if (!scm || typeof scm.getPrComments !== 'function') return null;
-    var raw = scm.getPrComments(prNumber);
-    var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
-    return Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+    return findingRegistry.normalizePrCommentList(scm.getPrComments(prNumber));
 }
 
 /**
