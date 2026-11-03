@@ -9378,7 +9378,7 @@ function action(params) {
     // every rule targets other repos (the pre-fix behavior kept).
     tickReposSeen[globalRepoInfo.owner + '/' + globalRepoInfo.repo] = globalRepoInfo;
     console.log('SM Agent — ' + globalRepoInfo.owner + '/' + globalRepoInfo.repo + ' (' + rules.length + ' rules)');
-    if (projectConfig.jira.project) {
+    if (projectConfig.jira.project && smTracker().provider() === 'jira') {
         console.log('  Jira project: ' + projectConfig.jira.project);
     }
     if (workflowBudget) {
