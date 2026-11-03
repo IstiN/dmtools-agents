@@ -23,6 +23,11 @@ const { GIT_CONFIG, LABELS, JIRA_FIELDS } = require('./config.js');
 var outputFiles = require('./common/outputFiles.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var shared = require('./postStoryTestAutomationShared.js');
+// gh-1329: attribute linked-TC failures before bouncing a bug.
+var tcTriage = require('./common/tcTriage.js');
+var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
+var tcRunRegistry = require('./common/tcRunRegistry.js');
+var machineAuthor = require('./common/machineAuthor.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');

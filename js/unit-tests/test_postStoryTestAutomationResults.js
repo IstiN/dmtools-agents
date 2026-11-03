@@ -40,6 +40,8 @@ function loadPostStoryTestAutomationResults(mocks) {
     var allMocks = Object.assign({}, defaults, mocks);
 
     var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), allMocks);
+    var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), allMocks);
+    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthor }), allMocks);
     var prHelper = loadModule('js/common/pullRequest.js', makeRequire({
         './mergeState.js': loadModule('js/common/mergeState.js'),
         './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -53,6 +55,14 @@ function loadPostStoryTestAutomationResults(mocks) {
             './config.js': configModule,
             './common/pullRequest.js': prHelper,
             './postStoryTestAutomationShared.js': sharedModule,
+            './common/tcTriage.js': loadModule('js/common/tcTriage.js', makeRequire({}), allMocks),
+            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                './reviewVerdicts.js': reviewVerdicts
+            }), allMocks),
+            './common/tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
+                './reviewVerdicts.js': reviewVerdicts
+            }), allMocks),
+            './common/machineAuthor.js': machineAuthor,
             './common/autoStart.js': {
                 triggerConfiguredWorkflowForTicket: function(opts) {
                     return (mocks && mocks.triggerConfiguredWorkflowForTicket)
@@ -338,7 +348,7 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
         ]);
     });
 
-    test('Bug with product failure returns to Ready For Development and finalizes failed TCs', function() {
+    test('Bug with unattributed fresh TC failure routes to rework — bug state unchanged', function() {
         var statusMoves = [];
         var comments = [];
 
@@ -351,14 +361,82 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
                         summary: 'Fix did not work',
                         results: [
                             { testCaseKey: 'TS-151', status: 'passed', testPath: 'testing/tests/TS-151/test.py' },
-                            { testCaseKey: 'TS-152', status: 'failed', testPath: 'testing/tests/TS-152/test.py', failedDescriptionFile: 'outputs/failed_description_TS-152.md', failureSummary: 'regression' }
+                            { testCaseKey: 'TS-152', status: 'failed', testPath: 'testing/tests/TS-152/test.py', failedDescriptionFile: 'outputs/failed_description_TS-152.md', failureSummary: 'regression', errorClass: 'assertion' }
                         ]
                     });
                 }
                 if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
                 return null;
             },
-            cli_execute_command: function() { return ''; },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return 'test/BUG-150';
+                if (opts.command === 'git rev-parse HEAD') return 'sha-current';
+                return '';
+            },
+            jira_get_ticket: function(args) {
+                if (args && args.key === 'BUG-150') {
+                    return JSON.stringify({ key: 'BUG-150', fields: { comment: { comments: [] } } });
+                }
+                return null;
+            },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_attach_file_to_ticket: function() {},
+            jira_update_field: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'BUG-150', fields: { summary: 'Broken fix', issuetype: { name: 'Bug' } } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.status, 'test_maintenance');
+        assert.deepEqual(result.maintenanceTestCases, ['TS-152']);
+        assert.ok(!statusMoves.some(function(m) { return m.key === 'BUG-150' && m.statusName === 'Ready For Development'; }),
+            'a fresh TC failure must never bounce the bug');
+        assert.deepEqual(statusMoves, [
+            { key: 'TS-152', statusName: 'In Review - Failed' }
+        ]);
+        assert.ok(comments.some(function(c) { return c.indexOf('gh-1329') !== -1 && c.indexOf('TS-152') !== -1; }));
+        assert.ok(comments.some(function(c) { return c.indexOf('dmtools:tc-maintenance-ledger') !== -1; }),
+            'the finding lands in the maintenance ledger');
+        assert.ok(comments.some(function(c) { return c.indexOf('dmtools:tc-run-registry') !== -1; }),
+            'the passed TC is recorded as validated (lastGreenSha)');
+        // Failing scripts are always persisted (commit + push, no PR).
+        assert.ok(comments.every(function(c) { return c.indexOf('pull/') === -1 || c.indexOf('Automated story test') === -1; }));
+    });
+
+    test('Bug bounce requires attribution: own-oracle red + AC violated bounces once with evidence', function() {
+        var statusMoves = [];
+        var comments = [];
+
+        var module = loadPostStoryTestAutomationResults({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/story_test_automation_result.json') {
+                    return JSON.stringify({
+                        storyKey: 'BUG-150',
+                        overall: 'failed',
+                        summary: 'Fix did not work',
+                        results: [
+                            { testCaseKey: 'TS-152', status: 'failed', testPath: 'testing/tests/TS-152/test.py', failedDescriptionFile: 'outputs/failed_description_TS-152.md', failureSummary: 'regression', errorClass: 'assertion', acVerdict: 'violated' }
+                        ]
+                    });
+                }
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return 'test/BUG-150';
+                if (opts.command === 'git rev-parse HEAD') return 'sha-current';
+                return '';
+            },
+            jira_get_ticket: function(args) {
+                if (args && args.key === 'BUG-150') {
+                    return JSON.stringify({ key: 'BUG-150', fields: { comment: { comments: [] } } });
+                }
+                return null;
+            },
             jira_move_to_status: function(args) { statusMoves.push(args); },
             jira_post_comment: function(args) { comments.push(args.comment); },
             jira_attach_file_to_ticket: function() {},
@@ -380,6 +458,51 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
         ]);
         assert.ok(comments.some(function(c) { return c.indexOf('Bug Fix Did Not Pass Automated Tests') !== -1; }));
         assert.ok(comments.some(function(c) { return c.indexOf('TS-152') !== -1 && c.indexOf('regression') !== -1; }));
+    });
+
+    test('Bug with blocked_by_human overall skips triage — environment owns it', function() {
+        var statusMoves = [];
+        var comments = [];
+
+        var module = loadPostStoryTestAutomationResults({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/story_test_automation_result.json') {
+                    return JSON.stringify({
+                        storyKey: 'BUG-160',
+                        overall: 'blocked_by_human',
+                        blockedReason: 'Missing credentials',
+                        results: [
+                            { testCaseKey: 'TS-161', status: 'failed', testPath: 'testing/tests/TS-161/test.py', acVerdict: 'violated' }
+                        ]
+                    });
+                }
+                if (opts.path === 'outputs/tracker_comment.md') return 'h3. Story Test Result';
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return 'test/BUG-160';
+                if (opts.command === 'git status --short -- testing') return '';
+                if (opts.command === 'git diff --cached --stat') return '';
+                if (opts.command.indexOf('git ls-remote --heads origin test/BUG-160') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/BUG-160';
+                return '';
+            },
+            jira_get_ticket: function() { return JSON.stringify({ key: 'BUG-160', fields: { comment: { comments: [] } } }); },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_attach_file_to_ticket: function() {},
+            jira_update_field: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'BUG-160', fields: { summary: 'Env blocked bug', issuetype: { name: 'Bug' } } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.status, 'blocked_by_human');
+        assert.ok(statusMoves.some(function(m) { return m.key === 'BUG-160' && m.statusName === 'Blocked'; }));
+        assert.ok(!statusMoves.some(function(m) { return m.key === 'BUG-160' && m.statusName === 'Ready For Development'; }));
     });
 
     test('ignores result entries with an unknown status', function() {
@@ -818,5 +941,169 @@ suite('postStoryTestAutomationResults: characterization (gh-1080 CRAP split)', f
         assert.equal(result.status, 'passed');
         assert.ok(statusMoves.some(function(m) { return m.statusName === 'Passed'; }), 'TC finalization still ran');
         assert.ok(!statusMoves.some(function(m) { return m.statusName === 'In Testing'; }), 'the story move was rejected');
+    });
+});
+
+// ── gh-1329: validated-guard triage — the mechanical decision table ─────────
+
+suite('postStoryTestAutomationResults: gh-1329 guard triage', function() {
+
+    var REGISTRY_MARKER_TS152 = '<!-- dmtools:tc-run-registry {"v":1,"at":"2026-01-01T00:00:00.000Z","tcs":{"TS-152":{"role":"regression-guard","validated":true,"lastGreenSha":"sha-green","lastGreenEnvFingerprint":"env-1","lastGreenAt":"2026-01-01T00:00:00.000Z","greens":1,"redRounds":0,"lastRedAt":null,"lastVerdict":null}}} -->\n\ud83d\udcd8 registry fixture';
+
+    function bugComments(comments) {
+        return function(args) {
+            if (args && args.key === 'BUG-150') {
+                return JSON.stringify({ key: 'BUG-150', fields: { comment: { comments: comments } } });
+            }
+            return null;
+        };
+    }
+
+    function guardFailedResult(extra) {
+        return {
+            testCaseKey: 'TS-152',
+            status: 'failed',
+            testPath: 'testing/tests/TS-152/test_guard.py',
+            failedDescriptionFile: 'outputs/failed_description_TS-152.md',
+            failureSummary: 'guard assertion',
+            errorClass: 'assertion',
+            envFingerprint: 'env-1',
+            role: 'regression guard'
+        };
+    }
+
+    function triageModule(opts) {
+        var comments = opts.comments || [];
+        var statusMoves = [];
+        var posted = [];
+        var cli = opts.cli || function(o) {
+            if (o.command === 'git branch --show-current') return 'test/BUG-150';
+            if (o.command === 'git rev-parse HEAD') return 'sha-new';
+            return '';
+        };
+        var module = loadPostStoryTestAutomationResults({
+            file_read: function(fpath) {
+                if (fpath.path === 'outputs/story_test_automation_result.json') {
+                    return JSON.stringify({
+                        storyKey: 'BUG-150',
+                        overall: 'failed',
+                        summary: 'guard red',
+                        results: [opts.resultEntry || guardFailedResult()]
+                    });
+                }
+                if (fpath.path && fpath.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: cli,
+            jira_get_ticket: bugComments(comments),
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_post_comment: function(args) { posted.push(args.comment); },
+            jira_attach_file_to_ticket: function() {},
+            jira_update_field: function() {}
+        });
+        return {
+            module: module,
+            statusMoves: statusMoves,
+            posted: posted,
+            run: function() {
+                return module.action({
+                    ticket: { key: 'BUG-150', fields: { summary: 'Guard red bug', issuetype: { name: 'Bug' } } },
+                    jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered', machineAuthor: 'ai-teammate' } }
+                });
+            }
+        };
+    }
+
+    test('AC: guard red, same SHA + same env fingerprint -> no rerun, no bounce; ledger entry', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            cli: function(o) {
+                if (o.command === 'git branch --show-current') return 'test/BUG-150';
+                if (o.command === 'git rev-parse HEAD') return 'sha-green'; // SAME build as last green
+                return '';
+            },
+            resultEntry: Object.assign(guardFailedResult(), { envFingerprint: 'env-1' })
+        });
+        var result = t.run();
+        assert.equal(result.success, true);
+        assert.equal(result.status, 'test_maintenance');
+        assert.deepEqual(result.maintenanceTestCases, ['TS-152']);
+        assert.ok(!t.statusMoves.some(function(m) { return m.key === 'BUG-150'; }),
+            'bug state unchanged');
+        assert.deepEqual(t.statusMoves, [{ key: 'TS-152', statusName: 'In Review - Failed' }],
+            'stage status only — no final Failed for a maintenance route');
+        assert.ok(t.posted.some(function(c) { return c.indexOf('dmtools:tc-maintenance-ledger') !== -1; }));
+    });
+
+    test('AC: guard red, new SHA, differential green on the last-green build -> bounce with evidence', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            resultEntry: Object.assign(guardFailedResult(), { differential: 'green' })
+        });
+        var result = t.run();
+        assert.equal(result.status, 'failed');
+        assert.deepEqual(result.failedTestCases, ['TS-152']);
+        assert.ok(t.statusMoves.some(function(m) { return m.key === 'BUG-150' && m.statusName === 'Ready For Development'; }));
+        assert.ok(t.statusMoves.some(function(m) { return m.key === 'TS-152' && m.statusName === 'Failed'; }),
+            'earned bounce finalizes the TC as Failed');
+        assert.ok(t.posted.some(function(c) {
+            return c.indexOf('Bug Fix Did Not Pass Automated Tests') !== -1 && c.indexOf('sha-green') !== -1;
+        }), 'the bounce comment carries the differential evidence');
+    });
+
+    test('AC: repeated attributed failures hit maxReworkRounds -> escalation, no bounce', function() {
+        var exhaustedRegistry = REGISTRY_MARKER_TS152.replace('"redRounds":0', '"redRounds":2');
+        var t = triageModule({
+            comments: [{ body: exhaustedRegistry, user: { login: 'ai-teammate' } }],
+            resultEntry: Object.assign(guardFailedResult(), { differential: 'green' })
+        });
+        var result = t.run();
+        assert.equal(result.status, 'test_maintenance');
+        assert.deepEqual(result.escalatedTestCases, ['TS-152']);
+        assert.ok(!t.statusMoves.some(function(m) { return m.key === 'BUG-150' && m.statusName === 'Ready For Development'; }),
+            'the bounce loop stopped at the cap — no infinite re-fix laps');
+        assert.ok(t.posted.some(function(c) { return c.indexOf('escalat') !== -1 && c.indexOf('TS-152') !== -1; }));
+    });
+
+    test('sibling TC (verifies a different bug) red never bounces this bug', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152.replace('regression-guard', 'own-oracle'), user: { login: 'ai-teammate' } }],
+            resultEntry: Object.assign(guardFailedResult(), { role: '', verifies: 'BUG-999', differential: 'green' })
+        });
+        var result = t.run();
+        assert.equal(result.status, 'test_maintenance');
+        assert.ok(!t.statusMoves.some(function(m) { return m.key === 'BUG-150' && m.statusName === 'Ready For Development'; }),
+            'sibling failures route to test maintenance and never bounce the bug');
+    });
+
+    test('markers from untrusted authors are not trusted (fail closed, legacy bounce applies)', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'not-the-machine' } }],
+            resultEntry: Object.assign(guardFailedResult(), { acVerdict: 'violated' })
+        });
+        var result = t.run();
+        assert.equal(result.status, 'failed',
+            'with no trusted registry the TC is unvalidated own-oracle; AC verdict drives the bounce');
+    });
+
+    test('failing scripts are persisted on bug failure routes (commit + push, no PR)', function() {
+        var commands = [];
+        var t = triageModule({
+            comments: [],
+            cli: function(o) {
+                commands.push(o.command);
+                if (o.command === 'git branch --show-current') return 'test/BUG-150';
+                if (o.command === 'git rev-parse HEAD') return 'sha-new';
+                if (o.command === 'git status --short -- testing') return '?? testing/tests/TS-152/test_guard.py';
+                if (o.command === 'git diff --cached --stat') return ' testing/tests/TS-152/test_guard.py | 1 +';
+                return '';
+            }
+        });
+        var result = t.run();
+        assert.equal(result.success, true);
+        assert.ok(commands.some(function(c) { return c.indexOf('git commit -m') === 0; }),
+            'the failing script was committed');
+        assert.ok(commands.some(function(c) { return c.indexOf('git push') === 0; }),
+            'the failing script was pushed');
     });
 });
