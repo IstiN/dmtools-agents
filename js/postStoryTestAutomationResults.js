@@ -765,13 +765,12 @@ function returnBugToDevelopment(storyKey, failedResults, statuses, bouncedVerdic
 /** The bug ticket's comments — the registry/ledger marker storage. */
 function bugTrackedComments(storyKey) {
     try {
-        console.log('PROBE2 getIssue for', storyKey);
         var details = getTracker().getIssue(storyKey);
-        console.log('PROBE4 details:', details ? JSON.stringify(details).substring(0, 200) : 'null');
         var fields = (details && details.fields) || {};
-        return (fields.comment && fields.comments) || [];
+        // Jira/ADO/GitHub view shape: fields.comment.{comments}
+        return (fields.comment && fields.comment.comments) || [];
     } catch (e) {
-        console.warn('PROBE2 catch:', e && e.message);
+        console.warn('Could not read bug comments for TC bookkeeping (skipping):', e);
         return [];
     }
 }
@@ -998,7 +997,6 @@ function handleBugWithProductFailure(params, result, ctx) {
     console.log('Bug', ctx.storyKey, 'has', failedResults.length, 'failed TC(s) — triaging before any bounce');
 
     var bookkeeping = loadBugBookkeeping(ctx.storyKey, params, ctx.config);
-    console.log('PROBE known tcs:', JSON.stringify(Object.keys(bookkeeping.registry.tcs || {})), 'validated:', tcRunRegistry.isValidated(bookkeeping.registry, 'TS-152'), 'logins:', JSON.stringify(machineAuthorOptsOf(params, ctx.config).authorLogins), 'ncomments:', (function() { var cs = bugTrackedComments(ctx.storyKey); var rec = tcRunRegistry.latestRegistry(cs, machineAuthorOptsOf(params, ctx.config)); console.log('PROBE5 parsed records:', rec ? Object.keys(rec.registry.tcs).join(',') : 'null', 'first body head:', cs.length ? String(cs[0].body).substring(0, 60) : 'none'); return cs.length; })());
     var triage = triageBugFailures(params, result, ctx, bookkeeping);
 
     persistBugTestScripts(ctx);

@@ -33,6 +33,10 @@ var trackersModule = require('./common/trackers.js');
 // ai_questions_asked label and the green needsInput outcome body are shared
 // with the story and batch legs (review round 1, bug-legs thread).
 var needsInputCommon = require('./common/needsInput.js');
+// gh-1329: the structured dev exit — outputs/test_suspected.json routes
+// machine-side into the rolling TC maintenance ledger.
+var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
+var machineAuthor = require('./common/machineAuthor.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {

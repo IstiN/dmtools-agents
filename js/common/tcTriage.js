@@ -53,6 +53,10 @@
 // silently demoting every legacy TC to a non-gating guard.
 var ROLE_OWN = 'own-oracle';
 var ROLE_GUARD = 'regression-guard';
+// A guard that verifies ANOTHER bug: its failures (even differential-green
+// ones) belong to that bug's pipeline — within this run they route to
+// maintenance and never bounce the bug being triaged.
+var ROLE_SIBLING = 'sibling-guard';
 
 var DEFAULT_MAX_REWORK_ROUNDS = 2;
 
@@ -85,17 +89,20 @@ function bugKeyEqual(a, b) {
 /**
  * Resolves a TC's role from its metadata (result entry or linked-TC entry).
  * Order: explicit role word → verifies-key comparison → regressionGuard
- * boolean → default OWN.
+ * boolean → default OWN. A guard whose verifies key names ANOTHER bug is a
+ * SIBLING of this run.
  */
 function resolveTcRole(entry, bugKey) {
     if (!entry) return ROLE_OWN;
     var word = roleWordOf(entry);
-    if (GUARD_ROLE_WORDS[word]) return ROLE_GUARD;
-    if (OWN_ROLE_WORDS[word]) return ROLE_OWN;
+    var isGuardWord = !!GUARD_ROLE_WORDS[word];
     var verifies = entry.verifies !== undefined && typeof entry.verifies === 'string' ? entry.verifies : '';
     if (normalizedWord(verifies) !== '') {
-        return bugKeyEqual(verifies, bugKey) ? ROLE_OWN : ROLE_GUARD;
+        if (!bugKeyEqual(verifies, bugKey)) return ROLE_SIBLING;
+        return isGuardWord ? ROLE_GUARD : ROLE_OWN;
     }
+    if (isGuardWord) return ROLE_GUARD;
+    if (OWN_ROLE_WORDS[word]) return ROLE_OWN;
     if (entry.regressionGuard === true) return ROLE_GUARD;
     return ROLE_OWN;
 }
@@ -166,7 +173,7 @@ function verdict(input, action, reason, withLedgerEntry) {
     var redRounds = nonNegativeIntOr(input.redRounds, 0);
     var v = {
         tcKey: String(input.tcKey || ''),
-        role: input.role === ROLE_GUARD ? ROLE_GUARD : ROLE_OWN,
+        role: (input.role === ROLE_GUARD || input.role === ROLE_SIBLING) ? input.role : ROLE_OWN,
         action: action,
         reason: reason,
         redRounds: redRounds,
@@ -193,7 +200,10 @@ function bounceCapReached(input) {
 // ── the mechanical table ─────────────────────────────────────────────────────
 
 /**
- * Guard triage (§4) — validated guards only; no agent judgment.
+ * Guard triage (§4) — validated guards only; no agent judgment. A SIBLING
+ * (a guard verifying another bug) can never turn its mechanical outcomes
+ * into THIS bug's bounce/escalation: those belong to the sibling's owner,
+ * so they convert to owner-notified maintenance with the evidence intact.
  */
 function triageValidatedGuard(input) {
     // 1. flake filter: a same-build retry that went green means nothing happened.
@@ -209,6 +219,9 @@ function triageValidatedGuard(input) {
     }
     // 3. build changed — the differential rerun attributes it (varies only the build).
     if (input.differential === 'green') {
+        if (input.role === ROLE_SIBLING) {
+            return verdict(input, ACTION_MAINTENANCE, 'sibling-regression-owner-notified');
+        }
         if (bounceCapReached(input)) {
             return verdict(input, ACTION_ESCALATE, 'bounce-cap-reached');
         }
@@ -262,9 +275,9 @@ function triageAcGated(input) {
  */
 function triageFailure(input) {
     var resolved = input || {};
-    var role = resolved.role === ROLE_GUARD ? ROLE_GUARD : ROLE_OWN;
+    var role = resolved.role === ROLE_GUARD || resolved.role === ROLE_SIBLING ? resolved.role : ROLE_OWN;
     var normalized = Object.assign({}, resolved, { role: role });
-    if (role === ROLE_GUARD && normalized.validated) {
+    if (role !== ROLE_OWN && normalized.validated) {
         return triageValidatedGuard(normalized);
     }
     return triageAcGated(normalized);
@@ -335,6 +348,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         ROLE_OWN: ROLE_OWN,
         ROLE_GUARD: ROLE_GUARD,
+        ROLE_SIBLING: ROLE_SIBLING,
         DEFAULT_MAX_REWORK_ROUNDS: DEFAULT_MAX_REWORK_ROUNDS,
         ACTION_NONE: ACTION_NONE,
         ACTION_REWORK: ACTION_REWORK,

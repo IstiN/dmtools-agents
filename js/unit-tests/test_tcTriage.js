@@ -26,9 +26,9 @@ suite('tcTriage: role resolution', function() {
         assert.equal(triage.resolveTcRole({ role: 'sibling' }, 'BUG-1'), triage.ROLE_GUARD);
     });
 
-    test('verifies key equal to the bug is own, a different key is a guard', function() {
+    test('verifies key equal to the bug is own, a different key is a sibling', function() {
         assert.equal(triage.resolveTcRole({ verifies: 'BUG-1' }, 'BUG-1'), triage.ROLE_OWN);
-        assert.equal(triage.resolveTcRole({ verifies: 'BUG-2' }, 'BUG-1'), triage.ROLE_GUARD);
+        assert.equal(triage.resolveTcRole({ verifies: 'BUG-2' }, 'BUG-1'), triage.ROLE_SIBLING);
         assert.equal(triage.resolveTcRole({ verifies: 'bug-1' }, 'BUG-1'), triage.ROLE_OWN);
     });
 
@@ -41,6 +41,11 @@ suite('tcTriage: role resolution', function() {
     test('explicit regressionGuard boolean marks a guard', function() {
         assert.equal(triage.resolveTcRole({ regressionGuard: true }, 'BUG-1'), triage.ROLE_GUARD);
         assert.equal(triage.resolveTcRole({ regressionGuard: false }, 'BUG-1'), triage.ROLE_OWN);
+    });
+
+    test('a guard that verifies another bug is a sibling of this run', function() {
+        assert.equal(triage.resolveTcRole({ role: 'regression guard', verifies: 'BUG-2' }, 'BUG-1'), triage.ROLE_SIBLING);
+        assert.equal(triage.resolveTcRole({ role: 'regression guard', verifies: 'BUG-1' }, 'BUG-1'), triage.ROLE_GUARD);
     });
 });
 
@@ -120,6 +125,17 @@ suite('tcTriage: validated guard failure — the mechanical table', function() {
             maxReworkRounds: 2
         }));
         assert.equal(below.action, triage.ACTION_BOUNCE);
+    });
+
+    test('AC: a sibling (verifies another bug) never bounces this bug — owner-notified maintenance', function() {
+        var sibling = Object.assign({}, validated, { role: triage.ROLE_SIBLING, differential: 'green' });
+        assert.equal(triage.triageFailure(sibling).action, triage.ACTION_MAINTENANCE);
+        var siblingFlaky = Object.assign({}, validated, {
+            role: triage.ROLE_SIBLING,
+            current: { sha: 'sha-green', envFingerprint: 'env-1' },
+            lastGreen: { sha: 'sha-green', envFingerprint: 'env-1' }
+        });
+        assert.equal(triage.triageFailure(siblingFlaky).action, triage.ACTION_MAINTENANCE);
     });
 });
 

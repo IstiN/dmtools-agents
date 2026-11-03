@@ -114,6 +114,10 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/commentMarkup.js': commentMarkupModule
     }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })({});
 
+    var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}));
+    var reviewVerdictsModule = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorModule }));
+    var tcLedgerModule = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './reviewVerdicts.js': reviewVerdictsModule }));
+
     var requireMap = {
         './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
         './config.js': configModule,
@@ -123,6 +127,8 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/outputFiles.js': outputFiles,
         './common/needsInput.js': loadModule('js/common/needsInput.js'),
         './common/trackers.js': loadTrackersDev(allMocks),
+        './common/machineAuthor.js': machineAuthorModule,
+        './common/tcMaintenanceLedger.js': tcLedgerModule,
         './developTicketAndCreatePR.js': {
             action: function() { return { success: true, path: 'delegated' }; },
             throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
@@ -1961,5 +1967,93 @@ suite('developBugAndCreatePR — resume fixture helpers (gh-1230 characterizatio
             delegate('TS-2', { b: 2 }, 'sum2', true, 'boom'),
             { attempted: false, reason: 'gate', ticketKey: 'TS-2', hasFatal: true, msg: 'boom', customParams: { b: 2 }, summary: 'sum2' });
         assert.equal(calls2.length, 1, 'delegated call recorded too');
+    });
+});
+
+// ── gh-1329: the structured dev exit — outputs/test_suspected.json ──────────
+
+suite('developBugAndCreatePR: gh-1329 test_suspected dev exit', function() {
+
+    function testSuspectedModule(claim, bugComments) {
+        return loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/test_suspected.json') {
+                    return JSON.stringify(claim);
+                }
+                throw new Error('missing ' + args.path);
+            },
+            jira_get_ticket: function(args) {
+                if (args && args.key === 'BUG-1400') {
+                    return JSON.stringify({ key: 'BUG-1400', fields: { comment: { comments: bugComments || [] } } });
+                }
+                return null;
+            }
+        });
+    }
+
+    test('test_suspected.json routes the claim to the maintenance ledger and returns the bug to TC verification', function() {
+        var loaded = testSuspectedModule({
+            tcKey: 'TS-1401',
+            claimedVerdict: 'stale-test',
+            reason: 'TC asserts the old column name; the AC names the renamed one',
+            evidence: 'outputs/rca.md',
+            errorClass: 'assertion',
+            testPath: 'testing/tests/TS-1401/test.py'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'BUG-1400', fields: { summary: 'Suspected stale test', issuetype: { name: 'Bug' } } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { machineAuthor: 'ai-teammate', customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'test_suspected');
+
+        var marker = loaded.comments.filter(function(c) { return c.comment.indexOf('dmtools:tc-maintenance-ledger') !== -1; });
+        assert.equal(marker.length, 1, 'the ledger marker lands on the bug ticket');
+        assert.contains(marker[0].comment, 'TS-1401');
+        assert.contains(marker[0].comment, 'dev-test-suspected');
+
+        var digest = loaded.comments.filter(function(c) { return c.comment.indexOf('maintenance ledger digest') !== -1; });
+        assert.equal(digest.length, 1, 'the async owner digest is posted');
+        assert.notContains(digest[0].comment, 'MUST', 'the digest never demands action');
+
+        assert.deepEqual(loaded.moves, [{ key: 'BUG-1400', statusName: 'In Testing' }],
+            'the bug returns to the TC-verification lane — its verdict stays gated by its own oracle TC');
+        assert.deepEqual(loaded.removed, [
+            { key: 'BUG-1400', label: 'bug_development_wip' },
+            { key: 'BUG-1400', label: 'sm_bug_development_triggered' }
+        ]);
+    });
+
+    test('an existing trusted ledger is extended, not replaced', function() {
+        var existingMarker = '<!-- dmtools:tc-maintenance-ledger {"v":1,"at":"2026-01-01T00:00:00.000Z","findings":[{"id":"aaaaaaaaaaaaaaaa","tcKey":"TS-1402","role":null,"verdict":"maintenance","reason":"flaky-same-build","errorClass":"timeout","testPath":"testing/tests/TS-1402/t.py","failedDescriptionFile":null,"failureSummary":"","note":null,"claimedVerdict":null,"evidence":null,"sha":null,"envFingerprint":null,"lastGreenSha":null,"lastGreenEnvFingerprint":null,"source":"automation","status":"open","firstSeenAt":"2026-01-01T00:00:00.000Z","lastSeenAt":"2026-01-01T00:00:00.000Z","occurrences":1,"resolvedAt":null,"resolvedVia":null}]} -->';
+        var loaded = testSuspectedModule(
+            { tcKey: 'TS-1403', reason: 'test targets a different behavior' },
+            [{ body: existingMarker, user: { login: 'ai-teammate' } }]
+        );
+
+        var result = loaded.mod.action({
+            ticket: { key: 'BUG-1400', fields: { summary: 'Suspected stale test', issuetype: { name: 'Bug' } } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { machineAuthor: 'ai-teammate', customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+
+        assert.equal(result.path, 'test_suspected');
+        var marker = loaded.comments.filter(function(c) { return c.comment.indexOf('dmtools:tc-maintenance-ledger') !== -1; });
+        assert.equal(marker.length, 1);
+        assert.contains(marker[0].comment, 'TS-1402', 'the prior finding survives');
+        assert.contains(marker[0].comment, 'TS-1403', 'the dev claim is appended');
+    });
+
+    test('a malformed claim (no TC key) is rejected and the normal fix path proceeds', function() {
+        var loaded = testSuspectedModule({ reason: 'no tcKey here' });
+        var result = loaded.mod.action({
+            ticket: { key: 'BUG-1400', fields: { summary: 'Malformed claim', issuetype: { name: 'Bug' } } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+        assert.equal(result.path, 'delegated', 'falls through to the normal fix path');
     });
 });
