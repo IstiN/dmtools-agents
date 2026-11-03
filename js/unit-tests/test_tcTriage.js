@@ -388,7 +388,8 @@ suite('tcTriage: triageDifferentialOutcome — the dispatcher continuation', fun
 
     test('the verdict carries the request evidence (lastGreenSha etc.)', function() {
         var v = triage.triageDifferentialOutcome(dispatcherInput({
-            sha: 'sha-new', lastGreenSha: 'sha-green', envFingerprint: 'env-1', lastGreenEnvFingerprint: 'env-1'
+            current: { sha: 'sha-new', envFingerprint: 'env-1' },
+            lastGreen: { sha: 'sha-green', envFingerprint: 'env-1' }
         }));
         assert.equal(v.evidence.sha, 'sha-new');
         assert.equal(v.evidence.lastGreenSha, 'sha-green');

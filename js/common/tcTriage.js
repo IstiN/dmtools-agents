@@ -288,6 +288,23 @@ function triageDifferentialGreenGuard(input) {
 }
 
 /**
+ * The scripted dispatcher's continuation (gh-1345): a parked differential
+ * request has RUN on the last-green build — the outcome decides. Red there
+ * → the failure predates the change → maintenance; green → the earned
+ * bounce path (sibling-aware, escalation at the cap). This is the honest
+ * mechanical continuation of a parked request: re-running triageFailure
+ * with the parked evidence would loop (the same-build/unproven case
+ * re-requests the differential instead of consuming the outcome).
+ */
+function triageDifferentialOutcome(input) {
+    var resolved = input || {};
+    if (resolved.differential === 'red') {
+        return verdict(resolved, ACTION_MAINTENANCE, 'failure-predates-change');
+    }
+    return triageDifferentialGreenGuard(resolved);
+}
+
+/**
  * AC-gated path (§2 + §3) — fresh TCs and the bug's own oracle. Bounce only
  * when the rework leg confirms the product violates the AC; bounded.
  */
@@ -412,6 +429,7 @@ if (typeof module !== 'undefined' && module.exports) {
         ACTION_ESCALATE: ACTION_ESCALATE,
         resolveTcRole: resolveTcRole,
         triageFailure: triageFailure,
+        triageDifferentialOutcome: triageDifferentialOutcome,
         buildBounceComment: buildBounceComment,
         buildTriageComment: buildTriageComment,
         buildEscalationComment: buildEscalationComment
