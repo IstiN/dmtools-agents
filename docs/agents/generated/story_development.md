@@ -121,6 +121,7 @@ _Develop Ticket and Create PR Action_
   - `contentOutput`
   - `contentOutput.target`
   - `customStatuses`
+  - `dryRun`
   - `featureBranchEnabled`
   - `feedbackLoop`
   - `localTeammate`
@@ -201,6 +202,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `cacheToReleases` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `managedSubmodules` _(used by JS action)_

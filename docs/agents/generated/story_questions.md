@@ -90,6 +90,7 @@ _Create Questions and Assign For Review Post-Action_
   - `contentOutput`
   - `contentOutput.target`
   - `customStatuses`
+  - `dryRun`
   - `featureBranchEnabled`
   - `localTeammate`
   - `prSearchFnPath`
@@ -130,6 +131,7 @@ _Create Questions and Assign For Review Post-Action_
 - `autoStartQuestionAnswerConfigFile` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `priorityMap` _(used by JS action)_
 - `projectKey` _(used by JS action)_

@@ -46,6 +46,7 @@ _E2E Post-Action: Write Solution + Affected Repositories Section + Labels_
   - `contentOutput.target`
   - `customStatuses`
   - `diagramField`
+  - `dryRun`
   - `featureBranchEnabled`
   - `localTeammate`
   - `outputType`
@@ -79,6 +80,7 @@ _E2E Post-Action: Write Solution + Affected Repositories Section + Labels_
 - `contentOutput.target` _(used by JS action)_
 - `customStatuses` _(used by JS action)_
 - `diagramField` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `featureBranchEnabled` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `outputType` _(used by JS action)_

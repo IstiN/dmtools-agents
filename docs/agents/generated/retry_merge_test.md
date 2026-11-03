@@ -66,6 +66,7 @@ _retryMergePR.js_
   - `contentOutput`
   - `contentOutput.target`
   - `customStatuses`
+  - `dryRun`
   - `featureBranchEnabled`
   - `localTeammate`
   - `prSearchFnPath`
@@ -105,6 +106,7 @@ _retryMergePR.js_
 - `autoStartReworkConfigFile` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `smFallback` _(used by JS action)_
