@@ -211,61 +211,60 @@ function resolveAutoStartInputJql(ticketKey, config) {
     return 'key = ' + ticketKey;
 }
 
+function isLocalAutoStartDryRun(options) {
+    var customParams = (options && options.customParams) || {};
+    return !!(options && (options.dryRun || customParams.dryRun));
+}
+
+function writeLocalAutoStartConfig(ticketKey, encodedCfg) {
+    var safeTicket = ticketKey.replace(/[^A-Za-z0-9_-]/g, '_');
+    var path = '.dmtools/local-run-encoded-config-autochain-' + safeTicket + '-' + Date.now() + '.json';
+    try {
+        file_write({ path: path, content: encodedCfg });
+        return path;
+    } catch (e) {
+        console.warn('autoStart(local): could not write encoded config file — skipping: ' + (e.message || e));
+        return null;
+    }
+}
+
+function executeLocalAutoStartCommand(cmd, label, ticketKey, configFile, projectKey) {
+    console.log('  🖥️  [local auto-chain] ' + cmd);
+    try {
+        cli_execute_command({ command: cmd });
+        console.log('✅ Auto-started ' + label + ' for ' + ticketKey +
+            ' [local, config=' + configFile + (projectKey ? ', project=' + projectKey : '') + ']');
+        return true;
+    } catch (e) {
+        console.warn('⚠️ autoStart(local): ' + label + ' failed for ' + ticketKey + ': ' + (e.message || e));
+        return false;
+    }
+}
+
 function triggerConfiguredJobLocally(options) {
     var ticketKey = options.ticketKey;
     var configFile = options.configFile;
-    var config = options.config || {};
-    var customParams = options.customParams || {};
-    var projectKey = options.projectKey || deriveProjectKey(customParams);
-    var label = options.label || configFile;
-    if (options.dryRun || customParams.dryRun) {
+    if (isLocalAutoStartDryRun(options)) {
         console.log('  [dry] 🖥️ local auto-chain ' + ticketKey + ' → ' + configFile);
         return true;
     }
-
-    // isLocal=true propagates customParams.localTeammate=true into the chained job
-    // too, so if IT also auto-starts a further stage, that stays local as well.
+    var config = options.config || {};
+    var projectKey = options.projectKey || deriveProjectKey(options.customParams || {});
+    var label = options.label || configFile;
     var encodedCfg = buildEncodedConfigModule.buildEncodedConfig(
         ticketKey,
         { configFile: configFile, projectKey: projectKey },
         config,
         true
     );
-
-    var safeTicket = ticketKey.replace(/[^A-Za-z0-9_-]/g, '_');
-    var encodedConfigFile = '.dmtools/local-run-encoded-config-autochain-' + safeTicket + '-' + Date.now() + '.json';
-    try {
-        file_write({ path: encodedConfigFile, content: encodedCfg });
-    } catch (e) {
-        console.warn('autoStart(local): could not write encoded config file — skipping: ' + (e.message || e));
-        return false;
-    }
-
-    // Mirrors the exact `dmtools --debug run <config> "<encoded>" --inputJql ... --ciRunUrl ...`
-    // invocation scripts/run-teammate-local.sh and ai-teammate.yml both use — read the encoded
-    // config back from disk with $(cat ...) rather than inlining it, to avoid shell-escaping a
-    // large/multiline JSON blob as a literal CLI argument.
+    var encodedConfigFile = writeLocalAutoStartConfig(ticketKey, encodedCfg);
+    if (!encodedConfigFile) return false;
     var ciRunUrl = 'local://autochain/' + ticketKey + '/' + Date.now();
     var inputJql = resolveAutoStartInputJql(ticketKey, config);
     var cmd = 'bash -c \'ENCODED_CONFIG="$(cat ' + encodedConfigFile + ')"; dmtools --debug run ' +
         configFile + ' "${ENCODED_CONFIG}" --inputJql "' + inputJql + '" --ciRunUrl "' + ciRunUrl + '"\'';
-
-    console.log('  🖥️  [local auto-chain] ' + cmd);
-
-    var ok = true;
-    try {
-        cli_execute_command({ command: cmd });
-        console.log('✅ Auto-started ' + label + ' for ' + ticketKey +
-            ' [local, config=' + configFile + (projectKey ? ', project=' + projectKey : '') + ']');
-    } catch (e) {
-        ok = false;
-        console.warn('⚠️ autoStart(local): ' + label + ' failed for ' + ticketKey + ': ' + (e.message || e));
-    }
-
-    // Bare "rm" isn't in the CLI executor's whitelist — wrap in "bash -c" (whitelisted) so this
-    // best-effort temp-file cleanup doesn't log a noisy, misleading security-violation error.
+    var ok = executeLocalAutoStartCommand(cmd, label, ticketKey, configFile, projectKey);
     try { cli_execute_command({ command: 'bash -c "rm -f ' + encodedConfigFile + '"' }); } catch (e2) {}
-
     return ok;
 }
 
