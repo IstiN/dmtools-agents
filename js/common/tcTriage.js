@@ -92,17 +92,26 @@ function bugKeyEqual(a, b) {
  * boolean → default OWN. A guard whose verifies key names ANOTHER bug is a
  * SIBLING of this run.
  */
+function explicitRoleWord(entry) {
+    var word = roleWordOf(entry);
+    if (GUARD_ROLE_WORDS[word]) return ROLE_GUARD;
+    if (OWN_ROLE_WORDS[word]) return ROLE_OWN;
+    return null;
+}
+
+function roleFromVerifies(entry, bugKey) {
+    var verifies = typeof entry.verifies === 'string' ? entry.verifies : '';
+    if (normalizedWord(verifies) === '') return null;
+    if (!bugKeyEqual(verifies, bugKey)) return ROLE_SIBLING;
+    return explicitRoleWord(entry) === ROLE_GUARD ? ROLE_GUARD : ROLE_OWN;
+}
+
 function resolveTcRole(entry, bugKey) {
     if (!entry) return ROLE_OWN;
-    var word = roleWordOf(entry);
-    var isGuardWord = !!GUARD_ROLE_WORDS[word];
-    var verifies = entry.verifies !== undefined && typeof entry.verifies === 'string' ? entry.verifies : '';
-    if (normalizedWord(verifies) !== '') {
-        if (!bugKeyEqual(verifies, bugKey)) return ROLE_SIBLING;
-        return isGuardWord ? ROLE_GUARD : ROLE_OWN;
-    }
-    if (isGuardWord) return ROLE_GUARD;
-    if (OWN_ROLE_WORDS[word]) return ROLE_OWN;
+    var byVerifies = roleFromVerifies(entry, bugKey);
+    if (byVerifies) return byVerifies;
+    var byWord = explicitRoleWord(entry);
+    if (byWord) return byWord;
     if (entry.regressionGuard === true) return ROLE_GUARD;
     return ROLE_OWN;
 }
@@ -124,18 +133,9 @@ function nonNegativeIntOr(value, fallback) {
 }
 
 /**
- * True when the current run ran the SAME build AND the same environment as
- * the recorded last-green run. A missing half on either side never proves
- * sameness — the comparison is evidence, not a default.
+ * True when the current run ran the SAME build as the recorded last-green
+ * run (fingerprint lookup — evidence, never a default).
  */
-function sameBuildAndEnv(current, lastGreen) {
-    if (!current || !lastGreen) return false;
-    if (!present(current.sha) || !present(lastGreen.sha)) return false;
-    if (String(current.sha) !== String(lastGreen.sha)) return false;
-    if (!present(current.envFingerprint) || !present(lastGreen.envFingerprint)) return false;
-    return String(current.envFingerprint) === String(lastGreen.envFingerprint);
-}
-
 function sameBuild(current, lastGreen) {
     return !!(current && lastGreen &&
         present(current.sha) && present(lastGreen.sha) &&
@@ -148,24 +148,49 @@ function envChanged(current, lastGreen) {
         String(current.envFingerprint) !== String(lastGreen.envFingerprint));
 }
 
+/**
+ * A missing env fingerprint half on either side never proves sameness —
+ * the comparison is evidence, not a default (gh-1329 review: an agent that
+ * omitted envFingerprint must not have its red silently reclassified as
+ * flaky).
+ */
+function fingerprintsUnproven(current, lastGreen) {
+    return !(present(current.envFingerprint) && present(lastGreen.envFingerprint));
+}
+
 // ── verdict construction ─────────────────────────────────────────────────────
 
+// Evidence carried onto every verdict: sha/env from the failing run and
+// lastGreen* from the registry record are always present (null when
+// absent); the optional input fields appear only when supplied.
+var EVIDENCE_FIELD_TABLE = [
+    { key: 'sha', source: 'current' },
+    { key: 'envFingerprint', source: 'current' },
+    { key: 'lastGreenSha', source: 'lastGreen' },
+    { key: 'lastGreenEnvFingerprint', source: 'lastGreen' },
+    { key: 'differential', optional: true },
+    { key: 'acVerdict', optional: true },
+    { key: 'errorClass', optional: true },
+    { key: 'testPath', optional: true },
+    { key: 'failedDescriptionFile', optional: true },
+    { key: 'failureSummary', optional: true }
+];
+
+function evidenceSource(input, source) {
+    return source ? (input[source] || {}) : input;
+}
+
 function pickEvidence(input) {
-    var current = input.current || {};
-    var lastGreen = input.lastGreen || {};
-    var evidence = {
-        sha: present(current.sha) ? String(current.sha) : null,
-        envFingerprint: present(current.envFingerprint) ? String(current.envFingerprint) : null,
-        lastGreenSha: present(lastGreen.sha) ? String(lastGreen.sha) : null,
-        lastGreenEnvFingerprint: present(lastGreen.envFingerprint) ? String(lastGreen.envFingerprint) : null
-    };
-    if (input.differential) evidence.differential = String(input.differential);
-    if (input.acVerdict) evidence.acVerdict = String(input.acVerdict);
+    var evidence = {};
+    EVIDENCE_FIELD_TABLE.forEach(function(spec) {
+        var src = evidenceSource(input, spec.source);
+        if (present(src[spec.key])) {
+            evidence[spec.key] = String(src[spec.key]);
+        } else if (!spec.optional) {
+            evidence[spec.key] = null;
+        }
+    });
     if (input.retryGreen) evidence.retryGreen = true;
-    if (present(input.errorClass)) evidence.errorClass = String(input.errorClass);
-    if (present(input.testPath)) evidence.testPath = String(input.testPath);
-    if (present(input.failedDescriptionFile)) evidence.failedDescriptionFile = String(input.failedDescriptionFile);
-    if (present(input.failureSummary)) evidence.failureSummary = String(input.failureSummary);
     return evidence;
 }
 
@@ -210,27 +235,52 @@ function triageValidatedGuard(input) {
     if (input.retryGreen) {
         return verdict(input, ACTION_NONE, 'retry-green-on-same-build', false);
     }
-    // 2. fingerprint lookup vs the last green run.
+    // 2.+3. fingerprint lookup vs the last green run, then the differential.
     if (sameBuild(input.current, input.lastGreen)) {
-        if (envChanged(input.current, input.lastGreen)) {
-            return verdict(input, ACTION_MAINTENANCE, 'environment-shift');
-        }
-        return verdict(input, ACTION_MAINTENANCE, 'flaky-same-build');
+        return triageSameBuildGuard(input);
     }
-    // 3. build changed — the differential rerun attributes it (varies only the build).
-    if (input.differential === 'green') {
-        if (input.role === ROLE_SIBLING) {
-            return verdict(input, ACTION_MAINTENANCE, 'sibling-regression-owner-notified');
-        }
-        if (bounceCapReached(input)) {
-            return verdict(input, ACTION_ESCALATE, 'bounce-cap-reached');
-        }
-        return verdict(input, ACTION_BOUNCE, 'regression-from-change-range');
+    return triageBuildChangedGuard(input);
+}
+
+/**
+ * Same-build red: a proven environment shift is maintenance; flaky requires
+ * BOTH fingerprints (missing evidence never defaults to flaky — the
+ * differential rerun must attribute it instead).
+ */
+function triageSameBuildGuard(input) {
+    if (envChanged(input.current, input.lastGreen)) {
+        return verdict(input, ACTION_MAINTENANCE, 'environment-shift');
     }
+    if (fingerprintsUnproven(input.current, input.lastGreen)) {
+        return verdict(input, ACTION_DIFFERENTIAL, 'rerun-requested-on-last-green-build');
+    }
+    return verdict(input, ACTION_MAINTENANCE, 'flaky-same-build');
+}
+
+/**
+ * Build changed — the differential rerun attributes it (varies only the
+ * build): red there too → failure predates the change → maintenance; green
+ * there → EARNED bounce (bounded, escalation at the cap); unavailable →
+ * request the rerun, bug parked.
+ */
+function triageBuildChangedGuard(input) {
     if (input.differential === 'red') {
         return verdict(input, ACTION_MAINTENANCE, 'failure-predates-change');
     }
+    if (input.differential === 'green') {
+        return triageDifferentialGreenGuard(input);
+    }
     return verdict(input, ACTION_DIFFERENTIAL, 'rerun-requested-on-last-green-build');
+}
+
+function triageDifferentialGreenGuard(input) {
+    if (input.role === ROLE_SIBLING) {
+        return verdict(input, ACTION_MAINTENANCE, 'sibling-regression-owner-notified');
+    }
+    if (bounceCapReached(input)) {
+        return verdict(input, ACTION_ESCALATE, 'bounce-cap-reached');
+    }
+    return verdict(input, ACTION_BOUNCE, 'regression-from-change-range');
 }
 
 /**
@@ -357,7 +407,6 @@ if (typeof module !== 'undefined' && module.exports) {
         ACTION_BOUNCE: ACTION_BOUNCE,
         ACTION_ESCALATE: ACTION_ESCALATE,
         resolveTcRole: resolveTcRole,
-        sameBuildAndEnv: sameBuildAndEnv,
         triageFailure: triageFailure,
         buildBounceComment: buildBounceComment,
         buildTriageComment: buildTriageComment,
