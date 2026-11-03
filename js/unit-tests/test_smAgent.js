@@ -18038,3 +18038,43 @@ suite('smAgent: transplant_guest_pr limit slot yield on noop/skip/conflict', fun
         assert.deepEqual(adds1314[0].labels, ['ai_pr_reviewed']);
     });
 });
+
+// ── gh-1316: Avoid Jira-specific banner output when using Azure DevOps ───────
+
+suite('smAgent: gh-1316 tracker-aware banner output', function () {
+    test('does not log Jira project when Azure DevOps is configured as tracker', function () {
+        var sm = makeSmAgent({
+            captureConsole: true,
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = { tracker: { provider: "ado" }, jira: { project: "ADO_PROJ" }, repository: { owner: "o", repo: "r" } };'
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [makeRule('SELECT [System.Id] FROM WorkItems')]));
+
+        assert.equal(
+            sm.capturedLogs.some(function (l) { return l.indexOf('Jira project:') !== -1; }),
+            false,
+            'must not log Jira project when tracker provider is ado'
+        );
+    });
+
+    test('logs Jira project when Jira is the active tracker provider', function () {
+        var sm = makeSmAgent({
+            captureConsole: true,
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = { jira: { project: "JIRA_PROJ" }, repository: { owner: "o", repo: "r" } };'
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [makeRule('project = {jiraProject}')]));
+
+        assert.equal(
+            sm.capturedLogs.some(function (l) { return l.indexOf('Jira project: JIRA_PROJ') !== -1; }),
+            true,
+            'still logs Jira project when tracker provider is jira'
+        );
+    });
+});
