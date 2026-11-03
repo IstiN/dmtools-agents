@@ -95,6 +95,8 @@ _Post Story Test Automation Review Comments Action_
   - `prSearchFnPath`
   - `projectKey`
   - `removeLabel`
+  - `reviewPolicy`
+  - `reviewPolicy.identity`
   - `scmProvider`
   - `smFallback`
   - `stageFallback`
@@ -136,6 +138,8 @@ _Post Story Test Automation Review Comments Action_
 - `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `onApproved` _(used by JS action)_
 - `projectKey` _(used by JS action)_
+- `reviewPolicy` _(used by JS action)_
+- `reviewPolicy.identity` _(used by JS action)_
 - `smFallback` _(used by JS action)_
 
 ---

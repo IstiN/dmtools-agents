@@ -17,6 +17,13 @@ const commentMarkup = require('./common/commentMarkup.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var trackersModule = require('./common/trackers.js');
 var forkCheckout = require('./common/forkCheckout.js');
+// gh-1332 (hoisted, never lazy — the gh-823 pack-require rule): the
+// finding-identity registry — the review-round dedup. The registry's
+// previously-raised-findings injection tells a review round what earlier
+// rounds already raised, so a re-raise re-introduces the identity instead of
+// minting a duplicate thread.
+var machineAuthorModule = require('./common/machineAuthor.js');
+var findingRegistry = require('./common/findingRegistry.js');
 
 // ── Parsing / context ────────────────────────────────────────────────────────
 
@@ -224,6 +231,47 @@ function writePrContext(ctx, prDetails, diff, discussionData) {
     console.log('PR context files written successfully');
 }
 
+// ── gh-1332: the finding-identity registry injection ─────────────────────────
+
+function machineAuthorLoginsOf(ctx) {
+    return machineAuthorModule.machineAuthorLogins(
+        machineAuthorModule.resolveMachineAuthor(ctx.jp, ctx.config));
+}
+
+// The PR comments list shape, or null when the provider cannot list comments
+// (no getPrComments, transport failure) — the injection then skips quietly.
+function prCommentListForRegistry(scm, prNumber) {
+    if (!scm || typeof scm.getPrComments !== 'function') return null;
+    var raw = scm.getPrComments(prNumber);
+    var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
+    return Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+}
+
+/**
+ * Step 6.5: inject the previously raised findings (claim, file, status) into
+ * the review input, so a review round inherits the earlier rounds' registry —
+ * a re-raise re-introduces the identity instead of minting a duplicate
+ * thread. Non-fatal end to end: without a registry (or when the provider
+ * cannot list comments) the input prep looks exactly as before.
+ */
+function writeFindingRegistryContext(ctx, prNumber) {
+    try {
+        if (!prNumber) return false;
+        var comments = prCommentListForRegistry(ctx.scm, prNumber);
+        if (comments === null) return false;
+        var record = findingRegistry.latestRegistry(comments,
+            { authorLogins: machineAuthorLoginsOf(ctx) });
+        var markdown = record ? findingRegistry.buildFindingsInjection(record.registry) : null;
+        if (!markdown) return false;
+        gitOps.writeInputFile(ctx.inputFolder + '/pr_findings.md', markdown, 'pr_findings.md');
+        console.log('✅ Finding-registry context written (previously raised findings injected)');
+        return true;
+    } catch (e) {
+        console.warn('Finding-registry context injection failed (non-fatal):', e.message || e);
+        return false;
+    }
+}
+
 // Step 6.5: detect failed checks on the head commit.
 // gh-1119: the PR diff rides along so detectFailedChecks can tag extracted
 // gate violations owned/foreign in ci_failures.md (same tables the rework
@@ -354,6 +402,10 @@ function action(params) {
         var discussionData = fetchDiscussionData(ctx, prOutcome.pr.number);
         writePrContext(ctx, prDetails, diff, discussionData);
 
+        // Step 6.5: inject the finding-identity registry (gh-1332) — the
+        // previously raised findings this round must answer, not re-raise.
+        writeFindingRegistryContext(ctx, prOutcome.pr.number);
+
         var failedChecks = detectCheckFailures(ctx, prDetails, diff);
 
         finishReviewStart(ctx, prDetails, branchName, failedChecks);
@@ -392,6 +444,7 @@ if (typeof module !== 'undefined' && module.exports) {
         generateDiff: generateDiff,
         fetchDiscussionData: fetchDiscussionData,
         writePrContext: writePrContext,
+        writeFindingRegistryContext: writeFindingRegistryContext,
         detectCheckFailures: detectCheckFailures,
         buildFailedChecksPanel: buildFailedChecksPanel,
         buildReviewStartedComment: buildReviewStartedComment,

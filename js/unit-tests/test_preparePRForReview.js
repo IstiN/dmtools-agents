@@ -75,6 +75,9 @@ function prGitOpsMocks(opts, record) {
             record.gitOps.push({ fn: 'writePRContext', inputFolder: inputFolder,
                 prNumber: prDetails && prDetails.number, diff: diff,
                 markdown: markdown, rawThreads: rawThreads });
+        },
+        writeInputFile: function(path, content, label) {
+            record.gitOps.push({ fn: 'writeInputFile', path: path, content: content, label: label });
         }
     };
 }
@@ -99,12 +102,12 @@ function prConfigLoader(opts, record) {
             return opts.config || {};
         },
         createScm: function() {
-            return {
+            return Object.assign({
                 getRemoteRepoInfo: function() {
                     return opts.remoteRepoInfo !== undefined ? opts.remoteRepoInfo :
                         { owner: 'acme', repo: 'widget' };
                 }
-            };
+            }, opts.scm || {});
         }
     };
 }
@@ -134,6 +137,12 @@ function prLoad(opts) {
         './common/commentMarkup.js': prCommentMarkup(),
         './fetchParentContextToInput.js': prParentMock(opts, record),
         './common/trackers.js': prTrackersWith(globalMocks),
+        './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+        }), {}),
         './common/forkCheckout.js': loadModule('js/common/forkCheckout.js',
             makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js') }),
             opts.forkEnv ? { get_env_variable: function(k) { return opts.forkEnv[k] || null; } } : {})
@@ -141,6 +150,90 @@ function prLoad(opts) {
 
     return { module: module, record: record };
 }
+
+// ── gh-1332: the finding-identity registry injection (pr_findings.md) ────────
+
+suite('preparePRForReview — gh-1332 finding-registry injection', function() {
+
+    function registryCommentBody() {
+        var fr = loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+        }), {});
+        var policy = fr.resolveIdentityPolicy({}, null);
+        var outcome = fr.applyRound(null, { at: '2026-11-03T10:00:00Z', findings: [
+            { file: 'src/auth.ts', claim: 'nothing validates a token', severity: 'BLOCKING', line: 45 }
+        ] }, policy);
+        return fr.buildRegistryComment(Object.assign(outcome.registry, { at: '2026-11-03T10:00:00Z' }));
+    }
+
+    test('a registry on the PR injects pr_findings.md into the input folder', function() {
+        var rec = prRecorder();
+        var body = registryCommentBody();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            scm: { getPrComments: function() { return [{ body: body, user: { login: 'ai-teammate' } }]; } }
+        });
+
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success, 'the review start still succeeds');
+        var write = rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile' && g.path === 'input/TS-42/pr_findings.md'; });
+        assert.equal(write.length, 1, 'exactly one pr_findings.md write');
+        assert.contains(write[0].content, 'F1');
+        assert.contains(write[0].content, 'verify fixed');
+        assert.contains(write[0].content, 'nothing validates a token');
+    });
+
+    test('no registry on the PR → no pr_findings.md write', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' } },
+            scm: { getPrComments: function() { return []; } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile'; }).length, 0);
+    });
+
+    test('a forged registry (non-machine author) is invisible — nothing injects', function() {
+        var rec = prRecorder();
+        var body = registryCommentBody();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            scm: { getPrComments: function() { return [{ body: body, user: { login: 'random-user' } }]; } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile'; }).length, 0);
+    });
+
+    test('comment-read failure is non-fatal', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            scm: { getPrComments: function() { throw new Error('api down'); } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success, 'the injection never breaks review setup');
+        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile'; }).length, 0);
+    });
+
+    test('a provider without getPrComments skips the injection quietly', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile'; }).length, 0);
+    });
+});
 
 suite('preparePRForReview.action — happy paths', function() {
 
