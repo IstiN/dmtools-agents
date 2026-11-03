@@ -220,3 +220,27 @@ suite('fetchLinkedTestsToInput — early exits', function () {
         assert.equal(env.written.length, 0);
     });
 });
+
+// ── gh-1329: the header stops asserting a blanket "your fix MUST make these
+//    tests pass" — scoping is per TC role/attribution ────────────────────────
+
+suite('fetchLinkedTestsToInput — gh-1329 header scoping', function () {
+
+    test('header drops the blanket MUST assertion and scopes the oracle by bug key', function () {
+        var env = makeMocks({
+            searchResult: [jiraIssue('TC-9', 'Pins the fix', 'Failed')],
+            issueDetails: { 'TC-9': jiraIssue('TC-9', 'Pins the fix', 'Failed', { comment: { comments: [] } }) }
+        });
+        var mod = loadFetchLinkedTests(env.mocks);
+
+        mod.action({ inputFolderPath: 'input/BUG-5', jobParams: { customParams: {} } });
+
+        assert.equal(env.written.length, 1);
+        var md = env.written[0].content;
+        assert.notContains(md, 'Your fix MUST make these tests pass');
+        assert.contains(md, 'acceptance-oracle');
+        assert.contains(md, 'BUG-5');
+        assert.contains(md, 'regression guards');
+        assert.contains(md, 'maintenance ledger');
+    });
+});

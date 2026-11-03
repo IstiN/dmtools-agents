@@ -294,9 +294,20 @@ suite('wave2d2 ado — postStoryTestAutomationResults', function() {
             './mergeState.js': loadModule('js/common/mergeState.js'), './common/mergeState.js': loadModule('js/common/mergeState.js')
         }), rec.mocks);
         var sharedModule = loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), rec.mocks);
+        var w2MachineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), rec.mocks);
+        var w2ReviewVerdicts = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': w2MachineAuthor }), rec.mocks);
         var mod = loadModule('js/postStoryTestAutomationResults.js', makeRequire({
             './configLoader.js': cfgLoader, './config.js': configModule, './common/pullRequest.js': prHelper,
             './postStoryTestAutomationShared.js': sharedModule,
+            './common/tcTriage.js': loadModule('js/common/tcTriage.js', makeRequire({}), rec.mocks),
+            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
+            './common/tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({ './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
+            './common/bugBookkeeping.js': loadModule('js/common/bugBookkeeping.js', makeRequire({
+                './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({ './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
+                './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
+                './machineAuthor.js': w2MachineAuthor
+            }), rec.mocks),
+            './common/machineAuthor.js': w2MachineAuthor,
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; }, triggerSmIfIdle: function() { return { success: true }; } },
             './common/outputFiles.js': outputFiles,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },

@@ -238,21 +238,8 @@ function maxSeverity(classA, classB) {
 
 // FNV-1a (32-bit, Math.imul keeps the multiply exact). Two bases concatenated
 // → a 16-hex id; the file+severity partitioning keeps per-PR collision space
-// negligible.
-function fnv1a(text, basis) {
-    var h = basis >>> 0;
-    for (var i = 0; i < text.length; i++) {
-        h = h ^ text.charCodeAt(i);
-        h = Math.imul(h, 16777619) >>> 0;
-    }
-    return h;
-}
-
-function hex8(n) {
-    var s = (n >>> 0).toString(16);
-    while (s.length < 8) s = '0' + s;
-    return s;
-}
+// negligible. The hash helpers are the marker families' shared plumbing
+// (reviewVerdicts — gh-1329 rework, gh-1251 duplication ratchet).
 
 /**
  * The finding identity: hash(file path + normalized claim + severity class).
@@ -261,7 +248,7 @@ function hex8(n) {
 function findingIdentity(file, claim, severityClass) {
     var normalized = normalizeClaim(claim);
     var key = String(file || '') + '\n' + normalized + '\n' + severityClassOf(severityClass);
-    return hex8(fnv1a(key, 0x811c9dc5)) + hex8(fnv1a(key, 0x811c9dc5 ^ 0x9e3779b9));
+    return reviewVerdicts.hex8(reviewVerdicts.fnv1a(key, 0x811c9dc5)) + reviewVerdicts.hex8(reviewVerdicts.fnv1a(key, 0x811c9dc5 ^ 0x9e3779b9));
 }
 
 // ── registry shape ───────────────────────────────────────────────────────────
@@ -654,22 +641,13 @@ function applyRound(prev, roundInput, policy) {
 
 // ── marker persistence (the house dmtools: marker pattern) ───────────────────
 
-// Marker-hostile sequences: an embedded `-->` would terminate the HTML comment
-// (visually on GitHub, and for the next round's suffix-search parse — the
-// registry would silently revert to the previous round), and an embedded
-// `<!--` would shadow the marker prefix search. A zero-width space breaks
-// both sequences while staying invisible in the rendered text.
-function markerSafe(text) {
-    return String(text || '')
-        .replace(/-->/g, '--\u200b>')
-        .replace(/<!--/g, '<!\u200b--');
-}
-
-// Every string entering the payload is marker-safe — withdrawReason, fixHunk
-// and any future free-text field (reviewer text is data, not protocol).
-function markerSafeReplacer(key, value) {
-    return typeof value === 'string' ? markerSafe(value) : value;
-}
+// Marker hygiene (escaping) and the parse walk live in reviewVerdicts — the
+// shared dmtools: marker plumbing (gh-1329 rework, gh-1251 duplication
+// ratchet): this module keeps only its MARKER_PREFIX and payload adapter.
+// The registry keeps the SHAPE-AGNOSTIC walk (no fail-closed gate): its
+// callers pass the machine-author allowlist when one is configured, and a
+// missing allowlist degrades to "read every registry marker" — context
+// injection only, never a verdict re-route.
 
 function registryPayload(registry) {
     return {
@@ -706,7 +684,7 @@ function buildRegistryComment(registry) {
     if (!registry || !Array.isArray(registry.items)) return null;
     var payload = registryPayload(registry);
     var note = registryNote(openItemCount(payload.items), payload.pending.length);
-    return MARKER_PREFIX + JSON.stringify(payload, markerSafeReplacer) + MARKER_SUFFIX + '\n' + note;
+    return MARKER_PREFIX + JSON.stringify(payload, reviewVerdicts.markerSafeReplacer) + MARKER_SUFFIX + '\n' + note;
 }
 
 // The machine-author trust gate (allowlist, '[bot]'-normalized login match)
@@ -738,7 +716,6 @@ function registryFromPayload(parsed) {
 
 // The atMs-based records order is the reviewVerdicts marker-convention one
 // (payload order as the tiebreak, unparseable timestamps sink to the front).
-var registryTimestampComparator = reviewVerdicts.markerRecordComparator;
 
 /**
  * The PR comments list shape shared by both wiring sites (the post-review
@@ -758,16 +735,11 @@ function normalizePrCommentList(raw) {
  * records oldest-first.
  */
 function parseRegistryComments(comments, opts) {
-    var records = reviewVerdicts.collectAllowedRecords(comments, opts, function(item) {
-        var reg = registryFromPayload(reviewVerdicts.extractMarkerJson(
-            item && item.body, MARKER_PREFIX, MARKER_SUFFIX));
-        return reg ? { registry: reg, at: reg.at } : null;
-    });
-    records.forEach(function(rec) {
-        rec.atMs = Date.parse(rec.at);
-    });
-    records.sort(registryTimestampComparator);
-    return records;
+    return reviewVerdicts.parseMarkerComments(comments, opts, MARKER_PREFIX, MARKER_SUFFIX,
+        function(parsed) {
+            var reg = registryFromPayload(parsed);
+            return reg ? { registry: reg, at: reg.at } : null;
+        }, false);
 }
 
 /**
@@ -870,7 +842,7 @@ function buildEscalationPacketComment(registry) {
         packet.rounds.map(function(r) { return 'round ' + r.round + ': ' + r.newIdentities; }).join(', ') + '.'];
     packet.blockingWithdrawals.forEach(function(w) {
         lines.push('\uD83D\uDEA8 F' + w.n + ' (' + w.severity + ') ' + w.file +
-            ' \u2014 withdrawn: "' + markerSafe(w.reason) + '" (no fixing hunk cited)');
+            ' \u2014 withdrawn: "' + reviewVerdicts.markerSafe(w.reason) + '" (no fixing hunk cited)');
     });
     return lines.join('\n');
 }

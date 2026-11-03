@@ -17,8 +17,8 @@
    - Check `testing/tests/{TC_KEY}/`.
    - If it exists, run it.
    - If missing, write a new automated test that reproduces the bug and verifies the fix.
-3. Re-run failed tests once to confirm real failure.
-4. Write `outputs/story_test_automation_result.json` with the shared schema.
+3. Re-run failed tests once to confirm real failure, and record the outcome as `retryStatus` (`green` when the re-run passed, `red` when it failed again).
+4. Write `outputs/story_test_automation_result.json` with the shared schema, including the failure-attribution triage metadata on every failed entry (`errorClass`, `envFingerprint` when known, `retryStatus`, and the TC's `role` / `verifies` copied from its description).
 5. Write `outputs/tracker_comment.md` summarizing the bulk run.
 6. For each failed Test Case, write `outputs/failed_description_{TC_KEY}.md`.
 
@@ -29,3 +29,4 @@
 - Do NOT modify feature code.
 - Each new `testing/tests/{TC_KEY}/` folder must contain `README.md` and `config.yaml`.
 - Focus tests on the bug regression scenario.
+- **Failure attribution**: a red Test Case is not automatically a product failure — it may be a stale test, an environment shift or a flake. Record the triage evidence: `errorClass`, `retryStatus`, `differential`, `acVerdict`. The pipeline triages and only an attributed regression returns the bug to development. Never bounce a bug from the automation leg.

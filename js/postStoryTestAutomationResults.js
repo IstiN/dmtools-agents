@@ -23,6 +23,13 @@ const { GIT_CONFIG, LABELS, JIRA_FIELDS } = require('./config.js');
 var outputFiles = require('./common/outputFiles.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var shared = require('./postStoryTestAutomationShared.js');
+// gh-1329: attribute linked-TC failures before bouncing a bug.
+var tcTriage = require('./common/tcTriage.js');
+var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
+var tcRunRegistry = require('./common/tcRunRegistry.js');
+// gh-1329 review: the shared "load bug bookkeeping" helper (one getIssue,
+// one machine-author resolution) for both legs that read the markers.
+var bugBookkeeping = require('./common/bugBookkeeping.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -127,7 +134,14 @@ function buildResumePrompt(storyKey, linkedTestCases, result, missingKeys) {
                         "status": { "type": "string", "enum": ["passed", "failed", "skipped", "irrelevant"] },
                         "testPath": { "type": "string" },
                         "failedDescriptionFile": { "type": "string" },
-                        "failureSummary": { "type": "string" }
+                        "failureSummary": { "type": "string" },
+                        "errorClass": { "type": "string", "enum": ["element-not-found", "assertion", "timeout", "navigation", "crash", "unknown"] },
+                        "envFingerprint": { "type": "string" },
+                        "retryStatus": { "type": "string", "enum": ["green", "red"] },
+                        "differential": { "type": "string", "enum": ["green", "red", "unavailable"] },
+                        "acVerdict": { "type": "string", "enum": ["violated", "intact"] },
+                        "role": { "type": "string" },
+                        "verifies": { "type": "string" }
                     },
                     "additionalProperties": false
                 }
@@ -601,9 +615,10 @@ function action(params) {
 
         const overall = (result.overall || '').toLowerCase();
 
-        // For a Bug, a product failure means the fix did not work. Send the Bug
-        // straight back to development and finalize the failing Test Cases as Failed.
-        var bugResult = handleBugWithProductFailure(params, result, ctx.storyKey, ctx.jiraConfig, ctx.statuses, ctx.config, ctx.workingDir);
+        // For a Bug, failed TCs are triaged before any bounce (gh-1329):
+        // roles, fingerprints and the differential rerun attribute each
+        // failure; only an earned bounce returns the bug to development.
+        var bugResult = handleBugWithProductFailure(params, result, ctx);
         if (bugResult) {
             return bugResult;
         }
@@ -700,8 +715,20 @@ function finalizeFailedBugTestCases(failedResults, workingDir, storyKey, config,
     });
 }
 
-/** Moves the Bug back to Ready For Development and posts the failure summary. */
-function returnBugToDevelopment(storyKey, failedResults, statuses) {
+/**
+ * Bug with a test-side triage route: stage the TC as In Review - Failed with
+ * the failure evidence attached, but do NOT finalize it as Failed — the
+ * final status reads as a product failure, and these routes are test-side
+ * (maintenance / rework / differential rerun) with the bug unchanged.
+ */
+function stageRoutedBugTestCases(routedVerdicts, workingDir, storyKey, config) {
+    routedVerdicts.forEach(function(v) {
+        updateTestCaseStatus(v.tcKey, 'failed', workingDir, storyKey, config);
+    });
+}
+
+/** Moves the Bug back to Ready For Development (the earned-bounce move). */
+function moveBugToDevelopment(storyKey, statuses) {
     var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT;
     try {
         getTracker().moveToStatus(storyKey, bugReturnStatus);
@@ -709,40 +736,458 @@ function returnBugToDevelopment(storyKey, failedResults, statuses) {
     } catch (moveErr) {
         console.warn('Failed to move Bug', storyKey, 'to', bugReturnStatus, ':', moveErr);
     }
+}
 
+/** The per-TC failure list lines (legacy comment shape). */
+function failureListLines(failedResults) {
+    return failedResults.map(function(r) {
+        return '* ' + r.testCaseKey + (r.failureSummary ? ' — ' + r.failureSummary : '');
+    }).join('\n');
+}
+
+/**
+ * The bounce comment: ONE TC list (gh-1329 review — the legacy list and the
+ * tcTriage bounce list rendered the same header + list twice back-to-back).
+ * The verdict-attributed list carries the failure summaries and the earned
+ * evidence per bounced TC; the legacy list remains the no-verdict fallback.
+ */
+function bugReturnComment(failedResults, bouncedVerdicts) {
+    var comment = 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n';
+    if (bouncedVerdicts && bouncedVerdicts.length) {
+        comment += tcTriage.buildBounceComment(bouncedVerdicts) + '\n\n';
+    } else {
+        comment += 'The following Test Cases failed with a product regression:\n' +
+            failureListLines(failedResults) + '\n\n';
+    }
+    comment += 'The Bug is being returned to *Ready For Development* for a corrected fix.';
+    return comment;
+}
+
+/** Moves the Bug back to Ready For Development and posts the failure summary. */
+function returnBugToDevelopment(storyKey, failedResults, statuses, bouncedVerdicts) {
+    moveBugToDevelopment(storyKey, statuses);
     try {
-        var failureList = failedResults.map(function(r) { return '* ' + r.testCaseKey + (r.failureSummary ? ' — ' + r.failureSummary : ''); }).join('\n');
-        getTracker().postComment(storyKey, 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n\nThe following Test Cases failed with a product regression:\n' + failureList + '\n\nThe Bug is being returned to *Ready For Development* for a corrected fix.');
+        getTracker().postComment(storyKey, bugReturnComment(failedResults, bouncedVerdicts || []));
     } catch (e) {
         console.warn('Failed to post bug return comment:', e);
     }
 }
 
+// ── gh-1329: failure attribution before any bounce ───────────────────────────
+
 /**
- * Bug with a real product failure: the fix did not work — send the Bug
- * straight back to development and finalize the failing Test Cases as Failed.
- * Returns the action result when this path handled the run, null otherwise.
+ * The build SHA a result entry declares (entry sha wins, then the
+ * result-level buildSha), or null when neither carries one.
  */
-function handleBugWithProductFailure(params, result, storyKey, jiraConfig, statuses, config, workingDir) {
-    var issueType = (params.ticket && params.ticket.fields &&
-        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name) || 'Story';
-    var failedResults = (result.results || []).filter(function(r) {
-        return r.status === 'failed';
+function declaredBuildSha(result, entry) {
+    if (entry && entry.sha) return String(entry.sha);
+    if (result && result.buildSha) return String(result.buildSha);
+    return null;
+}
+
+/** The checked-out test branch HEAD — resolved at most once per run. */
+function repoHeadSha(workingDir) {
+    try {
+        var out = runInRepo('git rev-parse HEAD', workingDir) || '';
+        var sha = cleanCommandOutput(String(out)).split('\n')[0].trim();
+        return sha || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function currentBuildSha(result, entry, workingDir) {
+    return declaredBuildSha(result, entry) || repoHeadSha(workingDir);
+}
+
+/** One entry's build SHA: entry/result still win over the run-level HEAD. */
+function entryBuildSha(entry, result, runBuildSha) {
+    return declaredBuildSha(result, entry) || runBuildSha;
+}
+
+function maxReworkRoundsOf(customParams) {
+    var n = parseInt(customParams && customParams.maxReworkRounds, 10);
+    return n > 0 ? n : tcTriage.DEFAULT_MAX_REWORK_ROUNDS;
+}
+
+/** The scripted differential rerun outcome ('green'|'red'|'unavailable'|null). */
+function normalizeDifferential(raw) {
+    var v = String(raw || '').toLowerCase().trim();
+    if (v === 'green' || v === 'red' || v === 'unavailable') return v;
+    return null;
+}
+
+/** The TC-rework leg's AC re-check verdict ('violated'|'intact'|null). */
+function normalizeAcVerdict(raw) {
+    var v = String(raw || '').toLowerCase().trim();
+    if (v === 'violated' || v === 'intact') return v;
+    return null;
+}
+
+/**
+ * Role metadata for one result entry — the LINKED TC's own metadata wins
+ * (gh-1329 review: the TC ticket is the durable record; the result file is
+ * per-run and agent-copied). A missing linked entry falls back to the
+ * result entry; any role disagreement leaves a warning trace.
+ */
+function linkedRoleFieldsOf(linkedEntry) {
+    var fields = linkedEntry && linkedEntry.fields;
+    if (fields && (fields.role || fields.verifies)) return fields;
+    return null;
+}
+
+function linkedRoleSourceOf(linkedEntry) {
+    if (!linkedEntry) return null;
+    if (linkedEntry.role || linkedEntry.verifies || linkedEntry.regressionGuard !== undefined) return linkedEntry;
+    return linkedRoleFieldsOf(linkedEntry);
+}
+
+function linkedRoleAwareEntry(entry, linked) {
+    var base = entry || {};
+    return {
+        role: linked.role !== undefined ? linked.role : base.role,
+        tcRole: linked.tcRole !== undefined ? linked.tcRole : base.tcRole,
+        verifies: linked.verifies !== undefined ? linked.verifies : base.verifies,
+        regressionGuard: linked.regressionGuard !== undefined ? linked.regressionGuard : base.regressionGuard
+    };
+}
+
+/** A mis-scoped oracle must leave a trace, not silently demote the gate. */
+function warnOnRoleDisagreement(entry, linked, bugKey) {
+    var entryRole = tcTriage.resolveTcRole(entry, bugKey);
+    var linkedRole = tcTriage.resolveTcRole(linked, bugKey);
+    if (entryRole === linkedRole) return;
+    console.warn('gh-1329: role scoping disagreement for a linked TC — result entry says "' + entryRole +
+        '" (verifies: ' + (entry && entry.verifies ? entry.verifies : 'n/a') +
+        '), the linked TC metadata says "' + linkedRole +
+        '" (verifies: ' + (linked && linked.verifies ? linked.verifies : 'n/a') +
+        ') — the linked TC metadata wins');
+}
+
+function entryRoleMeta(entry, linkedEntry, bugKey) {
+    var linked = linkedRoleSourceOf(linkedEntry);
+    if (!linked) return entry || {};
+    warnOnRoleDisagreement(entry, linked, bugKey);
+    return linkedRoleAwareEntry(entry, linked);
+}
+
+/** The gh-1329 result-schema triage fields (their absence stalls attribution). */
+var TRIAGE_SCHEMA_FIELDS = ['acVerdict', 'retryStatus', 'errorClass'];
+
+function entryCarriesTriageFields(entry) {
+    return TRIAGE_SCHEMA_FIELDS.some(function(f) {
+        return entry[f] !== undefined && entry[f] !== null && entry[f] !== '';
     });
-    if (issueType !== jiraConfig.issueTypes.BUG || failedResults.length === 0) {
+}
+
+/**
+ * The linked-TC map for the run (readLinkedTestCases, keyed by TC key).
+ */
+function linkedTestCaseMap(ctx) {
+    var linkedMap = {};
+    readLinkedTestCases(ctx.storyKey, ctx.testCaseType).forEach(function(tc) {
+        if (tc && tc.key) linkedMap[tc.key] = tc;
+    });
+    return linkedMap;
+}
+
+function newTriageOutcome(bookkeeping) {
+    return {
+        bounced: [], routed: [], escalated: [], transient: [],
+        schemaGapTestCases: [],
+        registry: bookkeeping.registry, ledger: bookkeeping.ledger
+    };
+}
+
+/** The registry's last-green record for a TC, or null while unvalidated. */
+function lastGreenOf(registry, tcKey) {
+    var state = tcRunRegistry.stateOf(registry, tcKey);
+    return (state && state.validated) ? {
+        sha: state.lastGreenSha,
+        envFingerprint: state.lastGreenEnvFingerprint
+    } : null;
+}
+
+/** The triage-engine input for one result entry. */
+function triageInputForEntry(entry, vars) {
+    var tcKey = entry.testCaseKey;
+    return {
+        tcKey: tcKey,
+        role: vars.role,
+        validated: tcRunRegistry.isValidated(vars.outcome.registry, tcKey),
+        current: {
+            sha: entryBuildSha(entry, vars.result, vars.runBuildSha),
+            envFingerprint: entry.envFingerprint || null
+        },
+        lastGreen: lastGreenOf(vars.outcome.registry, tcKey),
+        retryGreen: entry.retryStatus === 'green' || entry.retryGreen === true,
+        differential: normalizeDifferential(entry.differential),
+        acVerdict: normalizeAcVerdict(entry.acVerdict),
+        redRounds: tcRunRegistry.redRoundsOf(vars.outcome.registry, tcKey),
+        maxReworkRounds: vars.maxRework,
+        errorClass: entry.errorClass,
+        testPath: entry.testPath,
+        failedDescriptionFile: entry.failedDescriptionFile,
+        failureSummary: entry.failureSummary
+    };
+}
+
+function routeVerdict(outcome, entry, verdict) {
+    if (verdict.action === tcTriage.ACTION_BOUNCE) outcome.bounced.push({ entry: entry, verdict: verdict });
+    else if (verdict.action === tcTriage.ACTION_ESCALATE) outcome.escalated.push(verdict);
+    else if (verdict.action === tcTriage.ACTION_NONE) outcome.transient.push(verdict);
+    else outcome.routed.push(verdict);
+}
+
+/** The triage of one failed entry: ledger, registry streak, route bucket. */
+function triageFailedEntry(outcome, entry, vars) {
+    var verdict = tcTriage.triageFailure(triageInputForEntry(entry, vars));
+    if (vars.role === tcTriage.ROLE_OWN && !entryCarriesTriageFields(entry)) {
+        outcome.schemaGapTestCases.push(vars.tcKey);
+    }
+    if (verdict.ledgerEntry) {
+        outcome.ledger = tcMaintenanceLedger.appendFinding(
+            outcome.ledger, tcMaintenanceLedger.findingFromVerdict(verdict, { at: vars.at }));
+    }
+    if (verdict.action !== tcTriage.ACTION_NONE) {
+        // A transient flake (retry green) is "nothing happened" — it
+        // never counts toward the bounce streak.
+        outcome.registry = tcRunRegistry.recordFailure(outcome.registry, vars.tcKey, {
+            at: vars.at, verdict: verdict.action, role: vars.role
+        });
+    }
+    routeVerdict(outcome, entry, verdict);
+}
+
+function recordPassedEntry(outcome, entry, vars) {
+    outcome.registry = tcRunRegistry.recordGreen(outcome.registry, entry.testCaseKey, {
+        sha: entryBuildSha(entry, vars.result, vars.runBuildSha),
+        envFingerprint: entry.envFingerprint || null,
+        role: vars.role,
+        at: vars.at
+    });
+}
+
+function applyEntryToOutcome(outcome, entry, vars) {
+    if (!entry || !entry.testCaseKey) return;
+    var role = tcTriage.resolveTcRole(
+        entryRoleMeta(entry, vars.linkedMap[entry.testCaseKey], vars.bugKey), vars.bugKey);
+    if (entry.status === 'failed') {
+        triageFailedEntry(outcome, entry, Object.assign({}, vars, { role: role, tcKey: entry.testCaseKey }));
+        return;
+    }
+    if (entry.status === 'passed') {
+        recordPassedEntry(outcome, entry, Object.assign({}, vars, { role: role }));
+    }
+}
+
+/**
+ * The gh-1329 result-schema hint: failed own-oracle entries carrying NONE
+ * of the triage fields cannot be attributed — without the hint a stalled
+ * bug is indistinguishable from "product didn't regress" while the real
+ * cause is "the agent didn't follow the schema".
+ */
+function schemaGapHintSection(triage) {
+    var tcs = triage.schemaGapTestCases || [];
+    if (!tcs.length) return null;
+    return '⚠️ *gh-1329 triage metadata missing* — the failed TC result entries carried none of ' +
+        'acVerdict / retryStatus / errorClass (' + tcs.join(', ') + '). The automation agent likely ignored ' +
+        'the result schema, so the failures could not be attributed; a failing own-oracle TC routes to rework ' +
+        'and the bug stays in the TC-verification lane until a schema-compliant run lands.';
+}
+
+/**
+ * Triage for every failed TC of a bug run (gh-1329): mechanical, evidence-
+ * producing, and bounce-gated. Greens validate guards into the run
+ * registry. Nothing is dropped: every verdict except a same-build retry
+ * green lands in the maintenance ledger. The build SHA is resolved once
+ * per run (entry overrides still win).
+ */
+function triageBugFailures(params, result, ctx, bookkeeping) {
+    var at = new Date().toISOString();
+    var outcome = newTriageOutcome(bookkeeping);
+    var vars = {
+        outcome: outcome,
+        result: result,
+        bugKey: ctx.storyKey,
+        linkedMap: linkedTestCaseMap(ctx),
+        maxRework: maxReworkRoundsOf(ctx.customParams || {}),
+        runBuildSha: currentBuildSha(result, null, ctx.workingDir),
+        at: at
+    };
+    (result.results || []).forEach(function(entry) {
+        applyEntryToOutcome(outcome, entry, vars);
+    });
+    outcome.registryChanged = JSON.stringify(outcome.registry) !== JSON.stringify(bookkeeping.registry);
+    outcome.ledgerChanged = JSON.stringify(outcome.ledger) !== JSON.stringify(bookkeeping.ledger);
+    outcome.schemaGapHint = schemaGapHintSection(outcome);
+    if (outcome.schemaGapHint) console.warn(outcome.schemaGapHint);
+    return outcome;
+}
+
+/** Posts a machine marker comment when its payload is not already current. */
+function postMarkerIfChanged(storyKey, changed, marker, label) {
+    if (!changed || !marker) return;
+    try {
+        getTracker().postComment(storyKey, marker);
+        console.log('✅ Posted', label, 'marker to', storyKey);
+    } catch (e) {
+        console.warn('Failed to post', label, 'marker (non-fatal):', e);
+    }
+}
+
+/**
+ * AC: failing scripts are always persisted — commit + push the testing tree
+ * onto the test branch (NO PR: the evidence must survive a red result; the
+ * sweep/re-fix legs consume the branch). Best effort: a persistence failure
+ * never re-routes the triage verdicts.
+ */
+function persistBugTestScripts(ctx) {
+    try {
+        runInRepo('git config user.name "' + ctx.config.git.authorName + '"', ctx.workingDir);
+        runInRepo('git config user.email "' + ctx.config.git.authorEmail + '"', ctx.workingDir);
+        var rawBranch = runInRepo('git branch --show-current', ctx.workingDir) || '';
+        var branchName = cleanCommandOutput(rawBranch);
+        if (!branchName) {
+            console.warn('No current branch — failing test scripts not persisted');
+            return;
+        }
+        const commitMessage = configLoader.formatTemplate(
+            ctx.config.formats.commitMessage.testAutomation,
+            { ticketKey: ctx.storyKey, ticketSummary: ctx.storySummary });
+        var gitResult = gitOps.performGitOperations(branchName, commitMessage, ctx.workingDir, ctx.testFilesPath);
+        console.log('✅ Persisted failing test scripts on', branchName, '—', JSON.stringify(gitResult).substring(0, 200));
+    } catch (e) {
+        console.warn('Failed to persist failing test scripts (non-fatal):', e);
+    }
+}
+
+/**
+ * Bug with failed linked TCs — attribute before bouncing (gh-1329):
+ *   - the bug's verdict is gated only by its own oracle TC;
+ *   - fresh TCs route to rework (a fresh TC cannot bounce by construction);
+ *   - validated guards go through the mechanical triage table (retry filter,
+ *     fingerprint lookup, differential rerun);
+ *   - only an earned bounce (own-oracle AC violated / differential-green
+ *     regression) returns the bug to development — bounded, escalation at
+ *     the cap;
+ *   - everything test-side lands in the maintenance ledger; failing scripts
+ *     are always persisted; routed/escalated findings are staged and
+ *     digested on EVERY route (mixed bounce+route runs included).
+ * Returns the action result when this path handled the run, null otherwise
+ * (stories, bugs without failures, and blocked_by_human runs fall through).
+ */
+function handleBugWithProductFailure(params, result, ctx) {
+    if (!isTriagableBugRun(params, result, ctx)) {
         return null;
     }
 
-    console.log('Bug', storyKey, 'has', failedResults.length, 'product failure(s) — returning to development');
-    finalizeFailedBugTestCases(failedResults, workingDir, storyKey, config, jiraConfig);
-    returnBugToDevelopment(storyKey, failedResults, statuses);
+    console.log('Bug', ctx.storyKey, 'has', failedResultsOf(result).length, 'failed TC(s) — triaging before any bounce');
 
-    removeAutomationLabels(storyKey, params);
+    var bookkeeping = bugBookkeeping.loadBugBookkeeping(getTracker(), ctx.storyKey, params, ctx.config);
+    var triage = triageBugFailures(params, result, ctx, bookkeeping);
+
+    persistBugTestScripts(ctx);
+    postMarkerIfChanged(ctx.storyKey, triage.registryChanged, tcRunRegistry.buildRegistryMarker(triage.registry), 'TC run registry');
+    postMarkerIfChanged(ctx.storyKey, triage.ledgerChanged, tcMaintenanceLedger.buildLedgerMarker(triage.ledger), 'TC maintenance ledger');
+
+    if (triage.bounced.length > 0) {
+        return bouncePathResult(triage, params, ctx);
+    }
+    return routePathResult(triage, params, ctx);
+}
+
+/** The bug ticket's issue type ('Story' when the run carries no type). */
+function bugIssueTypeOf(params) {
+    return ((params.ticket && params.ticket.fields &&
+        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name) || 'Story');
+}
+
+function failedResultsOf(result) {
+    return (result.results || []).filter(function(r) {
+        return r.status === 'failed';
+    });
+}
+
+/**
+ * The triage gate: bugs only, at least one failed TC, and not a
+ * blocked_by_human run (missing setup is environment/ops territory — the
+ * blocked gate owns it downstream; nothing there is attributable to the fix).
+ */
+function isTriagableBugRun(params, result, ctx) {
+    if (bugIssueTypeOf(params) !== ctx.jiraConfig.issueTypes.BUG) return false;
+    if (failedResultsOf(result).length === 0) return false;
+    return (result.overall || '').toLowerCase() !== 'blocked_by_human';
+}
+
+/** Routed AND escalated findings get the same human surface on every route. */
+function routedAndEscalated(triage) {
+    return triage.routed.concat(triage.escalated);
+}
+
+function digestSections(triage) {
+    var sections = [];
+    if (triage.routed.length > 0) sections.push(tcTriage.buildTriageComment(triage.routed));
+    if (triage.escalated.length > 0) sections.push(tcTriage.buildEscalationComment(triage.escalated));
+    if (triage.schemaGapHint) sections.push(triage.schemaGapHint);
+    if (sections.length > 0) sections.push(tcMaintenanceLedger.buildDigestComment(triage.ledger));
+    return sections;
+}
+
+/**
+ * The triage digest: posted on EVERY route (mixed bounce+route runs
+ * included) so every attributed finding gets the same human surface.
+ */
+function postTriageDigest(triage, ctx) {
+    var sections = digestSections(triage);
+    if (sections.length === 0) {
+        console.log('All failed TCs resolved as transient (retry green) — nothing routed');
+        return;
+    }
+    try {
+        getTracker().postComment(ctx.storyKey, sections.join('\n\n'));
+        console.log('✅ Posted triage digest for', ctx.storyKey);
+    } catch (e) {
+        console.warn('Failed to post triage digest (non-fatal):', e);
+    }
+}
+
+/**
+ * The earned-bounce route: finalize the bounced TCs as Failed, return the
+ * bug to development with the attribution evidence, and STILL stage +
+ * digest the routed/escalated findings of the same run.
+ */
+function bouncePathResult(triage, params, ctx) {
+    var bouncedEntries = triage.bounced.map(function(b) { return b.entry; });
+    var bouncedVerdicts = triage.bounced.map(function(b) { return b.verdict; });
+    finalizeFailedBugTestCases(bouncedEntries, ctx.workingDir, ctx.storyKey, ctx.config, ctx.jiraConfig);
+    returnBugToDevelopment(ctx.storyKey, bouncedEntries, ctx.statuses, bouncedVerdicts);
+    stageRoutedBugTestCases(routedAndEscalated(triage), ctx.workingDir, ctx.storyKey, ctx.config);
+    postTriageDigest(triage, ctx);
+    removeAutomationLabels(ctx.storyKey, params);
     return {
         success: true,
         status: 'failed',
-        storyKey: storyKey,
-        failedTestCases: failedResults.map(function(r) { return r.testCaseKey; })
+        storyKey: ctx.storyKey,
+        failedTestCases: bouncedEntries.map(function(r) { return r.testCaseKey; }),
+        escalatedTestCases: triage.escalated.map(function(v) { return v.tcKey; })
+    };
+}
+
+/**
+ * Test-side routes: the bug state is unchanged. Stage the TCs (In
+ * Review - Failed + attached evidence) and surface the async digest.
+ */
+function routePathResult(triage, params, ctx) {
+    stageRoutedBugTestCases(routedAndEscalated(triage), ctx.workingDir, ctx.storyKey, ctx.config);
+    postTriageDigest(triage, ctx);
+    removeAutomationLabels(ctx.storyKey, params);
+    return {
+        success: true,
+        status: 'test_maintenance',
+        storyKey: ctx.storyKey,
+        maintenanceTestCases: triage.routed.map(function(v) { return v.tcKey; }),
+        escalatedTestCases: triage.escalated.map(function(v) { return v.tcKey; })
     };
 }
 

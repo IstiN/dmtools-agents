@@ -114,6 +114,9 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/commentMarkup.js': commentMarkupModule
     }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })({});
 
+    var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}));
+    var reviewVerdictsModule = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorModule }));
+    var tcLedgerModule = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './reviewVerdicts.js': reviewVerdictsModule }));
     var requireMap = {
         './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
         './config.js': configModule,
@@ -123,6 +126,9 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/outputFiles.js': outputFiles,
         './common/needsInput.js': loadModule('js/common/needsInput.js'),
         './common/trackers.js': loadTrackersDev(allMocks),
+        './common/machineAuthor.js': machineAuthorModule,
+        './common/tcMaintenanceLedger.js': tcLedgerModule,
+        './common/bugBookkeeping.js': bugBookkeepingModule,
         './developTicketAndCreatePR.js': {
             action: function() { return { success: true, path: 'delegated' }; },
             throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
@@ -163,6 +169,23 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         developTicketRealModule: developTicketRealModule
     };
 }
+
+
+// gh-1329 review: the shared "load bug bookkeeping" helper used by the bug
+// leg (and asserted on directly in test_bugBookkeeping.js).
+var bugBookkeepingModule = loadModule('js/common/bugBookkeeping.js', makeRequire({
+    './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+            './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+        }))
+    })),
+    './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+            './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+        }))
+    })),
+    './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+}));
 
 suite('developBugAndCreatePR', function() {
 
@@ -772,6 +795,13 @@ suite('developBugAndCreatePR', function() {
                     }
                 }),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
+                './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
+                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+                        './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+                    }))
+                })),
+                './common/bugBookkeeping.js': bugBookkeepingModule,
                 './developTicketAndCreatePR.js': { action: function () { throw marked; }, classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); } },
                 './common/feedbackLoop.js': {
                     runQualityGates: function () { return { success: true }; },
@@ -947,6 +977,13 @@ function loadBugForMissingResponseResume(opts) {
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': realOutputFiles,
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
+            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+                    './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+                }))
+            })),
+            './common/bugBookkeeping.js': bugBookkeepingModule,
             // SPY: a direct resumeOnceForMissingResponse call from the bug leg
             // is forbidden — the shared gate owns the resume (gh-775 review
             // round 1, IMPORTANT thread).
@@ -1405,6 +1442,13 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
                 './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), allMocks),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './common/trackers.js': loadTrackersDev(allMocks),
+                './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
+                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+                        './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+                    }))
+                })),
+                './common/bugBookkeeping.js': bugBookkeepingModule,
                 './developTicketAndCreatePR.js': {
                     action: function () { delegated++; return { success: true, path: 'delegated' }; },
                     classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); },
@@ -1961,5 +2005,140 @@ suite('developBugAndCreatePR — resume fixture helpers (gh-1230 characterizatio
             delegate('TS-2', { b: 2 }, 'sum2', true, 'boom'),
             { attempted: false, reason: 'gate', ticketKey: 'TS-2', hasFatal: true, msg: 'boom', customParams: { b: 2 }, summary: 'sum2' });
         assert.equal(calls2.length, 1, 'delegated call recorded too');
+    });
+});
+
+// ── gh-1329: the structured dev exit — outputs/test_suspected.json ──────────
+
+suite('developBugAndCreatePR: gh-1329 test_suspected dev exit', function() {
+
+    function testSuspectedModule(claim, bugComments) {
+        return loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/test_suspected.json') {
+                    return JSON.stringify(claim);
+                }
+                throw new Error('missing ' + args.path);
+            },
+            jira_get_ticket: function(args) {
+                if (args && args.key === 'BUG-1400') {
+                    return JSON.stringify({ key: 'BUG-1400', fields: { comment: { comments: bugComments || [] } } });
+                }
+                return null;
+            }
+        });
+    }
+
+    test('test_suspected.json routes the claim to the maintenance ledger and returns the bug to TC verification', function() {
+        var loaded = testSuspectedModule({
+            tcKey: 'TS-1401',
+            claimedVerdict: 'stale-test',
+            reason: 'TC asserts the old column name; the AC names the renamed one',
+            evidence: 'outputs/rca.md',
+            errorClass: 'assertion',
+            testPath: 'testing/tests/TS-1401/test.py'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'BUG-1400', fields: { summary: 'Suspected stale test', issuetype: { name: 'Bug' } } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { machineAuthor: 'ai-teammate', customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'test_suspected');
+
+        var marker = loaded.comments.filter(function(c) { return c.comment.indexOf('dmtools:tc-maintenance-ledger') !== -1; });
+        assert.equal(marker.length, 1, 'the ledger marker lands on the bug ticket');
+        assert.contains(marker[0].comment, 'TS-1401');
+        assert.contains(marker[0].comment, 'dev-test-suspected');
+
+        var digest = loaded.comments.filter(function(c) { return c.comment.indexOf('maintenance ledger digest') !== -1; });
+        assert.equal(digest.length, 1, 'the async owner digest is posted');
+        assert.notContains(digest[0].comment, 'MUST', 'the digest never demands action');
+
+        assert.deepEqual(loaded.moves, [{ key: 'BUG-1400', statusName: 'In Testing' }],
+            'the bug returns to the TC-verification lane — its verdict stays gated by its own oracle TC');
+        assert.deepEqual(loaded.removed, [
+            { key: 'BUG-1400', label: 'bug_development_wip' },
+            { key: 'BUG-1400', label: 'sm_bug_development_triggered' }
+        ]);
+    });
+
+    test('an existing trusted ledger is extended, not replaced', function() {
+        var existingMarker = '<!-- dmtools:tc-maintenance-ledger {"v":1,"at":"2026-01-01T00:00:00.000Z","findings":[{"id":"aaaaaaaaaaaaaaaa","tcKey":"TS-1402","role":null,"verdict":"maintenance","reason":"flaky-same-build","errorClass":"timeout","testPath":"testing/tests/TS-1402/t.py","failedDescriptionFile":null,"failureSummary":"","note":null,"claimedVerdict":null,"evidence":null,"sha":null,"envFingerprint":null,"lastGreenSha":null,"lastGreenEnvFingerprint":null,"source":"automation","status":"open","firstSeenAt":"2026-01-01T00:00:00.000Z","lastSeenAt":"2026-01-01T00:00:00.000Z","occurrences":1,"resolvedAt":null,"resolvedVia":null}]} -->';
+        var loaded = testSuspectedModule(
+            { tcKey: 'TS-1403', reason: 'test targets a different behavior' },
+            [{ body: existingMarker, user: { login: 'ai-teammate' } }]
+        );
+
+        var result = loaded.mod.action({
+            ticket: { key: 'BUG-1400', fields: { summary: 'Suspected stale test', issuetype: { name: 'Bug' } } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { machineAuthor: 'ai-teammate', customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+
+        assert.equal(result.path, 'test_suspected');
+        var marker = loaded.comments.filter(function(c) { return c.comment.indexOf('dmtools:tc-maintenance-ledger') !== -1; });
+        assert.equal(marker.length, 1);
+        assert.contains(marker[0].comment, 'TS-1402', 'the prior finding survives');
+        assert.contains(marker[0].comment, 'TS-1403', 'the dev claim is appended');
+    });
+
+    test('a malformed claim (no TC key) is rejected and the normal fix path proceeds', function() {
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/test_suspected.json') {
+                    return JSON.stringify({ reason: 'no tcKey here' });
+                }
+                if (args.path === 'outputs/response.md') return '# Fix delivered\n';
+                throw new Error('missing ' + args.path);
+            }
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'BUG-1400', fields: { summary: 'Malformed claim', issuetype: { name: 'Bug' } } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+        assert.equal(result.path, 'delegated', 'falls through to the normal fix path');
+    });
+
+    test('AC: a failed marker/digest post leaves a warning — the catch is never silent', function() {
+        var warnings = [];
+        var origWarn = console.warn;
+        console.warn = function() {
+            warnings.push(Array.prototype.slice.call(arguments).map(String).join(' '));
+        };
+        var loaded;
+        try {
+            loaded = loadDevelopBugAndCreatePR({
+                file_read: function(args) {
+                    if (args.path === 'outputs/test_suspected.json') {
+                        return JSON.stringify({ tcKey: 'TS-1405', claimedVerdict: 'stale-test', reason: 'TC asserts the old column name' });
+                    }
+                    throw new Error('missing ' + args.path);
+                },
+                jira_get_ticket: function(args) {
+                    if (args && args.key === 'BUG-1400') {
+                        return JSON.stringify({ key: 'BUG-1400', fields: { comment: { comments: [] } } });
+                    }
+                    return null;
+                },
+                jira_post_comment: function() { throw new Error('tracker down'); }
+            });
+            loaded.result = loaded.mod.action({
+                ticket: { key: 'BUG-1400', fields: { summary: 'Suspected stale test', issuetype: { name: 'Bug' } } },
+                metadata: { contextId: 'bug_development' },
+                jobParams: { machineAuthor: 'ai-teammate', customParams: { removeLabel: 'sm_bug_development_triggered' } }
+            });
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(loaded.result.success, true, 'the post failure stays non-fatal');
+        assert.equal(loaded.result.path, 'test_suspected');
+        assert.ok(warnings.some(function(w) { return w.indexOf('ledger marker') !== -1; }),
+            'the dropped ledger marker is logged, not swallowed');
+        assert.deepEqual(loaded.moves, [{ key: 'BUG-1400', statusName: 'In Testing' }],
+            'the bug still returns to the TC-verification lane');
     });
 });

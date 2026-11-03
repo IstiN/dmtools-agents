@@ -33,6 +33,12 @@ var trackersModule = require('./common/trackers.js');
 // ai_questions_asked label and the green needsInput outcome body are shared
 // with the story and batch legs (review round 1, bug-legs thread).
 var needsInputCommon = require('./common/needsInput.js');
+// gh-1329: the structured dev exit — outputs/test_suspected.json routes
+// machine-side into the rolling TC maintenance ledger.
+var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
+// gh-1329 review: the shared "load bug bookkeeping" helper (one getIssue,
+// one machine-author resolution) for both legs that read the markers.
+var bugBookkeeping = require('./common/bugBookkeeping.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -637,11 +643,71 @@ function resolvePrAlreadyOpenOutcome(ticketKey, scm, expectedBranch, tracker, st
     return null;
 }
 
+/** The ledger marker post (non-fatal, never silent — a dropped marker drifts occurrences). */
+function postLedgerMarker(ticketKey, ledger, tracker) {
+    try {
+        tracker.postComment(ticketKey, tcMaintenanceLedger.buildLedgerMarker(ledger));
+    } catch (e) {
+        console.warn('Failed to post TC maintenance ledger marker (non-fatal):', e);
+    }
+}
+
+/** The dev-claim owner digest post (non-fatal, never silent). */
+function postDevClaimDigest(ticketKey, ledger, tracker) {
+    try {
+        tracker.postComment(ticketKey,
+            '\uD83D\uDD0D Dev leg claims a test-side cause (gh-1329) — outputs/test_suspected.json routed to the TC maintenance ledger.\n\n' +
+            tcMaintenanceLedger.buildDigestComment(ledger));
+    } catch (e) {
+        console.warn('Failed to post dev-claim digest (non-fatal):', e);
+    }
+}
+
+/** The bug returns to the TC-verification lane (verdict stays oracle-gated). */
+function moveBugToTesting(ticketKey, jiraConfig, tracker) {
+    try {
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_TESTING);
+        console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.IN_TESTING, '— verdict stays gated by its own oracle TC');
+    } catch (e) {
+        console.warn('Failed to move to In Testing:', e);
+    }
+}
+
+/**
+ * gh-1329: the structured dev exit. The agent claims the failing test is
+ * wrong (verdict + evidence + TC key in outputs/test_suspected.json); the
+ * claim is machine-routed into the TC maintenance ledger (marker on the bug
+ * ticket) and the bug returns to the TC-verification lane — its verdict
+ * stays gated by its own oracle TC while the TC-rework leg re-checks the
+ * suspected test against the AC. The owner surface is the async digest;
+ * nothing here asks a human anything.
+ */
+function completeTestSuspectedPath(ticketKey, claim, tracker, jiraConfig, params, config) {
+    var bookkeeping = bugBookkeeping.loadBugBookkeeping(tracker, ticketKey, params, config);
+    var ledger = tcMaintenanceLedger.appendFinding(
+        bookkeeping.ledger, tcMaintenanceLedger.findingFromDevClaim(claim));
+
+    postLedgerMarker(ticketKey, ledger, tracker);
+    postDevClaimDigest(ticketKey, ledger, tracker);
+    moveBugToTesting(ticketKey, jiraConfig, tracker);
+
+    removeLabels(ticketKey, params, tracker);
+    return { success: true, path: 'test_suspected', ticketKey };
+}
+
+/** The claim is machine-usable only with the TC key it suspects (§6 contract). */
+function isValidTestSuspectedClaim(claim) {
+    return !!(claim && (claim.tcKey || claim.testCaseKey));
+}
+
 /**
  * gh-1188: Paths 1+2 (blocked / already-fixed outputs) extracted from
  * action — returns the handled outcome, or null when neither file exists.
+ * gh-1329: Path 2b — outputs/test_suspected.json (claimed test-side
+ * verdict) routes to the maintenance ledger; a malformed claim falls
+ * through to the normal fix path.
  */
-function resolveSpecialOutputPath(ticketKey, tracker, statuses, jiraConfig, params) {
+function resolveSpecialOutputPath(ticketKey, tracker, statuses, jiraConfig, params, config) {
     const blocked = readJson('outputs/blocked.json');
     if (blocked) {
         console.log('outputs/blocked.json found — bug cannot be fixed automatically');
@@ -652,6 +718,16 @@ function resolveSpecialOutputPath(ticketKey, tracker, statuses, jiraConfig, para
     if (alreadyFixed) {
         console.log('outputs/already_fixed.json found — bug already resolved in codebase');
         return completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraphUsage(), tracker, jiraConfig, params);
+    }
+
+    const testSuspected = readJson('outputs/test_suspected.json');
+    if (testSuspected) {
+        if (!isValidTestSuspectedClaim(testSuspected)) {
+            console.warn('outputs/test_suspected.json rejected — no TC key in the claim; proceeding with the normal fix path');
+        } else {
+            console.log('outputs/test_suspected.json found — dev claims a test-side cause; routing to the TC maintenance ledger');
+            return completeTestSuspectedPath(ticketKey, testSuspected, tracker, jiraConfig, params, config);
+        }
     }
 
     return null;
@@ -736,8 +812,8 @@ function action(params) {
             return prOpenResult;
         }
 
-        // ── Path 1: Blocked / Path 2: Already Fixed ─────────────────────────
-        const specialResult = resolveSpecialOutputPath(ticketKey, tracker, ctx.statuses, ctx.jiraConfig, params);
+        // ── Path 1: Blocked / Path 2: Already Fixed / Path 2b: Test Suspected ─
+        const specialResult = resolveSpecialOutputPath(ticketKey, tracker, ctx.statuses, ctx.jiraConfig, params, config);
         if (specialResult) {
             return specialResult;
         }

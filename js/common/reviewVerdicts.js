@@ -244,6 +244,79 @@ function markerRecordComparator(a, b) {
     return (a.order || 0) - (b.order || 0);
 }
 
+// ── gh-1329 rework: the shared marker plumbing ───────────────────────────────
+// The three machine-marker modules (findingRegistry, tcRunRegistry,
+// tcMaintenanceLedger) carried byte-identical copies of the marker-hygiene
+// escaping and the parse-records walk — the gh-1251 duplication ratchet
+// flagged all three files (tcRunRegistry 7.29% was the red gate). The shared
+// helpers live here, beside the walk's other halves (collectAllowedRecords,
+// extractMarkerJson, markerRecordComparator); every marker module now
+// delegates.
+
+// Marker-hostile sequences: an embedded `-->` would terminate the HTML
+// comment (visually on GitHub, and for the next round's suffix-search
+// parse), and an embedded `<!--` would shadow the marker prefix search. A
+// zero-width space breaks both sequences while staying invisible in the
+// rendered text.
+function markerSafe(text) {
+    return String(text || '')
+        .replace(/-->/g, '--\u200b>')
+        .replace(/<!--/g, '<!\u200b--');
+}
+
+// Every string entering a marker payload is marker-safe — free text (reviewer
+// text is data, not protocol) can never break out of the marker format.
+function markerSafeReplacer(key, value) {
+    return typeof value === 'string' ? markerSafe(value) : value;
+}
+
+// The configured-identity gate for the FAIL-CLOSED marker families (the run
+// registry and the maintenance ledger re-route bug verdicts, so an absent
+// allowlist trusts nothing). The finding registry keeps its shape-agnostic
+// walk (no gate) — the flag selects.
+function authorConfigured(opts) {
+    return !!(opts && Array.isArray(opts.authorLogins) && opts.authorLogins.length > 0);
+}
+
+/**
+ * Parses ALL <prefix>…<suffix> marker records from a comments payload —
+ * comments: [{body}] (author fields consulted only when opts.authorLogins is
+ * passed). `payloadAdapter(parsedJson)` returns the record (its `at` field
+ * feeds the ordering) or null for a foreign/unparseable payload. With
+ * `failClosed` an absent/empty author allowlist trusts nothing. Returns
+ * records oldest-first (markerRecordComparator — atMs stamped from `at`).
+ */
+function parseMarkerComments(comments, opts, prefix, suffix, payloadAdapter, failClosed) {
+    if (failClosed && !authorConfigured(opts)) return [];
+    var records = collectAllowedRecords(comments, opts, function(item) {
+        return payloadAdapter(extractMarkerJson(item && item.body, prefix, suffix));
+    });
+    records.forEach(function(rec) {
+        rec.atMs = Date.parse(rec.at);
+    });
+    records.sort(markerRecordComparator);
+    return records;
+}
+
+// The marker families' shared finding-identity hash (the gh-1332 scheme —
+// FNV-1a 32-bit, Math.imul keeps the multiply exact; two bases concatenated
+// → a 16-hex id). Both registries built byte-identical copies; the
+// duplication ratchet flagged the ledger's copy, so the helpers live here.
+function fnv1a(text, basis) {
+    var h = basis >>> 0;
+    for (var i = 0; i < text.length; i++) {
+        h = h ^ text.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h;
+}
+
+function hex8(n) {
+    var s = (n >>> 0).toString(16);
+    while (s.length < 8) s = '0' + s;
+    return s;
+}
+
 // gh-1196: the records order — oldest-first, payload order as the tiebreak.
 function verdictTimestampComparator(a, b) {
     var ta = Date.parse(a.at), tb = Date.parse(b.at);
@@ -615,6 +688,11 @@ if (typeof module !== 'undefined' && module.exports) {
         authorAllowed: authorAllowed,
         collectAllowedRecords: collectAllowedRecords,
         markerRecordComparator: markerRecordComparator,
+        markerSafe: markerSafe,
+        markerSafeReplacer: markerSafeReplacer,
+        parseMarkerComments: parseMarkerComments,
+        fnv1a: fnv1a,
+        hex8: hex8,
         VERDICTS: VERDICTS,
         LABEL_APPROVED: LABEL_APPROVED,
         LABEL_REWORK: LABEL_REWORK,

@@ -117,7 +117,14 @@ Write `outputs/story_test_automation_result.json` in a single `Write` call (do N
       "status": "passed|failed|skipped|irrelevant",
       "testPath": "testing/tests/TS-124/...",
       "failedDescriptionFile": "outputs/failed_description_TS-124.md",
-      "failureSummary": "One-line failure summary when status is failed."
+      "failureSummary": "One-line failure summary when status is failed.",
+      "errorClass": "element-not-found|assertion|timeout|navigation|crash|unknown",
+      "envFingerprint": "store/config revision + data seed actually used",
+      "retryStatus": "green|red",
+      "differential": "green|red|unavailable",
+      "acVerdict": "violated|intact",
+      "role": "own oracle|regression guard",
+      "verifies": "BUG-123"
     }
   ],
   "blockedReason": "Explanation when overall is blocked_by_human."
@@ -127,6 +134,13 @@ Write `outputs/story_test_automation_result.json` in a single `Write` call (do N
 - `results` must list every linked Test Case from `linked_test_cases.json`.
 - `failedDescriptionFile` and `failureSummary` are required for every `failed` entry.
 - `testPath` is required for every `passed` entry and omitted for `skipped` or `irrelevant`.
+- **Triage metadata** — on bugs, the pipeline attributes failures before bouncing:
+  - `errorClass` is REQUIRED on every `failed` entry — classify from the failure evidence you already have (`element-not-found`, `assertion`, `timeout`, `navigation`, `crash`, or `unknown` when genuinely unclassifiable).
+  - `envFingerprint` — when you can identify the environment the run used (store/config revision, data seed), record it; it is the baseline the triage compares against the last green run.
+  - `retryStatus` — you already re-run a failed test once to confirm it: record `green` when that re-run passed, `red` when it failed again.
+  - `role` / `verifies` — copy each Test Case's role from its description: `own oracle` (the TC says `Verifies: <BUG-KEY>` naming this bug) or `regression guard`; when the TC names a different bug in `Verifies:`, put that key in `verifies`.
+  - `differential` — when a rerun of the same script on the last-green build is available to you, record its outcome; `unavailable` when no last-green build exists. Only the pipeline turns this into a bug bounce — never bounce a bug from the automation leg yourself.
+  - `acVerdict` — only after a re-check of a failed own-oracle TC against the ticket's acceptance criteria: `violated` (the product genuinely violates the AC) or `intact` (the TC misencodes the requirement).
 - Also write `outputs/tracker_comment.md` summarizing the run and `outputs/failed_description_{TC_KEY}.md` for each failed Test Case.
 
 
@@ -660,8 +674,8 @@ Use tracker-specific format:
    - Check `testing/tests/{TC_KEY}/`.
    - If it exists, run it.
    - If missing, write a new automated test that reproduces the bug and verifies the fix.
-3. Re-run failed tests once to confirm real failure.
-4. Write `outputs/story_test_automation_result.json` with the shared schema.
+3. Re-run failed tests once to confirm real failure, and record the outcome as `retryStatus` (`green` when the re-run passed, `red` when it failed again).
+4. Write `outputs/story_test_automation_result.json` with the shared schema, including the failure-attribution triage metadata on every failed entry (`errorClass`, `envFingerprint` when known, `retryStatus`, and the TC's `role` / `verifies` copied from its description).
 5. Write `outputs/tracker_comment.md` summarizing the bulk run.
 6. For each failed Test Case, write `outputs/failed_description_{TC_KEY}.md`.
 
@@ -672,6 +686,7 @@ Use tracker-specific format:
 - Do NOT modify feature code.
 - Each new `testing/tests/{TC_KEY}/` folder must contain `README.md` and `config.yaml`.
 - Focus tests on the bug regression scenario.
+- **Failure attribution**: a red Test Case is not automatically a product failure — it may be a stale test, an environment shift or a flake. Record the triage evidence: `errorClass`, `retryStatus`, `differential`, `acVerdict`. The pipeline triages and only an attributed regression returns the bug to development. Never bounce a bug from the automation leg.
 
 
 ---
