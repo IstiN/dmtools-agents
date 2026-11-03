@@ -56,6 +56,7 @@ var tcTriage = require('./common/tcTriage.js');
 var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
 var tcRunRegistry = require('./common/tcRunRegistry.js');
 var bugBookkeeping = require('./common/bugBookkeeping.js');
+var jobTicketInputs = require('./common/jobTicketInputs.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -83,17 +84,7 @@ var UNAVAILABLE_PATH_DETAIL =
     'the request carries an unsafe or missing testPath — no shell metacharacters, ' +
     'no leading dash, no relative escape';
 
-// ── inputs (the quotaParkProbe resolveInputs shape) ──────────────────────────
-
-function resolveInputs(params) {
-    var actualParams = params.ticket ? params : (params.jobParams || params);
-    var jobParams = params.jobParams || {};
-    return {
-        ticketKey: actualParams.ticket && actualParams.ticket.key,
-        jobParams: jobParams,
-        customParams: jobParams.customParams || actualParams.customParams || {}
-    };
-}
+// ── inputs (shared with quotaParkProbe: js/common/jobTicketInputs.js) ────────
 
 function parkLabelOf(customParams) {
     return String(customParams.parkLabel || PARK_LABEL_DEFAULT);
@@ -510,12 +501,10 @@ function dispatchResult(routes, ticketKey, dispatched) {
 }
 
 function action(params) {
-    var inputs = resolveInputs(params);
+    var inputs = jobTicketInputs.resolveInputs(params);
+    var missing = jobTicketInputs.missingTicketKeyResult(inputs);
+    if (missing) return missing;
     var ticketKey = inputs.ticketKey;
-    if (!ticketKey) {
-        console.error('No ticket key found');
-        return { success: false, error: 'missing ticket key' };
-    }
     var config = configLoader.loadProjectConfig(inputs.jobParams || params);
     initTracker(config, inputs.customParams);
     var tracker = getTracker();

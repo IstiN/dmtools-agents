@@ -32,6 +32,7 @@ var configLoader = require('./configLoader.js');
 const { resolveStatuses } = require('./config.js');
 var quotaBreaker = require('./common/quotaCircuitBreaker.js');
 var commentMarkup = require('./common/commentMarkup.js');
+var jobTicketInputs = require('./common/jobTicketInputs.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -43,17 +44,10 @@ var getTracker = trackerHolder.getTracker;
 // lifts, the dev/rework lanes must be able to re-fire.
 var DISPATCH_TRIGGER_LABELS = ['sm_story_development_triggered', 'sm_bug_development_triggered', 'sm_story_rework_triggered'];
 
-// The ticket reference + jobParams/customParams resolution from the head of
-// action() — kept tiny so action() itself stays inside the CRAP ratchet.
-function resolveInputs(params) {
-    var actualParams = params.ticket ? params : (params.jobParams || params);
-    var jobParams = params.jobParams || {};
-    return {
-        ticketKey: actualParams.ticket && actualParams.ticket.key,
-        jobParams: jobParams,
-        customParams: jobParams.customParams || actualParams.customParams || {}
-    };
-}
+// The ticket reference + jobParams/customParams resolution and the
+// missing-key guard are shared with tcDifferentialDispatcher —
+// js/common/jobTicketInputs.js (extracted so the action files stay free of
+// cross-file clones; the duplication ratchet fails any new one).
 
 function readCommentBodies(ticketKey) {
     try {
@@ -131,12 +125,10 @@ function liftPark(ticketKey, parkLabel, probeCount, statuses) {
 }
 
 function action(params) {
-    var inputs = resolveInputs(params);
+    var inputs = jobTicketInputs.resolveInputs(params);
+    var missing = jobTicketInputs.missingTicketKeyResult(inputs);
+    if (missing) return missing;
     var ticketKey = inputs.ticketKey;
-    if (!ticketKey) {
-        console.error('No ticket key found');
-        return { success: false, error: 'missing ticket key' };
-    }
     var jobParams = inputs.jobParams;
     var config = configLoader.loadProjectConfig(jobParams || params);
     var statuses = resolveStatuses(inputs.customParams, config.jira && config.jira.statuses);

@@ -6,6 +6,7 @@
 var quotaBreaker = loadModule('js/common/quotaCircuitBreaker.js');
 var qbShapes = loadModule('js/common/ticketKeyShapes.js');
 var qbMarkup = loadModule('js/common/commentMarkup.js', makeRequire({ './ticketKeyShapes.js': qbShapes }));
+var jobTicketInputs = loadModule('js/common/jobTicketInputs.js');
 
 function loadProbe(mocks) {
     return loadModule(
@@ -15,6 +16,7 @@ function loadProbe(mocks) {
             './common/quotaCircuitBreaker.js': quotaBreaker,
             './common/commentMarkup.js': qbMarkup,
             './configLoader.js': configLoaderModule,
+            './common/jobTicketInputs.js': jobTicketInputs,
             './common/trackers.js': loadModule(
                 'js/common/trackers.js',
                 makeRequire({
@@ -458,5 +460,17 @@ suite('quotaParkProbe > bounded probe + un-park (UT-2, AC2/AC3)', function () {
         assert.equal(res.action, 'unparked');
         assert.deepEqual(ran, ['my-ping --cheap']);
         assert.ok(removed.map(function (r) { return r.label; }).indexOf('my_quota') !== -1);
+    });
+
+    test('missing ticket key → structured failure before any tracker work (shared jobTicketInputs guard)', function () {
+        var mocks = probeMocks({
+            jira_get_comments: function () { throw new Error('must not read comments'); },
+            jira_post_comment: function () { throw new Error('must not comment'); },
+            jira_move_to_status: function () { throw new Error('must not move'); },
+            jira_add_label: function () { throw new Error('must not label'); },
+            jira_remove_label: function () { throw new Error('must not unlabel'); }
+        });
+        var res = loadProbe(mocks).action({ jobParams: { customParams: {} } });
+        assert.deepEqual(res, { success: false, error: 'missing ticket key' });
     });
 });

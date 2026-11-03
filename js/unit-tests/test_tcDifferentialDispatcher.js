@@ -28,6 +28,7 @@ var bugBookkeeping = loadModule('js/common/bugBookkeeping.js', makeRequire({
     './tcMaintenanceLedger.js': tcLedger,
     './machineAuthor.js': machineAuthor
 }));
+var jobTicketInputs = loadModule('js/common/jobTicketInputs.js');
 
 function trackersWith(mocks) {
     return loadModule(
@@ -152,7 +153,8 @@ function loadDispatcher(shell, jiraMocks, configExtra) {
         './common/tcTriage.js': tcTriage,
         './common/tcMaintenanceLedger.js': tcLedger,
         './common/tcRunRegistry.js': tcRunRegistry,
-        './common/bugBookkeeping.js': bugBookkeeping
+        './common/bugBookkeeping.js': bugBookkeeping,
+        './common/jobTicketInputs.js': jobTicketInputs
     })), Object.assign({}, { cli_execute_command: shell }, jiraMocks || {}));
 }
 
@@ -196,6 +198,28 @@ suite('tcDifferentialDispatcher: pure helpers', function() {
         var v = mod.dispatcherVerdict(parkedFinding('TS-7', { role: 'sibling-guard' }), 'green', 0, 2);
         assert.equal(v.action, tcTriage.ACTION_MAINTENANCE);
         assert.equal(v.reason, 'sibling-regression-owner-notified');
+    });
+});
+
+suite('tcDifferentialDispatcher: missing ticket key (the shared jobTicketInputs guard)', function() {
+
+    test('fails structured before any config, tracker or shell work', function() {
+        var shellCalls = 0;
+        var shell = function() { shellCalls++; return 'ok'; };
+        var jira = {
+            jira_get_ticket: function() { throw new Error('must not read the ticket'); },
+            jira_get_comments: function() { throw new Error('must not read comments'); },
+            jira_move_to_status: function() { throw new Error('must not move'); },
+            jira_post_comment: function() { throw new Error('must not comment'); },
+            jira_add_label: function() { throw new Error('must not label'); },
+            jira_remove_label: function() { throw new Error('must not unlabel'); }
+        };
+        var mod = loadDispatcher(shell, jira, {});
+        var params = dispatcherParams();
+        delete params.ticket;
+        var result = mod.action(params);
+        assert.deepEqual(result, { success: false, error: 'missing ticket key' });
+        assert.equal(shellCalls, 0, 'the guard fires before any shell work');
     });
 });
 
