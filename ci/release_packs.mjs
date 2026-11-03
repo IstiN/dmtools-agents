@@ -57,7 +57,7 @@ import {
 // unit-testable in the dmtools runner (same split as pack_release_guard.cjs).
 import {
   bump, resolveBaseVersion, resolveCandidateVersion, resolveShipVersion,
-  fingerprintsDiffer, selectCarriedForwardAssets,
+  fingerprintsDiffer,
 } from './pack_version_guard.cjs';
 import {
   unresolvedRequires, unresolvedConfigScripts, discoverConfigScriptClosure,
@@ -292,7 +292,7 @@ function shippedCatalog() {
       // and stale-version zips are simply ignored (each agent has exactly
       // one version per release snapshot).
       execSync(
-        `gh release download ${JSON.stringify(PREV_TAG)} --pattern '*.zip' --pattern '*.zip.sha256' --dir ${JSON.stringify(SHIPPED_DIR)} --clobber${ghRepoArg()}`,
+        `gh release download ${JSON.stringify(PREV_TAG)} --pattern '*.zip' --dir ${JSON.stringify(SHIPPED_DIR)} --clobber${ghRepoArg()}`,
         { stdio: ['ignore', 'ignore', 'ignore'] },
       );
     } catch (e) {
@@ -605,22 +605,6 @@ function buildPackRelease(agent, next, isAffected, shippedVersion) {
   return { zipPath: zip, version: next };
 }
 
-/**
- * gh-1325: copies bounded previous release pack assets from [SHIPPED_DIR] into
- * [OUT_DIR] so pinned `pack@<old-version>` refs continue resolving against the
- * latest release without unbounded O(N) asset accumulation (#1311).
- */
-function carryForwardPreviousPacks() {
-  if (!SHIPPED_DIR || !existsSync(SHIPPED_DIR)) return 0;
-  const prevAssets = readdirSync(SHIPPED_DIR);
-  const currentZips = readdirSync(OUT_DIR).filter((f) => f.endsWith('.zip'));
-  const carried = selectCarriedForwardAssets(prevAssets, currentZips);
-  for (const name of carried) {
-    copyFileSync(join(SHIPPED_DIR, name), join(OUT_DIR, name));
-  }
-  return carried.length;
-}
-
 function main() {
   const versions = readVersions();
   const affected = computeAffectedSet();
@@ -679,8 +663,6 @@ function main() {
     // same rule as the agent packs) — the factory downloads it by tag, so a
     // stale asset on a fresh tag would silently pin old workflow glue.
     buildFactorySetup();
-    const carriedCount = carryForwardPreviousPacks();
-    if (carriedCount > 0) console.log(`Carried forward ${carriedCount} previous pack asset(s) (gh-1325)`);
     writeFileSync(join(OUT_DIR, 'catalog.json'), JSON.stringify(catalog, null, 2) + '\n');
     console.log(`\nWrote ${OUT_DIR}/catalog.json (${agents.length} agents, ${affected.length} bumped, factory-setup shipped)`);
   }
