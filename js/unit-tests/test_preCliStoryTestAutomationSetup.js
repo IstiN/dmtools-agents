@@ -48,7 +48,8 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
             './configLoader.js': freshConfigLoader,
             './common/pullRequest.js': prHelper,
             './common/githubHelpers.js': githubHelpers,
-            './common/scm.js': { createScm: function() { return {}; } }
+            './common/scm.js': { createScm: function() { return {}; } },
+            './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js', makeRequire({}))
         }),
         allMocks
     );
@@ -332,7 +333,8 @@ function loadForPrContext(mocks, opts) {
             './configLoader.js': freshConfigLoader,
             './common/pullRequest.js': prHelper,
             './common/githubHelpers.js': githubHelpers,
-            './common/scm.js': { createScm: function() { return opts.scm || {}; } }
+            './common/scm.js': { createScm: function() { return opts.scm || {}; } },
+            './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js', makeRequire({}))
         }),
         allMocks
     );
@@ -838,4 +840,77 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
             'no pr_diff.txt when the diff probe throws');
     });
 
+});
+
+// ── gh-1345: the automation leg reads the mechanical role stamp ──────────────
+
+suite('preCliStoryTestAutomationSetup: stamped role fields in linked_test_cases.json (gh-1345)', function() {
+
+    function runWithSearchResult(searchIssues, ticketKey) {
+        var written = {};
+        var module = loadPreCliStoryTestAutomationSetup({
+            jira_search_by_jql: function() { return searchIssues; },
+            file_write: function(args) { written[args.path] = args.content; },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return 'main';
+                if (opts.command.indexOf('git ls-remote') === 0) return '';
+                return '';
+            }
+        });
+        module.action({
+            inputFolderPath: 'input/' + ticketKey,
+            jobParams: { customParams: {} }
+        });
+        return written;
+    }
+
+    test('a stamped Verifies TC lands with role=verifies + the verifies key', function() {
+        var written = runWithSearchResult([
+            { key: 'TS-201', fields: {
+                summary: 'Verify login',
+                description: 'Verifies: BUG-1\n\nh4. Objective\nscenario',
+                status: { name: 'In Testing' }
+            } }
+        ], 'BUG-1');
+
+        var json = JSON.parse(written['input/BUG-1/linked_test_cases.json']);
+        assert.equal(json.testCases[0].role, 'verifies');
+        assert.equal(json.testCases[0].verifies, 'BUG-1');
+    });
+
+    test('a stamped Regression guard TC lands with role=regression guard', function() {
+        var written = runWithSearchResult([
+            { key: 'TS-202', fields: {
+                summary: 'Guard totals',
+                description: 'Regression guard: totals rounding\n\nbody',
+                status: { name: 'In Testing' }
+            } }
+        ], 'BUG-1');
+
+        var json = JSON.parse(written['input/BUG-1/linked_test_cases.json']);
+        assert.equal(json.testCases[0].role, 'regression guard');
+        assert.equal(json.testCases[0].regressionGuard, true);
+    });
+
+    test('an unmarked TC carries NO role fields (legacy own-oracle fallback untouched)', function() {
+        var written = runWithSearchResult([
+            { key: 'TS-203', fields: { summary: 'Plain TC', description: 'h4. Objective\nthing' } },
+            { key: 'TS-204', fields: { summary: 'Another', description: 'Verifies: BUG-9\nsibling marker' } }
+        ], 'BUG-1');
+
+        var json = JSON.parse(written['input/BUG-1/linked_test_cases.json']);
+        assert.equal(json.testCases[0].role, undefined);
+        assert.equal(json.testCases[1].role, 'verifies');
+        assert.equal(json.testCases[1].verifies, 'BUG-9', 'the sibling key travels to the triage');
+    });
+
+    test('the .md context renders the stamped role for the automation agent', function() {
+        var written = runWithSearchResult([
+            { key: 'TS-201', fields: {
+                summary: 'Verify login',
+                description: 'Verifies: BUG-1\n\nh4. Objective\nscenario'
+            } }
+        ], 'BUG-1');
+        assert.contains(written['input/BUG-1/linked_test_cases.md'], 'Verifies: BUG-1');
+    });
 });

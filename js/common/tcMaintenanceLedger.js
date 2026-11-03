@@ -458,6 +458,5 @@ if (typeof module !== 'undefined' && module.exports) {
         VERDICT_DIFFERENTIAL: VERDICT_DIFFERENTIAL,
         PARK_LABEL: PARK_LABEL,
         differentialRequests: differentialRequests
-        differentialRequests: differentialRequests
     };
 }

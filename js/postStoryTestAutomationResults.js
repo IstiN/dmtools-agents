@@ -1087,7 +1087,7 @@ function handleBugWithProductFailure(params, result, ctx) {
     // gh-1345 deployment guard: triage is fail-closed against the machine
     // author allowlist — an empty allowlist reads fresh bookkeeping forever
     // (no earned bounce / escalation / differential dispatch can trigger).
-    var allowlistWarning = bugBookeeping.triageAllowlistWarning(params, ctx.config);
+    var allowlistWarning = bugBookkeeping.triageAllowlistWarning(params, ctx.config);
     if (allowlistWarning) console.warn(allowlistWarning);
     var bookkeeping = bugBookkeeping.loadBugBookkeeping(getTracker(), ctx.storyKey, params, ctx.config);
     var triage = triageBugFailures(params, result, ctx, bookkeeping);
