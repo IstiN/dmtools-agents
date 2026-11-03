@@ -358,4 +358,91 @@ BINEOF
 }
 run_default_model_case
 
+# Issue #1326: COPILOT_SESSION_NAME must be capped at 100 chars (Copilot CLI's
+# --name limit) with a deterministic hash/group suffix while preserving short
+# names, session_id, cache keys, and paths.
+run_session_name_length_cap_case() {
+  local case_dir="${TEST_ROOT}/session-name-length-cap"
+  mkdir -p "${case_dir}"
+  local session_script="${PROVIDERS_DIR}/../../setup/copilot-session.sh"
+
+  (
+    cd "${case_dir}"
+    export RUNNER_TEMP="${case_dir}/tmp"
+    unset AI_TEAMMATE_DISPLAY_KEY DISPLAY_KEY AI_TEAMMATE_CONCURRENCY_KEY CONCURRENCY_KEY GITHUB_ENV
+
+    # 1. Short name stays unchanged
+    export GITHUB_REPOSITORY="org/short-repo"
+    export AI_TEAMMATE_DISPLAY_KEY="PROJ-123"
+    export AI_TEAMMATE_CONFIG_FILE="agents/story_development.json"
+    # shellcheck source=/dev/null
+    source "${session_script}" env >/dev/null
+    if [ "${COPILOT_SESSION_NAME}" != "org-short-repo-proj-123-dev-write" ]; then
+      echo "[session-name-short] expected org-short-repo-proj-123-dev-write, got ${COPILOT_SESSION_NAME}" >&2
+      exit 1
+    fi
+
+    # 2. Long repo + branch + config (102 chars untruncated) is capped <= 100 chars
+    unset AI_TEAMMATE_DISPLAY_KEY DISPLAY_KEY AI_TEAMMATE_CONCURRENCY_KEY CONCURRENCY_KEY
+    git init -q "${case_dir}/repo"
+    git -C "${case_dir}/repo" checkout -qb "feature-2046039-ai-factory-redesign"
+    git -C "${case_dir}/repo" -c user.email="test@example.com" -c user.name="test" commit -q --allow-empty -m "init"
+    export GITHUB_WORKSPACE="${case_dir}/repo"
+    export GITHUB_REPOSITORY="org/very-very-very-long-repo-name"
+    export AI_TEAMMATE_CONFIG_FILE="agents/xxxxx_story_acceptance_criteria.json"
+    export GITHUB_RUN_ID="42"
+
+    # shellcheck source=/dev/null
+    source "${session_script}" env >/dev/null
+    local first_name="${COPILOT_SESSION_NAME}"
+    local first_id="${COPILOT_SESSION_ID}"
+    local name_len="${#first_name}"
+
+    if [ "${name_len}" -gt 100 ]; then
+      echo "[session-name-long] expected length <= 100, got ${name_len}: ${first_name}" >&2
+      exit 1
+    fi
+    case "${first_name}" in
+      *-)
+        echo "[session-name-long] session name must not end with '-': ${first_name}" >&2
+        exit 1
+        ;;
+      *"-${first_id:0:8}-"*)
+        ;;
+      *)
+        echo "[session-name-long] expected short hash -${first_id:0:8}- in ${first_name}" >&2
+        exit 1
+        ;;
+    esac
+    case "${first_name}" in
+      *"xxxxx_story_acceptance_criteria")
+        ;;
+      *)
+        echo "[session-name-long] expected group tail in ${first_name}" >&2
+        exit 1
+        ;;
+    esac
+
+    # Cache keys and paths remain full/unchanged
+    local expected_untruncated="org-very-very-very-long-repo-name-feature-2046039-ai-factory-redesign-xxxxx_story_acceptance_criteria"
+    if [ "${COPILOT_SESSION_CACHE_KEY}" != "copilot-session-${expected_untruncated}-v2-42" ]; then
+      echo "[session-name-long] unexpected cache key: ${COPILOT_SESSION_CACHE_KEY}" >&2
+      exit 1
+    fi
+    if [ "${COPILOT_SESSION_CACHE_PATH}" != "${RUNNER_TEMP}/dmtools-copilot-sessions/org-very-very-very-long-repo-name/feature-2046039-ai-factory-redesign/xxxxx_story_acceptance_criteria" ]; then
+      echo "[session-name-long] unexpected cache path: ${COPILOT_SESSION_CACHE_PATH}" >&2
+      exit 1
+    fi
+
+    # 3. Deterministic across runs
+    # shellcheck source=/dev/null
+    source "${session_script}" env >/dev/null
+    if [ "${COPILOT_SESSION_NAME}" != "${first_name}" ] || [ "${COPILOT_SESSION_ID}" != "${first_id}" ]; then
+      echo "[session-name-long] non-deterministic across runs: ${COPILOT_SESSION_NAME} vs ${first_name}" >&2
+      exit 1
+    fi
+  )
+}
+run_session_name_length_cap_case
+
 echo "Copilot provider integration tests passed"
