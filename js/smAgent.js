@@ -244,6 +244,14 @@ var smDoneCheckModule = require('./common/smDoneCheck.js');
 var aiChatModule = require('./common/aiChat.js');
 var validateInputJqlModule = require('./common/validateInputJql.js');
 var autoStartModule = require('./common/autoStart.js');
+// gh-1345: the TC-maintenance helper layer — js/tcDifferentialDispatcher.js
+// (localExecution) requires it, and the quota probe (gh-1087) already required
+// quotaCircuitBreaker/commentMarkup without them being on the sandbox list.
+var commentMarkupModule = require('./common/commentMarkup.js');
+var tcRunRegistryModule = require('./common/tcRunRegistry.js');
+var tcMaintenanceLedgerModule = require('./common/tcMaintenanceLedger.js');
+var tcTriageModule = require('./common/tcTriage.js');
+var bugBookkeepingModule = require('./common/bugBookkeeping.js');
 // gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
 // already recorded THIS tick. The already-parked guard in
 // recordDispatchFailure reads the query-time label snapshot — within one
@@ -1396,7 +1404,18 @@ function runLocalAction(jsPath, ticket, agentParams) {
         { id: 'aiChat.js', varName: '_ac', fallbackExpr: helperFallbackExpr(aiChatModule, 'aiChatModule') },
         { id: 'validateInputJql.js', varName: '_vq', fallbackExpr: helperFallbackExpr(validateInputJqlModule, 'validateInputJqlModule') },
         { id: 'buildEncodedConfig.js', varName: '_bc', fallbackExpr: helperFallbackExpr(buildEncodedConfigModule, 'buildEncodedConfigModule') },
-        { id: 'autoStart.js', varName: '_as', fallbackExpr: helperFallbackExpr(autoStartModule, 'autoStartModule') }
+        { id: 'autoStart.js', varName: '_as', fallbackExpr: helperFallbackExpr(autoStartModule, 'autoStartModule') },
+        // gh-1345: the TC-maintenance layer + the quota-probe pair, in
+        // dependency order (a helper's require must find the dep block
+        // already evaluated — the shim resolves by var name, not lazily).
+        { id: 'commentMarkup.js', varName: '_qmk', fallbackExpr: helperFallbackExpr(commentMarkupModule, 'commentMarkupModule') },
+        { id: 'quotaCircuitBreaker.js', varName: '_qcb', fallbackExpr: helperFallbackExpr(quotaBreakerModule, 'quotaBreakerModule') },
+        { id: 'machineAuthor.js', varName: '_mau', fallbackExpr: helperFallbackExpr(machineAuthorModule, 'machineAuthorModule') },
+        { id: 'reviewVerdicts.js', varName: '_rvd', fallbackExpr: helperFallbackExpr(reviewVerdictsModule, 'reviewVerdictsModule') },
+        { id: 'tcRunRegistry.js', varName: '_trr', fallbackExpr: helperFallbackExpr(tcRunRegistryModule, 'tcRunRegistryModule') },
+        { id: 'tcMaintenanceLedger.js', varName: '_tml', fallbackExpr: helperFallbackExpr(tcMaintenanceLedgerModule, 'tcMaintenanceLedgerModule') },
+        { id: 'tcTriage.js', varName: '_ttg', fallbackExpr: helperFallbackExpr(tcTriageModule, 'tcTriageModule') },
+        { id: 'bugBookkeeping.js', varName: '_bbk', fallbackExpr: helperFallbackExpr(bugBookkeepingModule, 'bugBookkeepingModule') }
     ];
     var helperBlocks = '';
     for (var hmi = 0; hmi < helperModules.length; hmi++) {
@@ -1417,6 +1436,14 @@ function runLocalAction(jsPath, ticket, agentParams) {
         '      if (id.indexOf("validateInputJql.js") !== -1) return _vq.exports;\n' +
         '      if (id.indexOf("buildEncodedConfig.js") !== -1) return _bc.exports;\n' +
         '      if (id.indexOf("autoStart.js") !== -1) return _as.exports;\n' +
+        '      if (id.indexOf("commentMarkup.js") !== -1) return _qmk.exports;\n' +
+        '      if (id.indexOf("quotaCircuitBreaker.js") !== -1) return _qcb.exports;\n' +
+        '      if (id.indexOf("machineAuthor.js") !== -1) return _mau.exports;\n' +
+        '      if (id.indexOf("reviewVerdicts.js") !== -1) return _rvd.exports;\n' +
+        '      if (id.indexOf("tcRunRegistry.js") !== -1) return _trr.exports;\n' +
+        '      if (id.indexOf("tcMaintenanceLedger.js") !== -1) return _tml.exports;\n' +
+        '      if (id.indexOf("tcTriage.js") !== -1) return _ttg.exports;\n' +
+        '      if (id.indexOf("bugBookkeeping.js") !== -1) return _bbk.exports;\n' +
         '      return _cm.exports;\n' +
         '    }';
 

@@ -61,7 +61,12 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
             './common/smDoneCheck.js': unreadable,
             './common/aiChat.js': unreadable,
             './common/validateInputJql.js': unreadable,
-            './common/autoStart.js': unreadable
+            './common/autoStart.js': unreadable,
+            './common/commentMarkup.js': unreadable,
+            './common/tcRunRegistry.js': unreadable,
+            './common/tcMaintenanceLedger.js': unreadable,
+            './common/tcTriage.js': unreadable,
+            './common/bugBookkeeping.js': unreadable
         };
     }
     var shapes = loadModule('js/common/ticketKeyShapes.js', makeRequire({}), {});
@@ -83,7 +88,29 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
             './scm.js': mockScmModule,
             './buildEncodedConfig.js': buildEncodedConfigModule,
             './workflowRuns.js': loadModule('js/common/workflowRuns.js', makeRequire({}), {})
-        }), smMocks)
+        }), smMocks),
+        // gh-1345: the TC-maintenance helper layer — js/tcDifferentialDispatcher.js
+        // (localExecution) needs real exports through the sandbox, so the
+        // module-level requires carry the same real-module fallbacks.
+        './common/commentMarkup.js': loadModule('js/common/commentMarkup.js', makeRequire({
+            './ticketKeyShapes.js': shapes
+        }), {}),
+        './common/tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
+            './reviewVerdicts.js': reviewVerdictsReal()
+        }), {}),
+        './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+            './reviewVerdicts.js': reviewVerdictsReal()
+        }), {}),
+        './common/tcTriage.js': loadModule('js/common/tcTriage.js', makeRequire({}), {}),
+        './common/bugBookkeeping.js': loadModule('js/common/bugBookkeeping.js', makeRequire({
+            './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
+                './reviewVerdicts.js': reviewVerdictsReal()
+            }), {}),
+            './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                './reviewVerdicts.js': reviewVerdictsReal()
+            }), {}),
+            './machineAuthor.js': machineAuthorReal()
+        }), {})
     };
 }
 
@@ -14480,7 +14507,17 @@ suite('smAgent: runLocalAction require shim (gh-908)', function() {
             'js/common/aiChat.js',
             'js/common/validateInputJql.js',
             'js/common/buildEncodedConfig.js',
-            'js/common/autoStart.js'
+            'js/common/autoStart.js',
+            // gh-1345: the dispatcher's TC-maintenance layer must travel in
+            // the pack too — the sandbox falls back to these when CWD has no js/.
+            'js/common/commentMarkup.js',
+            'js/common/quotaCircuitBreaker.js',
+            'js/common/machineAuthor.js',
+            'js/common/reviewVerdicts.js',
+            'js/common/tcRunRegistry.js',
+            'js/common/tcMaintenanceLedger.js',
+            'js/common/tcTriage.js',
+            'js/common/bugBookkeeping.js'
         ].forEach(function(expectedPath) {
             assert.ok(closure.indexOf(expectedPath) !== -1,
                 'sm pack closure must contain ' + expectedPath + ' for localExecution (gh-1299)');
