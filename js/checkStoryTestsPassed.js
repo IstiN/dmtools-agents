@@ -16,6 +16,13 @@
  * gh-1080 CRAP split: parameter parsing, TC classification and the
  * outcome dispatch are small top-level helpers; action() only orchestrates.
  * Tracker/post calls and their order are byte-identical to the pre-split flow.
+ *
+ * gh-1330: a concluded story whose TCs include Skipped/Irrelevant ones must not
+ * claim "All Test Cases Passed". The Done report shows the per-status buckets,
+ * every skipped TC is stamped with a machine-parseable skip marker (story key,
+ * reason, date — "skipped" means unverified, not exonerated), and the optional
+ * `skipsNeedHuman` customParam flags the story for human review instead of
+ * moving it to Done (default off — the automation flow is unchanged).
  */
 
 const configLoader = require('./configLoader.js');
@@ -30,7 +37,12 @@ function parseCheckParams(params) {
     return {
         ticketKey: params.ticket && params.ticket.key,
         customParams: customParams,
-        removeLabel: customParams && customParams.removeLabel
+        removeLabel: customParams && customParams.removeLabel,
+        // gh-1330: opt-in knob (default off) — flag the story for human review
+        // instead of Done when skipped TCs exist.
+        skipsNeedHuman: !(customParams && customParams.skipsNeedHuman),
+        // gh-1330: optional reason recorded in the per-TC skip markers.
+        skipReason: (customParams && customParams.skipReason) || null
     };
 }
 

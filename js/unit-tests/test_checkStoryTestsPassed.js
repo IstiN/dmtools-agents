@@ -88,10 +88,14 @@ suite('checkStoryTestsPassed', function() {
             jobParams: { customParams: { removeLabel: 'sm_story_done_check_triggered' } }
         });
 
+        // gh-1330: with skips present the report must show the buckets and must
+        // NOT claim "All Test Cases Passed".
         assert.equal(result.success, true);
         assert.equal(result.action, 'moved_to_done');
         assert.deepEqual(moved, [{ key: 'TS-20', statusName: 'Done' }]);
-        assert.contains(comments[0].comment, 'All Test Cases Passed');
+        var storyComment = comments.filter(function(c) { return c.key === 'TS-20'; })[0].comment;
+        assert.contains(storyComment, 'Test results: 1 Passed, 1 Skipped, 1 Irrelevant');
+        assert.notContains(storyComment, 'All Test Cases Passed');
         assert.equal(removedLabels.length, 0, 'lock should not be released after Done');
     });
 
@@ -584,5 +588,436 @@ suite('checkStoryTestsPassed: characterization (gh-1080 CRAP split)', function()
 
         assert.equal(result.success, false);
         assert.contains(result.error, 'state rejected');
+    });
+});
+
+// ── gh-1330: truthful bucket report — never claim "All Passed" when tests were
+// skipped, and stamp skip context on each skipped TC itself ──
+
+suite('checkStoryTestsPassed: truthful bucket report (gh-1330)', function() {
+
+    function sevenPassedThreeSkippedTcs() {
+        var tcs = [];
+        for (var p = 1; p <= 7; p++) tcs.push(makeTc('TS-P' + p, 'Passed'));
+        for (var s = 1; s <= 3; s++) tcs.push(makeTc('TS-S' + s, 'Skipped'));
+        return tcs;
+    }
+
+    test('7 Passed + 3 Skipped → Done (unchanged), report shows buckets, no "All … Passed" claim', function() {
+        var moved = [];
+        var comments = [];
+        var removedLabels = [];
+
+        var module = loadCheckStoryTestsPassed({
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('issuetype = "Test Case"') !== -1) return sevenPassedThreeSkippedTcs();
+                return [];
+            },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-10' },
+            jobParams: { customParams: { removeLabel: 'sm_story_done_check_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_done', 'default flow still moves to Done');
+        assert.deepEqual(moved, [{ key: 'TS-10', statusName: 'Done' }]);
+        var storyComment = comments.filter(function(c) { return c.key === 'TS-10'; })[0].comment;
+        assert.contains(storyComment, 'Test results: 7 Passed, 3 Skipped');
+        assert.contains(storyComment, 'never executed');
+        assert.notContains(storyComment, 'All Test Cases Passed');
+        assert.notContains(storyComment, 'are in *Passed* status');
+        assert.equal(result.totalTCs, 10);
+        assert.equal(result.passedTCs, 7);
+        assert.equal(result.skippedTCs, 3);
+        assert.equal(removedLabels.length, 0, 'lock should not be released after Done');
+    });
+
+    test('full-suite green story (0 skipped) keeps the exact report wording of today', function() {
+        var comments = [];
+
+        var module = loadCheckStoryTestsPassed({
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('issuetype = "Test Case"') !== -1) {
+                    return [makeTc('TS-G1', 'Passed'), makeTc('TS-G2', 'Passed')];
+                }
+                return [];
+            },
+            jira_move_to_status: function() {},
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_add_label: function(args) { throw new Error('no label expected on a green story: ' + JSON.stringify(args)); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-G0' },
+            jobParams: { customParams: { removeLabel: 'sm_story_done_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'moved_to_done');
+        var storyComment = comments.filter(function(c) { return c.key === 'TS-G0'; })[0].comment;
+        assert.equal(storyComment,
+            'h3. ✅ Story Complete — All Test Cases Passed\n\n' +
+            'All *2* linked Test Case(s) are in *Passed* status.\n\n' +
+            'The story has been automatically moved to *Done*.',
+            'green-story wording is byte-identical to the pre-gh-1330 report');
+    });
+
+    test('Irrelevant TCs also block the "All … Passed" claim', function() {
+        var comments = [];
+
+        var module = loadCheckStoryTestsPassed({
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('issuetype = "Test Case"') !== -1) {
+                    return [makeTc('TS-I1', 'Passed'), makeTc('TS-I2', 'Irrelevant'), makeTc('TS-I3', 'Irrelevant')];
+                }
+                return [];
+            },
+            jira_move_to_status: function() {},
+            jira_post_comment: function(args) { comments.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-I0' },
+            jobParams: { customParams: { removeLabel: 'sm_story_done_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'moved_to_done');
+        var storyComment = comments.filter(function(c) { return c.key === 'TS-I0'; })[0].comment;
+        assert.contains(storyComment, 'Test results: 1 Passed, 2 Irrelevant');
+        assert.notContains(storyComment, 'All Test Cases Passed');
+    });
+
+    test('multi-status summary lists every non-zero bucket', function() {
+        var comments = [];
+
+        var module = loadCheckStoryTestsPassed({
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('issuetype = "Test Case"') !== -1) {
+                    return [
+                        makeTc('TS-M1', 'Passed'), makeTc('TS-M2', 'Passed'),
+                        makeTc('TS-M3', 'Skipped'), makeTc('TS-M4', 'Skipped'),
+                        makeTc('TS-M5', 'Irrelevant')
+                    ];
+                }
+                return [];
+            },
+            jira_move_to_status: function() {},
+            jira_post_comment: function(args) { comments.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-M0' },
+            jobParams: { customParams: { removeLabel: 'sm_story_done_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'moved_to_done');
+        var storyComment = comments.filter(function(c) { return c.key === 'TS-M0'; })[0].comment;
+        assert.contains(storyComment, 'Test results: 2 Passed, 2 Skipped (never executed — see TC comments), 1 Irrelevant');
+        assert.notContains(storyComment, 'All Test Cases Passed');
+    });
+});
+
+suite('checkStoryTestsPassed: skip markers on TCs (gh-1330)', function() {
+
+    function runWithTcs(tcList, extraMocks) {
+        var recorded = { comments: [], labels: [], moves: [], events: [] };
+        var mocks = {
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('issuetype = "Test Case"') !== -1) return tcList;
+                return [];
+            },
+            jira_move_to_status: function(args) {
+                recorded.moves.push(args);
+                recorded.events.push('move:' + args.key);
+            },
+            jira_post_comment: function(args) {
+                recorded.comments.push(args);
+                recorded.events.push('comment:' + args.key);
+            },
+            jira_add_label: function(args) {
+                recorded.labels.push(args);
+                recorded.events.push('label:' + args.key + ':' + args.label);
+            },
+            jira_remove_label: function() {}
+        };
+        if (extraMocks) {
+            for (var k in extraMocks) mocks[k] = extraMocks[k];
+        }
+        var module = loadCheckStoryTestsPassed(mocks);
+        recorded.result = module.action({
+            ticket: { key: 'TS-100' },
+            jobParams: { customParams: { removeLabel: 'sm_story_done_check_triggered' } }
+        });
+        return recorded;
+    }
+
+    test('each skipped TC gets a marker comment + label; passed TCs stay untouched', function() {
+        var recorded = runWithTcs([
+            makeTc('TS-P1', 'Passed'),
+            makeTc('TS-S1', 'Skipped'),
+            makeTc('TS-S2', 'Skipped')
+        ]);
+
+        var markerComments = recorded.comments.filter(function(c) {
+            return c.comment.indexOf('[tc-skip-marker]') !== -1;
+        });
+        assert.equal(markerComments.length, 2, 'one marker per skipped TC');
+        var markedKeys = markerComments.map(function(c) { return c.key; }).sort();
+        assert.deepEqual(markedKeys, ['TS-S1', 'TS-S2']);
+
+        markerComments.forEach(function(c) {
+            assert.contains(c.comment, 'skipped at TS-100 done-check (');
+            assert.contains(c.comment, 'never executed');
+            assert.ok(/— \d{4}-\d{2}-\d{2}/.test(c.comment), 'marker carries the date: ' + c.comment);
+        });
+
+        var markerLabels = recorded.labels.filter(function(l) { return l.label === 'skipped_at_TS-100'; });
+        assert.deepEqual(markerLabels.map(function(l) { return l.key; }).sort(), ['TS-S1', 'TS-S2']);
+
+        var touchedKeys = recorded.comments.filter(function(c) { return c.key.indexOf('TS-P') === 0; });
+        assert.deepEqual(touchedKeys, [], 'no marker noise on passed TCs');
+        assert.deepEqual(recorded.labels.filter(function(l) { return l.key === 'TS-P1'; }), []);
+    });
+
+    test('markers are stamped before the story Done move', function() {
+        var recorded = runWithTcs([makeTc('TS-P1', 'Passed'), makeTc('TS-S1', 'Skipped')]);
+
+        var firstMarkerEvent = recorded.events.indexOf('comment:TS-S1');
+        var doneMoveEvent = recorded.events.indexOf('move:TS-100');
+        assert.ok(firstMarkerEvent !== -1 && doneMoveEvent !== -1, 'both events happened');
+        assert.ok(firstMarkerEvent < doneMoveEvent, 'skip context must exist even if the Done move later fails');
+    });
+
+    test('a failing Done move still leaves the markers stamped', function() {
+        var recorded = runWithTcs([makeTc('TS-S1', 'Skipped')], {
+            jira_move_to_status: function() { throw new Error('state rejected'); }
+        });
+
+        assert.equal(recorded.result.success, false, 'the move failure still fails the run');
+        var markerComments = recorded.comments.filter(function(c) {
+            return c.comment.indexOf('[tc-skip-marker]') !== -1;
+        });
+        assert.equal(markerComments.length, 1, 'marker was stamped before the failing move');
+    });
+
+    test('customParams.skipReason rides the marker', function() {
+        var recordedComments = [];
+        var module = loadCheckStoryTestsPassed({
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('issuetype = "Test Case"') !== -1) return [makeTc('TS-S1', 'Skipped')];
+                return [];
+            },
+            jira_move_to_status: function() {},
+            jira_post_comment: function(args) { recordedComments.push(args); }
+        });
+
+        module.action({
+            ticket: { key: 'TS-100' },
+            jobParams: { customParams: { removeLabel: 'sm_story_done_check_triggered', skipReason: 'device farm unavailable' } }
+        });
+
+        var marker = recordedComments.filter(function(c) { return c.comment.indexOf('[tc-skip-marker]') !== -1; })[0];
+        assert.contains(marker.comment, 'skipped at TS-100 done-check (device farm unavailable), never executed');
+    });
+
+    test('marker states the default reason when none is provided', function() {
+        var recorded = runWithTcs([makeTc('TS-S1', 'Skipped')]);
+        var marker = recorded.comments.filter(function(c) { return c.comment.indexOf('[tc-skip-marker]') !== -1; })[0];
+        assert.contains(marker.comment, 'skipped at TS-100 done-check (no reason recorded), never executed');
+    });
+
+    test("'label' mode: an already-marked skipped TC is not stamped twice", function() {
+        var markedTc = makeTc('TS-S1', 'Skipped');
+        markedTc.fields.labels = ['skipped_at_TS-100'];
+        var freshTc = makeTc('TS-S2', 'Skipped');
+
+        var recorded = runWithTcs([markedTc, freshTc], {
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('issuetype = "Test Case"') !== -1) {
+                    assert.deepEqual(args.fields, ['key', 'status', 'labels']);
+                    return [markedTc, freshTc];
+                }
+                return [];
+            }
+        });
+
+        var markerComments = recorded.comments.filter(function(c) {
+            return c.comment.indexOf('[tc-skip-marker]') !== -1;
+        });
+        assert.deepEqual(markerComments.map(function(c) { return c.key; }), ['TS-S2'],
+            'only the not-yet-marked TC gets a marker');
+        assert.deepEqual(recorded.labels, [{ key: 'TS-S2', label: 'skipped_at_TS-100' }]);
+        assert.equal(recorded.result.action, 'moved_to_done');
+    });
+
+    test('a failing marker write does not fail the completion', function() {
+        var recorded = runWithTcs([makeTc('TS-S1', 'Skipped')], {
+            jira_post_comment: function(args) {
+                if (args.key === 'TS-S1') throw new Error('comment denied');
+                return {};
+            }
+        });
+
+        assert.equal(recorded.result.action, 'moved_to_done', 'completion survives a marker failure');
+        assert.ok(recorded.labels.length > 0, 'best-effort: label still attempted for the skipped TC');
+    });
+});
+
+suite('checkStoryTestsPassed: skipsNeedHuman knob (gh-1330)', function() {
+
+    function runKnob(tcs, customParams, extraMocks) {
+        var recorded = { comments: [], labels: [], moves: [], removedLabels: [] };
+        var mocks = {
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('issuetype = "Test Case"') !== -1) return tcs;
+                return [];
+            },
+            jira_move_to_status: function(args) { recorded.moves.push(args); },
+            jira_post_comment: function(args) { recorded.comments.push(args); },
+            jira_add_label: function(args) { recorded.labels.push(args); },
+            jira_remove_label: function(args) { recorded.removedLabels.push(args); }
+        };
+        if (extraMocks) {
+            for (var k in extraMocks) mocks[k] = extraMocks[k];
+        }
+        var module = loadCheckStoryTestsPassed(mocks);
+        recorded.result = module.action({
+            ticket: { key: 'TS-200' },
+            jobParams: { customParams: customParams }
+        });
+        return recorded;
+    }
+
+    test('skipsNeedHuman: true → needs-human label instead of Done, markers still stamped', function() {
+        var tcs = [];
+        for (var p = 1; p <= 7; p++) tcs.push(makeTc('TS-P' + p, 'Passed'));
+        for (var s = 1; s <= 3; s++) tcs.push(makeTc('TS-S' + s, 'Skipped'));
+
+        var recorded = runKnob(tcs, {
+            removeLabel: 'sm_story_done_check_triggered',
+            skipsNeedHuman: true
+        });
+
+        assert.equal(recorded.result.action, 'needs_human_skips');
+        assert.deepEqual(recorded.moves, [], 'story is NOT moved to Done');
+        assert.deepEqual(recorded.labels.filter(function(l) { return l.key === 'TS-200'; }),
+            [{ key: 'TS-200', label: 'needs_human_skips' }]);
+        assert.deepEqual(recorded.removedLabels, [], 'lock stays — the story waits for a human');
+
+        var storyComment = recorded.comments.filter(function(c) { return c.key === 'TS-200'; })[0].comment;
+        assert.contains(storyComment, 'Test results: 7 Passed, 3 Skipped');
+        assert.notContains(storyComment, 'All Test Cases Passed');
+
+        var markerComments = recorded.comments.filter(function(c) {
+            return c.comment.indexOf('[tc-skip-marker]') !== -1;
+        });
+        assert.equal(markerComments.length, 3, 'skip markers ride the TCs in this flow too');
+    });
+
+    test('skipsNeedHuman: true with no skips still completes normally', function() {
+        var recorded = runKnob([makeTc('TS-P1', 'Passed')], {
+            removeLabel: 'sm_story_done_check_triggered',
+            skipsNeedHuman: true
+        });
+
+        assert.equal(recorded.result.action, 'moved_to_done');
+        assert.deepEqual(recorded.moves, [{ key: 'TS-200', statusName: 'Done' }]);
+        assert.deepEqual(recorded.labels, []);
+    });
+
+    test('needs-human flag is not duplicated when the story already carries it', function() {
+        var recorded = runKnob([makeTc('TS-S1', 'Skipped')], {
+            removeLabel: 'sm_story_done_check_triggered',
+            skipsNeedHuman: true
+        }, {
+            jira_get_ticket: function() {
+                return { key: 'TS-200', fields: { labels: ['needs_human_skips'] } };
+            }
+        });
+
+        assert.equal(recorded.result.action, 'needs_human_skips');
+        assert.deepEqual(recorded.labels, [], 'no duplicate needs-human label');
+        assert.deepEqual(recorded.comments.filter(function(c) { return c.key === 'TS-200'; }), [],
+            'no duplicate needs-human comment');
+        assert.equal(recorded.result.alreadyFlagged, true);
+        var markerComments = recorded.comments.filter(function(c) {
+            return c.comment.indexOf('[tc-skip-marker]') !== -1;
+        });
+        assert.equal(markerComments.length, 1, 'TC markers still stamped (idempotent by TC label)');
+    });
+
+    test('a failing story-label read degrades to flagging once more (best effort)', function() {
+        var recorded = runKnob([makeTc('TS-S1', 'Skipped')], {
+            removeLabel: 'sm_story_done_check_triggered',
+            skipsNeedHuman: true
+        }, {
+            jira_get_ticket: function() { throw new Error('jira down'); }
+        });
+
+        assert.equal(recorded.result.action, 'needs_human_skips');
+        assert.deepEqual(recorded.labels.filter(function(l) { return l.key === 'TS-200'; }),
+            [{ key: 'TS-200', label: 'needs_human_skips' }]);
+        assert.equal(recorded.result.alreadyFlagged, false);
+    });
+});
+
+suite('checkStoryTestsPassed: pure bucket helpers (gh-1330)', function() {
+
+    test('statusBuckets counts every concluded TC and collects skipped TCs', function() {
+        var module = loadCheckStoryTestsPassed({});
+        var gate = {
+            statuses: {},
+            hasStage: function(tc, stageKey) {
+                var status = tc.fields.status.name;
+                if (stageKey === 'PASSED') return status === 'Passed';
+                if (stageKey === 'SKIPPED') return status === 'Skipped';
+                if (stageKey === 'IRRELEVANT') return status === 'Irrelevant';
+                return false;
+            }
+        };
+
+        var split = module.statusBuckets([
+            makeTc('A', 'Passed'), makeTc('B', 'Passed'), makeTc('B2', 'Passed'),
+            makeTc('C', 'Skipped'), makeTc('D', 'Skipped'),
+            makeTc('E', 'Irrelevant')
+        ], gate);
+
+        assert.deepEqual(split.counts, { passed: 3, skipped: 2, irrelevant: 1, other: 0 });
+        assert.deepEqual(split.skippedTcs.map(function(tc) { return tc.key; }), ['C', 'D']);
+    });
+
+    test('buildBucketSummary renders only non-zero buckets in a fixed order', function() {
+        var module = loadCheckStoryTestsPassed({});
+        assert.equal(module.buildBucketSummary({ passed: 7, skipped: 3, irrelevant: 0, other: 0 }),
+            '7 Passed, 3 Skipped (never executed — see TC comments)');
+        assert.equal(module.buildBucketSummary({ passed: 0, skipped: 0, irrelevant: 2, other: 0 }),
+            '2 Irrelevant (no longer applicable)');
+        assert.equal(module.buildBucketSummary({ passed: 1, skipped: 1, irrelevant: 1, other: 1 }),
+            '1 Passed, 1 Skipped (never executed — see TC comments), 1 Irrelevant (no longer applicable), 1 Other');
+        assert.equal(module.buildBucketSummary({ passed: 0, skipped: 0, irrelevant: 0, other: 0 }), '');
+    });
+
+    test('buildSkipMarkerComment emits the machine-parseable marker line', function() {
+        var module = loadCheckStoryTestsPassed({});
+        var comment = module.buildSkipMarkerComment('TS-100', 'TS-S1', 'no reason recorded', '2026-01-11');
+        assert.contains(comment, '[tc-skip-marker] skipped at TS-100 done-check (no reason recorded), never executed — 2026-01-11');
+        assert.contains(comment, 'unverified, not exonerated');
+    });
+
+    test('buildStoryDoneComment never claims All Passed when skipped + irrelevant > 0', function() {
+        var module = loadCheckStoryTestsPassed({});
+        var mixed = module.buildStoryDoneComment({ passed: 7, skipped: 3, irrelevant: 0, other: 0 }, 10);
+        assert.contains(mixed, 'Test results: 7 Passed, 3 Skipped (never executed — see TC comments)');
+        assert.notContains(mixed, 'All Test Cases Passed');
+
+        var allIrrelevant = module.buildStoryDoneComment({ passed: 0, skipped: 0, irrelevant: 4, other: 0 }, 4);
+        assert.notContains(allIrrelevant, 'All Test Cases Passed');
+
+        var green = module.buildStoryDoneComment({ passed: 2, skipped: 0, irrelevant: 0, other: 0 }, 2);
+        assert.contains(green, 'All Test Cases Passed');
     });
 });
