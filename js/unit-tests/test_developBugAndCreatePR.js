@@ -86,6 +86,22 @@ var gitStagingModule = loadModule('js/common/gitStaging.js');
 // gh-1087: real quota circuit-breaker (pure module — no requires of its own).
 var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 
+// gh-1329 review: the shared "load bug bookkeeping" helper used by the bug
+// leg (and asserted on directly in test_bugBookkeeping.js).
+var bugBookkeepingModule = loadModule('js/common/bugBookkeeping.js', makeRequire({
+    './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+            './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+        }))
+    })),
+    './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+            './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+        }))
+    })),
+    './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+}));
+
 // gh-742 rework: the bug flow's interrupted path calls
 // developTicket.throwInterruptedReset, so the mock below exposes the REAL
 // exported helper (single source of truth for the marker/message contract)
@@ -117,7 +133,6 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
     var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}));
     var reviewVerdictsModule = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorModule }));
     var tcLedgerModule = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './reviewVerdicts.js': reviewVerdictsModule }));
-
     var requireMap = {
         './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
         './config.js': configModule,
@@ -129,6 +144,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/trackers.js': loadTrackersDev(allMocks),
         './common/machineAuthor.js': machineAuthorModule,
         './common/tcMaintenanceLedger.js': tcLedgerModule,
+        './common/bugBookkeeping.js': bugBookkeepingModule,
         './developTicketAndCreatePR.js': {
             action: function() { return { success: true, path: 'delegated' }; },
             throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
@@ -784,6 +800,7 @@ suite('developBugAndCreatePR', function() {
                         './machineAuthor.js': loadModule('js/common/machineAuthor.js')
                     }))
                 })),
+                './common/bugBookkeeping.js': bugBookkeepingModule,
                 './developTicketAndCreatePR.js': { action: function () { throw marked; }, classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); } },
                 './common/feedbackLoop.js': {
                     runQualityGates: function () { return { success: true }; },
@@ -965,6 +982,7 @@ function loadBugForMissingResponseResume(opts) {
                     './machineAuthor.js': loadModule('js/common/machineAuthor.js')
                 }))
             })),
+            './common/bugBookkeeping.js': bugBookkeepingModule,
             // SPY: a direct resumeOnceForMissingResponse call from the bug leg
             // is forbidden — the shared gate owns the resume (gh-775 review
             // round 1, IMPORTANT thread).
@@ -1429,6 +1447,7 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
                         './machineAuthor.js': loadModule('js/common/machineAuthor.js')
                     }))
                 })),
+                './common/bugBookkeeping.js': bugBookkeepingModule,
                 './developTicketAndCreatePR.js': {
                     action: function () { delegated++; return { success: true, path: 'delegated' }; },
                     classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); },

@@ -36,7 +36,9 @@ var needsInputCommon = require('./common/needsInput.js');
 // gh-1329: the structured dev exit — outputs/test_suspected.json routes
 // machine-side into the rolling TC maintenance ledger.
 var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
-var machineAuthor = require('./common/machineAuthor.js');
+// gh-1329 review: the shared "load bug bookkeeping" helper (one getIssue,
+// one machine-author resolution) for both legs that read the markers.
+var bugBookkeeping = require('./common/bugBookkeeping.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -641,6 +643,36 @@ function resolvePrAlreadyOpenOutcome(ticketKey, scm, expectedBranch, tracker, st
     return null;
 }
 
+/** The ledger marker post (non-fatal, never silent — a dropped marker drifts occurrences). */
+function postLedgerMarker(ticketKey, ledger, tracker) {
+    try {
+        tracker.postComment(ticketKey, tcMaintenanceLedger.buildLedgerMarker(ledger));
+    } catch (e) {
+        console.warn('Failed to post TC maintenance ledger marker (non-fatal):', e);
+    }
+}
+
+/** The dev-claim owner digest post (non-fatal, never silent). */
+function postDevClaimDigest(ticketKey, ledger, tracker) {
+    try {
+        tracker.postComment(ticketKey,
+            '\uD83D\uDD0D Dev leg claims a test-side cause (gh-1329) — outputs/test_suspected.json routed to the TC maintenance ledger.\n\n' +
+            tcMaintenanceLedger.buildDigestComment(ledger));
+    } catch (e) {
+        console.warn('Failed to post dev-claim digest (non-fatal):', e);
+    }
+}
+
+/** The bug returns to the TC-verification lane (verdict stays oracle-gated). */
+function moveBugToTesting(ticketKey, jiraConfig, tracker) {
+    try {
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_TESTING);
+        console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.IN_TESTING, '— verdict stays gated by its own oracle TC');
+    } catch (e) {
+        console.warn('Failed to move to In Testing:', e);
+    }
+}
+
 /**
  * gh-1329: the structured dev exit. The agent claims the failing test is
  * wrong (verdict + evidence + TC key in outputs/test_suspected.json); the
@@ -651,33 +683,13 @@ function resolvePrAlreadyOpenOutcome(ticketKey, scm, expectedBranch, tracker, st
  * nothing here asks a human anything.
  */
 function completeTestSuspectedPath(ticketKey, claim, tracker, jiraConfig, params, config) {
-    var comments = (function() {
-        try {
-            var fields = (tracker.getIssue(ticketKey) && tracker.getIssue(ticketKey).fields) || {};
-            return (fields.comment && fields.comment.comments) || [];
-        } catch (e) {
-            return [];
-        }
-    })();
-    var authorOpts = { authorLogins: machineAuthor.machineAuthorLogins(
-        machineAuthor.resolveMachineAuthor((params && params.jobParams) || params, config)) };
-    var record = tcMaintenanceLedger.latestLedger(comments, authorOpts);
-    var ledger = record ? record.ledger : tcMaintenanceLedger.emptyLedger();
-    ledger = tcMaintenanceLedger.appendFinding(ledger, tcMaintenanceLedger.findingFromDevClaim(claim));
+    var bookkeeping = bugBookkeeping.loadBugBookkeeping(tracker, ticketKey, params, config);
+    var ledger = tcMaintenanceLedger.appendFinding(
+        bookkeeping.ledger, tcMaintenanceLedger.findingFromDevClaim(claim));
 
-    try { tracker.postComment(ticketKey, tcMaintenanceLedger.buildLedgerMarker(ledger)); } catch (e) {}
-    try {
-        tracker.postComment(ticketKey,
-            '\uD83D\uDD0D Dev leg claims a test-side cause (gh-1329) — outputs/test_suspected.json routed to the TC maintenance ledger.\n\n' +
-            tcMaintenanceLedger.buildDigestComment(ledger));
-    } catch (e) {}
-
-    try {
-        tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_TESTING);
-        console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.IN_TESTING, '— verdict stays gated by its own oracle TC');
-    } catch (e) {
-        console.warn('Failed to move to In Testing:', e);
-    }
+    postLedgerMarker(ticketKey, ledger, tracker);
+    postDevClaimDigest(ticketKey, ledger, tracker);
+    moveBugToTesting(ticketKey, jiraConfig, tracker);
 
     removeLabels(ticketKey, params, tracker);
     return { success: true, path: 'test_suspected', ticketKey };

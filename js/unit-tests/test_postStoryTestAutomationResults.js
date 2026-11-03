@@ -42,6 +42,15 @@ function loadPostStoryTestAutomationResults(mocks) {
     var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), allMocks);
     var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), allMocks);
     var reviewVerdicts = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthor }), allMocks);
+    var bugBookkeeping = loadModule('js/common/bugBookkeeping.js', makeRequire({
+        './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
+            './reviewVerdicts.js': reviewVerdicts
+        }), allMocks),
+        './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+            './reviewVerdicts.js': reviewVerdicts
+        }), allMocks),
+        './machineAuthor.js': machineAuthor
+    }), allMocks);
     var prHelper = loadModule('js/common/pullRequest.js', makeRequire({
         './mergeState.js': loadModule('js/common/mergeState.js'),
         './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -62,7 +71,7 @@ function loadPostStoryTestAutomationResults(mocks) {
             './common/tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
                 './reviewVerdicts.js': reviewVerdicts
             }), allMocks),
-            './common/machineAuthor.js': machineAuthor,
+            './common/bugBookkeeping.js': bugBookkeeping,
             './common/autoStart.js': {
                 triggerConfiguredWorkflowForTicket: function(opts) {
                     return (mocks && mocks.triggerConfiguredWorkflowForTicket)
