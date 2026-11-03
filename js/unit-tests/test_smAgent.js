@@ -18335,7 +18335,8 @@ suite('sm.json: TC differential dispatcher rule (gh-1345)', function() {
     });
 
     test('the dispatcher agent config is a JSRunner pointing at the scripted action', function() {
-        var raw = file_read({ path: 'agents/tc_differential_dispatcher.json' });
+        var raw = file_read({ path: 'agents/tc_differential_dispatcher.json' }) ||
+                  file_read({ path: 'tc_differential_dispatcher.json' });
         var cfg = JSON.parse(raw);
         assert.equal(cfg.name, 'JSRunner', 'JSRunner — no AI CLI, the run is the verdict');
         assert.equal(cfg.params.postJSAction, 'agents/js/tcDifferentialDispatcher.js',

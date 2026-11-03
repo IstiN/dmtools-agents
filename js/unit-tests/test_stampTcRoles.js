@@ -208,3 +208,16 @@ suite('stampTcRoles: scoping — bugs only', function() {
         assert.deepEqual(m.moves, [{ key: 'BUG-1', statusName: 'Done' }]);
     });
 });
+
+// ── gh-1345: the generator config wires the mechanical stamp ────────────────
+
+suite('stampTcRoles: the bug TC-generator config runs the stamp post-action', function() {
+
+    test('bug_test_cases_generator.json points its postJSAction at the mechanical stamp', function() {
+        var cfg = JSON.parse(file_read({ path: 'bug_test_cases_generator.json' }));
+        assert.equal(cfg.params.postJSAction, 'agents/js/stampTcRoles.js',
+            'the generator leg stamps roles mechanically (stampTcRoles wraps moveToDone — the hand-off is preserved)');
+        assert.contains(cfg.params.metadata.descriptionPath, 'bug_test_cases_generator',
+            'the agent doc travels with the config');
+    });
+});

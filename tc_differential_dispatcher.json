@@ -1,0 +1,10 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "postJSAction": "agents/js/tcDifferentialDispatcher.js",
+    "customParams": {},
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/tc_differential_dispatcher.md"
+    }
+  }
+}

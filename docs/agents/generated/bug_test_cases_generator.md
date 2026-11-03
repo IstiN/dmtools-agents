@@ -42,15 +42,11 @@ _Move To Ready For Testing Action (postJSAction for test_cases_generator)_
 
 
 
-### postJSAction: `moveToDone.js`
+### postJSAction: `stampTcRoles.js`
 
-_Move To Done Action (postJSAction for bug_test_cases_generator)_
+_Stamp TC Roles (postJSAction for bug_test_cases_generator — gh-1345)_
 
-- Source: `agents/js/moveToDone.js`
-- Side effects:
-  - remove label "sm_bug_test_cases_triggered" (via tracker)
-  - post ticket comment (via tracker)
-  - move ticket to status (via tracker)
+- Source: `agents/js/stampTcRoles.js`
 - Parameters (customParams):
   - `adoTextFormat`
   - `branchCreateFnPath`

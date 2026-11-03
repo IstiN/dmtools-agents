@@ -424,6 +424,18 @@ match ANY entry. Resolution order:
    nor re-arms `agent:rework` (external semantics — the verdict comment
    is the whole report).
 
+**Deploy note — TC triage (gh-1345):** the bug-level TC run registry and
+maintenance ledger markers are authored by the machine identity and parse
+**fail-closed** against the allowlist: with `machineAuthor` unconfigured
+every bug reads fresh bookkeeping, so validated-guard streaks, earned
+bounces, escalations and differential dispatches never trigger. **Set
+`machineAuthor` (`params.jobParams.machineAuthor` at factory setup, or
+per-repo `config.machineAuthor` in `.dmtools/config.js`) BEFORE enabling
+the TC triage legs** (`postStoryTestAutomationResults` /
+`tcDifferentialDispatcher`). A deployment that runs TC triage with an
+empty allowlist logs a startup warning once per triage run — configure
+the knob to silence it.
+
 ## 6. The legs (runners)
 
 | Runner | Model | What it does |
