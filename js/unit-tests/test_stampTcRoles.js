@@ -59,9 +59,10 @@ function stampMocks(tcDescriptions, opts) {
         getIssueCalls: [],
         jira_search_by_jql: function(args) {
             var issues = Object.keys(tcDescriptions).map(function(key) {
+                var hideInSearch = opts.searchWithoutDescription && opts.searchWithoutDescription[key];
                 return { key: key, fields: {
                     summary: key + ' summary',
-                    description: tcDescriptions[key] === undefined ? null : tcDescriptions[key]
+                    description: hideInSearch ? null : (tcDescriptions[key] === undefined ? null : tcDescriptions[key])
                 } };
             });
             return JSON.stringify({ issues: issues });
@@ -73,7 +74,7 @@ function stampMocks(tcDescriptions, opts) {
         jira_get_ticket: function(args) {
             m.getIssueCalls.push(args.key);
             if (opts.parentType && String(args.key) === opts.parentKey) {
-                return { fields: { issuetype: { name: opts.parentType } } };
+                return { fields: { issuetype: { name: opts.parentType }, summary: opts.parentSummary || 'Checkout total wrong' } };
             }
             var desc = tcDescriptions[args.key];
             return { fields: { description: desc === undefined ? null : desc, summary: args.key + ' summary' } };
@@ -146,7 +147,8 @@ suite('stampTcRoles: the bug TC-generator leg stamps roles mechanically', functi
     });
 
     test('a linked TC without a description in the search result falls back to getIssue', function() {
-        var m = stampMocks({ 'TS-5': 'h4. Objective\nfrom getIssue' }, { parentType: 'Bug', parentKey: 'BUG-1' });
+        var m = stampMocks({ 'TS-5': 'h4. Objective\nfrom getIssue' },
+            { parentType: 'Bug', parentKey: 'BUG-1', searchWithoutDescription: { 'TS-5': true } });
         var mod = loadStampTcRoles(m);
 
         mod.action(bugParentParams());

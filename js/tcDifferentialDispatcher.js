@@ -46,7 +46,7 @@ const { resolveStatuses } = require('./config.js');
 var tcTriage = require('./common/tcTriage.js');
 var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
 var tcRunRegistry = require('./common/tcRunRegistry.js');
-var bugBookeeping = require('./common/bugBookkeeping.js');
+var bugBookkeeping = require('./common/bugBookkeeping.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -235,7 +235,7 @@ function maintenanceEntry(request, verdict) {
         envFingerprint: request.envFingerprint || null,
         lastGreenSha: request.lastGreenSha || null,
         lastGreenEnvFingerprint: request.lastGreenEnvFingerprint || null,
-        evidence: 'differential rerun on ' + (request.lastGreenSha || 'the last-green build') + ': red'
+        evidence: { differential: 'red' }
     };
 }
 
@@ -366,11 +366,10 @@ function action(params) {
 
     console.log('=== TC differential dispatcher for', ticketKey, '===');
 
-    var bookkeeping = bugBookeeping.loadBugBookeeping(tracker, ticketKey, params, config);
+    var bookkeeping = bugBookkeeping.loadBugBookkeeping(tracker, ticketKey, params, config);
     vars.registry = bookkeeping.registry;
     vars.ledger = bookkeeping.ledger;
 
-    console.log('DBG ledger type:', typeof tcMaintenanceLedger, 'fn:', typeof tcMaintenanceLedger.differentialRequests, 'marker fn:', typeof tcMaintenanceLedger.buildLedgerMarker);
     var requests = tcMaintenanceLedger.differentialRequests(vars.ledger);
     if (!requests.length) {
         removeLabelQuietly(tracker, ticketKey, parkLabel);
@@ -390,7 +389,9 @@ function action(params) {
     }
 
     var remaining = tcMaintenanceLedger.differentialRequests(vars.ledger);
-    if (routes.stalled.length || remaining.length || routes.bounced.length || routes.maintained.length || routes.escalated.length) {
+    var hasRoutes = routes.bounced.length || routes.escalated.length ||
+        routes.maintained.length || routes.stalled.length;
+    if (hasRoutes) {
         postCommentQuietly(tracker, ticketKey,
             buildReportComment(routes.bounced, routes.escalated, routes.maintained, routes.stalled, vars.ledger));
     }
