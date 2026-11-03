@@ -778,6 +778,12 @@ suite('developBugAndCreatePR', function() {
                     }
                 }),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
+                './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
+                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+                        './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+                    }))
+                })),
                 './developTicketAndCreatePR.js': { action: function () { throw marked; }, classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); } },
                 './common/feedbackLoop.js': {
                     runQualityGates: function () { return { success: true }; },
@@ -953,6 +959,12 @@ function loadBugForMissingResponseResume(opts) {
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': realOutputFiles,
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
+            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+                    './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+                }))
+            })),
             // SPY: a direct resumeOnceForMissingResponse call from the bug leg
             // is forbidden — the shared gate owns the resume (gh-775 review
             // round 1, IMPORTANT thread).
@@ -1411,6 +1423,12 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
                 './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), allMocks),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './common/trackers.js': loadTrackersDev(allMocks),
+                './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
+                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+                        './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+                    }))
+                })),
                 './developTicketAndCreatePR.js': {
                     action: function () { delegated++; return { success: true, path: 'delegated' }; },
                     classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); },
@@ -2048,7 +2066,15 @@ suite('developBugAndCreatePR: gh-1329 test_suspected dev exit', function() {
     });
 
     test('a malformed claim (no TC key) is rejected and the normal fix path proceeds', function() {
-        var loaded = testSuspectedModule({ reason: 'no tcKey here' });
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/test_suspected.json') {
+                    return JSON.stringify({ reason: 'no tcKey here' });
+                }
+                if (args.path === 'outputs/response.md') return '# Fix delivered\n';
+                throw new Error('missing ' + args.path);
+            }
+        });
         var result = loaded.mod.action({
             ticket: { key: 'BUG-1400', fields: { summary: 'Malformed claim', issuetype: { name: 'Bug' } } },
             metadata: { contextId: 'bug_development' },

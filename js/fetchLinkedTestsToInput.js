@@ -66,11 +66,17 @@ function buildTestBlockLines(tc) {
 }
 
 function writeLinkedTestsFile(folder, ticketKey, linkedTests) {
+    // gh-1329: the header no longer asserts a blanket "your fix MUST make
+    // these tests pass" — triage has not attributed every linked TC to the
+    // fix. The bug's own acceptance-oracle TC gates the verdict; regression
+    // guards are triaged mechanically and their failures land in the TC
+    // maintenance ledger without moving the bug.
     var lines = [
         '# Linked Test Cases\n',
-        '> **IMPORTANT**: These test cases are linked to this bug (they failed and triggered this bug report).',
-        '> Read the test steps and failure comments carefully.',
-        '> Your fix MUST make these tests pass — "already fixed" is only valid if the test can actually pass with the current code.\n'
+        '> These test cases are linked to this bug. Read the test steps and failure comments carefully.',
+        '> The bug is verified by its own acceptance-oracle test case (the one whose role says `Verifies: ' + ticketKey + '`): your fix is expected to make THAT test pass.',
+        '> Other linked test cases are regression guards — the pipeline triages their failures mechanically (gh-1329) and a red guard alone never returns the bug to development; test-side findings are routed to the TC maintenance ledger.',
+        '> "already fixed" is only valid if the acceptance-oracle test can actually pass with the current code.\n'
     ];
     for (var i = 0; i < linkedTests.length; i++) {
         lines = lines.concat(buildTestBlockLines(linkedTests[i]));
