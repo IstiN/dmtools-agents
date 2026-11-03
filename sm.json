@@ -87,6 +87,15 @@
           "enabled": true
         },
         {
+          "description": "Parked differential rerun requests → scripted CI dispatch (gh-1345)",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND labels = tc_differential_pending ORDER BY updated ASC",
+          "configFile": "agents/tc_differential_dispatcher.json",
+          "skipIfLabel": "sm_tc_differential_triggered",
+          "addLabel": "sm_tc_differential_triggered",
+          "localExecution": true,
+          "enabled": true
+        },
+        {
           "description": "Failed Test Cases → create or link bugs in batch",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND {stage.FAILED:Failed} AND (labels is EMPTY OR labels NOT IN ('sm_bug_creation_triggered')) ORDER BY created ASC",
           "configFile": "agents/bulk_bugs_creation.json",
@@ -188,11 +197,14 @@
         },
         {
           "description": "Ready For Testing Bugs → generate test cases",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND {stage.READY_FOR_TESTING:Ready For Testing} AND (labels is EMPTY OR labels NOT IN ('sm_bug_test_cases_triggered'))",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND {stage.READY_FOR_TESTING:Ready For Testing} AND (labels is EMPTY OR labels NOT IN ('sm_bug_test_cases_triggered','tc_differential_pending'))",
           "configFile": "agents/bug_test_cases_generator.json",
-          "skipIfLabel": "sm_bug_test_cases_triggered",
           "addLabel": "sm_bug_test_cases_triggered",
-          "enabled": true
+          "enabled": true,
+          "skipIfLabels": [
+            "sm_bug_test_cases_triggered",
+            "tc_differential_pending"
+          ]
         },
         {
           "description": "Ready For Testing Bugs → automate linked test cases in bulk",

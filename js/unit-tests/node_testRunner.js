@@ -363,34 +363,31 @@ function makeDefaultJiraConfig() {
 
 function makeDefaultConfigLoaderMock(extraConfig) {
     // gh-1230 CRAP: the loader body is a named declaration so the mock factory
-    // and the loader are measured as separate small functions.
+    // and the loader are measured as separate small functions. The extra-config
+    // merge helpers keep every function a small one (gh-1346 ratchet).
+    function mergeInto(target, src) {
+        for (var k in src) {
+            if (src.hasOwnProperty(k)) target[k] = src[k];
+        }
+    }
+
+    function applyExtraJira(jira, cfgJira) {
+        if (cfgJira.issueTypes) mergeInto(jira.issueTypes, cfgJira.issueTypes);
+        if (cfgJira.statuses) mergeInto(jira.statuses, cfgJira.statuses);
+    }
+
+    function applyExtraConfig(result, cfg) {
+        if (cfg.machineAuthor) result.machineAuthor = cfg.machineAuthor;
+        if (cfg.repository) result.repository = cfg.repository;
+        if (cfg.jobParamPatches) result.jobParamPatches = cfg.jobParamPatches;
+        if (cfg.jira) applyExtraJira(result.jira, cfg.jira);
+    }
+
     function loadProjectConfig(params) {
-        var cfg = extraConfig || {};
         var result = {
             jira: makeDefaultJiraConfig()
         };
-        if (cfg.repository) {
-            result.repository = cfg.repository;
-        }
-        if (cfg.jobParamPatches) {
-            result.jobParamPatches = cfg.jobParamPatches;
-        }
-        if (cfg.jira) {
-            if (cfg.jira.issueTypes) {
-                for (var it in cfg.jira.issueTypes) {
-                    if (cfg.jira.issueTypes.hasOwnProperty(it)) {
-                        result.jira.issueTypes[it] = cfg.jira.issueTypes[it];
-                    }
-                }
-            }
-            if (cfg.jira.statuses) {
-                for (var st in cfg.jira.statuses) {
-                    if (cfg.jira.statuses.hasOwnProperty(st)) {
-                        result.jira.statuses[st] = cfg.jira.statuses[st];
-                    }
-                }
-            }
-        }
+        applyExtraConfig(result, extraConfig || {});
         return result;
     }
     return {

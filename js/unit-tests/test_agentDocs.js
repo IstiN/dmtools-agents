@@ -734,6 +734,39 @@ suite('agentDocGenerator.renderActionSection (gh-119 characterization)', functio
         assert.contains(md, '### postCliJSAction: `missing.js`');
         assert.contains(md, '- No detected file I/O or side effects.');
     });
+
+    test('generic plumbing modules do not leak their customParams channels into the action section', function() {
+        // gh-1346 rework: configLoader / config / common-trackers are shared by
+        // (nearly) every action — following them attributed their own generic
+        // override channels (configPath, trackerProvider, customStatuses, …)
+        // to every job, so generated docs listed knobs the job never reads.
+        var mod = loadRenderHarness({
+            'agents/js/doThing.js':
+                "var configLoader = require('./configLoader.js');\n" +
+                "var trackers = require('./common/trackers.js');\n" +
+                'function action(params) { return params.jobParams.customParams.parkLabel; }',
+            'agents/js/configLoader.js':
+                'function loadProjectConfig(params) { return params.jobParams.customParams.configPath; }',
+            'agents/js/common/trackers.js':
+                'function initTracker(config, customParams) { return customParams.trackerProvider; }'
+        });
+        var md = mod.renderActionSection('postJSAction', 'agents/js/doThing.js', 'post');
+        assert.contains(md, '`parkLabel`', 'the action own read is still documented');
+        assert.notContains(md, '`configPath`', 'the config-loader plumbing channel is not attributed');
+        assert.notContains(md, '`trackerProvider`', 'the tracker plumbing channel is not attributed');
+    });
+
+    test('an action-specific helper module still contributes its params (gh-961 unchanged)', function() {
+        var mod = loadRenderHarness({
+            'agents/js/doThing.js':
+                "var helpers = require('./doThingHelpers.js');\n" +
+                'function action(params) { return helpers.decide(params); }',
+            'agents/js/doThingHelpers.js':
+                'function decide(params) { return params.jobParams.customParams.removeLabel; }'
+        });
+        var md = mod.renderActionSection('postJSAction', 'agents/js/doThing.js', 'post');
+        assert.contains(md, '`removeLabel`');
+    });
 });
 
 suite('agentDocGenerator.renderAgentDoc (gh-119 characterization)', function() {

@@ -43,18 +43,7 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `checkOpenPR`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
-  - `trackerProvider`
 
 ### preCliJSAction: `preCliReworkSetup.js`
 
@@ -68,29 +57,21 @@ _Pre-CLI Rework Setup Action (preCliJSAction for pr_rework agent)_
   - move ticket to status (via tracker)
   - git merge
 - Parameters (customParams):
-  - `adoTextFormat`
   - `aiRepository`
   - `artefactRepository`
   - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `branchSyncFnPath`
   - `childQuestions`
   - `commentMarkup`
-  - `configPath`
   - `contexts`
-  - `customStatuses`
-  - `featureBranchEnabled`
   - `feedbackLoop.qualityGates.gates`
   - `fields`
   - `jql`
   - `parentContextFetch`
-  - `prSearchFnPath`
   - `restoreFromReleases`
   - `scmProvider`
   - `setupCommands`
-  - `stageFallback`
   - `targetRepository`
-  - `trackerProvider`
 
 
 ### postJSAction: `pushReworkChanges.js`
@@ -107,25 +88,19 @@ _Push Rework Changes Post-Action_
   - git merge
   - git push
 - Parameters (customParams):
-  - `adoTextFormat`
   - `aiRepository`
   - `artefactRepository`
   - `autoStartReview`
   - `autoStartReviewConfigFile`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `cacheToReleases`
   - `commentMarkup`
   - `configPath`
   - `contentOutput`
   - `contentOutput.target`
-  - `customStatuses`
   - `dryRun`
-  - `featureBranchEnabled`
   - `feedbackLoop`
   - `localTeammate`
   - `managedSubmodules`
-  - `prSearchFnPath`
   - `projectKey`
   - `providerTransientBackoffSec`
   - `pushSubmodules`
@@ -134,7 +109,6 @@ _Push Rework Changes Post-Action_
   - `scmProvider`
   - `smFallback`
   - `squashReworkWip`
-  - `stageFallback`
   - `targetRepository`
   - `trackerProvider`
 
@@ -150,17 +124,10 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
   - `aiRepository`
   - `artefactRepository`
   - `autoSaveCommitMessage`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `cacheToReleases`
   - `cacheToReleases.releaseNameTemplate`
   - `cacheToReleases.releaseTagTemplate`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
   - `scmProvider`
-  - `stageFallback`
   - `targetRepository`
 
 ## LLM step
@@ -180,19 +147,9 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
   ]
   ```
 - `checkOpenPR`: `true`
-- `adoTextFormat` _(used by JS action)_
-- `branchCreateFnPath` _(used by JS action)_
-- `branchNamingFnPath` _(used by JS action)_
-- `configPath` _(used by JS action)_
-- `customStatuses` _(used by JS action)_
-- `featureBranchEnabled` _(used by JS action)_
-- `prSearchFnPath` _(used by JS action)_
-- `scmProvider` _(used by JS action)_
-- `stageFallback` _(used by JS action)_
-- `targetRepository` _(used by JS action)_
-- `trackerProvider` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `artefactRepository` _(used by JS action)_
+- `branchCreateFnPath` _(used by JS action)_
 - `branchSyncFnPath` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
@@ -202,10 +159,13 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `jql` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_
 - `restoreFromReleases` _(used by JS action)_
+- `scmProvider` _(used by JS action)_
 - `setupCommands` _(used by JS action)_
+- `targetRepository` _(used by JS action)_
 - `autoStartReview` _(used by JS action)_
 - `autoStartReviewConfigFile` _(used by JS action)_
 - `cacheToReleases` _(used by JS action)_
+- `configPath` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
 - `dryRun` _(used by JS action)_
@@ -218,6 +178,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `removeLabel` _(used by JS action)_
 - `smFallback` _(used by JS action)_
 - `squashReworkWip` _(used by JS action)_
+- `trackerProvider` _(used by JS action)_
 - `autoSaveCommitMessage` _(used by JS action)_
 - `cacheToReleases.releaseNameTemplate` _(used by JS action)_
 - `cacheToReleases.releaseTagTemplate` _(used by JS action)_

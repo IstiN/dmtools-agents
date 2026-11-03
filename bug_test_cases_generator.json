@@ -19,7 +19,7 @@
     "relatedTestCasesRules": "./agents/instructions/test_cases/test_case_relation_rules.md",
     "examples": "ql(project = JD AND issuetype = 'Test Case' AND labels = \"ai_example\")",
     "preJSAction": "agents/js/moveToReadyForTesting.js",
-    "postJSAction": "agents/js/moveToDone.js",
+    "postJSAction": "agents/js/stampTcRoles.js",
     "inputJql": "key = JD-107",
     "metadata": {
       "descriptionPath": "agents/docs/agents/bug_test_cases_generator.md"

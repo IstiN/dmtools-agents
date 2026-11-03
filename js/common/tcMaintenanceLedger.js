@@ -217,6 +217,25 @@ function openFindings(l) {
     return l.findings.filter(function(f) { return f.status === STATUS_OPEN; });
 }
 
+// The SM-routing label that anchors a parked differential request to the
+// scripted dispatcher rule (gh-1345): the automation leg adds it when a run
+// parks a request, the dispatcher clears it when nothing remains parked.
+var PARK_LABEL = 'tc_differential_pending';
+
+// The parked differential-rerun verdict (tcTriage ACTION_DIFFERENTIAL): the
+// finding that awaits the scripted CI dispatcher — never a sweep item.
+var VERDICT_DIFFERENTIAL = 'differential-rerun';
+
+/**
+ * The parked differential rerun requests of a ledger: open findings whose
+ * verdict is the differential rerun — the TCs the dispatcher still has to run
+ * on their last-green build. They stay parked (and visible in every digest)
+ * until the dispatcher resolves them.
+ */
+function differentialRequests(l) {
+    return openFindings(l).filter(function(f) { return f && f.verdict === VERDICT_DIFFERENTIAL; });
+}
+
 // ── finding builders (the two machine sources) ───────────────────────────────
 
 var VERDICT_FALLBACK_TABLE = [
@@ -371,21 +390,48 @@ function findingLine(f) {
 }
 
 /**
- * The digest comment: one section per open finding plus the explicit
- * "no action required right now" — humans meet a digest, never a question.
+ * The parked differential request line (gh-1345): everything the scripted
+ * dispatcher needs is on the line — TC, script, last-green build.
+ */
+function parkedRequestLine(f) {
+    return '- ' + f.tcKey + (f.testPath ? ' — `' + f.testPath + '`' : '') +
+        (f.lastGreenSha ? ' — last green build `' + f.lastGreenSha + '`' : '') +
+        ' — waiting for the scripted differential rerun';
+}
+
+/**
+ * The digest comment: the parked differential rerun requests ALWAYS get
+ * their own section first (gh-1345 — attribution stalls are never silent:
+ * a parked request is dispatcher work, not sweep work), then one section
+ * per open sweep finding plus the explicit "no action required right now".
  */
 function buildDigestComment(l) {
-    var open = openFindings(l);
-    if (!open.length) {
+    var parked = differentialRequests(l);
+    var open = openFindings(l).filter(function(f) { return !f || f.verdict !== VERDICT_DIFFERENTIAL; });
+    if (!open.length && !parked.length) {
         return '\uD83E\uDDFC TC maintenance ledger (gh-1329) — no open findings. Test-side debt is clear.';
     }
-    var lines = ['\uD83E\uDDFC TC maintenance ledger digest (gh-1329) — ' + open.length +
-        ' open test-side finding' + (open.length === 1 ? '' : 's') + ', queued for a batched sweep PR:'];
-    open.forEach(function(f) {
-        lines.push(findingLine(f));
-    });
-    lines.push('');
-    lines.push('Findings are fixed in batched sweep PRs; tests re-enter validation afterwards. No action is required right now.');
+    var lines = [];
+    if (parked.length) {
+        lines.push('\u23F3 Parked differential rerun requests (gh-1345) — ' + parked.length +
+            ' attribution stall' + (parked.length === 1 ? '' : 's') + ', the scripted CI dispatcher owns these ' +
+            '(each TC is rerun on its last-green build; the outcome bounces the bug or closes the request):');
+        parked.forEach(function(f) {
+            lines.push(parkedRequestLine(f));
+        });
+        lines.push('');
+    }
+    if (open.length) {
+        lines.push('\uD83E\uDDFC TC maintenance ledger digest (gh-1329) — ' + open.length +
+            ' open test-side finding' + (open.length === 1 ? '' : 's') + ', queued for a batched sweep PR:');
+        open.forEach(function(f) {
+            lines.push(findingLine(f));
+        });
+        lines.push('');
+        lines.push('Findings are fixed in batched sweep PRs; tests re-enter validation afterwards. No action is required right now.');
+    } else {
+        lines.push('The dispatcher runs each parked TC on its last-green build on the next maintenance tick and resolves the request mechanically; no action is required right now.');
+    }
     return lines.join('\n');
 }
 
@@ -408,6 +454,9 @@ if (typeof module !== 'undefined' && module.exports) {
         buildLedgerMarker: buildLedgerMarker,
         parseLedgerComments: parseLedgerComments,
         latestLedger: latestLedger,
-        buildDigestComment: buildDigestComment
+        buildDigestComment: buildDigestComment,
+        VERDICT_DIFFERENTIAL: VERDICT_DIFFERENTIAL,
+        PARK_LABEL: PARK_LABEL,
+        differentialRequests: differentialRequests
     };
 }

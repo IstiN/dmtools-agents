@@ -89,3 +89,30 @@ suite('bugBookkeeping: the shared bug bookkeeping loader', function() {
         assert.deepEqual(bugBookkeeping.machineAuthorOptsOf({}, {}), { authorLogins: [] });
     });
 });
+
+// ── gh-1345: the TC-triage machineAuthor deployment guard ────────────────────
+
+suite('bugBookkeeping: triageAllowlistWarning (gh-1345)', function() {
+
+    test('empty allowlist (jobParams + config unconfigured) returns the deployment warning', function() {
+        var w = bugBookkeeping.triageAllowlistWarning({}, {});
+        assert.ok(w);
+        assert.contains(w, 'machineAuthor');
+        assert.contains(w, 'params.jobParams.machineAuthor');
+        assert.contains(w, 'config.machineAuthor');
+    });
+
+    test('a comma-separated jobParams machineAuthor silences the warning', function() {
+        assert.equal(bugBookkeeping.triageAllowlistWarning(
+            { jobParams: { machineAuthor: 'ai-teammate,github-actions[bot]' } }, {}), null);
+    });
+
+    test('a config-level machineAuthor silences the warning', function() {
+        assert.equal(bugBookkeeping.triageAllowlistWarning({}, { machineAuthor: 'my-bot' }), null);
+    });
+
+    test('a whitespace-only knob still warns (no trusted identity resolves)', function() {
+        var w = bugBookkeeping.triageAllowlistWarning({ jobParams: { machineAuthor: ' , ' } }, {});
+        assert.ok(w);
+    });
+});

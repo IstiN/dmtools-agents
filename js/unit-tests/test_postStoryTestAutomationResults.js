@@ -1018,6 +1018,7 @@ function triageActionParams() {
 function triageModule(opts) {
     var statusMoves = [];
     var posted = [];
+    var labels = [];
     var module = loadPostStoryTestAutomationResults({
         file_read: triageFileReader(
             opts.resultEntries || [opts.resultEntry || guardFailedResult()],
@@ -1030,6 +1031,7 @@ function triageModule(opts) {
         jira_get_ticket: bugComments(opts.comments || []),
         jira_move_to_status: function(args) { statusMoves.push(args); },
         jira_post_comment: function(args) { posted.push(args.comment); },
+        jira_add_label: function(args) { labels.push(args); },
         jira_attach_file_to_ticket: function() {},
         jira_update_field: function() {}
     });
@@ -1037,8 +1039,14 @@ function triageModule(opts) {
         module: module,
         statusMoves: statusMoves,
         posted: posted,
+        labels: labels,
         run: function() {
             return module.action(triageActionParams());
+        },
+        runWithoutMachineAuthor: function() {
+            var p = triageActionParams();
+            delete p.jobParams.machineAuthor;
+            return module.action(p);
         }
     };
 }
@@ -1370,5 +1378,79 @@ suite('postStoryTestAutomationResults: gh-1329 rework — build SHA resolved onc
         assert.equal(result.success, true);
         var revParseCount = commands.filter(function(c) { return c === 'git rev-parse HEAD'; }).length;
         assert.equal(revParseCount, 1, 'git rev-parse HEAD runs once per triage run, not once per entry');
+    });
+});
+
+// ── gh-1345: the dispatcher hand-off (park label + deployment guard) ─────────
+
+suite('postStoryTestAutomationResults: gh-1345 differential dispatcher hand-off', function() {
+
+    test('AC: a parked differential request labels the bug for the scripted dispatcher', function() {
+        // validated guard, build changed, no differential outcome recorded —
+        // the triage parks a rerun request (fail-safe: no unattributed bounce)
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            resultEntry: Object.assign(guardFailedResult(), { differential: null })
+        });
+        var result = t.run();
+        assert.equal(result.status, 'test_maintenance');
+        assert.deepEqual(result.maintenanceTestCases, ['TS-152']);
+        assert.deepEqual(t.labels, [{ key: 'BUG-150', label: 'tc_differential_pending' }],
+            'the SM dispatcher rule matches this label next tick');
+    });
+
+    test('a fully-routed run (no differential requests) never parks the label', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            cli: function(o) {
+                if (o.command === 'git branch --show-current') return 'test/BUG-150';
+                if (o.command === 'git rev-parse HEAD') return 'sha-green'; // same build
+                return '';
+            },
+            resultEntry: Object.assign(guardFailedResult(), { envFingerprint: 'env-1' })
+        });
+        var result = t.run();
+        assert.equal(result.status, 'test_maintenance');
+        assert.deepEqual(t.labels, [], 'a flaky-same-build route is sweep work — no dispatcher label');
+    });
+
+    test('an earned bounce run never parks the label', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            resultEntry: Object.assign(guardFailedResult(), { differential: 'green' })
+        });
+        var result = t.run();
+        assert.equal(result.status, 'failed');
+        assert.deepEqual(t.labels, [], 'the bounce consumed the attribution — nothing parked');
+    });
+});
+
+suite('postStoryTestAutomationResults: gh-1345 machineAuthor deployment guard', function() {
+
+    function captureWarnings(run) {
+        var warnings = [];
+        var orig = console.warn;
+        console.warn = function() {
+            warnings.push(Array.prototype.slice.call(arguments).map(String).join(' '));
+        };
+        try { run(); } finally { console.warn = orig; }
+        return warnings;
+    }
+
+    test('AC4: triage active + empty allowlist warns ONCE with the deployment fix', function() {
+        var t = triageModule({ comments: [] });
+        var warnings = captureWarnings(function() { t.result = t.runWithoutMachineAuthor(); });
+        assert.equal(t.result.success, true);
+        var guardWarnings = warnings.filter(function(w) { return w.indexOf('machineAuthor') !== -1; });
+        assert.equal(guardWarnings.length, 1, 'exactly one startup warning per run');
+        assert.contains(guardWarnings[0], 'params.jobParams.machineAuthor');
+        assert.contains(guardWarnings[0], 'config.machineAuthor');
+    });
+
+    test('AC4: a configured deployment sees nothing', function() {
+        var t = triageModule({ comments: [] });
+        var warnings = captureWarnings(function() { t.result = t.run(); });
+        assert.equal(t.result.success, true);
+        assert.deepEqual(warnings.filter(function(w) { return w.indexOf('machineAuthor') !== -1; }), []);
     });
 });

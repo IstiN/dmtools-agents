@@ -43,18 +43,7 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `checkOpenPR`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
-  - `trackerProvider`
 
 ### preCliJSAction: `preCliDevelopmentSetup.js`
 
@@ -70,29 +59,21 @@ _Pre-CLI Development Setup Action_
   - git checkout
   - git merge
 - Parameters (customParams):
-  - `adoTextFormat`
   - `aiRepository`
   - `artefactRepository`
   - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `childQuestions`
   - `commentMarkup`
-  - `configPath`
   - `contexts`
-  - `customStatuses`
-  - `featureBranchEnabled`
   - `feedbackLoop.qualityGates.gates`
   - `fields`
   - `jql`
   - `parentContextFetch`
-  - `prSearchFnPath`
   - `restoreFromReleases`
   - `scmProvider`
   - `setupCommands`
-  - `stageFallback`
   - `targetRepository`
   - `targetRepository.workingDir`
-  - `trackerProvider`
 
 
 ### postJSAction: `developTicketAndCreatePR.js`
@@ -108,13 +89,10 @@ _Develop Ticket and Create PR Action_
   - git merge
   - post ticket comment (via tracker)
 - Parameters (customParams):
-  - `adoTextFormat`
   - `aiRepository`
   - `artefactRepository`
   - `autoStartReview`
   - `autoStartReviewConfigFile`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `cacheToReleases`
   - `commentMarkup`
   - `configPath`
@@ -122,11 +100,9 @@ _Develop Ticket and Create PR Action_
   - `contentOutput.target`
   - `customStatuses`
   - `dryRun`
-  - `featureBranchEnabled`
   - `feedbackLoop`
   - `localTeammate`
   - `managedSubmodules`
-  - `prSearchFnPath`
   - `projectKey`
   - `providerTransientBackoffSec`
   - `pushSubmodules`
@@ -135,7 +111,6 @@ _Develop Ticket and Create PR Action_
   - `removeLabels.forEach`
   - `scmProvider`
   - `smFallback`
-  - `stageFallback`
   - `targetRepository`
   - `targetRepository.workingDir`
   - `trackerProvider`
@@ -152,17 +127,10 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
   - `aiRepository`
   - `artefactRepository`
   - `autoSaveCommitMessage`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `cacheToReleases`
   - `cacheToReleases.releaseNameTemplate`
   - `cacheToReleases.releaseTagTemplate`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
   - `scmProvider`
-  - `stageFallback`
   - `targetRepository`
 
 ## LLM step
@@ -173,20 +141,10 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 ## Custom params
 
 - `removeLabel`: `"sm_story_development_triggered"`
-- `adoTextFormat` _(used by JS action)_
-- `branchCreateFnPath` _(used by JS action)_
-- `branchNamingFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
-- `configPath` _(used by JS action)_
-- `customStatuses` _(used by JS action)_
-- `featureBranchEnabled` _(used by JS action)_
-- `prSearchFnPath` _(used by JS action)_
-- `scmProvider` _(used by JS action)_
-- `stageFallback` _(used by JS action)_
-- `targetRepository` _(used by JS action)_
-- `trackerProvider` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `artefactRepository` _(used by JS action)_
+- `branchCreateFnPath` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
 - `contexts` _(used by JS action)_
@@ -195,13 +153,17 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `jql` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_
 - `restoreFromReleases` _(used by JS action)_
+- `scmProvider` _(used by JS action)_
 - `setupCommands` _(used by JS action)_
+- `targetRepository` _(used by JS action)_
 - `targetRepository.workingDir` _(used by JS action)_
 - `autoStartReview` _(used by JS action)_
 - `autoStartReviewConfigFile` _(used by JS action)_
 - `cacheToReleases` _(used by JS action)_
+- `configPath` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
+- `customStatuses` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
@@ -212,6 +174,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `removeLabels` _(used by JS action)_
 - `removeLabels.forEach` _(used by JS action)_
 - `smFallback` _(used by JS action)_
+- `trackerProvider` _(used by JS action)_
 - `autoSaveCommitMessage` _(used by JS action)_
 - `cacheToReleases.releaseNameTemplate` _(used by JS action)_
 - `cacheToReleases.releaseTagTemplate` _(used by JS action)_

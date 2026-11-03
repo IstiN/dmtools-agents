@@ -260,6 +260,8 @@ suite('wave2d1 tracker — preCli setups / writeSolutionAndLabels', function() {
             './config.js': configModule,
             './common/trackers.js': d1Trackers(mocks),
             './configLoader.js': makeDefaultConfigLoaderMock(),
+            // gh-1345: the module parses the mechanical TC role stamp — real module.
+            './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js'),
             './common/pullRequest.js': { buildTargetedOriginFetchCommand: function() { return null; }, buildOriginFetchCommand: function() { return null; } },
             './common/githubHelpers.js': {},
             './common/scm.js': { createScm: function() { return { listPrs: function() { return []; } }; } }

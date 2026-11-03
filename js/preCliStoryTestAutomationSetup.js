@@ -15,6 +15,7 @@ var scmModule = require('./common/scm.js');
 var gh = require('./common/githubHelpers.js');
 const { STATUSES, resolveStatuses } = require('./config.js');
 var trackersModule = require('./common/trackers.js');
+var tcRoleStamp = require('./common/tcRoleStamp.js');
 
 // Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
 // common/pullRequest.js once — this delegate keeps every local call site.
@@ -197,8 +198,10 @@ function fetchLinkedTestCases(storyKey, testCaseType, tracker) {
     var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = "' + testCaseType + '"';
     console.log('Fetching linked Test Cases with JQL:', jql);
     try {
-        // JQL text: provider-specific query (WIQL on ado)
-        var results = tracker.searchIssues(jql, { maxResults: 100, fields: ['key', 'summary', 'status'] });
+        // JQL text: provider-specific query (WIQL on ado). gh-1345: the
+        // description carries the mechanical role stamp — it is parsed into
+        // structured role fields below so the triage reads the stamp.
+        var results = tracker.searchIssues(jql, { maxResults: 100, fields: ['key', 'summary', 'status', 'description'] });
         return Array.isArray(results) ? results : [];
     } catch (e) {
         console.warn('Failed to fetch linked Test Cases:', e);
@@ -210,24 +213,31 @@ function renderTestCase(tc) {
     var fields = tc.fields || {};
     var lines = [];
     lines.push('- ' + tc.key + ' — ' + (fields.summary || '(no summary)') +
-               ' [' + (fields.status && fields.status.name ? fields.status.name : 'Unknown') + ']');
+               ' [' + (fields.status && fields.status.name ? fields.status.name : 'Unknown') + ']' +
+               (tc.role ? ' role: ' + tc.role +
+                   (tc.verifies ? ' (Verifies: ' + tc.verifies + ')' : '') : ''));
     return lines.join('\n');
 }
 
 function writeLinkedTestCases(storyKey, testCases) {
     var inputDir = 'input/' + storyKey;
+    // gh-1345: the stamped first line becomes structured role fields
+    // (role / verifies / regressionGuard) — the automation leg reads the
+    // machine stamp, never agent prose. Unmarked entries pass through.
+    // gh-1346 rework: not bug-scoped — sibling resolution stays with the triage.
+    var annotated = tcRoleStamp.annotateWithRoles(testCases);
     try {
         file_write({
             path: inputDir + '/linked_test_cases.json',
-            content: JSON.stringify({ storyKey: storyKey, testCases: testCases }, null, 2)
+            content: JSON.stringify({ storyKey: storyKey, testCases: annotated }, null, 2)
         });
     } catch (e) {
         console.warn('Could not write linked_test_cases.json:', e);
     }
 
     var md = '# Linked Test Cases for ' + storyKey + '\n\n';
-    md += 'Total: ' + testCases.length + '\n\n';
-    testCases.forEach(function(tc) {
+    md += 'Total: ' + annotated.length + '\n\n';
+    annotated.forEach(function(tc) {
         md += renderTestCase(tc) + '\n';
     });
     md += '\n';

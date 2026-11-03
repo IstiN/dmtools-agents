@@ -1084,6 +1084,11 @@ function handleBugWithProductFailure(params, result, ctx) {
 
     console.log('Bug', ctx.storyKey, 'has', failedResultsOf(result).length, 'failed TC(s) — triaging before any bounce');
 
+    // gh-1345 deployment guard: triage is fail-closed against the machine
+    // author allowlist — an empty allowlist reads fresh bookkeeping forever
+    // (no earned bounce / escalation / differential dispatch can trigger).
+    var allowlistWarning = bugBookkeeping.triageAllowlistWarning(params, ctx.config);
+    if (allowlistWarning) console.warn(allowlistWarning);
     var bookkeeping = bugBookkeeping.loadBugBookkeeping(getTracker(), ctx.storyKey, params, ctx.config);
     var triage = triageBugFailures(params, result, ctx, bookkeeping);
 
@@ -1120,9 +1125,32 @@ function isTriagableBugRun(params, result, ctx) {
     return (result.overall || '').toLowerCase() !== 'blocked_by_human';
 }
 
-/** Routed AND escalated findings get the same human surface on every route. */
+/**
+ * Routed AND escalated findings get the same human surface on every route.
+ */
 function routedAndEscalated(triage) {
     return triage.routed.concat(triage.escalated);
+}
+
+/**
+ * gh-1345: a parked differential rerun request is dispatcher work — the
+ * scripted SM job (tcDifferentialDispatcher) picks the bug up by this label
+ * on the next tick, runs the TC on the last-green build and resolves the
+ * request. Best effort: a tracker hiccup only warns.
+ */
+function parkDifferentialLabelQuietly(storyKey) {
+    try {
+        getTracker().addLabel(storyKey, tcMaintenanceLedger.PARK_LABEL);
+        console.log('✅ Parked differential request — labeled', storyKey, 'with', tcMaintenanceLedger.PARK_LABEL);
+    } catch (e) {
+        console.warn('Failed to add the differential park label (non-fatal):', e);
+    }
+}
+
+function differentialRequested(triage) {
+    return (triage.routed || []).some(function(v) {
+        return v.action === tcTriage.ACTION_DIFFERENTIAL;
+    });
 }
 
 function digestSections(triage) {
@@ -1165,6 +1193,7 @@ function bouncePathResult(triage, params, ctx) {
     stageRoutedBugTestCases(routedAndEscalated(triage), ctx.workingDir, ctx.storyKey, ctx.config);
     postTriageDigest(triage, ctx);
     removeAutomationLabels(ctx.storyKey, params);
+    if (differentialRequested(triage)) parkDifferentialLabelQuietly(ctx.storyKey);
     return {
         success: true,
         status: 'failed',
@@ -1181,6 +1210,7 @@ function bouncePathResult(triage, params, ctx) {
 function routePathResult(triage, params, ctx) {
     stageRoutedBugTestCases(routedAndEscalated(triage), ctx.workingDir, ctx.storyKey, ctx.config);
     postTriageDigest(triage, ctx);
+    if (differentialRequested(triage)) parkDifferentialLabelQuietly(ctx.storyKey);
     removeAutomationLabels(ctx.storyKey, params);
     return {
         success: true,

@@ -63,10 +63,30 @@ function loadBugBookkeeping(tracker, storyKey, params, config) {
     };
 }
 
+/**
+ * The gh-1345 deployment guard message: TC triage is fail-closed against the
+ * machine-author allowlist — with no configured identity every registry /
+ * ledger marker trusts nothing, so validated guards, streaks and parked
+ * differential requests all read fresh and NO earned-bounce/escalation path
+ * can ever trigger. Returns the warning text (log once per run) or null when
+ * the deployment resolves a non-empty allowlist.
+ */
+function triageAllowlistWarning(params, config) {
+    var logins = machineAuthor.machineAuthorLogins(
+        machineAuthor.resolveMachineAuthor((params && params.jobParams) || params, config));
+    if (logins.length > 0) return null;
+    return 'gh-1345 deployment guard: TC triage is active but no machineAuthor allowlist is configured — ' +
+        'the TC run registry and maintenance ledger parse fail-closed, so every bug reads fresh bookkeeping ' +
+        'and no earned bounce / escalation / differential dispatch can trigger. ' +
+        'Set params.jobParams.machineAuthor (factory setup) or config.machineAuthor (.dmtools/config.js) ' +
+        'before enabling TC triage.';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         bugTrackedComments: bugTrackedComments,
         machineAuthorOptsOf: machineAuthorOptsOf,
-        loadBugBookkeeping: loadBugBookkeeping
+        loadBugBookkeeping: loadBugBookkeeping,
+        triageAllowlistWarning: triageAllowlistWarning
     };
 }

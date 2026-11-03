@@ -49,18 +49,7 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
   - `checkOpenPR`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
-  - `trackerProvider`
 
 ### preCliJSAction: `fetchEpicsToInput.js`
 
@@ -70,18 +59,6 @@ _Fetch Epics To Input Pre-CLI Action_
 - Writes:
   - `input/<KEY>/existing_epics.json`
   - `input/<KEY>/existing_stories.json`
-- Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
-  - `trackerProvider`
 
 
 ### postJSAction: `createIntakeTickets.js`
@@ -97,16 +74,6 @@ _Create Intake Tickets Post-Action_
   - move ticket to status (via tracker)
   - assign ticket (via tracker)
 - Parameters (customParams):
-  - `adoTextFormat`
-  - `branchCreateFnPath`
-  - `branchNamingFnPath`
-  - `configPath`
-  - `customStatuses`
-  - `featureBranchEnabled`
-  - `prSearchFnPath`
-  - `scmProvider`
-  - `stageFallback`
-  - `targetRepository`
   - `trackerProvider`
 
 
@@ -117,17 +84,7 @@ _Create Intake Tickets Post-Action_
 
 ## Custom params
 
-- `adoTextFormat` _(used by JS action)_
-- `branchCreateFnPath` _(used by JS action)_
-- `branchNamingFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
-- `configPath` _(used by JS action)_
-- `customStatuses` _(used by JS action)_
-- `featureBranchEnabled` _(used by JS action)_
-- `prSearchFnPath` _(used by JS action)_
-- `scmProvider` _(used by JS action)_
-- `stageFallback` _(used by JS action)_
-- `targetRepository` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 
 ---

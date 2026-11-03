@@ -331,7 +331,34 @@ function resolveLocalRequire(fromFile, reqPath) {
  * Local relative requires are followed transitively (with cycle protection):
  * extractions like gh-961 move member accesses into helper modules next to
  * the action, and the generated docs must keep documenting those params.
+ *
+ * Generic plumbing modules are NOT followed (gh-1346 rework): configLoader /
+ * config (the project-config system) and common/trackers (the tracker
+ * abstraction) read their own framework-wide override channels
+ * (configPath, scmProvider, targetRepository, featureBranchEnabled,
+ * branchNamingFnPath, prSearchFnPath, trackerProvider, adoTextFormat,
+ * stageFallback, customStatuses, …) from whatever customParams object the
+ * action passes through. Following them attributed those channels to every
+ * job, so generated docs listed knobs the job never reads — a deployer
+ * configuring a JSRunner job from the doc hunted for params that do nothing.
+ * Action-specific helper modules (the gh-961 extractions) are still followed.
  */
+var PLUMBING_MODULES = {
+    'js/configLoader.js': true,
+    'js/config.js': true,
+    'js/common/trackers.js': true
+};
+
+// Normalize a resolved require path for the plumbing check: the canonical
+// layout prefixes sources with 'agents/', the pack layout does not.
+function canonicalModulePath(resolved) {
+    return String(resolved || '').replace(/\\/g, '/').replace(/^agents\//, '');
+}
+
+function isPlumbingModule(resolved) {
+    return !!PLUMBING_MODULES[canonicalModulePath(resolved)];
+}
+
 function collectCustomParamsUsageFrom(filePath, src, visited) {
     visited = visited || {};
     if (visited[filePath]) return [];
@@ -350,6 +377,7 @@ function collectCustomParamsUsageFrom(filePath, src, visited) {
 
     collectLocalRequires(src).forEach(function(reqPath) {
         var resolved = resolveLocalRequire(filePath, reqPath);
+        if (isPlumbingModule(resolved)) return;
         var helperSrc = readSource(resolved);
         if (!helperSrc) return;
         collectCustomParamsUsageFrom(resolved, helperSrc, visited).forEach(add);

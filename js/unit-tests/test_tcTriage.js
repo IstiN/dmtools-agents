@@ -335,3 +335,65 @@ suite('tcTriage: missing fingerprint evidence never defaults to flaky (gh-1329 r
         assert.equal(v.reason, 'environment-shift');
     });
 });
+
+// ── gh-1345: the scripted differential outcome (dispatcher continuation) ─────
+
+suite('tcTriage: triageDifferentialOutcome — the dispatcher continuation', function() {
+
+    function dispatcherInput(overrides) {
+        return Object.assign({
+            tcKey: 'TS-7',
+            role: triage.ROLE_GUARD,
+            differential: 'green',
+            redRounds: 0,
+            maxReworkRounds: 2,
+            errorClass: 'assertion',
+            testPath: 'testing/tests/TS-7/test.py'
+        }, overrides || {});
+    }
+
+    test('differential RED on the old build: the failure predates the change -> maintenance', function() {
+        var v = triage.triageDifferentialOutcome(dispatcherInput({ differential: 'red' }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'failure-predates-change');
+        assert.equal(v.evidence.differential, 'red');
+        assert.ok(v.ledgerEntry);
+    });
+
+    test('differential GREEN on the old build: earned bounce with evidence', function() {
+        var v = triage.triageDifferentialOutcome(dispatcherInput({ differential: 'green' }));
+        assert.equal(v.action, triage.ACTION_BOUNCE);
+        assert.equal(v.reason, 'regression-from-change-range');
+        assert.equal(v.evidence.differential, 'green');
+        assert.ok(v.ledgerEntry);
+    });
+
+    test('differential GREEN at the bounce cap escalates instead of looping', function() {
+        var v = triage.triageDifferentialOutcome(dispatcherInput({ differential: 'green', redRounds: 2, maxReworkRounds: 2 }));
+        assert.equal(v.action, triage.ACTION_ESCALATE);
+        assert.equal(v.reason, 'bounce-cap-reached');
+    });
+
+    test('a SIBLING green-on-old never bounces THIS bug — owner-notified maintenance', function() {
+        var v = triage.triageDifferentialOutcome(dispatcherInput({ role: triage.ROLE_SIBLING, differential: 'green' }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'sibling-regression-owner-notified');
+    });
+
+    test('a SIBLING red-on-old routes to maintenance like any red differential', function() {
+        var v = triage.triageDifferentialOutcome(dispatcherInput({ role: triage.ROLE_SIBLING, differential: 'red' }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'failure-predates-change');
+    });
+
+    test('the verdict carries the request evidence (lastGreenSha etc.)', function() {
+        var v = triage.triageDifferentialOutcome(dispatcherInput({
+            current: { sha: 'sha-new', envFingerprint: 'env-1' },
+            lastGreen: { sha: 'sha-green', envFingerprint: 'env-1' }
+        }));
+        assert.equal(v.evidence.sha, 'sha-new');
+        assert.equal(v.evidence.lastGreenSha, 'sha-green');
+        assert.equal(v.evidence.envFingerprint, 'env-1');
+        assert.equal(v.evidence.lastGreenEnvFingerprint, 'env-1');
+    });
+});
