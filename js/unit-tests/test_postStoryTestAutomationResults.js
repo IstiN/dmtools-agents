@@ -1320,6 +1320,25 @@ suite('postStoryTestAutomationResults: gh-1329 rework — linked-TC metadata is 
         });
         assert.equal(t.run().status, 'failed');
     });
+
+    test('linked TC fields can carry the role alone (fields.role wins over the agent copy)', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            linkedTestCases: [{ key: 'TS-152', fields: { role: 'regression guard' } }],
+            resultEntry: Object.assign(guardFailedResult(), { role: '', differential: 'green' })
+        });
+        assert.equal(t.run().status, 'failed',
+            'the linked TC names itself a guard of this bug — the earned bounce stands');
+    });
+
+    test('a linked entry with no role metadata at all falls through to the agent copy', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            linkedTestCases: [{ key: 'TS-152', fields: { summary: 'no role stamps here' } }],
+            resultEntry: Object.assign(guardFailedResult(), { differential: 'green' })
+        });
+        assert.equal(t.run().status, 'failed');
+    });
 });
 
 suite('postStoryTestAutomationResults: gh-1329 rework — build SHA resolved once per run', function() {

@@ -86,22 +86,6 @@ var gitStagingModule = loadModule('js/common/gitStaging.js');
 // gh-1087: real quota circuit-breaker (pure module — no requires of its own).
 var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 
-// gh-1329 review: the shared "load bug bookkeeping" helper used by the bug
-// leg (and asserted on directly in test_bugBookkeeping.js).
-var bugBookkeepingModule = loadModule('js/common/bugBookkeeping.js', makeRequire({
-    './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
-        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
-            './machineAuthor.js': loadModule('js/common/machineAuthor.js')
-        }))
-    })),
-    './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
-        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
-            './machineAuthor.js': loadModule('js/common/machineAuthor.js')
-        }))
-    })),
-    './machineAuthor.js': loadModule('js/common/machineAuthor.js')
-}));
-
 // gh-742 rework: the bug flow's interrupted path calls
 // developTicket.throwInterruptedReset, so the mock below exposes the REAL
 // exported helper (single source of truth for the marker/message contract)
@@ -185,6 +169,23 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         developTicketRealModule: developTicketRealModule
     };
 }
+
+
+// gh-1329 review: the shared "load bug bookkeeping" helper used by the bug
+// leg (and asserted on directly in test_bugBookkeeping.js).
+var bugBookkeepingModule = loadModule('js/common/bugBookkeeping.js', makeRequire({
+    './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+            './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+        }))
+    })),
+    './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+            './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+        }))
+    })),
+    './machineAuthor.js': loadModule('js/common/machineAuthor.js')
+}));
 
 suite('developBugAndCreatePR', function() {
 

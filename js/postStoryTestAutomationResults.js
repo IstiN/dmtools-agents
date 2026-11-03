@@ -830,12 +830,16 @@ function normalizeAcVerdict(raw) {
  * per-run and agent-copied). A missing linked entry falls back to the
  * result entry; any role disagreement leaves a warning trace.
  */
+function linkedRoleFieldsOf(linkedEntry) {
+    var fields = linkedEntry && linkedEntry.fields;
+    if (fields && (fields.role || fields.verifies)) return fields;
+    return null;
+}
+
 function linkedRoleSourceOf(linkedEntry) {
     if (!linkedEntry) return null;
     if (linkedEntry.role || linkedEntry.verifies || linkedEntry.regressionGuard !== undefined) return linkedEntry;
-    var fields = linkedEntry.fields;
-    if (fields && (fields.role || fields.verifies)) return fields;
-    return null;
+    return linkedRoleFieldsOf(linkedEntry);
 }
 
 function linkedRoleAwareEntry(entry, linked) {
