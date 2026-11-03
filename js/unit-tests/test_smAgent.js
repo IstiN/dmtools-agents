@@ -18229,9 +18229,9 @@ suite('smAgent: runLocalAction TC-maintenance helper layer (gh-1345)', function(
             reason: 'rerun-requested-on-last-green-build',
             errorClass: 'assertion',
             testPath: 'testing/tests/TS-9/test.py',
-            sha: 'sha-new',
+            sha: 'cafed00dbee',
             envFingerprint: null,
-            lastGreenSha: 'sha-green',
+            lastGreenSha: 'facade12345',
             lastGreenEnvFingerprint: null,
             occurrences: 1
         };
@@ -18272,7 +18272,7 @@ suite('smAgent: runLocalAction TC-maintenance helper layer (gh-1345)', function(
         assert.equal(result.success, true, 'live dispatcher must succeed, got: ' + JSON.stringify(result));
         assert.equal(result.action, 'bounced', 'green-on-old must route the earned bounce');
         assert.deepEqual(result.bouncedTestCases, ['TS-9'], 'the parked TC must be reported as bounced');
-        assert.ok(shellCalls.some(function(c) { return c.indexOf('checkout sha-green') !== -1; }),
+        assert.ok(shellCalls.some(function(c) { return c.indexOf('checkout facade12345') !== -1; }),
             'the scripted run must checkout the recorded last-green build');
         assert.ok(shellCalls.some(function(c) { return c.indexOf('pytest testing/tests/TS-9/test.py') !== -1; }),
             'the scripted run must execute the configured TC command');

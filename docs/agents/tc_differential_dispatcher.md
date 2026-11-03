@@ -10,6 +10,10 @@ When a validated guard TC fails and the automation leg's evidence cannot attribu
 
 Unrunnable requests (no checkout target, no run command configured) stay parked fail-safe: one explanation comment on first attempt, quiet bumps afterwards, and the request remains visible in every ledger digest — an attribution stall is never silent.
 
+The dispatcher validates the ledger-controlled inputs before any command is built: `lastGreenSha` must be a 7–64 char hex git SHA and `testPath` a plain repo-relative path (no shell metacharacters, no leading dash, no `..`). A rejected value routes to the `unavailable` fail-safe — nothing is executed and the request stays parked.
+
+The deployment guard also applies here: with no `machineAuthor` allowlist configured (`params.jobParams.machineAuthor` or `config.machineAuthor`), the maintenance ledger parse fails closed and cannot see parked requests — the dispatcher bails (`unconfigured_parked`) without clearing the park label, and drops only its own `sm_tc_differential_triggered` lock so the next tick retries once the allowlist is fixed. When a dispatch finishes with nothing left parked, the job removes both the `tc_differential_pending` park label and its `sm_tc_differential_triggered` trigger label — the SM-side `addLabel` stays the in-flight crash guard, and a later park on the same bug dispatches again.
+
 ## Parameters
 
 - `tcRunCommand` (customParams) — the single-TC command template with a `{testPath}` placeholder (e.g. `pytest {testPath}`). Required for any request to run; without it all requests stay parked with an explanation comment.
