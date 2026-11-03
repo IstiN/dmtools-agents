@@ -218,3 +218,104 @@ suite('tcMaintenanceLedger: marker persistence (house dmtools: pattern)', functi
         assert.contains(comment, 'no open findings');
     });
 });
+
+// ── gh-1345: parked differential rerun requests (digest visibility) ──────────
+
+function buildLedgerWithParked() {
+    var l = ledger.emptyLedger();
+    l = ledger.appendFinding(l, {
+        tcKey: 'TS-2', role: 'regression-guard', verdict: 'maintenance', reason: 'flaky-same-build',
+        errorClass: 'timeout', testPath: 'testing/tests/TS-2/test.py', sha: 'sha-new', lastGreenSha: 'sha-green'
+    });
+    l = ledger.appendFinding(l, {
+        tcKey: 'TS-7', role: 'regression-guard', verdict: 'differential-rerun',
+        reason: 'rerun-requested-on-last-green-build', errorClass: 'assertion',
+        testPath: 'testing/tests/TS-7/test.py', sha: 'sha-new', lastGreenSha: 'sha-green'
+    });
+    l = ledger.appendFinding(l, {
+        tcKey: 'TS-8', role: 'regression-guard', verdict: 'differential-rerun',
+        reason: 'rerun-requested-on-last-green-build', errorClass: 'navigation',
+        testPath: 'testing/tests/TS-8/test.py', sha: 'sha-new', lastGreenSha: 'sha-old'
+    });
+    l = ledger.appendFinding(l, {
+        tcKey: 'TS-3', verdict: 'rework', reason: 'fresh-tc-first-run-validation',
+        errorClass: 'element-not-found', testPath: 'testing/tests/TS-3/test.py'
+    });
+    return l;
+}
+
+suite('tcMaintenanceLedger: parked differential requests (gh-1345)', function() {
+
+    test('differentialRequests lists only open differential-rerun findings', function() {
+        var parked = ledger.differentialRequests(buildLedgerWithParked());
+        assert.equal(parked.length, 2);
+        assert.equal(parked[0].tcKey, 'TS-7');
+        assert.equal(parked[1].tcKey, 'TS-8');
+        assert.deepEqual(ledger.differentialRequests(ledger.emptyLedger()), []);
+    });
+
+    test('a resolved differential request no longer counts as parked', function() {
+        var l = buildLedgerWithParked();
+        var target = ledger.differentialRequests(l)[0];
+        var resolved = ledger.resolveFindings(l, [target.id], 'differential-rerun-dispatcher');
+        var parked = ledger.differentialRequests(resolved);
+        assert.equal(parked.length, 1);
+        assert.equal(parked[0].tcKey, 'TS-8');
+    });
+
+    test('digest always carries a dedicated parked-request section listing every parked TC', function() {
+        var comment = ledger.buildDigestComment(buildLedgerWithParked());
+        assert.contains(comment, 'Parked differential rerun requests');
+        assert.contains(comment, 'TS-7');
+        assert.contains(comment, 'TS-8');
+        // each parked line names the evidence the dispatcher needs
+        assert.contains(comment, 'testing/tests/TS-7/test.py');
+        assert.contains(comment, 'sha-green');
+        assert.contains(comment, 'sha-old');
+        // the parked section names its owner — the scripted dispatcher, not the sweep
+        assert.contains(comment, 'dispatcher');
+    });
+
+    test('digest keeps the sweep section for the non-differential findings', function() {
+        var comment = ledger.buildDigestComment(buildLedgerWithParked());
+        assert.contains(comment, 'TS-2');
+        assert.contains(comment, 'TS-3');
+        assert.contains(comment, 'batched sweep');
+    });
+
+    test('digest without parked requests renders the previous shape (no parked section)', function() {
+        var sweepOnly = ledger.emptyLedger();
+        sweepOnly = ledger.appendFinding(sweepOnly, {
+            tcKey: 'TS-2', role: 'regression-guard', verdict: 'maintenance', reason: 'flaky-same-build',
+            errorClass: 'timeout', testPath: 'testing/tests/TS-2/test.py', sha: 'sha-new', lastGreenSha: 'sha-green'
+        });
+        sweepOnly = ledger.appendFinding(sweepOnly, {
+            tcKey: 'TS-3', verdict: 'rework', reason: 'fresh-tc-first-run-validation',
+            errorClass: 'element-not-found', testPath: 'testing/tests/TS-3/test.py'
+        });
+        var comment = ledger.buildDigestComment(sweepOnly);
+        assert.notContains(comment, 'Parked differential rerun requests');
+        assert.contains(comment, 'TS-2');
+        assert.contains(comment, 'TS-3');
+    });
+
+    test('digest with ONLY parked requests still renders the parked section', function() {
+        var l = ledger.emptyLedger();
+        l = ledger.appendFinding(l, {
+            tcKey: 'TS-9', role: 'regression-guard', verdict: 'differential-rerun',
+            reason: 'rerun-requested-on-last-green-build', errorClass: 'timeout',
+            testPath: 'testing/tests/TS-9/test.py', sha: 'sha-new', lastGreenSha: 'sha-green'
+        });
+        var comment = ledger.buildDigestComment(l);
+        assert.contains(comment, 'Parked differential rerun requests');
+        assert.contains(comment, 'TS-9');
+        assert.contains(comment, 'dispatcher');
+    });
+
+    test('parked request survives the marker round-trip and stays parked', function() {
+        var marker = ledger.buildLedgerMarker(buildLedgerWithParked());
+        var parsed = ledger.latestLedger([machineComment(marker)], ALLOW);
+        var parked = ledger.differentialRequests(parsed.ledger);
+        assert.equal(parked.length, 2);
+    });
+});
