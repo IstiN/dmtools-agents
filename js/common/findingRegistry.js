@@ -80,7 +80,6 @@
  */
 'use strict';
 
-var machineAuthor = require('./machineAuthor.js');
 var reviewVerdicts = require('./reviewVerdicts.js');
 
 // The registry marker — one line, JSON payload, invisible in the rendered PR
@@ -710,27 +709,11 @@ function buildRegistryComment(registry) {
     return MARKER_PREFIX + JSON.stringify(payload, markerSafeReplacer) + MARKER_SUFFIX + '\n' + note;
 }
 
-function commentAuthorLogin(item) {
-    return machineAuthor.commentAuthorLogin(item);
-}
-
-function trustedLogin(login) {
-    return machineAuthor.trustedLogin(login);
-}
-
-// Machine-author gate — the marker format is public, so only allowlisted
-// identities' registries are trusted (no configured identity → trust nothing).
-function authorAllowed(item, allow) {
-    var who = trustedLogin(commentAuthorLogin(item));
-    for (var a = 0; a < allow.length; a++) {
-        if (who && who === trustedLogin(allow[a])) return true;
-    }
-    return false;
-}
-
-function authorAllowlist(opts) {
-    return (opts && Array.isArray(opts.authorLogins)) ? opts.authorLogins : null;
-}
+// The machine-author trust gate (allowlist, '[bot]'-normalized login match)
+// and the trusted-marker walk live in reviewVerdicts (gh-1196, gh-1343
+// rework) — parseRegistryComments below delegates to them. The marker format
+// is public, so only allowlisted identities' registries are trusted: no
+// configured identity → trust nothing.
 
 function normalizeOpenStatuses(items) {
     items.forEach(function(i) {
@@ -753,12 +736,9 @@ function registryFromPayload(parsed) {
     return reg;
 }
 
-function registryTimestampComparator(a, b) {
-    var aTime = isNaN(a.atMs) ? -1 : a.atMs;
-    var bTime = isNaN(b.atMs) ? -1 : b.atMs;
-    if (aTime !== bTime) return aTime < bTime ? -1 : 1;
-    return (a.order || 0) - (b.order || 0);
-}
+// The atMs-based records order is the reviewVerdicts marker-convention one
+// (payload order as the tiebreak, unparseable timestamps sink to the front).
+var registryTimestampComparator = reviewVerdicts.markerRecordComparator;
 
 /**
  * The PR comments list shape shared by both wiring sites (the post-review
@@ -778,22 +758,14 @@ function normalizePrCommentList(raw) {
  * records oldest-first.
  */
 function parseRegistryComments(comments, opts) {
-    var list = Array.isArray(comments) ? comments : [];
-    var allow = authorAllowlist(opts);
-    var records = [];
-    for (var i = 0; i < list.length; i++) {
-        if (allow && !authorAllowed(list[i], allow)) continue;
-        var payload = reviewVerdicts.extractMarkerJson(
-            list[i] && list[i].body, MARKER_PREFIX, MARKER_SUFFIX);
-        var reg = registryFromPayload(payload);
-        if (!reg) continue;
-        records.push({
-            registry: reg,
-            at: reg.at,
-            atMs: Date.parse(reg.at),
-            order: i
-        });
-    }
+    var records = reviewVerdicts.collectAllowedRecords(comments, opts, function(item) {
+        var reg = registryFromPayload(reviewVerdicts.extractMarkerJson(
+            item && item.body, MARKER_PREFIX, MARKER_SUFFIX));
+        return reg ? { registry: reg, at: reg.at } : null;
+    });
+    records.forEach(function(rec) {
+        rec.atMs = Date.parse(rec.at);
+    });
     records.sort(registryTimestampComparator);
     return records;
 }
