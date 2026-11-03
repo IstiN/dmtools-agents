@@ -18123,3 +18123,187 @@ suite('smAgent: gh-1316 tracker-aware banner output', function () {
         );
     });
 });
+
+// ── gh-1345: runLocalAction resolves the TC-maintenance helper layer ─────────
+
+// The gh-1345 TC differential dispatcher (js/tcDifferentialDispatcher.js) is a
+// localExecution SM job whose postJS action requires the TC-maintenance helper
+// layer (tcTriage / tcMaintenanceLedger / tcRunRegistry / bugBookkeeping) plus
+// the bookkeeping deps (reviewVerdicts / machineAuthor) and the quota-probe
+// pair (quotaCircuitBreaker / commentMarkup). None of those ids were on the
+// gh-908 sandbox whitelist, so under the real sandbox every one of them
+// resolved to config.js and the first member call died with a TypeError.
+// These suites pin the extension the same way the gh-908 suite does.
+
+suite('smAgent: runLocalAction TC-maintenance helper layer (gh-1345)', function() {
+
+    var DISPATCH_CHAIN_KEY = 'js/unit-tests/fixtures/gh1345_dispatch_chain_action.js';
+    var DISPATCH_CHAIN_SRC = [
+        'var tcTriage = require("./common/tcTriage.js");',
+        'var tcLedger = require("./common/tcMaintenanceLedger.js");',
+        'var tcRunRegistry = require("./common/tcRunRegistry.js");',
+        'var bugBookkeeping = require("./common/bugBookkeeping.js");',
+        'var quotaBreaker = require("./common/quotaCircuitBreaker.js");',
+        'var commentMarkup = require("./common/commentMarkup.js");',
+        'module.exports.action = function() {',
+        '    return {',
+        '        triageDifferentialOutcome: typeof tcTriage.triageDifferentialOutcome,',
+        '        differentialRequests: typeof tcLedger.differentialRequests,',
+        '        latestRegistry: typeof tcRunRegistry.latestRegistry,',
+        '        loadBugBookkeeping: typeof bugBookkeeping.loadBugBookkeeping,',
+        '        parkLabelOf: typeof quotaBreaker.parkLabelOf,',
+        '        forTicket: typeof commentMarkup.forTicket',
+        '    };',
+        '};'
+    ].join('\n');
+
+    test('UT-1: dispatcher + probe helper chains resolve to real exports, not config.js', function() {
+        var fm = {};
+        fm[DISPATCH_CHAIN_KEY] = DISPATCH_CHAIN_SRC;
+        var sm = makeSmAgent({ fileMap: fm });
+        var result = sm.runLocalAction(DISPATCH_CHAIN_KEY, { key: 'PROJ-1' }, {});
+        assert.equal(result.triageDifferentialOutcome, 'function', 'tcTriage.js exports must reach the action');
+        assert.equal(result.differentialRequests, 'function', 'tcMaintenanceLedger.js exports must reach the action');
+        assert.equal(result.latestRegistry, 'function', 'tcRunRegistry.js exports must reach the action');
+        assert.equal(result.loadBugBookkeeping, 'function', 'bugBookkeeping.js exports must reach the action');
+        assert.equal(result.parkLabelOf, 'function', 'quotaCircuitBreaker.js exports must reach the action (probe dep)');
+        assert.equal(result.forTicket, 'function', 'commentMarkup.js exports must reach the action (probe dep)');
+    });
+
+    test('IT: live tcDifferentialDispatcher.js runs end-to-end through the sandbox (gh-1345)', function() {
+        var moved = [];
+        var removedLabels = [];
+        var comments = [];
+        var shellCalls = [];
+
+        // The parked ledger marker travels on the bug's comments — build it
+        // with the same helper modules the sandbox will parse it with.
+        var machineAuthorMod = loadModule('js/common/machineAuthor.js');
+        var reviewVerdictsMod = loadModule('js/common/reviewVerdicts.js', makeRequire({
+            './machineAuthor.js': machineAuthorMod
+        }));
+        var tcLedgerMod = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+            './reviewVerdicts.js': reviewVerdictsMod
+        }));
+        var parked = {
+            tcKey: 'TS-9',
+            role: 'regression-guard',
+            verdict: 'differential-rerun',
+            reason: 'rerun-requested-on-last-green-build',
+            errorClass: 'assertion',
+            testPath: 'testing/tests/TS-9/test.py',
+            sha: 'sha-new',
+            envFingerprint: null,
+            lastGreenSha: 'sha-green',
+            lastGreenEnvFingerprint: null,
+            occurrences: 1
+        };
+        var ledger = tcLedgerMod.appendFinding(tcLedgerMod.emptyLedger(), parked);
+        var markerBody = tcLedgerMod.buildLedgerMarker(ledger);
+
+        var fm = {
+            '.dmtools/config.js': 'module.exports = { jira: { project: "PROJ", ' +
+                'statuses: { READY_FOR_DEVELOPMENT: "Ready For Development", DONE: "Done" } }, ' +
+                'machineAuthor: "ai-teammate" };'
+        };
+        var sm = makeSmAgent({
+            fileMap: fm,
+            extraMocks: {
+                jira_search_by_jql: function() { return []; },
+                jira_get_ticket: function() {
+                    return { key: 'BUG-9', fields: { comment: { comments: [
+                        { user: { login: 'ai-teammate' }, body: markerBody }
+                    ] } } };
+                },
+                jira_move_to_status: function(args) { moved.push(args); return args; },
+                jira_remove_label: function(args) { removedLabels.push(args.label || args); return args; },
+                jira_post_comment: function(args) { comments.push(args); return args; },
+                cli_execute_command: function(args) {
+                    var cmd = String((args && args.command) || '');
+                    shellCalls.push(cmd);
+                    if (cmd.indexOf('pytest') !== -1) return '1 passed';
+                    if (cmd.indexOf('branch --show-current') !== -1) return 'bug-test-branch';
+                    return 'ok';
+                }
+            }
+        });
+
+        var result = sm.runLocalAction('js/tcDifferentialDispatcher.js',
+            { key: 'BUG-9' },
+            { customParams: { tcRunCommand: 'pytest {testPath}' } });
+
+        assert.equal(result.success, true, 'live dispatcher must succeed, got: ' + JSON.stringify(result));
+        assert.equal(result.action, 'bounced', 'green-on-old must route the earned bounce');
+        assert.deepEqual(result.bouncedTestCases, ['TS-9'], 'the parked TC must be reported as bounced');
+        assert.ok(shellCalls.some(function(c) { return c.indexOf('checkout sha-green') !== -1; }),
+            'the scripted run must checkout the recorded last-green build');
+        assert.ok(shellCalls.some(function(c) { return c.indexOf('pytest testing/tests/TS-9/test.py') !== -1; }),
+            'the scripted run must execute the configured TC command');
+        assert.deepEqual(moved, [{ key: 'BUG-9', statusName: 'Ready For Development' }],
+            'the earned bounce must move the bug to Ready For Development');
+        assert.ok(removedLabels.indexOf('tc_differential_pending') !== -1,
+            'the consumed park label must be removed');
+    });
+});
+
+// ── gh-1345: sm.json wiring for the TC differential dispatcher ───────────────
+
+suite('sm.json: TC differential dispatcher rule (gh-1345)', function() {
+
+    function smRules() {
+        return JSON.parse(file_read({ path: 'sm.json' })).params.jobParams.rules;
+    }
+
+    function dispatcherRule(rules) {
+        for (var i = 0; i < rules.length; i++) {
+            if (rules[i].configFile === 'agents/tc_differential_dispatcher.json') return rules[i];
+        }
+        return null;
+    }
+
+    test('the dispatcher rule exists and stays a pure local execution job', function() {
+        var rule = dispatcherRule(smRules());
+        assert.ok(rule, 'tc_differential_dispatcher rule exists in sm.json');
+        assert.equal(rule.localExecution, true, 'the dispatcher must run locally (scripted run, no AI CLI)');
+        assert.equal(rule.enabled, true, 'the dispatcher rule is enabled');
+        assert.contains(rule.jql, 'tc_differential_pending', 'the rule queries the park label the post-run stamps');
+        assert.equal(rule.skipIfLabel, 'sm_tc_differential_triggered', 'the rule carries a crash-recovery lock label');
+        assert.equal(rule.addLabel, 'sm_tc_differential_triggered', 'the rule stamps its lock label');
+    });
+
+    test('the dispatcher runs before the bug TC generator re-dispatches a parked bug', function() {
+        var rules = smRules();
+        var dispatcherIndex = -1;
+        var generatorIndex = -1;
+        rules.forEach(function(rule, index) {
+            if (rule.configFile === 'agents/tc_differential_dispatcher.json') dispatcherIndex = index;
+            if (rule.configFile === 'agents/bug_test_cases_generator.json') generatorIndex = index;
+        });
+        assert.ok(dispatcherIndex >= 0, 'dispatcher rule exists');
+        assert.ok(generatorIndex >= 0, 'bug TC generator rule exists');
+        assert.ok(dispatcherIndex < generatorIndex,
+            'the differential verdict must land before the generator spends a run on the parked bug');
+    });
+
+    test('the bug TC generator skips differentially-parked bugs', function() {
+        var generator = null;
+        smRules().forEach(function(rule) {
+            if (rule.configFile === 'agents/bug_test_cases_generator.json') generator = rule;
+        });
+        assert.ok(generator, 'bug TC generator rule exists');
+        var guard = (generator.jql.indexOf('tc_differential_pending') !== -1) ||
+            (String(generator.skipIfLabel || '').indexOf('tc_differential_pending') !== -1) ||
+            ((generator.skipIfLabels || []).indexOf('tc_differential_pending') !== -1);
+        assert.ok(guard, 'a parked differential request must suppress a fresh TC generation dispatch');
+    });
+
+    test('the dispatcher agent config is a JSRunner pointing at the scripted action', function() {
+        var raw = file_read({ path: 'agents/tc_differential_dispatcher.json' });
+        var cfg = JSON.parse(raw);
+        assert.equal(cfg.name, 'JSRunner', 'JSRunner — no AI CLI, the run is the verdict');
+        assert.equal(cfg.params.postJSAction, 'agents/js/tcDifferentialDispatcher.js',
+            'the postJSAction points at the dispatcher script');
+        assert.contains(cfg.params.metadata.descriptionPath, 'tc_differential_dispatcher',
+            'the agent doc travels with the config');
+    });
+});
