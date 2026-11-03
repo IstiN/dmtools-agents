@@ -298,6 +298,25 @@ function parseMarkerComments(comments, opts, prefix, suffix, payloadAdapter, fai
     return records;
 }
 
+// The marker families' shared finding-identity hash (the gh-1332 scheme —
+// FNV-1a 32-bit, Math.imul keeps the multiply exact; two bases concatenated
+// → a 16-hex id). Both registries built byte-identical copies; the
+// duplication ratchet flagged the ledger's copy, so the helpers live here.
+function fnv1a(text, basis) {
+    var h = basis >>> 0;
+    for (var i = 0; i < text.length; i++) {
+        h = h ^ text.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h;
+}
+
+function hex8(n) {
+    var s = (n >>> 0).toString(16);
+    while (s.length < 8) s = '0' + s;
+    return s;
+}
+
 // gh-1196: the records order — oldest-first, payload order as the tiebreak.
 function verdictTimestampComparator(a, b) {
     var ta = Date.parse(a.at), tb = Date.parse(b.at);
@@ -672,6 +691,8 @@ if (typeof module !== 'undefined' && module.exports) {
         markerSafe: markerSafe,
         markerSafeReplacer: markerSafeReplacer,
         parseMarkerComments: parseMarkerComments,
+        fnv1a: fnv1a,
+        hex8: hex8,
         VERDICTS: VERDICTS,
         LABEL_APPROVED: LABEL_APPROVED,
         LABEL_REWORK: LABEL_REWORK,

@@ -238,21 +238,8 @@ function maxSeverity(classA, classB) {
 
 // FNV-1a (32-bit, Math.imul keeps the multiply exact). Two bases concatenated
 // → a 16-hex id; the file+severity partitioning keeps per-PR collision space
-// negligible.
-function fnv1a(text, basis) {
-    var h = basis >>> 0;
-    for (var i = 0; i < text.length; i++) {
-        h = h ^ text.charCodeAt(i);
-        h = Math.imul(h, 16777619) >>> 0;
-    }
-    return h;
-}
-
-function hex8(n) {
-    var s = (n >>> 0).toString(16);
-    while (s.length < 8) s = '0' + s;
-    return s;
-}
+// negligible. The hash helpers are the marker families' shared plumbing
+// (reviewVerdicts — gh-1329 rework, gh-1251 duplication ratchet).
 
 /**
  * The finding identity: hash(file path + normalized claim + severity class).
@@ -261,7 +248,7 @@ function hex8(n) {
 function findingIdentity(file, claim, severityClass) {
     var normalized = normalizeClaim(claim);
     var key = String(file || '') + '\n' + normalized + '\n' + severityClassOf(severityClass);
-    return hex8(fnv1a(key, 0x811c9dc5)) + hex8(fnv1a(key, 0x811c9dc5 ^ 0x9e3779b9));
+    return reviewVerdicts.hex8(reviewVerdicts.fnv1a(key, 0x811c9dc5)) + reviewVerdicts.hex8(reviewVerdicts.fnv1a(key, 0x811c9dc5 ^ 0x9e3779b9));
 }
 
 // ── registry shape ───────────────────────────────────────────────────────────
