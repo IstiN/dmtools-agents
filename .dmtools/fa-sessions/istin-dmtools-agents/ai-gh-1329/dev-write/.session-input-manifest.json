@@ -1,0 +1,351 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-03T13:04:40.948Z",
+  "ticketKey": "gh-1329",
+  "headSha": "2bf29a71c24fe0ad4cfe19b3f32f46f928a31733",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:680f2a46bcbbd50d",
+      "size": 50913
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:e220312d8ec94a64",
+      "size": 4640143
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:85af07824b508c21",
+      "size": 1773
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:432858bc8becabd5",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:8ae277f005c08a5a",
+      "size": 37159
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:9fdee1670b5c7b45",
+      "size": 15410
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:46107e7eb4ca8b5c",
+      "size": 4224
+    },
+    "request.md": {
+      "hash": "fnv1a64:c215617973c873ff",
+      "size": 12288
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:c8aa06d21ba4021a",
+      "size": 2401
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:caf670edc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:5e2edb78ae2297d3",
+      "size": 12584
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:c215617973c873ff",
+      "size": 12288
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6zGjg4",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/tcTriage.js",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: CI red — crap ratchet fails (15 new functions over threshold 8), worst offender is dead code**\n\nThe `crap` check failed on head `056b9cea` (`ci_failures.md`, log line `0 regression(s), 15 new over threshold, 8 improvement(s)... exit code 2`), so the merge gate is red. The single worst offender is this function:\n\n```\nsameBuildAndEnv    js/common/tcTriage.js    CC 8    Cov 0.0%    CRAP 72.0\n```\n\n`sameBuildAndEnv` is **never called anywhere** — not by `triageValidatedGuard` (which uses `sameBuild` + `envChanged` directly), not by any caller, not by any test (`grep -rn sameBuildAndEnv` finds only its definition and export). Deleting it removes the 72-CRAP entry entirely.\n\nThe remaining 14 over-threshold functions need decomposition before the ratchet passes (new functions must land ≤ 8):\n\n- `js/postStoryTestAutomationResults.js`: `triageBugFailures` (19.5), `entryRoleMeta` (17.1), `handleBugWithProductFailure` (16.1), `currentBuildSha` (10.4)\n- `js/common/tcMaintenanceLedger.js`: `normalizeFinding` (17), `findingFromVerdict` (16), `findingFromDevClaim` (11), `findingLine` (11.2)\n- `js/common/tcRunRegistry.js`: `recordGreen` (16), `recordFailure` (14)\n- `js/common/tcTriage.js`: `pickEvidence` (14), `resolveTcRole` (10)\n- `js/developBugAndCreatePR.js`: `completeTestSuspectedPath` (12.2)\n- `js/unit-tests/test_postStoryTestAutomationResults.js`: `triageModule` (9)\n\nConcrete refactor guidance: extract per-entry step helpers (`triageBugFailures` → one-entry function), table-drive `pickEvidence`/`normalizeFinding` field copying with a `[key, sourceKeys]` loop, split `recordGreen`/`recordFailure` entry construction into a shared `mergeEntryState` helper, and split `entryRoleMeta` source selection into a small resolver chain. All are pure functions — the existing 51 new unit tests keep passing through mechanical extraction."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zGjkc",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/tcMaintenanceLedger.js",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: dead code — `bits` is built and never used**\n\nIn `findingLine` (tcMaintenanceLedger.js:349-352) the `bits` array is populated with three conditional pushes and then discarded — the `return` statement below builds its own string from `f.tcKey`/`f.errorClass`/`f.testPath`/`f.occurrences` directly. The `bits` block is dead code that inflates complexity (the CRAP report flags `findingLine` at 11.2) and misleads readers into thinking it formats the output.\n\nDelete the `bits` block (or, if the multi-part line was intended, actually render from `bits.join(' — ')` — but then the `dev claim`/`claimedVerdict` suffixes must move into it too, since today a dev finding renders its testPath twice-shaped: once via `bits` (dropped) and once via the return string)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zGjoh",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postStoryTestAutomationResults.js",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the bounce comment lists every TC twice**\n\n`bugReturnComment` builds its own list under the header \"The following Test Cases failed with a product regression:\" (postStoryTestAutomationResults.js:744-745) and then appends `tcTriage.buildBounceComment(bouncedVerdicts)` — which opens with the **identical header and repeats the same TC list** (tcTriage.js:303-306). The posted comment therefore contains the same header + list twice back-to-back, only differing in the evidence suffix.\n\nRender one list: either keep the legacy `failureList` and pass the verdicts only for the attribution paragraph, or drop the local list and let `buildBounceComment` (which already carries `failureSummary` per TC) own the section. A regression test asserting the TC key appears exactly once in the comment would pin this."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zGjrj",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postStoryTestAutomationResults.js:1094",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: in a mixed bounce+route run, routed findings are never staged or digested**\n\nWhen `triage.bounced.length > 0` the function returns immediately after finalizing the bounced TCs — the `stageRoutedBugTestCases(triage.routed, ...)` call and the triage-digest `postComment` below it never run. A run that produces one earned bounce *and* (say) an environment-shifted guard leaves the routed TC at its previous status and its finding visible only inside the machine marker — no human-visible digest, inconsistent with the non-bounce path where the same verdict stages the TC and posts the digest. `escalated` verdicts are likewise reported in the result payload but never staged on either path.\n\nFix: before the bounce branch, stage routed TCs and append the triage/escalation digest sections to the bounce comment (or post the digest regardless of route), so every attributed finding gets the same human surface on every route."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zGjur",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/tcTriage.js",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: same-build red with missing env fingerprints is auto-classified \"flaky\" — contradicts the module's own evidence doctrine**\n\n`triageValidatedGuard` treats a same-SHA red as `'flaky-same-build'` whenever `envChanged()` is false — including the case where **neither side has an env fingerprint** (the agent omitted `envFingerprint`, cf. the instruction \"when you can identify the environment... record it\"). Yet this module's own docstring for `sameBuildAndEnv` states: *\"A missing half on either side never proves sameness — the comparison is evidence, not a default.\"* The live triage path does exactly what the doctrine forbids, defaulting an unproven case to \"flaky\" and routing it to maintenance.\n\nPlease confirm the intended reading. Options: route missing-fingerprint same-build reds to the `'rerun-requested-on-last-green-build'`/unknown-env reason instead of asserting `flaky-same-build`, or require both fingerprints before the flaky/environment-shift classification (falling through to the differential request otherwise). If \"flaky by default\" is deliberate, document it at the branch so the doctrine comment stops contradicting the code."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zGjy2",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/tcTriage.js:294",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: legacy bounce path is now gated on agent-supplied `acVerdict` — confirm the degradation is intended**\n\n`triageAcGated` bounces a validated own-oracle TC **only** when `acVerdict === 'violated'`; without an AC verdict it routes to `'own-oracle-ac-recheck'` (rework), and the run returns `status: 'test_maintenance'` with the bug untouched. Previously any red linked TC bounced the bug. So a bug run whose result entries lack the new metadata — an agent run that ignores the updated prompt contract, a hand-crafted or older-format `story_test_automation_result.json`, or a consuming repo that pins this submodule without updating its automation agent — will never bounce: every red degrades to rework/maintenance and the bug stalls in In Testing (the only exit being the redRounds escalation, which itself only fires via the `redRounds` registry streak).\n\nThe PR description claims \"bounded legacy bounce path preserved\" — in shape yes, but only when the agent actually emits `acVerdict`. Please confirm this fail-safe degradation is the accepted default for non-compliant results, and consider a tracker-comment hint when a failed own-oracle entry carries **none** of the new fields (`acVerdict`, `retryStatus`, `errorClass` all absent), so a stalled bug is diagnosable as \"agent didn't follow the schema\" rather than \"product didn't regress\"."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zGj1k",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postStoryTestAutomationResults.js",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the bounce gate trusts the agent-copied `role`/`verifies` over the linked TC's own metadata**\n\n`entryRoleMeta` returns the **result entry first**: if the automation agent supplied `role`/`verifies` (which the updated schema now instructs it to do on every failed entry), the linked TC's own metadata (`linkedEntry`, `linkedEntry.fields`) is never consulted. The entire scoping decision of gh-1329 — own oracle vs sibling vs guard, i.e. whether a TC may ever bounce the bug — thus rests on an LM-copied string. A hallucinated `verifies: \"BUG-2\"` silently demotes the bug's own acceptance oracle to `ROLE_SIBLING`, which by design can never bounce — the failure mode is invisible (no warning, verdict looks perfectly ordinary).\n\nSince the TC description stamping is mechanical-truth-in-progress (declared guidance-only in the PR concerns), consider at least: (a) preferring `linkedEntry`/`fields` metadata when present (the TC ticket is the durable record; the result file is per-run), and (b) logging a warning when the entry's `verifies` disagrees with a linked-TC-provided value, so a mis-scoped oracle leaves a trace instead of silently demoting the gate."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zGj5L",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/developBugAndCreatePR.js",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: silent catches + duplicated bookkeeping plumbing in `completeTestSuspectedPath`**\n\nTwo issues in one place:\n\n1. `try { tracker.postComment(ticketKey, ...); } catch (e) {}` (twice, developBugAndCreatePR.js:668-672) swallows failures with no log. The sibling implementation in this same PR (`postMarkerIfChanged`) logs `console.warn('Failed to post', label, 'marker (non-fatal):', e)` — a silently-dropped ledger marker means the next run rebuilds from the stale ledger and the finding's `occurrences` history drifts with nothing in the logs to explain it. Log the warnings.\n2. The comment-fetching IIFE and the `machineAuthorOptsOf` construction duplicate `bugTrackedComments`/`machineAuthorOptsOf` in postStoryTestAutomationResults.js (and call `tracker.getIssue(ticketKey)` twice — once for the truthiness check, once for `.fields`). Extract one shared \"load bug bookkeeping (comments + author opts)\" helper into a common module and call it from both legs."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zGj88",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postStoryTestAutomationResults.js",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `currentBuildSha` shells out once per result entry**\n\nBoth call sites in `triageBugFailures` (failed branch line 880, green branch line 918) invoke `currentBuildSha(result, entry, ctx.workingDir)`, which falls through to `runInRepo('git rev-parse HEAD', ...)` whenever the entry/result don't carry a SHA. For a bug with N linked TCs that is up to N identical subprocess invocations per run. Resolve the build SHA once per run (a `var buildSha = currentBuildSha(result, null, ctx.workingDir)` before the `forEach`) and pass it into both branches — the per-entry override (`entry.sha`) can still win inside the helper."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zGkAG",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/tcMaintenanceLedger.js",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `note` duplicates `reason` for automation-sourced findings**\n\n`normalizeFinding` sets both `reason: src.reason || null` and `note: truncate(firstDefined(src, ['note', 'reason']))` (tcMaintenanceLedger.js:124). Every automation finding built by `findingFromVerdict` carries `reason` (e.g. `'environment-shift'`), so `note` becomes a truncated copy of `reason` — redundant payload in every marker comment. Only `findingFromDevClaim` produces a genuinely additive `note` (reason + evidence pointer). Consider `note: firstDefined(src, ['note'])` (drop the `reason` fallback) so the two fields stay distinct."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zIUOH",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/tcRunRegistry.js:149",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: CI red again on head `2bf29a71` — the `crap` check now fails the duplication ratchet (3 fresh duplications)**\n\nThe complexity half of the previous round is verifiably fixed (fresh CI log: `0 regression(s), 0 new over threshold, 0 improvement(s), 0 removed` — thank you), but the same `crap` check still exits 2 on the current head, now from the gh-1251 duplication ratchet:\n\n```\nfresh duplication: js/common/findingRegistry.js 2.38% (not pinned in duplication-baseline.json)\nfresh duplication: js/common/tcMaintenanceLedger.js 3.16% (not pinned in duplication-baseline.json)\nfresh duplication: js/common/tcRunRegistry.js 7.29% (not pinned in duplication-baseline.json)\nduplication ratchet: FAIL — 3 fresh, 0 regressed (1 pinned debt files unchanged)\n```\n\nThe duplicated block is visible in this diff: `markerSafe`/`markerSafeReplacer` are **byte-identical** across `tcRunRegistry.js:149`, `tcMaintenanceLedger.js:313` and the pre-existing `findingRegistry.js:662`, and each file repeats the same `parseXComments` shape (`reviewVerdicts.collectAllowedRecords` + `atMs = Date.parse` + timestamp-comparator sort, tcRunRegistry.js:209-220 / tcMaintenanceLedger.js:371-382 / findingRegistry.js:760-770). `findingRegistry.js` is not touched by this PR — the new marker modules' similarity dragged it over threshold too — but the two new files are this PR's additions, so the red gate is this PR's to clear (tcRunRegistry.js at 7.29% is the worst).\n\nFix options, in order of preference:\n\n1. **Extract the shared marker plumbing** into one module (e.g. `js/common/markerComments.js`): `markerSafe`, `markerSafeReplacer`, and a `parseMarkerComments(comments, opts, prefix, suffix, payloadAdapter)` that wraps `collectAllowedRecords`, stamps `atMs` and applies the shared comparator. Each of the three modules keeps only its `MARKER_PREFIX` and payload adapter. The existing marker round-trip tests in all three suites keep passing (the adapters are pure).\n2. If the team prefers the debt route, pin all three files in `duplication-baseline.json` per the regeneration process documented in that file's `note` — but deduplicating here is small, safe, and clears the debt instead of growing it.\n\nEither way the `crap` check must go green on a new head before merge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:98cc4fe8",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: CI red — crap ratchet fails (15 new functions over threshold 8), worst offender is dead code**\n\nThe `crap` check failed on head `056b9cea` (`ci_failures.md`, log line `0 regression(s), 15 new over threshold, 8 improvement(s)... exit code 2`), so the merge gate is red. The single worst offender is this function:\n\n```\nsameBuildAndEnv    js/common/tcTriage.js    CC 8    Cov 0.0%    CRAP 72.0\n```\n\n`sameBuildAndEnv` is **never called anywhere** — not by `triageValidatedGuard` (which uses `sameBuild` + `envChanged` directly), not by any caller, not by any test (`grep -rn sameBuildAndEnv` finds only its definition and export). Deleting it removes the 72-CRAP entry entirely.\n\nThe remaining 14 over-threshold functions need decomposition before the ratchet passes (new functions must land ≤ 8):\n\n- `js/postStoryTestAutomationResults.js`: `triageBugFailures` (19.5), `entryRoleMeta` (17.1), `handleBugWithProductFailure` (16.1), `currentBuildSha` (10.4)\n- `js/common/tcMaintenanceLedger.js`: `normalizeFinding` (17), `findingFromVerdict` (16), `findingFromDevClaim` (11), `findingLine` (11.2)\n- `js/common/tcRunRegistry.js`: `recordGreen` (16), `recordFailure` (14)\n- `js/common/tcTriage.js`: `pickEvidence` (14), `resolveTcRole` (10)\n- `js/developBugAndCreatePR.js`: `completeTestSuspectedPath` (12.2)\n- `js/unit-tests/test_postStoryTestAutomationResults.js`: `triageModule` (9)\n\nConcrete refactor guidance: extract per-entry step helpers (`triageBugFailures` → one-entry function), table-drive `pickEvidence`/`normalizeFinding` field copying with a `[key, sourceKeys]` loop, split `recordGreen`/`recordFailure` entry construction into a shared `mergeEntryState` helper, and split `entryRoleMeta` source selection into a small resolver chain. All are pure functions — the existing 51 new unit tests keep passing through mechanical extraction."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:a44918ef",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: dead code — `bits` is built and never used**\n\nIn `findingLine` (tcMaintenanceLedger.js:349-352) the `bits` array is populated with three conditional pushes and then discarded — the `return` statement below builds its own string from `f.tcKey`/`f.errorClass`/`f.testPath`/`f.occurrences` directly. The `bits` block is dead code that inflates complexity (the CRAP report flags `findingLine` at 11.2) and misleads readers into thinking it formats the output.\n\nDelete the `bits` block (or, if the multi-part line was intended, actually render from `bits.join(' — ')` — but then the `dev claim`/`claimedVerdict` suffixes must move into it too, since today a dev finding renders its testPath twice-shaped: once via `bits` (dropped) and once via the return string)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:fc9d824a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the bounce comment lists every TC twice**\n\n`bugReturnComment` builds its own list under the header \"The following Test Cases failed with a product regression:\" (postStoryTestAutomationResults.js:744-745) and then appends `tcTriage.buildBounceComment(bouncedVerdicts)` — which opens with the **identical header and repeats the same TC list** (tcTriage.js:303-306). The posted comment therefore contains the same header + list twice back-to-back, only differing in the evidence suffix.\n\nRender one list: either keep the legacy `failureList` and pass the verdicts only for the attribution paragraph, or drop the local list and let `buildBounceComment` (which already carries `failureSummary` per TC) own the section. A regression test asserting the TC key appears exactly once in the comment would pin this."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:7b077d7a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: in a mixed bounce+route run, routed findings are never staged or digested**\n\nWhen `triage.bounced.length > 0` the function returns immediately after finalizing the bounced TCs — the `stageRoutedBugTestCases(triage.routed, ...)` call and the triage-digest `postComment` below it never run. A run that produces one earned bounce *and* (say) an environment-shifted guard leaves the routed TC at its previous status and its finding visible only inside the machine marker — no human-visible digest, inconsistent with the non-bounce path where the same verdict stages the TC and posts the digest. `escalated` verdicts are likewise reported in the result payload but never staged on either path.\n\nFix: before the bounce branch, stage routed TCs and append the triage/escalation digest sections to the bounce comment (or post the digest regardless of route), so every attributed finding gets the same human surface on every route."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:31e59bdf",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: same-build red with missing env fingerprints is auto-classified \"flaky\" — contradicts the module's own evidence doctrine**\n\n`triageValidatedGuard` treats a same-SHA red as `'flaky-same-build'` whenever `envChanged()` is false — including the case where **neither side has an env fingerprint** (the agent omitted `envFingerprint`, cf. the instruction \"when you can identify the environment... record it\"). Yet this module's own docstring for `sameBuildAndEnv` states: *\"A missing half on either side never proves sameness — the comparison is evidence, not a default.\"* The live triage path does exactly what the doctrine forbids, defaulting an unproven case to \"flaky\" and routing it to maintenance.\n\nPlease confirm the intended reading. Options: route missing-fingerprint same-build reds to the `'rerun-requested-on-last-green-build'`/unknown-env reason instead of asserting `flaky-same-build`, or require both fingerprints before the flaky/environment-shift classification (falling through to the differential request otherwise). If \"flaky by default\" is deliberate, document it at the branch so the doctrine comment stops contradicting the code."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:ef5e6bfa",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: legacy bounce path is now gated on agent-supplied `acVerdict` — confirm the degradation is intended**\n\n`triageAcGated` bounces a validated own-oracle TC **only** when `acVerdict === 'violated'`; without an AC verdict it routes to `'own-oracle-ac-recheck'` (rework), and the run returns `status: 'test_maintenance'` with the bug untouched. Previously any red linked TC bounced the bug. So a bug run whose result entries lack the new metadata — an agent run that ignores the updated prompt contract, a hand-crafted or older-format `story_test_automation_result.json`, or a consuming repo that pins this submodule without updating its automation agent — will never bounce: every red degrades to rework/maintenance and the bug stalls in In Testing (the only exit being the redRounds escalation, which itself only fires via the `redRounds` registry streak).\n\nThe PR description claims \"bounded legacy bounce path preserved\" — in shape yes, but only when the agent actually emits `acVerdict`. Please confirm this fail-safe degradation is the accepted default for non-compliant results, and consider a tracker-comment hint when a failed own-oracle entry carries **none** of the new fields (`acVerdict`, `retryStatus`, `errorClass` all absent), so a stalled bug is diagnosable as \"agent didn't follow the schema\" rather than \"product didn't regress\"."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:d7c16958",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the bounce gate trusts the agent-copied `role`/`verifies` over the linked TC's own metadata**\n\n`entryRoleMeta` returns the **result entry first**: if the automation agent supplied `role`/`verifies` (which the updated schema now instructs it to do on every failed entry), the linked TC's own metadata (`linkedEntry`, `linkedEntry.fields`) is never consulted. The entire scoping decision of gh-1329 — own oracle vs sibling vs guard, i.e. whether a TC may ever bounce the bug — thus rests on an LM-copied string. A hallucinated `verifies: \"BUG-2\"` silently demotes the bug's own acceptance oracle to `ROLE_SIBLING`, which by design can never bounce — the failure mode is invisible (no warning, verdict looks perfectly ordinary).\n\nSince the TC description stamping is mechanical-truth-in-progress (declared guidance-only in the PR concerns), consider at least: (a) preferring `linkedEntry`/`fields` metadata when present (the TC ticket is the durable record; the result file is per-run), and (b) logging a warning when the entry's `verifies` disagrees with a linked-TC-provided value, so a mis-scoped oracle leaves a trace instead of silently demoting the gate."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:1942f2f5",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: silent catches + duplicated bookkeeping plumbing in `completeTestSuspectedPath`**\n\nTwo issues in one place:\n\n1. `try { tracker.postComment(ticketKey, ...); } catch (e) {}` (twice, developBugAndCreatePR.js:668-672) swallows failures with no log. The sibling implementation in this same PR (`postMarkerIfChanged`) logs `console.warn('Failed to post', label, 'marker (non-fatal):', e)` — a silently-dropped ledger marker means the next run rebuilds from the stale ledger and the finding's `occurrences` history drifts with nothing in the logs to explain it. Log the warnings.\n2. The comment-fetching IIFE and the `machineAuthorOptsOf` construction duplicate `bugTrackedComments`/`machineAuthorOptsOf` in postStoryTestAutomationResults.js (and call `tracker.getIssue(ticketKey)` twice — once for the truthiness check, once for `.fields`). Extract one shared \"load bug bookkeeping (comments + author opts)\" helper into a common module and call it from both legs."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:a4a93b97",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `currentBuildSha` shells out once per result entry**\n\nBoth call sites in `triageBugFailures` (failed branch line 880, green branch line 918) invoke `currentBuildSha(result, entry, ctx.workingDir)`, which falls through to `runInRepo('git rev-parse HEAD', ...)` whenever the entry/result don't carry a SHA. For a bug with N linked TCs that is up to N identical subprocess invocations per run. Resolve the build SHA once per run (a `var buildSha = currentBuildSha(result, null, ctx.workingDir)` before the `forEach`) and pass it into both branches — the per-entry override (`entry.sha`) can still win inside the helper."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:d488af78",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `note` duplicates `reason` for automation-sourced findings**\n\n`normalizeFinding` sets both `reason: src.reason || null` and `note: truncate(firstDefined(src, ['note', 'reason']))` (tcMaintenanceLedger.js:124). Every automation finding built by `findingFromVerdict` carries `reason` (e.g. `'environment-shift'`), so `note` becomes a truncated copy of `reason` — redundant payload in every marker comment. Only `findingFromDevClaim` produces a genuinely additive `note` (reason + evidence pointer). Consider `note: firstDefined(src, ['note'])` (drop the `reason` fallback) so the two fields stay distinct."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:1116f623",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: CI red again on head `2bf29a71` — the `crap` check now fails the duplication ratchet (3 fresh duplications)**\n\nThe complexity half of the previous round is verifiably fixed (fresh CI log: `0 regression(s), 0 new over threshold, 0 improvement(s), 0 removed` — thank you), but the same `crap` check still exits 2 on the current head, now from the gh-1251 duplication ratchet:\n\n```\nfresh duplication: js/common/findingRegistry.js 2.38% (not pinned in duplication-baseline.json)\nfresh duplication: js/common/tcMaintenanceLedger.js 3.16% (not pinned in duplication-baseline.json)\nfresh duplication: js/common/tcRunRegistry.js 7.29% (not pinned in duplication-baseline.json)\nduplication ratchet: FAIL — 3 fresh, 0 regressed (1 pinned debt files unchanged)\n```\n\nThe duplicated block is visible in this diff: `markerSafe`/`markerSafeReplacer` are **byte-identical** across `tcRunRegistry.js:149`, `tcMaintenanceLedger.js:313` and the pre-existing `findingRegistry.js:662`, and each file repeats the same `parseXComments` shape (`reviewVerdicts.collectAllowedRecords` + `atMs = Date.parse` + timestamp-comparator sort, tcRunRegistry.js:209-220 / tcMaintenanceLedger.js:371-382 / findingRegistry.js:760-770). `findingRegistry.js` is not touched by this PR — the new marker modules' similarity dragged it over threshold too — but the two new files are this PR's additions, so the red gate is this PR's to clear (tcRunRegistry.js at 7.29% is the worst).\n\nFix options, in order of preference:\n\n1. **Extract the shared marker plumbing** into one module (e.g. `js/common/markerComments.js`): `markerSafe`, `markerSafeReplacer`, and a `parseMarkerComments(comments, opts, prefix, suffix, payloadAdapter)` that wraps `collectAllowedRecords`, stamps `atMs` and applies the shared comparator. Each of the three modules keeps only its `MARKER_PREFIX` and payload adapter. The existing marker round-trip tests in all three suites keep passing (the adapters are pure).\n2. If the team prefers the debt route, pin all three files in `duplication-baseline.json` per the regeneration process documented in that file's `note` — but deduplicating here is small, safe, and clears the debt instead of growing it.\n\nEither way the `crap` check must go green on a new head before merge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:b4065ea4",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 056b9ceaa3e7c46a7a638abcbcb5e541f6a13ea7 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:60029c85",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: CI is red — the `crap` ratchet fails on 15 new functions over threshold 8, and the worst offender (`tcTriage.js::sameBuildAndEnv`, CRAP 72 at 0% coverage) is dead code that no caller or test references. The triage design itself (roles, fingerprints, ledger markers, fail-closed machineAuthor) is solid and well-tested (804 passed locally), but the bounce-comment output duplicates its TC list, and mixed bounce+route runs silently drop the routed digest/staging.\n\n**Key Issues**:\n- 🚨 BLOCKING: red `crap` gate — decompose the 15 listed functions (delete unused `sameBuildAndEnv` first)\n- ⚠️ `findingLine`'s `bits` array is dead code; bounce comment lists every TC twice\n- ⚠️ Bounce runs skip routed-TC staging + digest; same-build reds with missing env fingerprints default to \"flaky\"\n- ⚠️ Legacy bounce now requires agent-supplied `acVerdict` (confirm degradation is intended); role scoping trusts the agent copy over the linked TC's metadata\n\n**Next Steps**:\n1. Fix the `crap` gate (see inline comment 1 for the per-function split plan)\n2. Address the six ⚠️ inline threads — the two triage-accuracy ones (5, 6) need a confirm/deny\n3. Suggestions (8–10) are non-blocking polish"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:f861afa6",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Validation CI went red on the head — merge aborted, rework re-queued. (linked issue #1329 re-armed) (approval latch kept — no re-review after fixes)\n🔴 red head 2bf29a71c24fe0ad4cfe19b3f32f46f928a31733 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:d0b1a0a0",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1344\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:05acf169",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES (round 2)\n\n**Summary**: All 10 round-1 findings are resolved — the CRAP decomposition landed (`0 new over threshold`), the dead code is gone, and the six behavioral threads (double TC list, dropped routed digest, missing-fingerprint flaky default, acVerdict diagnosability, role-metadata precedence, bookkeeping dedup) are fixed with regression tests. One new 🚨 BLOCKING: the `crap` check is red again on head `2bf29a71`, this time via the duplication ratchet — `markerSafe`/`markerSafeReplacer` and the marker-parse boilerplate are copy-pasted across `tcRunRegistry.js` (7.29%), `tcMaintenanceLedger.js` (3.16%) and `findingRegistry.js` (2.38%).\n\n**Key Issues**:\n- 🚨 BLOCKING: duplication ratchet FAIL — 3 fresh, none pinned (`ci_failures.md`, head `2bf29a71`)\n- ✅ F2–F10 verified fixed with citable hunks + regression tests (see findingReview)\n\n**Next Steps**:\n1. Extract the shared marker plumbing (`markerSafe`, `markerSafeReplacer`, `parseMarkerComments`) into one common module used by all three registries — see inline thread for the concrete shape\n2. Re-push; the `crap` gate must report exit 0 on the new head"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-03:588f68b0",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-03",
+      "updatedAt": "2026-11-03",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 2bf29a71c24fe0ad4cfe19b3f32f46f928a31733 — red 2/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    }
+  ]
+}
