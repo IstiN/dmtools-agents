@@ -946,76 +946,96 @@ suite('postStoryTestAutomationResults: characterization (gh-1080 CRAP split)', f
 
 // ── gh-1329: validated-guard triage — the mechanical decision table ─────────
 
-suite('postStoryTestAutomationResults: gh-1329 guard triage', function() {
+// ── gh-1329 triage fixtures + harness (shared by the triage suites) ─────────
 
-    var REGISTRY_MARKER_TS152 = '<!-- dmtools:tc-run-registry {"v":1,"at":"2026-01-01T00:00:00.000Z","tcs":{"TS-152":{"role":"regression-guard","validated":true,"lastGreenSha":"sha-green","lastGreenEnvFingerprint":"env-1","lastGreenAt":"2026-01-01T00:00:00.000Z","greens":1,"redRounds":0,"lastRedAt":null,"lastVerdict":null}}} -->\n\ud83d\udcd8 registry fixture';
+var REGISTRY_MARKER_TS152 = '<!-- dmtools:tc-run-registry {"v":1,"at":"2026-01-01T00:00:00.000Z","tcs":{"TS-152":{"role":"regression-guard","validated":true,"lastGreenSha":"sha-green","lastGreenEnvFingerprint":"env-1","lastGreenAt":"2026-01-01T00:00:00.000Z","greens":1,"redRounds":0,"lastRedAt":null,"lastVerdict":null}}} -->\n\ud83d\udcd8 registry fixture';
 
-    function bugComments(comments) {
-        return function(args) {
-            if (args && args.key === 'BUG-150') {
-                return JSON.stringify({ key: 'BUG-150', fields: { comment: { comments: comments } } });
-            }
-            return null;
-        };
-    }
+function bugComments(comments) {
+    return function(args) {
+        if (args && args.key === 'BUG-150') {
+            return JSON.stringify({ key: 'BUG-150', fields: { comment: { comments: comments } } });
+        }
+        return null;
+    };
+}
 
-    function guardFailedResult(extra) {
-        return {
-            testCaseKey: 'TS-152',
-            status: 'failed',
-            testPath: 'testing/tests/TS-152/test_guard.py',
-            failedDescriptionFile: 'outputs/failed_description_TS-152.md',
-            failureSummary: 'guard assertion',
-            errorClass: 'assertion',
-            envFingerprint: 'env-1',
-            role: 'regression guard'
-        };
-    }
+function guardFailedResult(extra) {
+    return {
+        testCaseKey: 'TS-152',
+        status: 'failed',
+        testPath: 'testing/tests/TS-152/test_guard.py',
+        failedDescriptionFile: 'outputs/failed_description_TS-152.md',
+        failureSummary: 'guard assertion',
+        errorClass: 'assertion',
+        envFingerprint: 'env-1',
+        role: 'regression guard'
+    };
+}
 
-    function triageModule(opts) {
-        var comments = opts.comments || [];
-        var statusMoves = [];
-        var posted = [];
-        var cli = opts.cli || function(o) {
+/** The file_read mock for triageModule: the result JSON + linked TC list. */
+function triageFileReader(resultEntries, linkedTestCases) {
+    return function(fpath) {
+        if (fpath.path === 'outputs/story_test_automation_result.json') {
+            return JSON.stringify({
+                storyKey: 'BUG-150',
+                overall: 'failed',
+                summary: 'guard red',
+                results: resultEntries
+            });
+        }
+        if (fpath.path === 'input/BUG-150/linked_test_cases.json') {
+            return JSON.stringify({ testCases: linkedTestCases });
+        }
+        if (fpath.path && fpath.path.indexOf('.dmtools/config') !== -1) return null;
+        return null;
+    };
+}
+
+/** The params for a BUG-150 triage run. */
+function triageActionParams() {
+    return {
+        ticket: { key: 'BUG-150', fields: { summary: 'Guard red bug', issuetype: { name: 'Bug' } } },
+        jobParams: {
+            machineAuthor: 'ai-teammate',
+            customParams: { removeLabel: 'sm_story_test_automation_triggered' }
+        }
+    };
+}
+
+/**
+ * The triage-run harness: one BUG-150 bug run with configurable result
+ * entries, linked TC metadata, bug comments (marker storage) and CLI.
+ */
+function triageModule(opts) {
+    var statusMoves = [];
+    var posted = [];
+    var module = loadPostStoryTestAutomationResults({
+        file_read: triageFileReader(
+            opts.resultEntries || [opts.resultEntry || guardFailedResult()],
+            opts.linkedTestCases || []),
+        cli_execute_command: opts.cli || function(o) {
             if (o.command === 'git branch --show-current') return 'test/BUG-150';
             if (o.command === 'git rev-parse HEAD') return 'sha-new';
             return '';
-        };
-        var module = loadPostStoryTestAutomationResults({
-            file_read: function(fpath) {
-                if (fpath.path === 'outputs/story_test_automation_result.json') {
-                    return JSON.stringify({
-                        storyKey: 'BUG-150',
-                        overall: 'failed',
-                        summary: 'guard red',
-                        results: [opts.resultEntry || guardFailedResult()]
-                    });
-                }
-                if (fpath.path && fpath.path.indexOf('.dmtools/config') !== -1) return null;
-                return null;
-            },
-            cli_execute_command: cli,
-            jira_get_ticket: bugComments(comments),
-            jira_move_to_status: function(args) { statusMoves.push(args); },
-            jira_post_comment: function(args) { posted.push(args.comment); },
-            jira_attach_file_to_ticket: function() {},
-            jira_update_field: function() {}
-        });
-        return {
-            module: module,
-            statusMoves: statusMoves,
-            posted: posted,
-            run: function() {
-                return module.action({
-                    ticket: { key: 'BUG-150', fields: { summary: 'Guard red bug', issuetype: { name: 'Bug' } } },
-                    jobParams: {
-                        machineAuthor: 'ai-teammate',
-                        customParams: { removeLabel: 'sm_story_test_automation_triggered' }
-                    }
-                });
-            }
-        };
-    }
+        },
+        jira_get_ticket: bugComments(opts.comments || []),
+        jira_move_to_status: function(args) { statusMoves.push(args); },
+        jira_post_comment: function(args) { posted.push(args.comment); },
+        jira_attach_file_to_ticket: function() {},
+        jira_update_field: function() {}
+    });
+    return {
+        module: module,
+        statusMoves: statusMoves,
+        posted: posted,
+        run: function() {
+            return module.action(triageActionParams());
+        }
+    };
+}
+
+suite('postStoryTestAutomationResults: gh-1329 guard triage', function() {
+
 
     test('AC: guard red, same SHA + same env fingerprint -> no rerun, no bounce; ledger entry', function() {
         var t = triageModule({
@@ -1108,5 +1128,219 @@ suite('postStoryTestAutomationResults: gh-1329 guard triage', function() {
             'the failing script was committed');
         assert.ok(commands.some(function(c) { return c.indexOf('git push') === 0; }),
             'the failing script was pushed');
+    });
+});
+
+// ── gh-1329 rework: review-thread fixes ──────────────────────────────────────
+
+suite('postStoryTestAutomationResults: gh-1329 rework — bounce/route surfacing', function() {
+
+    var TWO_TC_REGISTRY = '<!-- dmtools:tc-run-registry {"v":1,"at":"2026-01-01T00:00:00.000Z","tcs":{' +
+        '"TS-152":{"role":"regression-guard","validated":true,"lastGreenSha":"sha-green","lastGreenEnvFingerprint":"env-1","lastGreenAt":"2026-01-01T00:00:00.000Z","greens":1,"redRounds":0,"lastRedAt":null,"lastVerdict":null},' +
+        '"TS-153":{"role":"regression-guard","validated":true,"lastGreenSha":"sha-green","lastGreenEnvFingerprint":"env-1","lastGreenAt":"2026-01-01T00:00:00.000Z","greens":1,"redRounds":0,"lastRedAt":null,"lastVerdict":null},' +
+        '"TS-154":{"role":"regression-guard","validated":true,"lastGreenSha":"sha-green","lastGreenEnvFingerprint":"env-1","lastGreenAt":"2026-01-01T00:00:00.000Z","greens":1,"redRounds":2,"lastRedAt":null,"lastVerdict":null}' +
+        '}} -->\n\ud83d\udcd8 registry fixture';
+
+    function countOccurrences(text, needle) {
+        var n = 0;
+        var i = 0;
+        while ((i = text.indexOf(needle, i)) !== -1) { n++; i += needle.length; }
+        return n;
+    }
+
+    test('AC: the bounce comment lists each TC exactly once (no duplicated list)', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            resultEntry: Object.assign(guardFailedResult(), { differential: 'green' })
+        });
+        var result = t.run();
+        assert.equal(result.status, 'failed');
+        var bounceComments = t.posted.filter(function(c) {
+            return c.indexOf('Bug Fix Did Not Pass Automated Tests') !== -1;
+        });
+        assert.equal(bounceComments.length, 1, 'exactly one bounce comment');
+        assert.equal(countOccurrences(bounceComments[0], 'TS-152'), 1,
+            'the TC key appears exactly once in the bounce comment');
+        assert.contains(bounceComments[0], 'Attribution');
+    });
+
+    function mixedRunCli(commands) {
+        return function(o) {
+            commands.push(o.command);
+            if (o.command === 'git branch --show-current') return 'test/BUG-150';
+            if (o.command === 'git rev-parse HEAD') return 'sha-new';
+            if (o.command === 'git status --short -- testing') return '?? testing/tests/x.py';
+            if (o.command === 'git diff --cached --stat') return ' testing/tests/x.py | 1 +';
+            return '';
+        };
+    }
+
+    test('AC: a mixed bounce+route run still stages the routed TC and posts the triage digest', function() {
+        var commands = [];
+        var t = triageModule({
+            comments: [{ body: TWO_TC_REGISTRY, user: { login: 'ai-teammate' } }],
+            cli: mixedRunCli(commands),
+            resultEntries: [
+                Object.assign(guardFailedResult(), { testCaseKey: 'TS-152', differential: 'green' }),
+                Object.assign(guardFailedResult(), { testCaseKey: 'TS-153', errorClass: 'timeout' })
+            ]
+        });
+        // TS-152: differential green on a new build -> earned bounce.
+        // TS-153: failed on sha-new while last green was sha-green — build
+        // changed, no differential given -> routed (differential rerun).
+        var result = t.run();
+        assert.equal(result.status, 'failed', 'the earned bounce still returns the bug');
+        assert.ok(t.statusMoves.some(function(m) { return m.key === 'TS-153' && m.statusName === 'In Review - Failed'; }),
+            'the routed TC is staged even on a bounce run');
+        var digest = t.posted.filter(function(c) { return c.indexOf('Linked-TC failure triage') !== -1; });
+        assert.equal(digest.length, 1, 'the triage digest is posted on the bounce path too');
+        assert.contains(digest[0], 'TS-153');
+        var bounceComments = t.posted.filter(function(c) {
+            return c.indexOf('Bug Fix Did Not Pass Automated Tests') !== -1;
+        });
+        assert.ok(bounceComments.every(function(c) { return c.indexOf('TS-153') === -1; }),
+            'the bounce comment names only the bounced TCs');
+    });
+
+    test('AC: escalated TCs are staged and surfaced on both routes', function() {
+        var commands = [];
+        var t = triageModule({
+            comments: [{ body: TWO_TC_REGISTRY, user: { login: 'ai-teammate' } }],
+            cli: mixedRunCli(commands),
+            resultEntries: [
+                Object.assign(guardFailedResult(), { testCaseKey: 'TS-152', differential: 'green' }),
+                Object.assign(guardFailedResult(), { testCaseKey: 'TS-154', differential: 'green' })
+            ]
+        });
+        // TS-152: differential green -> earned bounce. TS-154: differential
+        // green with an exhausted red streak (redRounds 2/2) -> escalate.
+        var result = t.run();
+        assert.equal(result.status, 'failed');
+        assert.deepEqual(result.escalatedTestCases, ['TS-154']);
+        assert.ok(t.statusMoves.some(function(m) { return m.key === 'TS-154' && m.statusName === 'In Review - Failed'; }),
+            'the escalated TC is staged with its failure evidence');
+        var digest = t.posted.filter(function(c) { return c.indexOf('Bounce cap reached') !== -1; });
+        assert.equal(digest.length, 1, 'the escalation section is posted on the bounce path too');
+        assert.contains(digest[0], 'TS-154');
+    });
+});
+
+suite('postStoryTestAutomationResults: gh-1329 rework — schema-gap diagnosability', function() {
+
+    function captureWarnings(run) {
+        var warnings = [];
+        var orig = console.warn;
+        console.warn = function() {
+            warnings.push(Array.prototype.slice.call(arguments).map(String).join(' '));
+        };
+        try { run(); } finally { console.warn = orig; }
+        return warnings;
+    }
+
+    test('AC: a failed own-oracle entry carrying NONE of the triage fields leaves a schema-gap hint', function() {
+        var t = triageModule({
+            comments: [],
+            resultEntry: {
+                testCaseKey: 'TS-152',
+                status: 'failed',
+                testPath: 'testing/tests/TS-152/test_guard.py',
+                failedDescriptionFile: 'outputs/failed_description_TS-152.md',
+                failureSummary: 'agent ignored the schema'
+            }
+        });
+        var warnings = captureWarnings(function() { t.result = t.run(); });
+        assert.equal(t.result.status, 'test_maintenance');
+        var hint = t.posted.filter(function(c) { return c.indexOf('gh-1329 triage metadata') !== -1; });
+        assert.equal(hint.length, 1, 'the schema-gap hint is posted');
+        assert.contains(hint[0], 'TS-152');
+        assert.ok(warnings.some(function(w) { return w.indexOf('TS-152') !== -1; }),
+            'the schema gap also leaves a log trace');
+    });
+
+    test('an entry carrying triage fields (errorClass) produces no schema-gap hint', function() {
+        var t = triageModule({
+            comments: [],
+            resultEntry: guardFailedResult() // errorClass present
+        });
+        t.run();
+        assert.ok(t.posted.every(function(c) { return c.indexOf('gh-1329 triage metadata') === -1; }),
+            'no hint when the agent followed the schema');
+    });
+});
+
+suite('postStoryTestAutomationResults: gh-1329 rework — linked-TC metadata is the role truth', function() {
+
+    test('AC: the linked TC ticket metadata wins over the agent-copied role — a linked sibling never bounces', function() {
+        var warnings = [];
+        var orig = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).map(String).join(' ')); };
+        var t;
+        try {
+            t = triageModule({
+                comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+                linkedTestCases: [{ key: 'TS-152', fields: { verifies: 'BUG-999' } }],
+                resultEntry: Object.assign(guardFailedResult(), { differential: 'green' })
+            });
+            t.result = t.run();
+        } finally {
+            console.warn = orig;
+        }
+        assert.equal(t.result.status, 'test_maintenance',
+            'the linked TC names another bug in Verifies: — sibling — the bounce gate must not trust the agent copy');
+        assert.ok(!t.statusMoves.some(function(m) { return m.key === 'BUG-150'; }),
+            'bug state unchanged');
+        assert.ok(warnings.some(function(w) { return w.indexOf('BUG-999') !== -1; }),
+            'the disagreement leaves a warning trace');
+    });
+
+    test('linked own-oracle metadata (no fields wrapper) keeps the bounce gate', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            linkedTestCases: [{ key: 'TS-152', verifies: 'BUG-150', role: 'regression guard' }],
+            resultEntry: Object.assign(guardFailedResult(), { role: '', differential: 'green' })
+        });
+        var result = t.run();
+        assert.equal(result.status, 'failed',
+            'the linked TC verifies THIS bug — the earned bounce stands');
+    });
+
+    test('without linked TC metadata the agent-copied role still applies', function() {
+        var t = triageModule({
+            comments: [{ body: REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            resultEntry: Object.assign(guardFailedResult(), { differential: 'green' })
+        });
+        assert.equal(t.run().status, 'failed');
+    });
+});
+
+suite('postStoryTestAutomationResults: gh-1329 rework — build SHA resolved once per run', function() {
+
+    test('AC: a multi-TC bug run shells out to git rev-parse at most once', function() {
+        var commands = [];
+        var t = triageModule({
+            comments: [],
+            cli: function(o) {
+                commands.push(o.command);
+                if (o.command === 'git branch --show-current') return 'test/BUG-150';
+                if (o.command === 'git rev-parse HEAD') return 'sha-new';
+                if (o.command === 'git status --short -- testing') return '?? testing/tests/x.py';
+                if (o.command === 'git diff --cached --stat') return ' testing/tests/x.py | 1 +';
+                return '';
+            },
+            resultEntries: [
+                {
+                    testCaseKey: 'TS-151', status: 'failed', testPath: 'testing/tests/TS-151/t.py',
+                    failedDescriptionFile: 'outputs/failed_description_TS-151.md', failureSummary: 'one'
+                },
+                {
+                    testCaseKey: 'TS-152', status: 'failed', testPath: 'testing/tests/TS-152/t.py',
+                    failedDescriptionFile: 'outputs/failed_description_TS-152.md', failureSummary: 'two'
+                }
+            ]
+        });
+        var result = t.run();
+        assert.equal(result.success, true);
+        var revParseCount = commands.filter(function(c) { return c === 'git rev-parse HEAD'; }).length;
+        assert.equal(revParseCount, 1, 'git rev-parse HEAD runs once per triage run, not once per entry');
     });
 });

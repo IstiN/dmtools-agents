@@ -2082,4 +2082,43 @@ suite('developBugAndCreatePR: gh-1329 test_suspected dev exit', function() {
         });
         assert.equal(result.path, 'delegated', 'falls through to the normal fix path');
     });
+
+    test('AC: a failed marker/digest post leaves a warning — the catch is never silent', function() {
+        var warnings = [];
+        var origWarn = console.warn;
+        console.warn = function() {
+            warnings.push(Array.prototype.slice.call(arguments).map(String).join(' '));
+        };
+        var loaded;
+        try {
+            loaded = loadDevelopBugAndCreatePR({
+                file_read: function(args) {
+                    if (args.path === 'outputs/test_suspected.json') {
+                        return JSON.stringify({ tcKey: 'TS-1405', claimedVerdict: 'stale-test', reason: 'TC asserts the old column name' });
+                    }
+                    throw new Error('missing ' + args.path);
+                },
+                jira_get_ticket: function(args) {
+                    if (args && args.key === 'BUG-1400') {
+                        return JSON.stringify({ key: 'BUG-1400', fields: { comment: { comments: [] } } });
+                    }
+                    return null;
+                },
+                jira_post_comment: function() { throw new Error('tracker down'); }
+            });
+            loaded.result = loaded.mod.action({
+                ticket: { key: 'BUG-1400', fields: { summary: 'Suspected stale test', issuetype: { name: 'Bug' } } },
+                metadata: { contextId: 'bug_development' },
+                jobParams: { machineAuthor: 'ai-teammate', customParams: { removeLabel: 'sm_bug_development_triggered' } }
+            });
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(loaded.result.success, true, 'the post failure stays non-fatal');
+        assert.equal(loaded.result.path, 'test_suspected');
+        assert.ok(warnings.some(function(w) { return w.indexOf('ledger marker') !== -1; }),
+            'the dropped ledger marker is logged, not swallowed');
+        assert.deepEqual(loaded.moves, [{ key: 'BUG-1400', statusName: 'In Testing' }],
+            'the bug still returns to the TC-verification lane');
+    });
 });

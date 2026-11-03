@@ -132,6 +132,23 @@ suite('tcMaintenanceLedger: dev exit + automation verdicts', function() {
         var f = ledger.findingFromDevClaim({ tcKey: 'TS-7', reason: long }, { at: '2026-01-02T00:00:00.000Z' });
         assert.ok(f.note.length <= 600);
     });
+
+    test('AC: an automation finding keeps note DISTINCT from reason (no redundant payload)', function() {
+        var f = ledger.findingFromVerdict({
+            tcKey: 'TS-8', role: 'regression-guard', action: 'maintenance', reason: 'environment-shift',
+            evidence: { sha: 's1', errorClass: 'timeout', testPath: 'testing/tests/TS-8/t.py' }
+        }, { at: '2026-01-03T00:00:00.000Z' });
+        assert.equal(f.reason, 'environment-shift');
+        assert.equal(f.note, null, 'note must not duplicate reason for automation-sourced findings');
+    });
+
+    test('an explicit note still wins over the reason fallback', function() {
+        var l = ledger.appendFinding(ledger.emptyLedger(), {
+            tcKey: 'TS-2', verdict: 'maintenance', reason: 'flaky-same-build', note: 'flaky in CI only'
+        });
+        assert.equal(l.findings[0].note, 'flaky in CI only');
+        assert.equal(l.findings[0].reason, 'flaky-same-build');
+    });
 });
 
 suite('tcMaintenanceLedger: marker persistence (house dmtools: pattern)', function() {
