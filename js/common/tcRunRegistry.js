@@ -78,6 +78,36 @@ function redRoundsOf(r, tcKey) {
     return (e && e.redRounds) || 0;
 }
 
+// Entry fields a new state carries over from the previous one.
+var CARRIED_ENTRY_FIELDS = ['role', 'lastGreenSha', 'lastGreenEnvFingerprint', 'lastGreenAt', 'lastRedAt', 'lastVerdict'];
+
+/** The carried-over entry state (prev counters kept, stamps cleared per route). */
+function carriedEntryState(prevEntry) {
+    var prev = prevEntry || {};
+    var state = {
+        validated: prev.validated === true,
+        greens: prev.greens || 0,
+        redRounds: prev.redRounds || 0
+    };
+    CARRIED_ENTRY_FIELDS.forEach(function(k) {
+        state[k] = prev[k] || null;
+    });
+    return state;
+}
+
+// The evidence fields a green run overrides on the carried state.
+var GREEN_OVERRIDE_FIELDS = [['role', 'role'], ['lastGreenSha', 'sha'], ['lastGreenEnvFingerprint', 'envFingerprint']];
+
+function applyGreenEvidence(state, evidence, at) {
+    GREEN_OVERRIDE_FIELDS.forEach(function(pair) {
+        state[pair[0]] = evidence[pair[1]] || state[pair[0]];
+    });
+    state.validated = true;
+    state.lastGreenAt = at;
+    state.greens = state.greens + 1;
+    state.redRounds = 0;
+}
+
 /**
  * Records a green run for a TC: validates it, stores lastGreenSha + env
  * fingerprint, resets the red streak. Returns the NEW registry (never
@@ -87,18 +117,9 @@ function recordGreen(prev, tcKey, evidence) {
     var at = (evidence && evidence.at) || new Date().toISOString();
     var r = deepCopyRegistry(prev);
     r.at = at;
-    var prevEntry = entryOf(r, tcKey) || {};
-    r.tcs[tcKey] = {
-        role: (evidence && evidence.role) || prevEntry.role || null,
-        validated: true,
-        lastGreenSha: (evidence && evidence.sha) || prevEntry.lastGreenSha || null,
-        lastGreenEnvFingerprint: (evidence && evidence.envFingerprint) || prevEntry.lastGreenEnvFingerprint || null,
-        lastGreenAt: at,
-        greens: (prevEntry.greens || 0) + 1,
-        redRounds: 0,
-        lastRedAt: prevEntry.lastRedAt || null,
-        lastVerdict: prevEntry.lastVerdict || null
-    };
+    var state = carriedEntryState(entryOf(r, tcKey));
+    applyGreenEvidence(state, evidence || {}, at);
+    r.tcs[tcKey] = state;
     return r;
 }
 
@@ -110,18 +131,12 @@ function recordFailure(prev, tcKey, info) {
     var at = (info && info.at) || new Date().toISOString();
     var r = deepCopyRegistry(prev);
     r.at = at;
-    var prevEntry = entryOf(r, tcKey) || {};
-    r.tcs[tcKey] = {
-        role: (info && info.role) || prevEntry.role || null,
-        validated: prevEntry.validated === true,
-        lastGreenSha: prevEntry.lastGreenSha || null,
-        lastGreenEnvFingerprint: prevEntry.lastGreenEnvFingerprint || null,
-        lastGreenAt: prevEntry.lastGreenAt || null,
-        greens: prevEntry.greens || 0,
-        redRounds: (prevEntry.redRounds || 0) + 1,
-        lastRedAt: at,
-        lastVerdict: (info && info.verdict) || null
-    };
+    var state = carriedEntryState(entryOf(r, tcKey));
+    state.role = (info && info.role) || state.role;
+    state.lastRedAt = at;
+    state.redRounds = state.redRounds + 1;
+    state.lastVerdict = (info && info.verdict) || null;
+    r.tcs[tcKey] = state;
     return r;
 }
 

@@ -29,7 +29,10 @@
  *                1. retry once on the same build (flake filter; green →
  *                   nothing happened);
  *                2. fingerprint lookup vs the last green run — same build
- *                   SHA: same env → flaky, changed env → environment shift,
+ *                   SHA: changed env → environment shift; both fingerprints
+ *                   equal → flaky; a missing fingerprint half proves
+ *                   nothing (evidence, never a default — the case falls
+ *                   through to the differential rerun request),
  *                   both proven by lookup, zero further reruns;
  *                3. build changed → differential rerun on the lastGreenSha
  *                   build (scripted CI varies ONLY the build):
@@ -166,8 +169,8 @@ function fingerprintsUnproven(current, lastGreen) {
 var EVIDENCE_FIELD_TABLE = [
     { key: 'sha', source: 'current' },
     { key: 'envFingerprint', source: 'current' },
-    { key: 'lastGreenSha', source: 'lastGreen' },
-    { key: 'lastGreenEnvFingerprint', source: 'lastGreen' },
+    { key: 'lastGreenSha', source: 'lastGreen', sourceKey: 'sha' },
+    { key: 'lastGreenEnvFingerprint', source: 'lastGreen', sourceKey: 'envFingerprint' },
     { key: 'differential', optional: true },
     { key: 'acVerdict', optional: true },
     { key: 'errorClass', optional: true },
@@ -184,8 +187,9 @@ function pickEvidence(input) {
     var evidence = {};
     EVIDENCE_FIELD_TABLE.forEach(function(spec) {
         var src = evidenceSource(input, spec.source);
-        if (present(src[spec.key])) {
-            evidence[spec.key] = String(src[spec.key]);
+        var raw = src[spec.sourceKey || spec.key];
+        if (present(raw)) {
+            evidence[spec.key] = String(raw);
         } else if (!spec.optional) {
             evidence[spec.key] = null;
         }

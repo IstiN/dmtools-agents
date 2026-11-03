@@ -100,6 +100,39 @@ function firstDefined(obj, keys) {
     return null;
 }
 
+// Free-form finding fields copied from the source payload. `sources` lists
+// the accepted spellings in priority order; `truncate` fields are
+// marker-hygiene capped; `fallback` applies when every source is absent.
+var FINDING_FIELD_TABLE = [
+    { key: 'failedDescriptionFile', sources: ['failedDescriptionFile'] },
+    { key: 'failureSummary', sources: ['failureSummary', 'summary'], truncate: true, fallback: '' },
+    // An automation finding carries only an EXPLICIT note (gh-1329 review:
+    // reason and note stay distinct — no truncated reason copy in every
+    // marker); the dev claim builds its own additive note.
+    { key: 'note', sources: ['note'], truncate: true },
+    { key: 'claimedVerdict', sources: ['claimedVerdict'] },
+    { key: 'evidence', sources: ['evidence'] },
+    { key: 'sha', sources: ['sha', 'buildSha'] },
+    { key: 'envFingerprint', sources: ['envFingerprint'] },
+    { key: 'lastGreenSha', sources: ['lastGreenSha'] },
+    { key: 'lastGreenEnvFingerprint', sources: ['lastGreenEnvFingerprint'] }
+];
+
+function findingField(src, spec) {
+    var value = firstDefined(src, spec.sources);
+    if (value === null) return spec.fallback !== undefined ? spec.fallback : null;
+    return spec.truncate ? truncate(value) : value;
+}
+
+/** The identity-bearing core fields (they feed the finding id hash). */
+function findingCoreFields(src) {
+    return {
+        tcKey: String(firstDefined(src, ['tcKey', 'testCaseKey']) || ''),
+        errorClass: String(firstDefined(src, ['errorClass', 'error_class']) || 'unknown'),
+        testPath: String(firstDefined(src, ['testPath', 'script']) || '')
+    };
+}
+
 /**
  * Normalizes any finding input into the canonical ledger shape. Unknown
  * errorClass stays visible as 'unknown' — a finding is never silently
@@ -107,27 +140,15 @@ function firstDefined(obj, keys) {
  */
 function normalizeFinding(input, at) {
     var src = input || {};
-    var testPath = firstDefined(src, ['testPath', 'script']) || '';
-    var errorClass = firstDefined(src, ['errorClass', 'error_class']) || 'unknown';
-    var tcKey = firstDefined(src, ['tcKey', 'testCaseKey']) || '';
-    var failureSummary = firstDefined(src, ['failureSummary', 'summary']) || '';
-    return {
-        id: findingIdentity(tcKey, errorClass, testPath),
-        tcKey: String(tcKey),
+    var core = findingCoreFields(src);
+    var finding = {
+        id: findingIdentity(core.tcKey, core.errorClass, core.testPath),
+        tcKey: core.tcKey,
         role: src.role || null,
         verdict: src.verdict || 'maintenance',
         reason: src.reason || null,
-        errorClass: String(errorClass),
-        testPath: String(testPath),
-        failedDescriptionFile: firstDefined(src, ['failedDescriptionFile']) || null,
-        failureSummary: truncate(failureSummary),
-        note: truncate(firstDefined(src, ['note', 'reason'])),
-        claimedVerdict: firstDefined(src, ['claimedVerdict']) || null,
-        evidence: firstDefined(src, ['evidence']) || null,
-        sha: firstDefined(src, ['sha', 'buildSha']) || null,
-        envFingerprint: firstDefined(src, ['envFingerprint']) || null,
-        lastGreenSha: firstDefined(src, ['lastGreenSha']) || null,
-        lastGreenEnvFingerprint: firstDefined(src, ['lastGreenEnvFingerprint']) || null,
+        errorClass: core.errorClass,
+        testPath: core.testPath,
         source: src.source || SOURCE_AUTOMATION,
         status: STATUS_OPEN,
         firstSeenAt: at,
@@ -136,6 +157,10 @@ function normalizeFinding(input, at) {
         resolvedAt: null,
         resolvedVia: null
     };
+    FINDING_FIELD_TABLE.forEach(function(spec) {
+        finding[spec.key] = findingField(src, spec);
+    });
+    return finding;
 }
 
 function findById(l, id) {
@@ -206,6 +231,28 @@ function openFindings(l) {
 
 // ── finding builders (the two machine sources) ───────────────────────────────
 
+var VERDICT_FALLBACK_TABLE = [
+    { key: 'tcKey', entryKey: 'tcKey', verdictKey: 'tcKey' },
+    { key: 'role', entryKey: 'role', verdictKey: 'role' },
+    { key: 'verdict', entryKey: 'verdict', verdictKey: 'action' },
+    { key: 'reason', entryKey: 'reason', verdictKey: 'reason' }
+];
+
+var VERDICT_EVIDENCE_FIELDS = ['errorClass', 'testPath', 'failedDescriptionFile', 'failureSummary',
+    'sha', 'envFingerprint', 'lastGreenSha', 'lastGreenEnvFingerprint'];
+
+function firstNonEmptyValue(a, b) {
+    return (a !== undefined && a !== null && a !== '') ? a : b;
+}
+
+function verdictLedgerEntry(v) {
+    return (v && v.ledgerEntry) || {};
+}
+
+function verdictEvidence(v, entry) {
+    return entry.evidence || (v && v.evidence) || {};
+}
+
 /**
  * A triage verdict (tcTriage.js) becomes an automation-sourced finding.
  * Every verdict except ACTION_NONE carries a ledgerEntry payload — this
@@ -213,26 +260,35 @@ function openFindings(l) {
  */
 function findingFromVerdict(v, opts) {
     var at = (opts && opts.at) || new Date().toISOString();
-    var entry = (v && v.ledgerEntry) || {};
-    var evidence = entry.evidence || (v && v.evidence) || {};
-    // Accepts either a bare triage verdict or its ledgerEntry payload.
-    var src = Object.assign({}, entry, {
-        tcKey: entry.tcKey || (v && v.tcKey),
-        role: entry.role || (v && v.role),
-        verdict: entry.verdict || (v && v.action),
-        reason: entry.reason || (v && v.reason),
-        errorClass: evidence.errorClass,
-        testPath: evidence.testPath,
-        failedDescriptionFile: evidence.failedDescriptionFile,
-        failureSummary: evidence.failureSummary,
-        sha: evidence.sha,
-        envFingerprint: evidence.envFingerprint,
-        lastGreenSha: evidence.lastGreenSha,
-        lastGreenEnvFingerprint: evidence.lastGreenEnvFingerprint,
-        source: SOURCE_AUTOMATION,
-        at: at
+    var entry = verdictLedgerEntry(v);
+    var evidence = verdictEvidence(v, entry);
+    var verdictLike = v || {};
+    var src = { source: SOURCE_AUTOMATION, at: at };
+    VERDICT_FALLBACK_TABLE.forEach(function(spec) {
+        src[spec.key] = firstNonEmptyValue(entry[spec.entryKey], verdictLike[spec.verdictKey]);
+    });
+    VERDICT_EVIDENCE_FIELDS.forEach(function(k) {
+        src[k] = evidence[k];
     });
     return normalizeFinding(src, at);
+}
+
+/** The dev claim's additive note: reason + evidence pointer (never a bare reason copy). */
+function devClaimNote(src) {
+    var noteParts = [];
+    if (src.reason) noteParts.push(String(src.reason));
+    if (src.evidence) noteParts.push('evidence: ' + String(src.evidence));
+    return noteParts.join(' — ');
+}
+
+function devClaimCoreFields(src) {
+    return {
+        tcKey: firstDefined(src, ['tcKey', 'testCaseKey']) || '',
+        claimedVerdict: firstDefined(src, ['claimedVerdict', 'verdict']) || null,
+        errorClass: firstDefined(src, ['errorClass']) || 'unknown',
+        testPath: firstDefined(src, ['testPath', 'script']) || '',
+        sha: firstDefined(src, ['sha', 'buildSha']) || null
+    };
 }
 
 /**
@@ -241,21 +297,12 @@ function findingFromVerdict(v, opts) {
  * ledger. Free text is truncated (marker hygiene) and the source is 'dev'.
  */
 function findingFromDevClaim(claim, opts) {
-    var at = (opts && opts.at) || new Date().toISOString();
     var src = claim || {};
-    var noteParts = [];
-    if (src.reason) noteParts.push(String(src.reason));
-    if (src.evidence) noteParts.push('evidence: ' + String(src.evidence));
-    return normalizeFinding({
-        tcKey: firstDefined(src, ['tcKey', 'testCaseKey']) || '',
-        verdict: 'dev-test-suspected',
-        claimedVerdict: firstDefined(src, ['claimedVerdict', 'verdict']) || null,
-        errorClass: firstDefined(src, ['errorClass']) || 'unknown',
-        testPath: firstDefined(src, ['testPath', 'script']) || '',
-        note: noteParts.join(' — '),
-        sha: firstDefined(src, ['sha', 'buildSha']) || null,
-        source: SOURCE_DEV
-    }, at);
+    var core = devClaimCoreFields(src);
+    core.verdict = 'dev-test-suspected';
+    core.note = devClaimNote(src);
+    core.source = SOURCE_DEV;
+    return normalizeFinding(core, (opts && opts.at) || new Date().toISOString());
 }
 
 // ── marker persistence (the house dmtools: marker pattern) ───────────────────
@@ -346,10 +393,6 @@ function latestLedger(comments, opts) {
 // ── the owner-facing digest (§7: async, never a blocking ask) ────────────────
 
 function findingLine(f) {
-    var bits = [f.tcKey];
-    if (f.errorClass && f.errorClass !== 'unknown') bits.push(f.errorClass);
-    if (f.testPath) bits.push('`' + f.testPath + '`');
-    if (f.occurrences > 1) bits.push('x' + f.occurrences);
     var src = f.source === SOURCE_DEV ? 'dev claim' : f.verdict;
     return '- ' + f.tcKey + ' — ' + src + (f.reason ? ' (' + f.reason.replace(/-/g, ' ') + ')' : '') +
         (f.testPath ? ' — `' + f.testPath + '`' : '') +
