@@ -123,6 +123,7 @@ _Write Solution and Diagrams Post-Action_
   - `contentOutput.target`
   - `customStatuses`
   - `diagramField`
+  - `dryRun`
   - `featureBranchEnabled`
   - `localTeammate`
   - `outputType`
@@ -169,6 +170,7 @@ _Write Solution and Diagrams Post-Action_
 - `autoStartDevelopmentConfigFile` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
 - `diagramField` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `outputType` _(used by JS action)_
 - `projectKey` _(used by JS action)_

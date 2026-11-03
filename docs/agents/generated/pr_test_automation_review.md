@@ -69,6 +69,7 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
   - `contentOutput`
   - `contentOutput.target`
   - `customStatuses`
+  - `dryRun`
   - `featureBranchEnabled`
   - `localTeammate`
   - `prSearchFnPath`
@@ -103,6 +104,7 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
 - `aiRepository` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `smFallback` _(used by JS action)_

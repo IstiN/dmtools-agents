@@ -87,6 +87,7 @@ _Post Story Test Automation Review Comments Action_
   - `contentOutput`
   - `contentOutput.target`
   - `customStatuses`
+  - `dryRun`
   - `featureBranchEnabled`
   - `formalGithubReview`
   - `localTeammate`
@@ -133,6 +134,7 @@ _Post Story Test Automation Review Comments Action_
 - `commentMarkup` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `maxReviewThreadsBeforeForceApprove` _(used by JS action)_

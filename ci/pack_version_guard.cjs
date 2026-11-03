@@ -107,74 +107,6 @@ function fingerprintsDiffer(prevManifestJson, nextManifestJson) {
     return prev !== next;
 }
 
-/**
- * gh-1325: per-agent retention window when carrying forward previous release
- * assets so pinned `pack@<version>` refs keep resolving against `latest`
- * without unbounded O(N) asset accumulation or GitHub secondary rate limits.
- */
-var MAX_RETAINED_VERSIONS_PER_AGENT = 5;
-
-var PACK_ZIP_RE = /^([A-Za-z0-9_-]+)-(\d+\.\d+\.\d+)\.zip$/;
-
-function compareSemverDesc(a, b) {
-    var pa = String(a).split('.');
-    var pb = String(b).split('.');
-    for (var i = 0; i < 3; i++) {
-        var diff = (parseInt(pb[i], 10) || 0) - (parseInt(pa[i], 10) || 0);
-        if (diff !== 0) return diff;
-    }
-    return 0;
-}
-
-function addAgentVersion(versionsByAgent, zipName) {
-    var m = PACK_ZIP_RE.exec(zipName);
-    if (!m) return;
-    var list = versionsByAgent[m[1]] || (versionsByAgent[m[1]] = []);
-    if (list.indexOf(m[2]) === -1) list.push(m[2]);
-}
-
-function expandWithSidecars(keptZips, prevSet) {
-    var out = [];
-    for (var i = 0; i < keptZips.length; i++) {
-        var z = keptZips[i];
-        out.push(z);
-        if (prevSet[z + '.sha256']) out.push(z + '.sha256');
-    }
-    return out;
-}
-
-/**
- * Given [prevAssets] (filenames from the previous release) and [currentZips]
- * (filenames freshly built in `dist/`), returns the sorted list of previous
- * `.zip` and `.zip.sha256` filenames to copy forward so each agent keeps at
- * most [maxPerAgent] versions total (current + carried), never overwriting a
- * freshly built asset and never carrying `factory-setup-*`.
- */
-function selectCarriedForwardAssets(prevAssets, currentZips, maxPerAgent) {
-    var limit = maxPerAgent || MAX_RETAINED_VERSIONS_PER_AGENT;
-    var currentSet = {};
-    var prevSet = {};
-    var versionsByAgent = {};
-    (currentZips || []).forEach(function (cur) {
-        currentSet[cur] = true;
-        addAgentVersion(versionsByAgent, cur);
-    });
-    (prevAssets || []).forEach(function (name) {
-        if (name.indexOf('factory-setup-') === 0) return;
-        prevSet[name] = true;
-        addAgentVersion(versionsByAgent, name);
-    });
-    var keptZips = [];
-    Object.keys(versionsByAgent).forEach(function (agent) {
-        var top = versionsByAgent[agent].slice().sort(compareSemverDesc).slice(0, limit);
-        top.forEach(function (ver) {
-            var z = agent + '-' + ver + '.zip';
-            if (!currentSet[z] && prevSet[z]) keptZips.push(z);
-        });
-    });
-    return expandWithSidecars(keptZips.sort(), prevSet);
-}
-
 module.exports = {
     bump: bump,
     resolveBaseVersion: resolveBaseVersion,
@@ -182,6 +114,4 @@ module.exports = {
     resolveShipVersion: resolveShipVersion,
     payloadFingerprint: payloadFingerprint,
     fingerprintsDiffer: fingerprintsDiffer,
-    MAX_RETAINED_VERSIONS_PER_AGENT: MAX_RETAINED_VERSIONS_PER_AGENT,
-    selectCarriedForwardAssets: selectCarriedForwardAssets,
 };

@@ -181,9 +181,33 @@ function normalizeThenActionPath(thenAction) {
         .replace(/^js\//, '');
 }
 
+function buildThenActionCandidates(normalized, params) {
+    var candidates = ['./' + normalized];
+    var agentsDir = params && params.jobParams && params.jobParams.agentsDir;
+    if (agentsDir) {
+        candidates.push(String(agentsDir).replace(/\/+$/, '') + '/js/' + normalized);
+    }
+    candidates.push('agents/js/' + normalized);
+    candidates.push('js/' + normalized);
+    return candidates;
+}
+
+function requireThenAction(normalized, params) {
+    var candidates = buildThenActionCandidates(normalized, params);
+    var firstErr = null;
+    for (var i = 0; i < candidates.length; i++) {
+        try {
+            return require(candidates[i]);
+        } catch (e) {
+            if (!firstErr) firstErr = e;
+        }
+    }
+    throw firstErr;
+}
+
 function runThenAction(cfg, params, result) {
     var normalized = normalizeThenActionPath(cfg.thenAction);
-    var chained = require('./' + normalized);
+    var chained = requireThenAction(normalized, params);
     if (chained && typeof chained.action === 'function') {
         var chainedResult = chained.action(params);
         result.thenAction = cfg.thenAction;
@@ -313,6 +337,8 @@ if (typeof module !== 'undefined' && module.exports) {
         postConfluenceLinkComment: postConfluenceLinkComment,
         publishConfluenceStep: publishConfluenceStep,
         normalizeThenActionPath: normalizeThenActionPath,
+        buildThenActionCandidates: buildThenActionCandidates,
+        requireThenAction: requireThenAction,
         runThenAction: runThenAction,
         runFollowUpStep: runFollowUpStep,
         postTokenUsageStep: postTokenUsageStep,

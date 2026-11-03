@@ -96,6 +96,30 @@ exclude_copilot_session_from_git() {
     || echo ".dmtools/copilot-sessions/**" >> "${git_dir}/info/exclude"
 }
 
+_truncate_session_name() {
+  local name="$1"
+  local session_id="$2"
+  local group_slug="$3"
+  local max_len="${4:-100}"
+
+  if [ "${#name}" -le "${max_len}" ]; then
+    printf '%s' "${name}"
+    return 0
+  fi
+
+  local short_hash="${session_id:0:8}"
+  local group_tail="${group_slug:0:32}"
+  group_tail="${group_tail%-}"
+  local suffix="-${short_hash}-${group_tail}"
+  local prefix_len=$((max_len - ${#suffix}))
+  local prefix="${name:0:${prefix_len}}"
+  prefix="${prefix%-}"
+  local truncated="${prefix}${suffix}"
+  truncated="${truncated:0:${max_len}}"
+  truncated="${truncated%-}"
+  printf '%s' "${truncated}"
+}
+
 configure_copilot_session() {
   local workspace="${GITHUB_WORKSPACE:-${PWD}}"
   local repo="${GITHUB_REPOSITORY:-$(basename "${workspace}")}"
@@ -115,7 +139,7 @@ configure_copilot_session() {
   local group_slug="$(_slug "${group}")"
   local session_seed="${repo_slug}:${key_slug}:${group_slug}"
   local session_id="$(_uuid_from_seed "${session_seed}")"
-  local session_name="${repo_slug}-${key_slug}-${group_slug}"
+  local session_name="$(_truncate_session_name "${repo_slug}-${key_slug}-${group_slug}" "${session_id}" "${group_slug}" 100)"
   local session_base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/dmtools-copilot-sessions"
   local session_root="${session_base}/${repo_slug}/${key_slug}/${group_slug}"
   local cache_prefix="copilot-session-${repo_slug}-${key_slug}-${group_slug}-"

@@ -12,7 +12,7 @@ Experienced Business Analyst
 
 ### [2] `./agents/instructions/common/agent_task_preamble.md`
 
-You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
+You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/<ISSUE_KEY>/` folder. Your job is to follow the instructions below, read the prepared context from `input/<ISSUE_KEY>/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
 
 
 ---
@@ -344,7 +344,7 @@ flowchart TD
     SECTIONS --> RULES
 ```
 
-**IMPORTANT**: Read `input/existing_questions.json` for answered questions as context. Use `dmtools` CLI commands for full ticket details.
+**IMPORTANT**: Read `input/<ISSUE_KEY>/existing_questions.json` for answered questions as context. Use `dmtools` CLI commands for full ticket details.
 
 **IMPORTANT**: Check child tickets and parent story for better context using the appropriate `dmtools` search command.
 
@@ -468,7 +468,7 @@ flowchart TD
     SECTIONS --> RULES
 ```
 
-**IMPORTANT**: Read `input/existing_questions.json` for answered questions as context. Use `dmtools` CLI commands for full ticket details.
+**IMPORTANT**: Read `input/<ISSUE_KEY>/existing_questions.json` for answered questions as context. Use `dmtools` CLI commands for full ticket details.
 
 **IMPORTANT**: Check child tickets and parent story for better context using the appropriate `dmtools` search command.
 
