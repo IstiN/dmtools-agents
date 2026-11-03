@@ -40,7 +40,7 @@ function parseCheckParams(params) {
         removeLabel: customParams && customParams.removeLabel,
         // gh-1330: opt-in knob (default off) — flag the story for human review
         // instead of Done when skipped TCs exist.
-        skipsNeedHuman: !(customParams && customParams.skipsNeedHuman),
+        skipsNeedHuman: !!(customParams && customParams.skipsNeedHuman),
         // gh-1330: optional reason recorded in the per-TC skip markers.
         skipReason: (customParams && customParams.skipReason) || null
     };
@@ -59,6 +59,8 @@ function buildCheckContext(params) {
         ticketKey: parsed.ticketKey,
         customParams: parsed.customParams,
         removeLabel: parsed.removeLabel,
+        skipsNeedHuman: parsed.skipsNeedHuman,
+        skipReason: parsed.skipReason,
         tracker: trackersModule.createTracker(projectConfig, parsed.customParams || {}),
         statuses: resolveCustomStatuses(jiraConfig, parsed.customParams),
         testCaseType: jiraConfig.issueTypes.TEST_CASE || 'Test Case',
@@ -113,6 +115,109 @@ function allTestsConcluded(buckets) {
         buckets.pendingBug.length === 0 &&
         buckets.waitingForBugs.length === 0 &&
         buckets.readyForRetest.length === 0;
+}
+
+// ── gh-1330: truthful bucket reporting ───────────────────────────────────────
+
+// Needs-human label for the opt-in `skipsNeedHuman` flow (default off).
+var NEEDS_HUMAN_SKIPS_LABEL = 'needs_human_skips';
+
+// Per-TC skip marker label — also the stamping idempotency gate (one marker
+// per story; a TC skipped by two different stories carries one label each).
+function skipMarkerLabelFor(storyKey) {
+    return 'skipped_at_' + storyKey;
+}
+
+/**
+ * Splits concluded TCs into per-status counts plus the skipped TC objects.
+ * Uses the same gate (tracker.hasStage) as the flow classification, so a
+ * stage_skipped marker counts as Skipped in 'label' mode exactly like the
+ * Done decision does. `other` is defensive: allTestsConcluded() guarantees
+ * every TC reached a final stage — the summary stays truthful if that ever
+ * changes.
+ */
+function statusBuckets(allTCs, gate) {
+    var counts = { passed: 0, skipped: 0, irrelevant: 0, other: 0 };
+    var skippedTcs = [];
+    (allTCs || []).forEach(function(tc) {
+        if (gate.hasStage(tc, 'PASSED', gate.statuses.PASSED)) {
+            counts.passed++;
+        } else if (gate.hasStage(tc, 'SKIPPED', gate.statuses.SKIPPED)) {
+            counts.skipped++;
+            skippedTcs.push(tc);
+        } else if (gate.hasStage(tc, 'IRRELEVANT', gate.statuses.IRRELEVANT)) {
+            counts.irrelevant++;
+        } else {
+            counts.other++;
+        }
+    });
+    return { counts: counts, skippedTcs: skippedTcs };
+}
+
+/**
+ * One line for the Done report: every non-zero bucket, fixed order.
+ * Only Skipped gets the "never executed" qualifier — Irrelevant means the TC
+ * is no longer applicable, not untested.
+ */
+function buildBucketSummary(counts) {
+    var parts = [];
+    if (counts.passed > 0) parts.push(counts.passed + ' Passed');
+    if (counts.skipped > 0) parts.push(counts.skipped + ' Skipped (never executed — see TC comments)');
+    if (counts.irrelevant > 0) parts.push(counts.irrelevant + ' Irrelevant (no longer applicable)');
+    if (counts.other > 0) parts.push(counts.other + ' Other');
+    return parts.join(', ');
+}
+
+/**
+ * The story Done comment. A fully green suite (skipped + irrelevant == 0)
+ * keeps the exact pre-gh-1330 wording; anything else reports the buckets and
+ * never claims "All … Passed".
+ */
+function buildStoryDoneComment(counts, totalTCs) {
+    if (counts.skipped + counts.irrelevant === 0) {
+        return 'h3. ✅ Story Complete — All Test Cases Passed\n\n' +
+            'All *' + totalTCs + '* linked Test Case(s) are in *Passed* status.\n\n' +
+            'The story has been automatically moved to *Done*.';
+    }
+
+    var comment = 'h3. ✅ Story Complete — Test Cases Concluded\n\n' +
+        'Test results: ' + buildBucketSummary(counts) + '.\n\n' +
+        'All *' + totalTCs + '* linked Test Case(s) reached a final status; ' +
+        'the story has been automatically moved to *Done*.';
+
+    if (counts.skipped > 0) {
+        comment += '\n\n⚠️ Skipped Test Cases were *never executed* against this story — ' +
+            '"skipped" means *unverified, not exonerated*: no baseline exists for them. ' +
+            'See the skip markers on each skipped Test Case.';
+    }
+    return comment;
+}
+
+/**
+ * Machine-parseable skip marker posted on the skipped TC itself: story key,
+ * reason and date on one line so a future failure of this TC carries its
+ * "never executed during <story>" context even for readers who never open the
+ * story.
+ */
+function buildSkipMarkerComment(storyKey, tcKey, reason, dateStr) {
+    return 'h3. ⏭️ Skipped At Story Done-Check — Never Executed\n\n' +
+        '[tc-skip-marker] skipped at ' + storyKey + ' done-check (' + (reason || 'no reason recorded') + '), ' +
+        'never executed — ' + dateStr + '\n\n' +
+        'This Test Case was *not executed* when story *' + storyKey + '* was concluded: ' +
+        '"skipped" means *unverified, not exonerated*, and no baseline exists for this TC. ' +
+        'A later failure is *not automatically unrelated* — treat this TC as fresh.';
+}
+
+/**
+ * The needs-human flag comment for the opt-in `skipsNeedHuman` flow.
+ */
+function buildSkipsNeedHumanComment(counts, totalTCs) {
+    return 'h3. ⚠️ Story Done-Check Found Skipped Test Cases — Needs Human\n\n' +
+        'Test results: ' + buildBucketSummary(counts) + ' (' + totalTCs + ' linked Test Case(s) concluded).\n\n' +
+        '*skipsNeedHuman* is enabled: skipped Test Cases need human review before this story ' +
+        'can move to *Done*. The story stays in *In Testing*.\n\n' +
+        'Skipped Test Cases were stamped with skip markers — they were *never executed* against ' +
+        'this story ("skipped" = *unverified, not exonerated*).';
 }
 
 function action(params) {
@@ -203,20 +308,29 @@ function action(params) {
 
     // ── gh-1080: outcome steps (extracted verbatim from the pre-split flow) ──
 
-    function completeAllPassed(totalTCs) {
-        console.log('All', totalTCs, 'Test Case(s) passed — moving', ticketKey, 'to Done');
+    // gh-1330: the Done completion now reports per-status buckets — a suite
+    // with skipped/irrelevant TCs must not claim "All Test Cases Passed".
+    function completeStoryDone(counts, totalTCs) {
+        console.log('Concluded TC buckets — passed:', counts.passed, 'skipped:', counts.skipped,
+            'irrelevant:', counts.irrelevant, '— moving', ticketKey, 'to Done');
 
         tracker.moveToStatus(ticketKey, ctx.statuses.DONE);
 
-        tracker.postComment(ticketKey, 'h3. ✅ Story Complete — All Test Cases Passed\n\n' +
-                'All *' + totalTCs + '* linked Test Case(s) are in *Passed* status.\n\n' +
-                'The story has been automatically moved to *Done*.');
+        tracker.postComment(ticketKey, buildStoryDoneComment(counts, totalTCs));
 
         console.log('✅ Story', ticketKey, 'moved to Done');
 
         postTokenUsageSafely();
 
-        return { success: true, action: 'moved_to_done', totalTCs: totalTCs, ticketKey: ticketKey };
+        return {
+            success: true,
+            action: 'moved_to_done',
+            totalTCs: totalTCs,
+            passedTCs: counts.passed,
+            skippedTCs: counts.skipped,
+            irrelevantTCs: counts.irrelevant,
+            ticketKey: ticketKey
+        };
     }
 
     // Step 3: Some TCs have open bugs → Story must wait in Bug To Fix
@@ -262,9 +376,93 @@ function action(params) {
         return { success: true, action: 'moved_to_ready_for_testing', readyForRetestTCs: readyForRetestCount, ticketKey: ticketKey };
     }
 
-    function applyCheckOutcome(buckets, totalTCs) {
+    // gh-1330: best-effort skip marker — the comment carries the context, the
+    // label is the idempotency gate. Each write fails soft: a marker failure
+    // must never block the story completion.
+    function stampSkipMarkerOnTc(tcKey, reason, dateStr, existingLabels) {
+        var markerLabel = skipMarkerLabelFor(ticketKey);
+        if ((existingLabels || []).indexOf(markerLabel) !== -1) {
+            console.log('Skip marker already on', tcKey, '— not stamping again');
+            return false;
+        }
+        var stamped = false;
+        try {
+            tracker.postComment(tcKey, buildSkipMarkerComment(ticketKey, tcKey, reason, dateStr));
+            stamped = true;
+        } catch (e) {
+            console.warn('Failed to post skip marker comment on', tcKey, ':', e);
+        }
+        try {
+            tracker.addLabel(tcKey, markerLabel);
+            stamped = true;
+        } catch (e) {
+            console.warn('Failed to add skip marker label on', tcKey, ':', e);
+        }
+        return stamped;
+    }
+
+    function stampSkipMarkers(skippedTcs, reason) {
+        var dateStr = new Date().toISOString().slice(0, 10);
+        var stamped = [];
+        skippedTcs.forEach(function(tc) {
+            var existingLabels = tc.fields && tc.fields.labels;
+            if (stampSkipMarkerOnTc(tc.key, reason, dateStr, existingLabels)) {
+                stamped.push(tc.key);
+            }
+        });
+        return stamped;
+    }
+
+    // gh-1330: opt-in skipsNeedHuman flow — flag the story instead of moving it
+    // to Done. No lock release: the flow stops until a human resolves the skips
+    // and re-triggers the check (the flag is posted once; re-checks stay quiet).
+    function flagSkipsNeedHuman(counts, totalTCs) {
+        var alreadyFlagged = false;
+        try {
+            var story = tracker.getIssue(ticketKey);
+            var labels = (story && story.fields && story.fields.labels) || [];
+            alreadyFlagged = labels.indexOf(NEEDS_HUMAN_SKIPS_LABEL) !== -1;
+        } catch (e) {
+            console.warn('Could not read story labels — treating the needs-human flag as not set:', e);
+        }
+
+        if (!alreadyFlagged) {
+            tracker.addLabel(ticketKey, NEEDS_HUMAN_SKIPS_LABEL);
+            tracker.postComment(ticketKey, buildSkipsNeedHumanComment(counts, totalTCs));
+            console.log('⚠️ skipsNeedHuman:', ticketKey, 'flagged for human review —', counts.skipped, 'skipped TC(s), story NOT moved to Done');
+        } else {
+            console.log('⚠️ skipsNeedHuman:', ticketKey, 'already flagged — leaving it for human review');
+        }
+
+        postTokenUsageSafely();
+
+        return {
+            success: true,
+            action: 'needs_human_skips',
+            totalTCs: totalTCs,
+            passedTCs: counts.passed,
+            skippedTCs: counts.skipped,
+            irrelevantTCs: counts.irrelevant,
+            alreadyFlagged: alreadyFlagged,
+            ticketKey: ticketKey
+        };
+    }
+
+    function applyCheckOutcome(buckets, allTCs, gate, totalTCs) {
         if (allTestsConcluded(buckets)) {
-            return completeAllPassed(totalTCs);
+            var split = statusBuckets(allTCs, gate);
+
+            // gh-1330: stamp the skip context on the TCs themselves BEFORE the
+            // story moves — a Done story is never re-checked, so the markers
+            // must exist even if the move (or a later step) fails.
+            if (split.counts.skipped > 0) {
+                stampSkipMarkers(split.skippedTcs, ctx.skipReason);
+                if (ctx.skipsNeedHuman) {
+                    return flagSkipsNeedHuman(split.counts, totalTCs);
+                }
+            }
+
+            return completeStoryDone(split.counts, totalTCs);
         }
 
         // Step 2: Some TCs are still being reviewed/developed — wait for those agents
@@ -302,8 +500,9 @@ function action(params) {
             return { success: true, action: 'no_test_cases', ticketKey: ticketKey };
         }
 
-        const buckets = bucketTestCases(allTCs, classificationGate());
-        return applyCheckOutcome(buckets, totalTCs);
+        const gate = classificationGate();
+        const buckets = bucketTestCases(allTCs, gate);
+        return applyCheckOutcome(buckets, allTCs, gate, totalTCs);
 
     } catch (error) {
         console.error('❌ Error in checkStoryTestsPassed:', error);
@@ -313,5 +512,15 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action,
+        // gh-1330: truthful bucket reporting helpers — exported for direct
+        // characterization tests.
+        statusBuckets,
+        buildBucketSummary,
+        buildStoryDoneComment,
+        buildSkipMarkerComment,
+        buildSkipsNeedHumanComment,
+        skipMarkerLabelFor
+    };
 }

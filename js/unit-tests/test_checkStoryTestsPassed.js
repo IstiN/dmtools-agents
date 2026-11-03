@@ -94,7 +94,7 @@ suite('checkStoryTestsPassed', function() {
         assert.equal(result.action, 'moved_to_done');
         assert.deepEqual(moved, [{ key: 'TS-20', statusName: 'Done' }]);
         var storyComment = comments.filter(function(c) { return c.key === 'TS-20'; })[0].comment;
-        assert.contains(storyComment, 'Test results: 1 Passed, 1 Skipped, 1 Irrelevant');
+        assert.contains(storyComment, 'Test results: 1 Passed, 1 Skipped (never executed — see TC comments), 1 Irrelevant (no longer applicable)');
         assert.notContains(storyComment, 'All Test Cases Passed');
         assert.equal(removedLabels.length, 0, 'lock should not be released after Done');
     });
@@ -723,7 +723,7 @@ suite('checkStoryTestsPassed: truthful bucket report (gh-1330)', function() {
 
 suite('checkStoryTestsPassed: skip markers on TCs (gh-1330)', function() {
 
-    function runWithTcs(tcList, extraMocks) {
+    function runWithTcs(tcList, extraMocks, customParams) {
         var recorded = { comments: [], labels: [], moves: [], events: [] };
         var mocks = {
             jira_search_by_jql: function(args) {
@@ -750,7 +750,7 @@ suite('checkStoryTestsPassed: skip markers on TCs (gh-1330)', function() {
         var module = loadCheckStoryTestsPassed(mocks);
         recorded.result = module.action({
             ticket: { key: 'TS-100' },
-            jobParams: { customParams: { removeLabel: 'sm_story_done_check_triggered' } }
+            jobParams: { customParams: customParams || { removeLabel: 'sm_story_done_check_triggered' } }
         });
         return recorded;
     }
@@ -843,7 +843,7 @@ suite('checkStoryTestsPassed: skip markers on TCs (gh-1330)', function() {
                 }
                 return [];
             }
-        });
+        }, { stageFallback: 'label', removeLabel: 'sm_story_done_check_triggered' });
 
         var markerComments = recorded.comments.filter(function(c) {
             return c.comment.indexOf('[tc-skip-marker]') !== -1;
@@ -940,7 +940,8 @@ suite('checkStoryTestsPassed: skipsNeedHuman knob (gh-1330)', function() {
         });
 
         assert.equal(recorded.result.action, 'needs_human_skips');
-        assert.deepEqual(recorded.labels, [], 'no duplicate needs-human label');
+        assert.deepEqual(recorded.labels.filter(function(l) { return l.key === 'TS-200'; }), [],
+            'no duplicate needs-human label');
         assert.deepEqual(recorded.comments.filter(function(c) { return c.key === 'TS-200'; }), [],
             'no duplicate needs-human comment');
         assert.equal(recorded.result.alreadyFlagged, true);
