@@ -1837,8 +1837,7 @@ suite('postStoryTestAutomationResults: gh-1331 rework — the all-green resoluti
             'the run window carries the resolution lap');
     });
 
-    test('AC: after the all-green resolution the next red earns its bounce (no stale suppression)', function() {
-        var resolution = gh1331Triage({
+    test('AC: after the all-green resolution the next red earns its bounce (no stale suppression)', function() {        var resolution = gh1331Triage({
             comments: [gh1331Comment(gh1331Registry.buildRegistryMarker(gh1331MarkedTradingPair()))],
             buildSha: 'sha-fix',
             overall: 'passed',
@@ -1859,5 +1858,34 @@ suite('postStoryTestAutomationResults: gh-1331 rework — the all-green resoluti
         assert.deepEqual(result.failedTestCases, ['TS-152']);
         assert.ok(t.statusMoves.some(function(m) { return m.key === 'BUG-150' && m.statusName === 'Ready For Development'; }),
             'no stale contradictory-pair suppression — the bug returns to development');
+    });
+});
+
+suite('postStoryTestAutomationResults: gh-1331 rework — the green lap escalates a fresh flip', function() {
+
+    test('AC: a fresh trade flip surfaces even on a sha-less all-green lap (the bookkeeping escalation)', function() {
+        // a trading history WITHOUT a stable green: TS-153 red@S2, then TS-152 red@S3.
+        var r = gh1331Registry.emptyRegistry();
+        r = gh1331Registry.recordGreen(r, 'TS-152', { sha: 'S2', envFingerprint: 'env-1', role: 'regression-guard', at: gh1331At(1) });
+        r = gh1331Registry.recordFailure(r, 'TS-153', { sha: 'S2', at: gh1331At(1), verdict: 'bounce', role: 'regression-guard' });
+        r = gh1331Registry.recordGreen(r, 'TS-153', { sha: 'S3', envFingerprint: 'env-1', role: 'regression-guard', at: gh1331At(2) });
+        r = gh1331Registry.recordFailure(r, 'TS-152', { sha: 'S3', at: gh1331At(2), verdict: 'bounce', role: 'regression-guard' });
+        // the lap is all-green but carries NO build sha — the greens never
+        // classify, so the full-lap scan still sees the trade flip behind them
+        var t = gh1331Triage({
+            comments: [gh1331Comment(gh1331Registry.buildRegistryMarker(r))],
+            buildSha: '',
+            overall: 'passed',
+            cli: gh1331GreenCli({ buildSha: '' }),
+            resultEntries: [gh1331PassedEntry('TS-152'), gh1331PassedEntry('TS-153')]
+        });
+        var result = t.run();
+        assert.equal(result.success, true);
+        var escalations = gh1331EscalationsOf(t);
+        assert.equal(escalations.length, 1, 'the fresh flip escalates even though the lap was all-green');
+        assert.contains(escalations[0], 'TS-152');
+        assert.contains(escalations[0], 'TS-153');
+        var posted = gh1331PostedRegistry(t);
+        assert.ok(posted.pairs['TS-152|TS-153'], 'the pair is marked in the posted registry');
     });
 });

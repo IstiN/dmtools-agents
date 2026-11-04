@@ -349,31 +349,6 @@ function suppressedEntry(request, suppressedVerdict) {
 /**
  * The member-evidence snapshot for a pair-conflict record: the dispatched
  * request carries its own script + last-green build; a partner TC falls back
- * to its registry record.
- */
-function dispatcherMetaOf(request, vars) {
-    return function(tcKey) {
-        if (String(tcKey) === String(request.tcKey)) {
-            return {
-                verifies: null,
-                testPath: request.testPath || null,
-                failureSummary: request.failureSummary || null,
-                lastGreenSha: request.lastGreenSha || null
-            };
-        }
-        var state = tcRunRegistry.stateOf(vars.registry, tcKey);
-        return {
-            verifies: null,
-            testPath: null,
-            failureSummary: null,
-            lastGreenSha: state ? state.lastGreenSha : null
-        };
-    };
-}
-
-/**
- * The member-evidence snapshot for a pair-conflict record: the dispatched
- * request carries its own script + last-green build; a partner TC falls back
  * to its registry record. (The free-text cap is applied by recordConflicts.)
  */
 function dispatcherMetaOf(request, vars) {

@@ -1284,20 +1284,11 @@ function failedResultsOf(result) {
  * The bug-run gate for the gh-1331 cross-lap bookkeeping: bugs only, and
  * never the blocked_by_human lane (missing setup is environment/ops
  * territory — the blocked gate owns it downstream). EVERY bookkeeping-worthy
- * bug lap qualifies — failed laps triage, all-green laps reconcile.
+ * bug lap qualifies — failed laps triage (the failed-count check rides the
+ * dispatch in handleBugWithProductFailure), all-green laps reconcile.
  */
 function isBookkeepableBugRun(params, result, ctx) {
     if (bugIssueTypeOf(params) !== ctx.jiraConfig.issueTypes.BUG) return false;
-    return (result.overall || '').toLowerCase() !== 'blocked_by_human';
-}
-
-/**
- * The triage gate: at least one failed TC, and not a blocked_by_human run.
- * The bug-type and failed-count checks live in the caller's dispatch (the
- * bookkeeping gate runs wider — all-green laps still book their greens).
- */
-function isTriagableBugRun(params, result, ctx) {
-    if (failedResultsOf(result).length === 0) return false;
     return (result.overall || '').toLowerCase() !== 'blocked_by_human';
 }
 
