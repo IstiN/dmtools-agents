@@ -156,10 +156,8 @@ function resolveTargetWorkingDir(config) {
     return workingDir;
 }
 
-function isDryRunSnapshotParams(params, actualParams) {
-    var topDry = Boolean(params && (params.dryRun === true || params.dryRun === 'true'));
-    var actDry = Boolean(actualParams && (actualParams.dryRun === true || actualParams.dryRun === 'true'));
-    return topDry || actDry;
+function shouldSkipSnapshotForDryRun(actualParams) {
+    return String(actualParams && actualParams.dryRun) === 'true';
 }
 
 function syncSnapshotWorkspace(config) {
@@ -186,7 +184,7 @@ function action(params) {
         if (runChainedAction(customParams.chainedPreCliJSAction, params) === false) {
             return false;
         }
-        if (isDryRunSnapshotParams(params, actualParams)) {
+        if (shouldSkipSnapshotForDryRun(actualParams)) {
             console.log('[dryRun] preCliSnapshotSetup: skipping snapshot branch checkout and codegraph sync');
             return true;
         }
