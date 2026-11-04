@@ -476,6 +476,7 @@ function buildReconciliationComment(effective, loserLabel, headSha) {
 // keeps the arm.
 function recordCensusKepsArm(record) {
     return censusCount(record.blocking) > 0 ||
+        censusCount(record.important) > 0 ||
         censusCount(record.suggestions) > 0 ||
         censusCount(record.nits) > 0;
 }
@@ -525,6 +526,14 @@ function armReworkDecision(records, headSha) {
         var blocking = censusCount(rec.blocking);
         if (blocking > 0) {
             return { arm: true, reason: 'blocking-threads', effective: effective };
+        }
+        // gh-1351 (epic gh-1328 step 2/4): IMPORTANT gates approval — an
+        // APPROVE record reporting important > 0 is the open-thread evidence
+        // the arm is placed on (the strip side, reconcileDecision, reads the
+        // same census so arming and stripping never disagree).
+        var important = censusCount(rec.important);
+        if (important > 0) {
+            return { arm: true, reason: 'important-threads', effective: effective };
         }
         var suggestions = censusCount(rec.suggestions);
         if (suggestions > 0) {
@@ -579,6 +588,10 @@ var SEVERITY_BLOCKING_EMOJI_RE = /\uD83D\uDEA8/;
 var SEVERITY_BLOCKING_WORD_RE = /(?:^|[^\w-])BLOCKING\b/i;
 var SEVERITY_IMPORTANT_RE = /(\u26A0)|(\bIMPORTANT\b)/i;
 var SEVERITY_SUGGESTION_RE = /(\uD83D\uDCA1)|(\bSUGGESTION\b)/i;
+// gh-1351 (epic gh-1328 step 2/4): the 4-tier enum — 🪶 NIT joins. Same
+// emoji-or-word mapping as IMPORTANT/SUGGESTION; checked LAST so a 💡
+// suggestion whose prose merely says "nit" stays a suggestion.
+var SEVERITY_NIT_RE = /(\uD83E\uDEB6)|(\bNIT\b)/i;
 
 // gh-1350: the canonical machine severity lines. The posting path stamps
 // them from the structured JSON `inlineComment.severity` field — the
@@ -588,14 +601,15 @@ var SEVERITY_SUGGESTION_RE = /(\uD83D\uDCA1)|(\bSUGGESTION\b)/i;
 var MACHINE_SEVERITY_LINES = {
     BLOCKING: '\uD83D\uDEA8 severity: BLOCKING \u2014',
     IMPORTANT: '\u26A0\uFE0F severity: IMPORTANT \u2014',
-    SUGGESTION: '\uD83D\uDCA1 severity: SUGGESTION \u2014'
+    SUGGESTION: '\uD83D\uDCA1 severity: SUGGESTION \u2014',
+    NIT: '\uD83E\uDEB6 severity: NIT \u2014'
 };
 
 // The strip matcher — anchored at the body head, tolerant of the em-dash
 // suffix and surrounding whitespace (a prose-authored variant may drop the
-// dash or vary spacing).
+// dash or vary spacing). gh-1351: 🪶 NIT joins the stamp vocabulary.
 var MACHINE_SEVERITY_LINE_HEAD_RE =
-    /^\s*(?:\uD83D\uDEA8|\u26A0\uFE0F?|\uD83D\uDCA1)\s*severity:\s*(?:BLOCKING|IMPORTANT|SUGGESTION|NONE)\s*(?:\u2014|-)?\s*/i;
+    /^\s*(?:\uD83D\uDEA8|\u26A0\uFE0F?|\uD83D\uDCA1|\uD83E\uDEB6)\s*severity:\s*(?:BLOCKING|IMPORTANT|SUGGESTION|NIT|NONE)\s*(?:\u2014|-)?\s*/i;
 
 // gh-1350: the explicit `severity: X` word form — the machine-stamped
 // marker's structured field (or the corrupted prose copy of it). The word
@@ -604,7 +618,7 @@ var MACHINE_SEVERITY_LINE_HEAD_RE =
 // quotes around key and value admit the JSON field form
 // (`"severity":"BLOCKING"` — a structured finding echoed verbatim into a
 // thread body).
-var EXPLICIT_SEVERITY_RE = /(?:^|[^\w-])severity"?\s*:\s*"?\s*(BLOCKING|IMPORTANT|SUGGESTION|NONE)(?![\w-])/i;
+var EXPLICIT_SEVERITY_RE = /(?:^|[^\w-])severity"?\s*:\s*"?\s*(BLOCKING|IMPORTANT|SUGGESTION|NIT|NONE)(?![\w-])/i;
 
 /**
  * The canonical severity line for one structured severity value, or null
@@ -674,6 +688,9 @@ function threadSeverity(body) {
     if (SEVERITY_BLOCKING_EMOJI_RE.test(text) && SEVERITY_BLOCKING_WORD_RE.test(text)) return 'blocking';
     if (SEVERITY_IMPORTANT_RE.test(text)) return 'important';
     if (SEVERITY_SUGGESTION_RE.test(text)) return 'suggestion';
+    // gh-1351: the 4-tier enum — 🪶 NIT last, so a 💡 thread whose prose
+    // says "nit" keeps its suggestion class.
+    if (SEVERITY_NIT_RE.test(text)) return 'nit';
     return 'none';
 }
 

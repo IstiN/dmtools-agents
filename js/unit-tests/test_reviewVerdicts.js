@@ -925,13 +925,14 @@ suite('reviewVerdicts — machine severity lines (gh-1350)', function () {
             '\uD83D\uDCA1 severity: SUGGESTION \u2014');
     });
 
-    test('machineSeverityLine normalizes case and rejects unknown severities', function () {
+    test('machineSeverityLine normalizes case and stamps every tier incl. NIT (gh-1351)', function () {
         assert.equal(rv.machineSeverityLine('important'),
             '\u26A0\uFE0F severity: IMPORTANT \u2014');
         assert.equal(rv.machineSeverityLine(' blocking '),
             '\uD83D\uDEA8 severity: BLOCKING \u2014');
-        assert.equal(rv.machineSeverityLine('NIT'), null,
-            'the NIT enum lands in part 2 — unrecognized severities stamp nothing');
+        assert.equal(rv.machineSeverityLine('NIT'),
+            '\uD83E\uDEB6 severity: NIT \u2014',
+            'the NIT enum landed in gh-1351 (part 2) — nits stamp like every tier');
         assert.equal(rv.machineSeverityLine(''), null);
         assert.equal(rv.machineSeverityLine(null), null);
         assert.equal(rv.machineSeverityLine(undefined), null);
@@ -1089,3 +1090,120 @@ suite('reviewVerdicts — nit census plumbing (gh-1350)', function () {
             { prHasRework: true, issueHasRework: true, prHasApproved: false }).loserLabel, 'agent:rework');
     });
 });
+
+// ── gh-1351 (epic gh-1328 step 2/4): IMPORTANT gates approval ────────────────
+// The verdict layer upgrade: a record's IMPORTANT census is now an open
+// machine-owned conversation exactly like blocking/suggestions/nits —
+// armReworkDecision arms 'important-threads' and reconcileDecision keeps the
+// arm (the arming side and the strip side never disagree on what an open
+// thread is). The NIT severity enum joins the machine-stamp vocabulary
+// (🪶 canonical line, classification, strip).
+
+suite('reviewVerdicts — IMPORTANT gates approval (gh-1351)', function () {
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function record(over) {
+        var rec = { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 0,
+                    at: '2026-11-04T00:00:00.000Z', source: 'pr_review.json' };
+        for (var k in over) rec[k] = over[k];
+        return rec;
+    }
+
+    test('armReworkDecision: APPROVE + important > 0 arms important-threads', function () {
+        var decision = rv.armReworkDecision([record({ important: 1 })], HEAD);
+        assert.equal(decision.arm, true);
+        assert.equal(decision.reason, 'important-threads');
+    });
+
+    test('armReworkDecision: important ranks after blocking in the arm-reason order', function () {
+        var decision = rv.armReworkDecision([record({ blocking: 1, important: 2 })], HEAD);
+        assert.equal(decision.arm, true);
+        assert.equal(decision.reason, 'blocking-threads', 'blocking is the loudest census');
+    });
+
+    test('reconcileDecision: APPROVE winner with important > 0 keeps the rework arm (census exception)', function () {
+        var decision = rv.reconcileDecision([record({ important: 1 })], HEAD,
+            { prHasRework: true, issueHasRework: true, prHasApproved: false });
+        assert.equal(decision, null,
+            'important threads are open machine-owned conversations — the strip is withheld');
+    });
+
+    test('REQUEST_CHANGES with important > 0 arms via changes-requested (unchanged)', function () {
+        var decision = rv.armReworkDecision([record({ verdict: 'REQUEST_CHANGES', important: 1 })], HEAD);
+        assert.equal(decision.arm, true);
+        assert.equal(decision.reason, 'changes-requested');
+    });
+
+    test('the zero-important APPROVE behavior is unchanged (no behavior flip)', function () {
+        assert.equal(rv.armReworkDecision([record({})], HEAD).arm, false);
+        assert.equal(rv.armReworkDecision([record({ suggestions: 1 })], HEAD).reason, 'suggestion-threads');
+    });
+});
+
+suite('reviewVerdicts — NIT severity stamp (gh-1351)', function () {
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
+
+    test('machineSeverityLine stamps the 🪶 canonical NIT line (case-insensitive)', function () {
+        assert.equal(rv.machineSeverityLine('NIT'), '\uD83E\uDEB6 severity: NIT \u2014');
+        assert.equal(rv.machineSeverityLine('nit'), '\uD83E\uDEB6 severity: NIT \u2014');
+    });
+
+    test('machineSeverityLine still returns null without a machine stamp', function () {
+        assert.equal(rv.machineSeverityLine(undefined), null);
+        assert.equal(rv.machineSeverityLine(''), null);
+        assert.equal(rv.machineSeverityLine('NONE'), null);
+        assert.equal(rv.machineSeverityLine('TRIVIAL'), null);
+    });
+
+    test('stripLeadingSeverityLine strips a leading canonical NIT line', function () {
+        var body = '\uD83E\uDEB6 severity: NIT \u2014 typo in a comment\nactual prose';
+        assert.equal(rv.stripLeadingSeverityLine(body), 'typo in a comment\nactual prose');
+    });
+
+    test('stripLeadingSeverityLine leaves a mid-body NIT-looking string alone', function () {
+        var body = 'prose first\n🪶 severity: NIT — not a stamp';
+        assert.equal(rv.stripLeadingSeverityLine(body), body);
+    });
+
+    test('threadSeverity: 🪶 emoji alone classifies nit', function () {
+        assert.equal(rv.threadSeverity('🪶 tiny naming thing'), 'nit');
+    });
+
+    test('threadSeverity: the explicit severity word classifies nit', function () {
+        assert.equal(rv.threadSeverity('worth a nit: rename x'), 'nit');
+    });
+
+    test('threadSeverity: explicit word dominates the emoji it rides on', function () {
+        assert.equal(rv.threadSeverity('🪶 severity: none'), 'none');
+        assert.equal(rv.threadSeverity('⚠️ severity: NIT'), 'nit');
+        assert.equal(rv.threadSeverity('🪶 severity: BLOCKING'), 'blocking');
+    });
+
+    test('threadSeverity: the JSON field form "severity":"NIT" classifies nit', function () {
+        assert.equal(rv.threadSeverity('{"severity":"NIT","note":"typo"}'), 'nit');
+    });
+
+    test('threadSeverity: suggestion markers outrank nit prose (the word nit in a 💡 thread stays suggestion)', function () {
+        assert.equal(rv.threadSeverity('💡 suggestion: extract this nit-pick helper'), 'suggestion');
+    });
+
+    test('threadSeverity: unmarked bodies still classify none', function () {
+        assert.equal(rv.threadSeverity('plain prose'), 'none');
+        assert.equal(rv.threadSeverity(''), 'none');
+    });
+
+    test('nit threads are resolvable non-blocking conversations (resolution gate untouched)', function () {
+        var threads = [{
+            threadId: 'PRRT_1', resolved: false, author: 'dmtools-factory-bot',
+            body: '\uD83E\uDEB6 severity: NIT \u2014 typo'
+        }];
+        var selection = rv.selectResolvableThreads(
+            [{ head: 'h0', verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 0, at: '', source: 'x' }],
+            'h0', threads, { machineLogins: ['dmtools-factory-bot'] });
+        assert.equal(selection.gate, 'approve');
+        assert.equal(selection.resolvable.length, 1);
+        assert.equal(selection.skipped.blocking, 0);
+    });
+});
+

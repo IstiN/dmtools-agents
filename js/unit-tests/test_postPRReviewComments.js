@@ -1572,7 +1572,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
             'an overridden approve must NOT arm the merge pipeline');
     });
 
-    test('allowApproveWithSuggestions=true keeps APPROVE effective', function() {
+    test('IMPORTANT gates approval (gh-1351): allowApproveWithSuggestions cannot approve an open ⚠️', function() {
         var h = loadReviewActionHarness({
             reviewData: {
                 recommendation: 'APPROVE',
@@ -1585,13 +1585,188 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
 
         var result = h.mod.action(gh926ActionParams({ customParams: { allowApproveWithSuggestions: true } }));
 
-        assert.equal(result.message, 'PR approved — awaiting reviewer merge');
+        assert.equal(result.message, 'Changes requested, ticket returned to In Development',
+            'an open IMPORTANT thread gates approval per the policy — the legacy knob is not honored');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"REQUEST_CHANGES"',
+            'the record stamps the recomputed verdict, not the advisory token');
+        assert.equal(h.opsOf('jira.moveToStatus').length, 1, 'rework runs');
+        assert.equal(h.opsOf('scm.addLabel').filter(function(o) { return o.label === 'pr_approved'; }).length, 0,
+            'an important-gated approve must NOT arm the merge pipeline');
+    });
+
+    test('suggestions-only APPROVE with the legacy knob true stays approved (knob honored — no 🚨/⚠️ open)', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 2 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({ customParams: { allowApproveWithSuggestions: true } }));
+
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'only 💡/🪶 open → APPROVE (the knob is honored when no rework-tier thread is open)');
         assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"');
-        assert.equal(h.opsOf('jira.moveToStatus').length, 0);
         assert.ok(h.opsOf('scm.addLabel').some(function(o) { return o.label === 'pr_approved'; }));
     });
 
-    test('dispatch-race guard: threads >= maxReviewThreadsBeforeForceApprove force-approves despite suggestions', function() {
+    test('legacy knob conflict: allowApproveWithSuggestions=false + suggestion-only census → policy wins, conflict logged', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 3 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({ customParams: { allowApproveWithSuggestions: false } }));
+
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'the resolved policy decides — only rework-tier threads gate approval');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"');
+        assert.ok(h.conflicts.some(function(line) {
+            return line.indexOf('allowApproveWithSuggestions=false') !== -1 &&
+                line.indexOf('policy wins') !== -1;
+        }), 'the knob conflict is logged: got ' + JSON.stringify(h.conflicts));
+    });
+
+    test('convergence: REQUEST_CHANGES token over a rework-tier-clean census recomputes to APPROVE', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'REQUEST_CHANGES',
+                issueCounts: { blocking: 0, important: 0, suggestions: 1, nits: 1 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'a suggestion-only cycle must converge — the machine recomputes');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"',
+            'the record stamps the recomputed APPROVE');
+        assert.ok(h.opsOf('scm.addLabel').some(function(o) { return o.label === 'pr_approved'; }));
+    });
+
+    test('BLOCK passes through: the machine never upgrades a security/data-loss call', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'BLOCK',
+                issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.message, 'Changes requested, ticket returned to In Development');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"BLOCK"');
+    });
+
+    test('investigation policy (explicit config): blocking census does not gate approval', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 1, important: 1 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            config: { reviewPolicy: { preset: 'investigation' } }
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'every tier is round none in investigation — the config IS the owner standing approval');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"');
+    });
+
+    test('malformed policy config fails the leg with a validation message', function() {
+        var h = loadReviewActionHarness({
+            reviewData: GH926_CLEAN_APPROVE,
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            config: { reviewPolicy: { severities: { TRIVIAL: { round: 'none', fix: 'never' } } } }
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.success, false, 'the leg fails loudly');
+        assert.contains(result.error, 'TRIVIAL', 'the validation message names the unknown tier');
+        assert.deepEqual(h.opNames(), [], 'no side effects before validation');
+    });
+
+    test('machine enforcement recomputes verdicts from census + policy; the census cross-check still fires first', function() {
+        // Posted inline BLOCKING severity + census blocking 0: the gh-1350
+        // cross-check overrides the token to REQUEST_CHANGES; the machine
+        // verdict keeps it (gating census 0, but the posted evidence wins).
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                inlineComments: [
+                    { path: 'src/a.js', line: 1, severity: 'BLOCKING', body: 'it breaks' }
+                ]
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.message, 'Changes requested, ticket returned to In Development');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"REQUEST_CHANGES"');
+    });
+
+    test('density audit: over-posted 💡 threads warn (never fail the leg)', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 10 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            githubPr: { number: 42, head: { sha: 'sha0000' }, additions: 50 }
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.success, true, 'the audit is warn-only');
+        assert.ok(h.warnings.some(function(line) {
+            return line.indexOf('density audit') !== -1 && line.indexOf('allows 4') !== -1;
+        }), 'the density overflow warns with the allowed cap: ' + JSON.stringify(h.warnings));
+    });
+
+    test('density audit: within the cap stays silent', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 1 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            githubPr: { number: 42, head: { sha: 'sha0000' }, additions: 1000 }
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.success, true);
+        assert.equal(h.warnings.filter(function(line) { return line.indexOf('density audit') !== -1; }).length, 0);
+    });
+
+    test('dispatch-race guard (legacy valve retired): the policy owns thread budgets — approval is census-driven', function() {
         var h = loadReviewActionHarness({
             reviewData: {
                 recommendation: 'APPROVE',
@@ -1605,29 +1780,13 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
 
         var result = h.mod.action(gh926ActionParams({ customParams: { maxReviewThreadsBeforeForceApprove: 2 } }));
 
-        assert.equal(result.message, 'PR approved — awaiting reviewer merge', 'forced approve at the limit');
-        assert.ok(h.opsOf('scm.addLabel').some(function(o) { return o.label === 'pr_approved'; }));
-        assert.equal(h.opsOf('jira.moveToStatus').length, 0);
-        assert.equal(h.opsOf('github_get_pr').length, 1, 'verdict record still probed the head');
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'the census is rework-tier clean → approved without any legacy valve');
+        assert.ok(h.conflicts.some(function(line) {
+            return line.indexOf('maxReviewThreadsBeforeForceApprove') !== -1;
+        }), 'the rejected legacy knob is logged: ' + JSON.stringify(h.conflicts));
     });
 
-    test('dispatch-race guard: threads under the limit still override to REQUEST_CHANGES', function() {
-        var h = loadReviewActionHarness({
-            reviewData: {
-                recommendation: 'APPROVE',
-                issueCounts: { blocking: 0, important: 0, suggestions: 3 },
-                inlineComments: []
-            },
-            repoInfo: GH926_REPO,
-            prInfoContent: GH926_PR_INFO_42,
-            threads: [{ id: 1 }]
-        });
-
-        var result = h.mod.action(gh926ActionParams({ customParams: { maxReviewThreadsBeforeForceApprove: 2 } }));
-
-        assert.equal(result.message, 'Changes requested, ticket returned to In Development');
-        assert.equal(h.opsOf('jira.moveToStatus').length, 1);
-    });
 
     test('autoStartRework opt-in triggers the configured workflow and skips the SM rework fallback', function() {
         var h = loadReviewActionHarness({
