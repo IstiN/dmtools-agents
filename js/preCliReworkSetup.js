@@ -848,6 +848,30 @@ function postReworkStartedCommentOrSkip(prAnchor, tracker, ticketKey, customPara
     });
 }
 
+function isDryRunReworkParams(params, actualParams) {
+    var topDry = Boolean(params && (params.dryRun === true || params.dryRun === 'true'));
+    var actDry = Boolean(actualParams && (actualParams.dryRun === true || actualParams.dryRun === 'true'));
+    return topDry || actDry;
+}
+
+function resolveReworkBaseBranch(prDetails, config) {
+    return prDetails.base ? prDetails.base.ref : config.git.baseBranch;
+}
+
+function resolveRequiredPrForRework(prAnchor, scm, config, tracker, ticketKey, inputFolder, customParams) {
+    var pr = findPrForRework(prAnchor, scm, config, ticketKey);
+    if (!pr) {
+        failSetup(
+            tracker,
+            ticketKey,
+            inputFolder,
+            'No Pull Request found for ticket ' + ticketKey + '. Cannot start rework without an existing PR.',
+            customParams
+        );
+    }
+    return pr;
+}
+
 function action(params) {
     var tracker = null;
     try {
@@ -869,7 +893,7 @@ function action(params) {
         // throws a ReviewPolicyValidationError HERE, before any side effect.
         var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(config, actualParams);
 
-        if ((params && (params.dryRun === true || params.dryRun === 'true')) || (actualParams && (actualParams.dryRun === true || actualParams.dryRun === 'true'))) {
+        if (isDryRunReworkParams(params, actualParams)) {
             console.log('[dryRun] Skipping mutating rework setup (branch checkout, merge, setup commands, tracker/SCM writes)');
             return { success: true, dryRun: true };
         }
@@ -890,16 +914,7 @@ function action(params) {
         }
 
         // Step 2: Find existing PR — PR-anchored (#544): the anchor IS the PR.
-        var pr = findPrForRework(prAnchor, scm, config, ticketKey);
-        if (!pr) {
-            failSetup(
-                tracker,
-                ticketKey,
-                inputFolder,
-                'No Pull Request found for ticket ' + ticketKey + '. Cannot start rework without an existing PR.',
-                customParams
-            );
-        }
+        var pr = resolveRequiredPrForRework(prAnchor, scm, config, tracker, ticketKey, inputFolder, customParams);
 
         // Steps 3-4: PR details + head branch, failing the setup when either is
         // missing, then checkout of the PR branch.
@@ -909,7 +924,7 @@ function action(params) {
         checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams,
             forkCheckout.resolvePullRef(forkCheckout.prPullRef(prDetails), forkCheckout.envCheckoutRef()));
 
-        const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
+        const baseBranch = resolveReworkBaseBranch(prDetails, config);
 
         // Persist the PR's real base branch to outputs/pr_base_branch.txt so that
         // quality-gate shell commands (static strings in the job's JSON config, unable

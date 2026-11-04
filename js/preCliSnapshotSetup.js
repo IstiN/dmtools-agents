@@ -156,6 +156,27 @@ function resolveTargetWorkingDir(config) {
     return workingDir;
 }
 
+function isDryRunSnapshotParams(params, actualParams) {
+    var topDry = Boolean(params && (params.dryRun === true || params.dryRun === 'true'));
+    var actDry = Boolean(actualParams && (actualParams.dryRun === true || actualParams.dryRun === 'true'));
+    return topDry || actDry;
+}
+
+function syncSnapshotWorkspace(config) {
+    return syncCodegraph(config.workingDir || '.');
+}
+
+function alignAndSyncSnapshot(config) {
+    var snapshotBranch = resolveSnapshotBranch(config);
+    if (!snapshotBranch) return true;
+
+    var workingDir = resolveTargetWorkingDir(config);
+    if (!workingDir) return true;
+    checkoutSnapshotBranch(workingDir, snapshotBranch);
+    syncSnapshotWorkspace(config);
+    return true;
+}
+
 function action(params) {
     try {
         var actualParams = resolveActualParams(params);
@@ -165,7 +186,7 @@ function action(params) {
         if (runChainedAction(customParams.chainedPreCliJSAction, params) === false) {
             return false;
         }
-        if ((params && (params.dryRun === true || params.dryRun === 'true')) || (actualParams && (actualParams.dryRun === true || actualParams.dryRun === 'true'))) {
+        if (isDryRunSnapshotParams(params, actualParams)) {
             console.log('[dryRun] preCliSnapshotSetup: skipping snapshot branch checkout and codegraph sync');
             return true;
         }
@@ -174,18 +195,7 @@ function action(params) {
         // jobParams in the real Teammate execution path) so snapshotBranchResolverFnPath
         // can key off the ticket's fixVersion — see configLoader.js for details.
         var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
-        var snapshotBranch = resolveSnapshotBranch(config);
-        if (!snapshotBranch) return true;
-
-        // 3. Align the dependency checkout with the snapshot branch.
-        var workingDir = resolveTargetWorkingDir(config);
-        if (!workingDir) return true;
-        checkoutSnapshotBranch(workingDir, snapshotBranch);
-
-        // 4. Refresh codegraph index so BA/SA/discovery agents see the aligned snapshot.
-        syncCodegraph(config.workingDir || '.');
-
-        return true;
+        return alignAndSyncSnapshot(config);
     } catch (error) {
         console.error('preCliSnapshotSetup: unexpected error:', error);
         // Never block the agent because of a snapshot setup failure.
