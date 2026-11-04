@@ -74,6 +74,8 @@ suite('tcRunRegistry: greens validate guards and record fingerprints', function(
     });
 });
 
+var REGISTRY_MARKER_NO_PAIRS = '<!-- dmtools:tc-run-registry {"v":1,"at":"2026-01-01T00:00:00.000Z","tcs":{"TS-1":{"role":"regression-guard","validated":true,"lastGreenSha":"sha-a","lastGreenEnvFingerprint":"env-1","lastGreenAt":"2026-01-01T00:00:00.000Z","greens":1,"redRounds":0,"lastRedAt":null,"lastVerdict":null}}} -->\nold fixture';
+
 suite('tcRunRegistry: marker persistence (house dmtools: pattern)', function() {
 
     test('marker round-trips through parse with the machine-author trust gate', function() {
@@ -110,5 +112,110 @@ suite('tcRunRegistry: marker persistence (house dmtools: pattern)', function() {
         assert.equal(registry.latestRegistry([{ body: 'plain prose' }], ALLOW), null);
         assert.equal(registry.latestRegistry([{ body: '<!-- dmtools:tc-run-registry {broken -->' }], ALLOW), null);
         assert.equal(registry.latestRegistry(null, ALLOW), null);
+    });
+
+    test('legacy markers without a pairs map parse with an empty one (additive shape)', function() {
+        var parsed = registry.latestRegistry([machineComment(REGISTRY_MARKER_NO_PAIRS)], ALLOW);
+        assert.ok(parsed);
+        assert.deepEqual(parsed.registry.pairs, {});
+    });
+});
+
+// ── gh-1331: the cross-lap history beside lastGreenSha ────────────────────────
+
+// A pre-gh-1331 registry marker: no pairs map, no run history, no bounce record.
+
+suite('tcRunRegistry: gh-1331 run history (last K runs + shas beside lastGreenSha)', function() {
+
+    test('greens and reds append to the per-TC run history', function() {
+        var r = registry.emptyRegistry();
+        r = registry.recordGreen(r, 'TS-1', { sha: 'sha-a', envFingerprint: 'env-1', at: '2026-01-01T00:00:00.000Z' });
+        r = registry.recordFailure(r, 'TS-1', { at: '2026-01-02T00:00:00.000Z' });
+        var runs = registry.runsOf(r, 'TS-1');
+        assert.equal(runs.length, 2);
+        assert.equal(runs[0].s, 'green');
+        assert.equal(runs[0].sha, 'sha-a');
+        assert.equal(runs[1].s, 'red');
+    });
+
+    test('AC: the history is a short window (last K runs), not a lifetime log', function() {
+        var r = registry.emptyRegistry();
+        for (var i = 0; i < 10; i++) {
+            r = registry.recordGreen(r, 'TS-1', { sha: 'sha-' + i, envFingerprint: 'env-1' });
+        }
+        var runs = registry.runsOf(r, 'TS-1');
+        assert.equal(runs.length, registry.RUN_HISTORY_LIMIT, 'the window is capped');
+        assert.equal(runs[runs.length - 1].sha, 'sha-9', 'the newest run survives');
+        assert.equal(runs[0].sha, 'sha-' + (10 - registry.RUN_HISTORY_LIMIT), 'the oldest runs fall off');
+    });
+
+    test('the history survives later updates (carried, not dropped)', function() {
+        var r = registry.emptyRegistry();
+        r = registry.recordGreen(r, 'TS-1', { sha: 'sha-a', envFingerprint: 'env-1' });
+        r = registry.recordFailure(r, 'TS-1', { at: '2026-01-02T00:00:00.000Z' });
+        assert.equal(registry.runsOf(r, 'TS-1').length, 2, 'the red did not reset the window');
+    });
+
+    test('TCs are independent and unknown TCs have no history', function() {
+        var r = registry.emptyRegistry();
+        r = registry.recordGreen(r, 'TS-1', { sha: 'sha-a', envFingerprint: 'env-1' });
+        assert.deepEqual(registry.runsOf(r, 'TS-2'), []);
+        assert.deepEqual(registry.runsOf(null, 'TS-1'), []);
+    });
+});
+
+suite('tcRunRegistry: gh-1331 bounce record (the earned-bounce anchor)', function() {
+
+    test('recordBounce stamps the range anchor + kind on the TC entry', function() {
+        var r = registry.recordGreen(registry.emptyRegistry(), 'TS-1', { sha: 'sha-a', envFingerprint: 'env-1' });
+        r = registry.recordBounce(r, 'TS-1', { at: '2026-01-02T00:00:00.000Z', lastGreenSha: 'sha-a', kind: 'earned' });
+        var s = registry.stateOf(r, 'TS-1');
+        assert.equal(s.lastBounceAt, '2026-01-02T00:00:00.000Z');
+        assert.equal(s.lastBounceRange, 'sha-a');
+        assert.equal(s.lastBounceKind, 'earned');
+        assert.equal(s.validated, true, 'the existing entry is kept');
+    });
+
+    test('the bounce record carries through later reds and greens', function() {
+        var r = registry.recordGreen(registry.emptyRegistry(), 'TS-1', { sha: 'sha-a', envFingerprint: 'env-1' });
+        r = registry.recordBounce(r, 'TS-1', { lastGreenSha: 'sha-a', kind: 'earned' });
+        r = registry.recordFailure(r, 'TS-1', { at: '2026-01-03T00:00:00.000Z' });
+        var s = registry.stateOf(r, 'TS-1');
+        assert.equal(s.lastBounceRange, 'sha-a', 'the anchor survives a red');
+        assert.equal(s.lastBounceKind, 'earned');
+        r = registry.recordGreen(r, 'TS-1', { sha: 'sha-b', envFingerprint: 'env-1' });
+        assert.equal(registry.stateOf(r, 'TS-1').lastBounceRange, 'sha-a', 'the anchor survives a green too (range-keyed)');
+    });
+
+    test('a newer bounce on a different range overwrites the anchor', function() {
+        var r = registry.recordBounce(registry.emptyRegistry(), 'TS-1', { lastGreenSha: 'sha-a', kind: 'earned' });
+        r = registry.recordBounce(r, 'TS-1', { at: '2026-01-05T00:00:00.000Z', lastGreenSha: 'sha-c', kind: 'escalated' });
+        var s = registry.stateOf(r, 'TS-1');
+        assert.equal(s.lastBounceRange, 'sha-c');
+        assert.equal(s.lastBounceKind, 'escalated');
+    });
+
+    test('the bounce record round-trips through the marker', function() {
+        var r = registry.recordBounce(registry.emptyRegistry(), 'TS-1', { at: '2026-01-02T00:00:00.000Z', lastGreenSha: 'sha-a', kind: 'earned' });
+        var parsed = registry.latestRegistry([machineComment(registry.buildRegistryMarker(r))], ALLOW);
+        assert.equal(parsed.registry.tcs['TS-1'].lastBounceRange, 'sha-a');
+    });
+});
+
+suite('tcRunRegistry: gh-1331 pair-conflict records in the payload', function() {
+
+    test('pairs survive the marker round-trip', function() {
+        var r = registry.emptyRegistry();
+        r.pairs = { 'TS-1|TS-2': { state: 'contradictory-or-flaky', detectedAt: '2026-01-02T00:00:00.000Z' } };
+        var parsed = registry.latestRegistry([machineComment(registry.buildRegistryMarker(r))], ALLOW);
+        assert.ok(parsed.registry.pairs['TS-1|TS-2']);
+        assert.equal(parsed.registry.pairs['TS-1|TS-2'].state, 'contradictory-or-flaky');
+    });
+
+    test('an empty pairs map serializes without breaking older parsers of the payload', function() {
+        var marker = registry.buildRegistryMarker(registry.recordGreen(registry.emptyRegistry(), 'TS-1', { sha: 'sha-a' }));
+        assert.contains(marker, '"pairs"');
+        var parsed = registry.latestRegistry([machineComment(marker)], ALLOW);
+        assert.deepEqual(parsed.registry.pairs, {});
     });
 });

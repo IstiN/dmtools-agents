@@ -42,7 +42,7 @@ var REGISTRY_VERSION = 1;
 // ── shape ────────────────────────────────────────────────────────────────────
 
 function emptyRegistry() {
-    return { v: REGISTRY_VERSION, at: new Date().toISOString(), tcs: {} };
+    return { v: REGISTRY_VERSION, at: new Date().toISOString(), tcs: {}, pairs: {} };
 }
 
 function deepCopyRegistry(r) {
@@ -78,8 +78,32 @@ function redRoundsOf(r, tcKey) {
     return (e && e.redRounds) || 0;
 }
 
+// ── gh-1331: the cross-lap history (bookeeping beside lastGreenSha) ──────────
+
+/**
+ * The per-TC run window (gh-1331): the last K runs with their build SHAs —
+ * the cross-lap memory the alternation detector (tcAlternation.js) reads.
+ * A bounded window: the detector needs a few laps, not a lifetime log.
+ */
+var RUN_HISTORY_LIMIT = 6;
+
+function appendRun(state, s, sha, at) {
+    var runs = (state.runs || []).slice();
+    runs.push({ s: s, sha: sha || null, at: at });
+    while (runs.length > RUN_HISTORY_LIMIT) runs.shift();
+    state.runs = runs;
+}
+
+/** The run-history window of a TC (the gh-1331 cross-lap memory), [] when none. */
+function runsOf(r, tcKey) {
+    var e = entryOf(r, tcKey);
+    return (e && e.runs) || [];
+}
+
 // Entry fields a new state carries over from the previous one.
-var CARRIED_ENTRY_FIELDS = ['role', 'lastGreenSha', 'lastGreenEnvFingerprint', 'lastGreenAt', 'lastRedAt', 'lastVerdict'];
+// gh-1331: the run window + the bounce anchor (lastBounce*) carry too.
+var CARRIED_ENTRY_FIELDS = ['role', 'lastGreenSha', 'lastGreenEnvFingerprint', 'lastGreenAt', 'lastRedAt', 'lastVerdict',
+    'lastBounceAt', 'lastBounceRange', 'lastBounceKind'];
 
 /** The carried-over entry state (prev counters kept, stamps cleared per route). */
 function carriedEntryState(prevEntry) {
@@ -87,7 +111,8 @@ function carriedEntryState(prevEntry) {
     var state = {
         validated: prev.validated === true,
         greens: prev.greens || 0,
-        redRounds: prev.redRounds || 0
+        redRounds: prev.redRounds || 0,
+        runs: (prev.runs || []).slice()
     };
     CARRIED_ENTRY_FIELDS.forEach(function(k) {
         state[k] = prev[k] || null;
@@ -119,8 +144,22 @@ function recordGreen(prev, tcKey, evidence) {
     r.at = at;
     var state = carriedEntryState(entryOf(r, tcKey));
     applyGreenEvidence(state, evidence || {}, at);
+    appendRun(state, 'green', (evidence && evidence.sha) || null, at);
     r.tcs[tcKey] = state;
     return r;
+}
+
+/**
+ * The red-stamp fields of one failing run (gh-1331 review: the field
+ * stamping is its own unit — recordFailure only books it into the
+ * registry): the streak advances, the verdict evidence lands, the run
+ * window appends.
+ */
+function applyFailure(state, info, at) {
+    state.lastRedAt = at;
+    state.redRounds = state.redRounds + 1;
+    state.lastVerdict = (info && info.verdict) || null;
+    appendRun(state, 'red', (info && info.sha) || null, at);
 }
 
 /**
@@ -133,9 +172,27 @@ function recordFailure(prev, tcKey, info) {
     r.at = at;
     var state = carriedEntryState(entryOf(r, tcKey));
     state.role = (info && info.role) || state.role;
-    state.lastRedAt = at;
-    state.redRounds = state.redRounds + 1;
-    state.lastVerdict = (info && info.verdict) || null;
+    applyFailure(state, info, at);
+    r.tcs[tcKey] = state;
+    return r;
+}
+
+/**
+ * gh-1331: records the earned-bounce anchor for a TC — the lastGreenSha
+ * range the bounce was attributed against. The suppression rule keys on the
+ * RANGE (invariant across laps until the guard goes green again), so a
+ * bounce that did not fix the guard cannot re-fire on the same range.
+ * Returns the NEW registry (never mutates the input).
+ */
+function recordBounce(prev, tcKey, info) {
+    var resolved = info || {};
+    var at = resolved.at || new Date().toISOString();
+    var r = deepCopyRegistry(prev);
+    r.at = at;
+    var state = carriedEntryState(entryOf(r, tcKey));
+    state.lastBounceAt = at;
+    state.lastBounceRange = resolved.lastGreenSha || null;
+    state.lastBounceKind = resolved.kind || 'earned';
     r.tcs[tcKey] = state;
     return r;
 }
@@ -150,7 +207,8 @@ function registryPayload(r) {
     return {
         v: r.v || REGISTRY_VERSION,
         at: r.at || new Date().toISOString(),
-        tcs: r.tcs || {}
+        tcs: r.tcs || {},
+        pairs: (r && r.pairs) || {}
     };
 }
 
@@ -183,7 +241,8 @@ function registryFromPayload(parsed) {
     return {
         v: parseInt(parsed.v, 10) || REGISTRY_VERSION,
         at: String(parsed.at || ''),
-        tcs: parsed.tcs
+        tcs: parsed.tcs,
+        pairs: (parsed.pairs && typeof parsed.pairs === 'object') ? parsed.pairs : {}
     };
 }
 
@@ -219,8 +278,11 @@ if (typeof module !== 'undefined' && module.exports) {
         isKnown: isKnown,
         isValidated: isValidated,
         redRoundsOf: redRoundsOf,
+        RUN_HISTORY_LIMIT: RUN_HISTORY_LIMIT,
+        runsOf: runsOf,
         recordGreen: recordGreen,
         recordFailure: recordFailure,
+        recordBounce: recordBounce,
         buildRegistryMarker: buildRegistryMarker,
         parseRegistryComments: parseRegistryComments,
         latestRegistry: latestRegistry

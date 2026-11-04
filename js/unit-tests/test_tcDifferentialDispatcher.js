@@ -23,6 +23,10 @@ var tcLedger = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
     './reviewVerdicts.js': reviewVerdicts
 }));
 var tcTriage = loadModule('js/common/tcTriage.js', makeRequire({}));
+var tcAlternation = loadModule('js/common/tcAlternation.js', makeRequire({
+    './tcRunRegistry.js': tcRunRegistry,
+    './tcMaintenanceLedger.js': tcLedger
+}));
 var bugBookkeeping = loadModule('js/common/bugBookkeeping.js', makeRequire({
     './tcRunRegistry.js': tcRunRegistry,
     './tcMaintenanceLedger.js': tcLedger,
@@ -153,6 +157,7 @@ function loadDispatcher(shell, jiraMocks, configExtra) {
         './common/tcTriage.js': tcTriage,
         './common/tcMaintenanceLedger.js': tcLedger,
         './common/tcRunRegistry.js': tcRunRegistry,
+        './common/tcAlternation.js': tcAlternation,
         './common/bugBookkeeping.js': bugBookkeeping,
         './common/jobTicketInputs.js': jobTicketInputs
     })), Object.assign({}, { cli_execute_command: shell }, jiraMocks || {}));
@@ -292,11 +297,16 @@ suite('tcDifferentialDispatcher: green-on-old — the earned bounce', function()
         assert.ok(run.latestLedger, 'the updated ledger marker was posted');
         assert.equal(tcLedger.differentialRequests(run.latestLedger).length, 0);
         assert.deepEqual(labelNames(run.jira), ['sm_tc_differential_triggered', 'tc_differential_pending']);
-        // the run registry is NOT rewritten by the dispatcher (the red streak
-        // that created the request stays the bounce-cap input)
+        // gh-1331: the dispatcher stamps the bounce anchor into the registry
+        // (the cross-lap suppression input the next lap reads)
         var registryBodies = run.jira.comments.map(function(c) { return c.comment; })
             .filter(function(b) { return String(b).indexOf('<!-- dmtools:tc-run-registry ') !== -1; });
-        assert.equal(registryBodies.length, 0);
+        assert.equal(registryBodies.length, 1, 'the registry marker lands with the bounce anchor');
+        var registry = tcRunRegistry.latestRegistry(
+            [{ body: registryBodies[0], user: { login: 'ai-teammate' } }],
+            { authorLogins: ['ai-teammate'] }).registry;
+        assert.equal(registry.tcs['TS-7'].lastBounceRange, 'facade12345');
+        assert.equal(registry.tcs['TS-7'].lastBounceKind, 'earned');
     });
 });
 
@@ -687,5 +697,127 @@ suite('tcDifferentialDispatcher: per-tick cap observability', function() {
         assert.equal(runCmds.length, 10);
         // the deferred two stay parked in the ledger digest
         assert.equal(tcLedger.differentialRequests(run.latestLedger).length, 2);
+    });
+});
+
+// ── gh-1331: the dispatcher honors the cross-lap alternation suppression ──────
+
+/** A runAction variant whose bug ticket carries EXPLICIT pre-built comments. */
+function runActionWithComments(shell, comments) {
+    var jira = {
+        jira_get_ticket: function() {
+            return { fields: {
+                summary: 'Checkout total wrong',
+                issuetype: { name: 'Bug' },
+                comment: { comments: comments }
+            } };
+        },
+        jira_move_to_status: function(args) { jira.moves.push(args); },
+        jira_post_comment: function(args) { jira.comments.push(args); },
+        jira_add_label: function(args) { jira.labels.push(args); },
+        jira_remove_label: function(args) { jira.unlabels.push(args); }
+    };
+    jira.moves = []; jira.comments = []; jira.labels = []; jira.unlabels = [];
+    var mod = loadDispatcher(shell, jira, {});
+    var result = mod.action(dispatcherParams());
+    var registryBodies = jira.comments.map(function(c) { return c.comment; })
+        .filter(function(b) { return String(b).indexOf('<!-- dmtools:tc-run-registry ') !== -1; });
+    var latestRegistry = null;
+    if (registryBodies.length) {
+        latestRegistry = tcRunRegistry.latestRegistry(
+            [{ body: registryBodies[registryBodies.length - 1], user: { login: 'ai-teammate' } }],
+            { authorLogins: ['ai-teammate'] }).registry;
+    }
+    return { mod: mod, result: result, jira: jira, shell: shell, latestRegistry: latestRegistry };
+}
+
+/**
+ * The lap-2 dispatcher fixture: two validated guards trading reds. TS-7
+ * bounced on lap 1 (red on cafed00dbee, green on facade12345); TS-8 went red
+ * on a LATER build (befcafe01) and parked a differential request — the flip
+ * signature is already in the registry when the dispatcher runs TS-8.
+ */
+function tradingPairRegistryMarker() {
+    var r = tcRunRegistry.emptyRegistry();
+    r = tcRunRegistry.recordGreen(r, 'TS-7', { sha: 'facade12345', envFingerprint: 'env-1', role: 'regression-guard', at: '2026-01-01T00:00:00.000Z' });
+    r = tcRunRegistry.recordGreen(r, 'TS-8', { sha: 'facade12345', envFingerprint: 'env-1', role: 'regression-guard', at: '2026-01-01T00:00:00.000Z' });
+    r = tcRunRegistry.recordFailure(r, 'TS-7', { sha: 'cafed00dbee', at: '2026-01-02T00:00:00.000Z', verdict: 'bounce', role: 'regression-guard' });
+    r = tcRunRegistry.recordBounce(r, 'TS-7', { at: '2026-01-02T00:00:00.000Z', lastGreenSha: 'facade12345', kind: 'earned' });
+    r = tcRunRegistry.recordGreen(r, 'TS-8', { sha: 'cafed00dbee', envFingerprint: 'env-1', role: 'regression-guard', at: '2026-01-03T00:00:00.000Z' });
+    r = tcRunRegistry.recordFailure(r, 'TS-8', { sha: 'befcafe01', at: '2026-01-04T00:00:00.000Z', verdict: 'differential-rerun', role: 'regression-guard' });
+    return tcRunRegistry.buildRegistryMarker(r);
+}
+
+suite('tcDifferentialDispatcher: gh-1331 alternation suppression', function() {
+
+    test('AC: at most ONE bounce per contradictory pair — the dispatcher suppresses the second trade', function() {
+        var comments = [{ body: tradingPairRegistryMarker(), user: { login: 'ai-teammate' } }];
+        comments.push(Object.assign({}, ALLOWED_AUTHOR, {
+            body: ledgerMarkerWith([parkedFinding('TS-8', { sha: 'befcafe01' })])
+        }));
+        var run = runActionWithComments(fakeShell({}), comments);
+
+        // the scripted run still happened (green on facade12345)…
+        var cmds = run.shell.calls.map(function(c) { return c.command; });
+        assert.contains(cmds.join('\n'), 'pytest testing/tests/TS-8/test.py');
+        // …but the earned bounce is suppressed: the bug is NOT moved
+        assert.equal(run.result.action, 'suppressed');
+        assert.deepEqual(run.jira.moves, [], 'no unbounded ping-pong — the second trade never re-bounces');
+        // the suppression has its OWN route bucket — it is NOT a maintained
+        // (red-on-old) finding, the report must not claim the rerun failed
+        assert.deepEqual(run.result.suppressedTestCases, ['TS-8']);
+        assert.deepEqual(run.result.maintainedTestCases, []);
+        // the fresh pair conflict is visible in the payload (gh-1331 review)
+        assert.deepEqual(run.result.conflicts, ['TS-7|TS-8']);
+        var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
+        assert.contains(body, 'suppressed-contradictory-pair');
+        assert.contains(body, 'loop-stop anchor owns it');
+        // a suppressed bounce is the GREEN-on-old case — the maintained
+        // section's "it fails there too" claim must NOT render (gh-1331 review)
+        assert.notContains(body, 'fails there too');
+        // ONE async escalation for the pair, with both pinned behaviors
+        var escalations = run.jira.comments.map(function(c) { return c.comment; })
+            .filter(function(b) { return b.indexOf('gh-1331') !== -1 && b.indexOf('contradictory-or-flaky') !== -1; });
+        assert.equal(escalations.length, 1, 'a single escalation per pair');
+        assert.contains(escalations[0], 'TS-7');
+        assert.contains(escalations[0], 'TS-8');
+        // the pair record persists for the next lap
+        assert.equal(run.latestRegistry.pairs['TS-7|TS-8'].state, 'contradictory-or-flaky');
+    });
+
+    test('AC: a bounce-cap escalation stays an escalation under an open pair conflict (mirrors the automation leg)', function() {
+        // the trading pair history PLUS a TS-7 registry already at the cap:
+        // the dispatcher verdict for TS-7 is ESCALATE, not bounce.
+        var r = tcRunRegistry.emptyRegistry();
+        r = tcRunRegistry.recordGreen(r, 'TS-7', { sha: 'facade12345', envFingerprint: 'env-1', role: 'regression-guard', at: '2026-01-01T00:00:00.000Z' });
+        r = tcRunRegistry.recordGreen(r, 'TS-8', { sha: 'facade12345', envFingerprint: 'env-1', role: 'regression-guard', at: '2026-01-01T00:00:00.000Z' });
+        r = tcRunRegistry.recordFailure(r, 'TS-7', { sha: 'cafed00dbee', at: '2026-01-02T00:00:00.000Z', verdict: 'bounce', role: 'regression-guard' });
+        r = tcRunRegistry.recordFailure(r, 'TS-7', { sha: 'cafed00dbee', at: '2026-01-02T00:00:01.000Z', verdict: 'bounce', role: 'regression-guard' });
+        r = tcRunRegistry.recordGreen(r, 'TS-8', { sha: 'cafed00dbee', envFingerprint: 'env-1', role: 'regression-guard', at: '2026-01-03T00:00:00.000Z' });
+        r = tcRunRegistry.recordFailure(r, 'TS-8', { sha: 'befcafe01', at: '2026-01-04T00:00:00.000Z', verdict: 'bounce', role: 'regression-guard' });
+        var comments = [{ body: tcRunRegistry.buildRegistryMarker(r), user: { login: 'ai-teammate' } }];
+        comments.push(Object.assign({}, ALLOWED_AUTHOR, {
+            body: ledgerMarkerWith([parkedFinding('TS-7', { sha: 'cafed00dbee' })])
+        }));
+        var run = runActionWithComments(fakeShell({}), comments);
+
+        assert.equal(run.result.action, 'escalated', 'the cap escalation is not converted into a suppression');
+        assert.deepEqual(run.result.escalatedTestCases, ['TS-7']);
+        assert.deepEqual(run.result.suppressedTestCases, [], 'no suppression — the escalation passes through ungated');
+        assert.deepEqual(run.result.conflicts, [], 'the escalation lap mirrors the automation leg — no pair marking there');
+        assert.deepEqual(run.jira.moves, [], 'an escalation never moves the bug');
+        var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
+        assert.contains(body, 'Bounce cap reached');
+        assert.notContains(body, 'suppressed-contradictory-pair');
+    });
+
+    test('without a trade history the dispatcher bounce is untouched', function() {
+        var comments = [{ body: registryMarkerWith(1), user: { login: 'ai-teammate' } }];
+        comments.push(Object.assign({}, ALLOWED_AUTHOR, {
+            body: ledgerMarkerWith([parkedFinding('TS-7')])
+        }));
+        var run = runActionWithComments(fakeShell({}), comments);
+        assert.equal(run.result.action, 'bounced', 'a single failure with no trade signature still earns its bounce');
+        assert.deepEqual(run.jira.moves, [{ key: 'BUG-1', statusName: 'Ready For Development' }]);
     });
 });

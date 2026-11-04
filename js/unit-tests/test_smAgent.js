@@ -65,6 +65,7 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
             './common/commentMarkup.js': unreadable,
             './common/tcRunRegistry.js': unreadable,
             './common/tcMaintenanceLedger.js': unreadable,
+            './common/tcAlternation.js': unreadable,
             './common/tcTriage.js': unreadable,
             './common/bugBookkeeping.js': unreadable,
             './common/jobTicketInputs.js': unreadable
@@ -101,6 +102,14 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
         }), {}),
         './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
             './reviewVerdicts.js': reviewVerdictsReal()
+        }), {}),
+        './common/tcAlternation.js': loadModule('js/common/tcAlternation.js', makeRequire({
+            './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
+                './reviewVerdicts.js': reviewVerdictsReal()
+            }), {}),
+            './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                './reviewVerdicts.js': reviewVerdictsReal()
+            }), {})
         }), {}),
         './common/tcTriage.js': loadModule('js/common/tcTriage.js', makeRequire({}), {}),
         './common/bugBookkeeping.js': loadModule('js/common/bugBookkeeping.js', makeRequire({

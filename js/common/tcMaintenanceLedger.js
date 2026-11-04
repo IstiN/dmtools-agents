@@ -444,6 +444,8 @@ if (typeof module !== 'undefined' && module.exports) {
         STATUS_RESOLVED: STATUS_RESOLVED,
         SOURCE_AUTOMATION: SOURCE_AUTOMATION,
         SOURCE_DEV: SOURCE_DEV,
+        MAX_NOTE_LENGTH: MAX_NOTE_LENGTH,
+        truncate: truncate,
         findingIdentity: findingIdentity,
         emptyLedger: emptyLedger,
         appendFinding: appendFinding,
