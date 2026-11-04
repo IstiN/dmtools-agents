@@ -522,6 +522,33 @@ function policyTableBody(p) {
     return lines.join('\n');
 }
 
+/**
+ * The gh-1351 run-context file body (review/rework input `review_policy.md`,
+ * epic §1 plumbing): the resolved policy table PLUS the agent duties the
+ * machine enforces — density top-K/digest discipline and the downgrade
+ * protocol. One canonical document for every leg that reads it.
+ */
+function policyInputContextMarkdown(policy) {
+    var p = policy || defaultPolicy();
+    var lines = [];
+    lines.push('# Review Policy');
+    lines.push('');
+    lines.push('Preset: `' + p.preset + '` — resolved from: ' + p.source +
+        ' (resolution chain: projectConfig.reviewPolicy → workflow jobParams → built-in default).');
+    lines.push('Every verdict on this PR is traceable to this table.');
+    lines.push('');
+    lines.push(policyTableBody(p));
+    lines.push('## Downgrade protocol');
+    lines.push('');
+    lines.push('A rework lap may downgrade a specific ' + TIER_EMOJI.IMPORTANT +
+        ' IMPORTANT finding to ' + TIER_EMOJI.SUGGESTION + ' SUGGESTION **only with a written justification** ' +
+        'in the census (the thread reply and the response summary: why this is not maintainability debt). ' +
+        'A silent downgrade does not exist: the next review round re-raises it as ' + TIER_EMOJI.IMPORTANT +
+        ' IMPORTANT and the cycle repeats. A justified downgrade lets a false-' + TIER_EMOJI.IMPORTANT +
+        ' review converge to APPROVE without a code change.');
+    return lines.join('\n');
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         TIERS: TIERS,
@@ -544,6 +571,7 @@ if (typeof module !== 'undefined' && module.exports) {
         densityAudit: densityAudit,
         policyTableMarkdown: policyTableMarkdown,
         policyTableBody: policyTableBody,
+        policyInputContextMarkdown: policyInputContextMarkdown,
         isReviewPolicyError: isReviewPolicyError
     };
 }

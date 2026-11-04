@@ -13,6 +13,10 @@ const gitOps = require('./common/gitOps.js');
 var prHelper = require('./common/pullRequest.js');
 var branchSetup = require('./common/branchSetup.js');
 const { LABELS } = require('./config.js');
+// gh-1351 (hoisted, never lazy — the gh-823 pack-require rule): the review
+// policy config — resolved once here so a malformed config fails the leg at
+// start, and the resolved table is stamped into the run context.
+var reviewPolicyModule = require('./common/reviewPolicy.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 // gh-1261: the canonical lazy holder lives in common/trackers.js (createTrackerHolder);
@@ -347,6 +351,11 @@ function resolveReviewSetup(params) {
     const inputFolder = getInputFolder(params, ticketKey);
     const issueType = getIssueType(params);
     var config = configLoader.loadProjectConfig(params.jobParams || params);
+    // gh-1351: hard validation at leg start — a malformed reviewPolicy throws
+    // a ReviewPolicyValidationError HERE, before any side effect (the action
+    // catch posts the setup-error comment and the leg fails).
+    var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(
+        config, params.jobParams || params);
     initTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
     return {
         ticketKey: ticketKey,
@@ -354,6 +363,7 @@ function resolveReviewSetup(params) {
         ticket: params.ticket,
         issueType: issueType,
         config: config,
+        reviewPolicy: reviewPolicy,
         jiraConfig: config.jira,
         scm: configLoader.createScm(config)
     };
@@ -518,6 +528,22 @@ function action(params) {
 
         // Step 5 + 6: Diff + discussions, then write context files
         writeReviewContext(gh, gitOps, setup.scm, setup.config, setup.inputFolder, prDetails, branchName);
+
+        // gh-1351: stamp the resolved reviewPolicy into the run context so
+        // all three test-automation review legs rank/post under the policy
+        // the machine enforces. Non-fatal (the policy still governs the
+        // machine verdict in postPRReviewComments).
+        try {
+            gitOps.writeInputFile(
+                setup.inputFolder + '/review_policy.md',
+                reviewPolicyModule.policyInputContextMarkdown(setup.reviewPolicy),
+                'review_policy.md (resolved review policy — gh-1351)'
+            );
+            console.log('✅ Review policy stamped into the run context (review_policy.md, preset ' +
+                setup.reviewPolicy.preset + ')');
+        } catch (policyErr) {
+            console.warn('review_policy.md stamp failed (non-fatal):', policyErr.message || policyErr);
+        }
 
         // Step 7: Jira comment
         postReviewStartedComment(setup.ticketKey, prDetails, branchName);

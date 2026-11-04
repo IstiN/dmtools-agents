@@ -33,7 +33,9 @@ function loadPrepareTestPRForReview(mocks) {
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return scmMock; } }
         }),
-        { file_read: function() { return null; } }
+        // gh-1351: configLoaderFileRead lets a test serve a project
+        // .dmtools/config.js to the config loader only (reviewPolicy cases).
+        { file_read: (mocks && mocks.configLoaderFileRead) || function() { return null; } }
     );
 
     var prHelper = loadModule(
@@ -792,15 +794,10 @@ suite('prepareTestPRForReview: action error paths (gh-1186)', function() {
 
 suite('prepareTestPRForReview — gh-1351 reviewPolicy: hard validation + run-context stamp', function() {
 
-    function gh1351Load(fileReadOverride) {
+    function gh1351Load(configLoaderFileRead) {
         var gitOpsWrites = [];
-        return loadPrepareTestPRForReview({
-            file_read: function(args) {
-                var p = args && (args.path || args);
-                if (fileReadOverride && fileReadOverride(p) !== undefined) return fileReadOverride(p);
-                if (p && p.indexOf('.dmtools/config') !== -1) return null;
-                return null;
-            },
+        var module = loadPrepareTestPRForReview({
+            configLoaderFileRead: configLoaderFileRead,
             gitOpsMock: {
                 writeInputFile: function(path, content, label) { gitOpsWrites.push({ path: path, content: content }); }
             },
@@ -823,24 +820,28 @@ suite('prepareTestPRForReview — gh-1351 reviewPolicy: hard validation + run-co
                 if (opts.command.indexOf('rm -f') === 0) return '';
                 return '';
             }
-        }) && gitOpsWrites;
+        });
+        return { module: module, writes: gitOpsWrites };
     }
 
     test('a valid project policy is stamped as review_policy.md in the test-review input folder', function() {
-        var writes = gh1351Load(function(p) {
+        var h = gh1351Load(function(p) {
             if (p === '.dmtools/config.js') {
                 return 'module.exports = { reviewPolicy: { preset: "fix-everything" } };';
             }
-            return undefined;
+            return null;
         });
-        var stamp = writes.filter(function(w) { return w.path === 'input/TS-90/review_policy.md'; });
-        assert.equal(stamp.length, 1, 'exactly one review_policy.md write, got: ' + JSON.stringify(writes.map(function(w) { return w.path; })));
+        var result = h.module.action({ jobParams: { inputFolderPath: 'input/TS-90', customParams: {} } });
+        assert.notEqual(result, false, 'a valid policy never fails the leg');
+        var stamp = h.writes.filter(function(w) { return w.path === 'input/TS-90/review_policy.md'; });
+        assert.equal(stamp.length, 1, 'exactly one review_policy.md write, got: ' + JSON.stringify(h.writes.map(function(w) { return w.path; })));
         assert.contains(stamp[0].content, 'fix-everything');
     });
 
     test('missing config stamps the built-in default silently', function() {
-        var writes = gh1351Load(null);
-        var stamp = writes.filter(function(w) { return w.path === 'input/TS-90/review_policy.md'; });
+        var h = gh1351Load(null);
+        h.module.action({ jobParams: { inputFolderPath: 'input/TS-90', customParams: {} } });
+        var stamp = h.writes.filter(function(w) { return w.path === 'input/TS-90/review_policy.md'; });
         assert.equal(stamp.length, 1);
         assert.contains(stamp[0].content, 'built-in default');
     });
@@ -848,12 +849,11 @@ suite('prepareTestPRForReview — gh-1351 reviewPolicy: hard validation + run-co
     test('malformed project reviewPolicy fails the leg at setup with the validation message', function() {
         var comments = [];
         var module = loadPrepareTestPRForReview({
-            file_read: function(args) {
+            configLoaderFileRead: function(args) {
                 var p = args && (args.path || args);
                 if (p === '.dmtools/config.js') {
                     return 'module.exports = { reviewPolicy: { severities: { WAT: { round: "rework", fix: "mandatory" } } } };';
                 }
-                if (p && p.indexOf('.dmtools/config') !== -1) return null;
                 return null;
             },
             jira_post_comment: function(args) { comments.push(args.comment); },
