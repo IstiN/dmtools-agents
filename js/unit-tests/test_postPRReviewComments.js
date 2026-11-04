@@ -1607,6 +1607,10 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
             ['pr_approved', 'ai_pr_reviewed'],
             'no rework markers on approval'
         );
+        var summary = h.opsOf('jira.postComment').map(function(o) { return o.comment; }).join('\n');
+        assert.contains(summary, 'Review Policy (built-in default, preset default)',
+            'the policy table is stamped into the review summary — the rework run context traces the verdict to the policy');
+        assert.contains(summary, '| Severity | Round |', 'the table itself rides the summary');
     });
 
     test('IMPORTANT gates approval (gh-1351): allowApproveWithSuggestions cannot approve an open ⚠️', function() {

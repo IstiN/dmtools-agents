@@ -1296,7 +1296,7 @@ function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, 
         // reader can trace the verdict to the policy that produced it.
         if (policy && policy.source !== undefined) {
             comment += m.h(3, 'Review Policy (' + String(policy.source) + (policy.preset ? ', preset ' + policy.preset : '') + ')') + '\n';
-            comment += policyTableMarkdown(policy) + '\n\n';
+            comment += reviewPolicyModule.policyTableBody(policy) + '\n\n';
         }
 
         if (prUrl) {

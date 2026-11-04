@@ -478,12 +478,19 @@ function densityAudit(census, additions, bounds) {
  */
 function policyTableMarkdown(policy) {
     var p = policy || defaultPolicy();
-    var lines = [];
-    lines.push('## Review policy (gh-1351)');
-    lines.push('');
+    var lines = ['## Review policy (gh-1351)', ''];
     lines.push('Preset: `' + p.preset + '` — resolved from: ' + p.source +
         ' (resolution chain: projectConfig.reviewPolicy → workflow jobParams → built-in default).');
     lines.push('');
+    return lines.concat(policyTableBody(p)).join('\n');
+}
+
+/**
+ * Table body without the title — the review summary comment renders its own
+ * heading, so it stamps just the table + bounds + enforcement doctrine.
+ */
+function policyTableBody(p) {
+    var lines = [];
     lines.push('| Severity | Round | Fix | Gates approval |');
     lines.push('|---|---|---|---|');
     for (var i = 0; i < TIERS.length; i++) {
@@ -536,6 +543,7 @@ if (typeof module !== 'undefined' && module.exports) {
         allowedSuggestionThreads: allowedSuggestionThreads,
         densityAudit: densityAudit,
         policyTableMarkdown: policyTableMarkdown,
+        policyTableBody: policyTableBody,
         isReviewPolicyError: isReviewPolicyError
     };
 }

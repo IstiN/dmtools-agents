@@ -22,7 +22,6 @@
     "postJSAction": "agents/js/postPRReviewComments.js",
     "customParams": {
       "removeLabel": "sm_story_review_triggered",
-      "allowApproveWithSuggestions": true,
       "checkOpenPR": true
     },
     "outputSchemas": {
@@ -102,8 +101,10 @@
                   "enum": [
                     "BLOCKING",
                     "IMPORTANT",
-                    "SUGGESTION"
-                  ]
+                    "SUGGESTION",
+                    "NIT"
+                  ],
+                  "description": "4-tier severity (gh-1351). Boundary: a NIT changes nothing behavioral and nothing documented; a SUGGESTION changes clarity of the documented/behavioral surface."
                 }
               }
             }
@@ -113,7 +114,8 @@
             "required": [
               "blocking",
               "important",
-              "suggestion"
+              "suggestion",
+              "nits"
             ],
             "properties": {
               "blocking": {
@@ -123,6 +125,9 @@
                 "type": "integer"
               },
               "suggestion": {
+                "type": "integer"
+              },
+              "nits": {
                 "type": "integer"
               }
             }
