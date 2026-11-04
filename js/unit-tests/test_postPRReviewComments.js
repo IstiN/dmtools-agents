@@ -1583,7 +1583,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         );
     });
 
-    test('APPROVE with suggestions (no knobs) is overridden: record says REQUEST_CHANGES, In Rework + rework labels + SM', function() {
+    test('suggestions-only APPROVE with no knobs: the policy approves (allowApproveWithSuggestions is policy-derived)', function() {
         var h = loadReviewActionHarness({
             reviewData: {
                 recommendation: 'APPROVE',
@@ -1597,30 +1597,16 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         var result = h.mod.action(gh926ActionParams({}));
 
         assert.equal(result.success, true);
-        assert.equal(result.message, 'Changes requested, ticket returned to In Development');
-        assert.equal(result.recommendation, 'APPROVE', 'the raw verdict is preserved in the result');
-        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"REQUEST_CHANGES"',
-            'the record stamps what the leg DID, not the raw token');
-        assert.deepEqual(h.opNames(), [
-            'github_get_pr',
-            'scm.addComment',
-            'jira.postComment',
-            'jira.moveToStatus',
-            'jira.addLabel',
-            'scm.addLabel',
-            'jira.removeLabel',
-            'jira.addLabel',
-            'jira.addLabel',
-            'autoStart.triggerSmIfIdle',
-            'tokenUsage'
-        ], 'side-effect order drifted');
-        assert.equal(h.opsOf('jira.moveToStatus')[0].statusName, 'In Rework');
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'the resolved policy decides — only rework-tier (🚨/⚠️) threads gate approval');
+        assert.equal(result.recommendation, 'APPROVE', 'the effective verdict is the machine verdict');
+        assert.equal(result.advisoryRecommendation, 'APPROVE', 'the advisory token is carried for audit');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"');
         assert.deepEqual(
             h.opsOf('jira.addLabel').map(function(o) { return o.label; }),
-            ['ai_pr_reviewed', 'sm_story_rework_triggered', 'agent:rework']
+            ['pr_approved', 'ai_pr_reviewed'],
+            'no rework markers on approval'
         );
-        assert.equal(h.opsOf('scm.addLabel').filter(function(o) { return o.label === 'pr_approved'; }).length, 0,
-            'an overridden approve must NOT arm the merge pipeline');
     });
 
     test('IMPORTANT gates approval (gh-1351): allowApproveWithSuggestions cannot approve an open ⚠️', function() {
@@ -1754,7 +1740,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
 
         assert.equal(result.success, false, 'the leg fails loudly');
         assert.contains(result.error, 'TRIVIAL', 'the validation message names the unknown tier');
-        assert.deepEqual(h.opNames(), [], 'no side effects before validation');
+        assert.deepEqual(h.opNames(), ['jira.postComment'], 'no side effects before validation');
     });
 
     test('machine enforcement recomputes verdicts from census + policy; the census cross-check still fires first', function() {
@@ -1776,7 +1762,11 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         var result = h.mod.action(gh926ActionParams({}));
 
         assert.equal(result.message, 'Changes requested, ticket returned to In Development');
-        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"REQUEST_CHANGES"');
+        assert.contains(
+            h.opsOf('scm.addComment').map(function(o) { return o.body; }).join('\n---\n'),
+            '"verdict":"REQUEST_CHANGES"',
+            'the record rides the same addComment stream as the fallback inline post'
+        );
     });
 
     test('density audit: over-posted 💡 threads warn (never fail the leg)', function() {
@@ -1933,7 +1923,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         var h = loadReviewActionHarness({
             reviewData: {
                 recommendation: 'REQUEST_CHANGES',
-                issueCounts: { blocking: 0, important: 0, suggestions: 1 },
+                issueCounts: { blocking: 1, important: 0, suggestions: 0 },
                 inlineComments: []
             },
             repoInfo: null

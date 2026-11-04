@@ -1263,7 +1263,7 @@ function postFindingRegistryUpdate(ctx, pr, reviewData) {
  * @param {Object} reviewData - Parsed pr_review.json data
  * @param {string} prUrl - PR URL for linking
  */
-function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl) {
+function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, policy) {
     try {
         const m = commentMarkup.forTicket(ticketKey);
         let comment = m.h(2, '🔍 Automated PR Review Completed') + '\n\n';
@@ -1290,6 +1290,14 @@ function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl) 
         // digest lines the density cap diverted into the general comment.
         comment += '* 🪶 Nits: ' + m.bold(String(issueCounts.nits)) + '\n';
         comment += '* 📋 Digest lines: ' + m.bold(String(issueCounts.digest)) + '\n\n';
+
+        // gh-1351: the resolved reviewPolicy table — stamped into the review
+        // run context (this summary) so the rework leg and every human
+        // reader can trace the verdict to the policy that produced it.
+        if (policy && policy.source !== undefined) {
+            comment += m.h(3, 'Review Policy (' + String(policy.source) + (policy.preset ? ', preset ' + policy.preset : '') + ')') + '\n';
+            comment += policyTableMarkdown(policy) + '\n\n';
+        }
 
         if (prUrl) {
             comment += m.h(3, 'Pull Request') + '\n';
@@ -2574,7 +2582,7 @@ function action(params) {
         }
 
         // Step 6: Post review to the ticket (merge is handled by SM/required reviewers, not by this agent)
-        postReviewToJira(tracker, ctx.ticketKey, ctx.jiraReview, reviewData, pr.url);
+        postReviewToJira(tracker, ctx.ticketKey, ctx.jiraReview, reviewData, pr.url, ctx.reviewPolicy);
 
         // Step 7: Update ticket status based on outcome
         applyTicketOutcome(tracker, ctx.ticketKey, statuses, isApproved, pr, repoInfo);
