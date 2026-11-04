@@ -8,6 +8,17 @@ function smIdleMockOf(moduleMocks) {
         || function() { return { success: true }; };
 }
 
+// reviewSpecClaims requires ./findingRegistry.js (gh-1334) — resolve it the
+// same way the shared loaders in test_postPRReviewComments.js do.
+function loadSpecClaimsWithRegistry() {
+    return loadModule('js/common/reviewSpecClaims.js', makeRequire({
+        './findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': reviewVerdictsReal()
+        }))
+    }), {});
+}
+
 /** gh-1192: optional moduleMocks.configLoader override, else the loader's own. */
 function configLoaderMockOf(moduleMocks, fallback) {
     return (moduleMocks && moduleMocks.configLoader) || fallback;
@@ -119,7 +130,7 @@ var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
-            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
+            './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': reviewHelpersModule,
         }),
         allMocks

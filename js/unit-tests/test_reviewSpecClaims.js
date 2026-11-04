@@ -17,14 +17,26 @@
  *   - AC4: a spec claim WITH a citation keeps full BLOCKING force;
  *   - non-spec findings are untouched (no strictness cut);
  *   - sanitizeReviewData: rewrites bodies, rebalances issueCounts,
- *     collapses REQUEST_CHANGES to APPROVE when no cited blocking remains.
+ *     collapses REQUEST_CHANGES to APPROVE when no cited blocking remains;
+ *   - gh-1334: an uncited claim is verified against the ticket text before
+ *     demotion — a verifiably-present requirement keeps BLOCKING force and
+ *     gets the citation auto-appended; every demotion carries provenance.
  *
  * Uses: test(), suite(), assert — pure module, no dmtools globals.
  */
 /* global suite, test, assert, loadModule, makeRequire */
 
+function loadSpecClaims() {
+    return loadModule('js/common/reviewSpecClaims.js', makeRequire({
+        './findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': reviewVerdictsReal()
+        }))
+    }), {});
+}
+
 suite('reviewSpecClaims — detection (gh-1053)', function () {
-    var rsc = loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {});
+    var rsc = loadSpecClaims();
 
     test('detects "the spec says/requires/exempts ..." assertion families', function () {
         assert.ok(rsc.isExternalSpecClaim('🚨 BLOCKING: the spec says only *_MAX_TOKENS is exempt'), 'spec says');
@@ -69,7 +81,7 @@ suite('reviewSpecClaims — detection (gh-1053)', function () {
 });
 
 suite('reviewSpecClaims — severity classification (gh-1053 AC2/AC3/AC4)', function () {
-    var rsc = loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {});
+    var rsc = loadSpecClaims();
 
     test('AC3: uncited external-spec claim is classified NON-BLOCKING even with a 🚨 marker', function () {
         var body = '🚨 BLOCKING: the spec says only *_MAX_TOKENS and *_TOKEN_LIMIT are exempt — this PR exempts more.';
@@ -120,7 +132,8 @@ suite('reviewSpecClaims — severity classification (gh-1053 AC2/AC3/AC4)', func
         var down = rsc.downgradeBody(body);
         assert.equal(down.indexOf('\uD83D\uDEA8'), -1, '🚨 marker removed');
         assert.ok(down.indexOf('\u26A0') !== -1, '⚠ marker present');
-        assert.equal(down.indexOf('BLOCKING'), -1, 'BLOCKING word demoted');
+        assert.equal(down.split('dmtools:demoted-from-BLOCKING')[0].indexOf('BLOCKING'), -1,
+            'BLOCKING word demoted (outside the machine provenance marker)');
         assert.ok(down.indexOf('IMPORTANT') !== -1, 'IMPORTANT word present');
         assert.ok(down.indexOf('gh-1053') !== -1, 'downgrade note references the rule');
         assert.ok(/confirm/i.test(down), 'asks the author to confirm against the source');
@@ -141,7 +154,7 @@ suite('reviewSpecClaims — severity classification (gh-1053 AC2/AC3/AC4)', func
 });
 
 suite('reviewSpecClaims — sanitizeReviewData (machine-side guard)', function () {
-    var rsc = loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {});
+    var rsc = loadSpecClaims();
 
     test('review output with an uncited spec claim is classified non-blocking (AC3)', function () {
         var review = {
@@ -318,5 +331,286 @@ suite('reviewSpecClaims — sanitizeReviewData (machine-side guard)', function (
         assert.equal(review.issueCounts.blocking, 0);
         assert.equal(review.issueCounts.important, 1);
         assert.equal(review.recommendation, 'APPROVE');
+    });
+});
+
+// ── gh-1334: verify the claim against the ticket before demoting ────────────
+
+suite('reviewSpecClaims — matchClaimInTicket (gh-1334)', function () {
+    var rsc = loadSpecClaims();
+
+    // ticket.md fixture — line 3 carries the 401 requirement (the ticket's
+    // own repro shape: an uncited TRUE claim that today gets demoted).
+    var TICKET_MD = [
+        '# Login service requirements',
+        '',
+        'Invalid login attempts must return HTTP 401 with a structured error body.',
+        'Session tokens expire after 30 minutes of inactivity.',
+        'The legacy proxy answers 503 while the upstream redeploys.',
+        ''
+    ].join('\n');
+
+    test('AC1: an uncited TRUE claim matches the ticket line that carries the requirement', function () {
+        var claim = 'According to the ticket, invalid login must return 401.';
+        var m = rsc.matchClaimInTicket(claim, TICKET_MD);
+        assert.equal(m.outcome, 'yes', 'requirement verifiably present');
+        assert.equal(m.line, 3, 'matched the 401 requirement line');
+        assert.equal(m.citation, 'ticket.md:3', 'citation points at the matched location');
+    });
+
+    test('AC4: paraphrase matched via the status-code anchor + requirement-word overlap', function () {
+        var claim = 'unauthorized access must be rejected with 401';
+        var m = rsc.matchClaimInTicket(claim, TICKET_MD);
+        assert.equal(m.outcome, 'yes', 'anchor-based paraphrase recognition');
+        assert.equal(m.citation, 'ticket.md:3');
+    });
+
+    test('AC2: a claim the ticket does not make is confidently absent', function () {
+        var claim = 'According to the ticket, audit logs must be retained for 7 years.';
+        var m = rsc.matchClaimInTicket(claim, TICKET_MD);
+        assert.equal(m.outcome, 'no', 'no anchor and no requirement-word overlap anywhere');
+        assert.equal(m.line, null);
+        assert.equal(m.citation, null);
+    });
+
+    test('anchor present in the ticket but not attached to the requirement → inconclusive', function () {
+        var ticket = [
+            '# Billing API',
+            '',
+            'The health probe answers HTTP 401 when unauthenticated.',
+            'Invoices are generated nightly at 02:00.',
+            ''
+        ].join('\n');
+        var claim = 'According to the ticket, login failures are reported with status 401 and an audit event.';
+        var m = rsc.matchClaimInTicket(claim, ticket);
+        assert.equal(m.outcome, 'inconclusive',
+            '401 exists in the ticket but never with this requirement — not decidable mechanically');
+    });
+
+    test('paraphrase outside anchor coverage → inconclusive (never auto-escalate)', function () {
+        var claim = 'the spec says retries are expected';
+        var m = rsc.matchClaimInTicket(claim, TICKET_MD);
+        assert.equal(m.outcome, 'inconclusive', 'thin claim, no anchors — cannot decide');
+    });
+
+    test('unavailable ticket text → inconclusive (never demote harder than today)', function () {
+        var claim = 'According to the ticket, invalid login must return 401.';
+        assert.equal(rsc.matchClaimInTicket(claim, null).outcome, 'inconclusive', 'null text');
+        assert.equal(rsc.matchClaimInTicket(claim, '').outcome, 'inconclusive', 'empty text');
+        assert.equal(rsc.matchClaimInTicket(claim, '   \n  ').outcome, 'inconclusive', 'blank text');
+    });
+
+    test('the citation names the file the text came from', function () {
+        var m = rsc.matchClaimInTicket('According to the ticket, invalid login must return 401.', TICKET_MD,
+            { ticketFile: 'request.md' });
+        assert.equal(m.citation, 'request.md:3');
+    });
+
+    test('empty claim → inconclusive without crashing', function () {
+        assert.equal(rsc.matchClaimInTicket('', TICKET_MD).outcome, 'inconclusive');
+        assert.equal(rsc.matchClaimInTicket(null, TICKET_MD).outcome, 'inconclusive');
+    });
+});
+
+suite('reviewSpecClaims — demotion provenance marker (gh-1334)', function () {
+    var rsc = loadSpecClaims();
+
+    test('marker payload carries round (when known), reason and claimMatchedTicket in that order', function () {
+        assert.equal(rsc.demotionMarker({ round: 2, claimMatchedTicket: 'no' }),
+            '<!-- dmtools:demoted-from-BLOCKING {"round":2,"reason":"missing-citation","claimMatchedTicket":"no"} -->');
+    });
+
+    test('round is omitted when unknown; claimMatchedTicket defaults to inconclusive', function () {
+        assert.equal(rsc.demotionMarker(undefined),
+            '<!-- dmtools:demoted-from-BLOCKING {"reason":"missing-citation","claimMatchedTicket":"inconclusive"} -->');
+        assert.equal(rsc.demotionMarker({}),
+            '<!-- dmtools:demoted-from-BLOCKING {"reason":"missing-citation","claimMatchedTicket":"inconclusive"} -->');
+    });
+
+    test('downgradeBody appends the machine marker after the confirm note', function () {
+        var down = rsc.downgradeBody('🚨 BLOCKING: the spec says X is forbidden.', { claimMatchedTicket: 'no' });
+        assert.ok(down.indexOf('dmtools:demoted-from-BLOCKING {"reason":"missing-citation","claimMatchedTicket":"no"}') !== -1,
+            'marker present with claimMatchedTicket no');
+        assert.ok(/confirm/i.test(down), 'confirm note still present');
+        assert.equal(down.indexOf('\uD83D\uDEA8'), -1, '🚨 still removed');
+        assert.ok(down.indexOf('dmtools:demoted-from-BLOCKING') > down.indexOf('regains blocking force'),
+            'marker comes after the note');
+    });
+
+    test('default downgradeBody (no provenance) stamps the inconclusive marker', function () {
+        var down = rsc.downgradeBody('🚨 BLOCKING: the spec says X.');
+        assert.ok(down.indexOf('"claimMatchedTicket":"inconclusive"') !== -1);
+    });
+});
+
+suite('reviewSpecClaims — classifyFindingSeverity with ticket verification (gh-1334)', function () {
+    var rsc = loadSpecClaims();
+
+    var TICKET_MD = [
+        '# Login service requirements',
+        '',
+        'Invalid login attempts must return HTTP 401 with a structured error body.',
+        ''
+    ].join('\n');
+
+    var TRUE_CLAIM = '🚨 BLOCKING: According to the ticket, invalid login must return 401.';
+    var FALSE_CLAIM = '🚨 BLOCKING: According to the ticket, audit logs must be retained for 7 years.';
+
+    test('AC1: requirement present in the ticket → keeps BLOCKING with the verified citation', function () {
+        var result = rsc.classifyFindingSeverity(TRUE_CLAIM, 'BLOCKING', { ticketText: TICKET_MD });
+        assert.equal(result.severity, 'blocking', 'no demotion for a verifiably true claim');
+        assert.ok(result.blocking);
+        assert.ok(!result.downgraded);
+        assert.ok(result.claimVerified, 'verification outcome exposed');
+        assert.equal(result.citation, 'ticket.md:3');
+    });
+
+    test('AC2: claim absent from the ticket → demoted with claimMatchedTicket no', function () {
+        var result = rsc.classifyFindingSeverity(FALSE_CLAIM, 'BLOCKING', { ticketText: TICKET_MD });
+        assert.equal(result.severity, 'important');
+        assert.ok(!result.blocking);
+        assert.ok(result.downgraded);
+        assert.equal(result.claimMatchedTicket, 'no');
+    });
+
+    test('no ticket text → demoted as today with claimMatchedTicket inconclusive', function () {
+        var result = rsc.classifyFindingSeverity(TRUE_CLAIM, 'BLOCKING', {});
+        assert.ok(result.downgraded);
+        assert.equal(result.claimMatchedTicket, 'inconclusive');
+    });
+
+    test('AC3: a cited claim never consults the ticket and stays BLOCKING', function () {
+        var cited = '🚨 BLOCKING: the ticket requires a 401 (ticket.md:99-nothing-like-this) — the PR omits it.';
+        var result = rsc.classifyFindingSeverity(cited, 'BLOCKING', { ticketText: '' });
+        assert.equal(result.severity, 'blocking');
+        assert.ok(!result.downgraded);
+        assert.ok(!result.claimVerified, 'no verification ran — citation already present');
+    });
+});
+
+suite('reviewSpecClaims — sanitizeReviewData with ticket verification (gh-1334)', function () {
+    var rsc = loadSpecClaims();
+
+    var TICKET_MD = [
+        '# Login service requirements',
+        '',
+        'Invalid login attempts must return HTTP 401 with a structured error body.',
+        ''
+    ].join('\n');
+
+    test('AC1/AC6: verified claim keeps BLOCKING, census untouched, citation auto-appended', function () {
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/auth.js', line: 12, severity: 'BLOCKING',
+                  body: '🚨 BLOCKING: According to the ticket, invalid login must return 401.' }
+            ]
+        };
+        var result = rsc.sanitizeReviewData(review, null, { ticketText: TICKET_MD });
+        assert.equal(result.downgrades, 0, 'no demotion for a verifiably true claim');
+        assert.equal(result.census, 0, 'keep-BLOCKING leaves the census untouched');
+        assert.equal(review.inlineComments[0].severity, 'BLOCKING', 'severity field unchanged');
+        assert.ok(review.inlineComments[0].body.indexOf('ticket.md:3') !== -1, 'citation auto-appended');
+        assert.equal(review.issueCounts.blocking, 1, 'blocking census intact');
+        assert.equal(review.recommendation, 'REQUEST_CHANGES', 'verdict stands');
+        assert.equal(result.citations.length, 1, 'citation recorded');
+        assert.equal(result.citations[0].citation, 'ticket.md:3');
+        assert.equal(result.citations[0].path, 'src/auth.js');
+        assert.deepEqual(result.demotions, [], 'nothing demoted');
+    });
+
+    test('AC2: claim absent from ticket → demoted, provenance stamped on body, entry and result', function () {
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/env.js', line: 1, severity: 'BLOCKING',
+                  body: '🚨 BLOCKING: According to the ticket, audit logs must be retained for 7 years.' }
+            ]
+        };
+        var result = rsc.sanitizeReviewData(review, null, { ticketText: TICKET_MD });
+        assert.equal(result.downgrades, 1);
+        assert.equal(review.issueCounts.blocking, 0, 'demotion still drains the census');
+        assert.equal(review.recommendation, 'APPROVE');
+        assert.ok(review.inlineComments[0].body.indexOf(
+            'dmtools:demoted-from-BLOCKING {"reason":"missing-citation","claimMatchedTicket":"no"}') !== -1,
+            'machine-parsed marker on the posted thread');
+        assert.deepEqual(review.inlineComments[0].demotion,
+            { reason: 'missing-citation', claimMatchedTicket: 'no' },
+            'registry callers read the provenance off the entry');
+        assert.deepEqual(result.demotions, [
+            { path: 'src/env.js', line: 1, claimMatchedTicket: 'no', reason: 'missing-citation' }
+        ]);
+    });
+
+    test('no ticket text → demotion stamps claimMatchedTicket inconclusive', function () {
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/a.js', line: 3, severity: 'BLOCKING', body: 'the spec says X is forbidden.' }
+            ]
+        };
+        var result = rsc.sanitizeReviewData(review, null);
+        assert.equal(result.downgrades, 1);
+        assert.equal(result.demotions[0].claimMatchedTicket, 'inconclusive');
+        assert.ok(review.inlineComments[0].body.indexOf('"claimMatchedTicket":"inconclusive"') !== -1);
+    });
+
+    test('AC6 both directions: verified + demoted findings in one review', function () {
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 2, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/auth.js', line: 12, severity: 'BLOCKING',
+                  body: '🚨 BLOCKING: According to the ticket, invalid login must return 401.' },
+                { path: 'src/env.js', line: 4, severity: 'BLOCKING',
+                  body: '🚨 BLOCKING: According to the ticket, audit logs must be retained for 7 years.' }
+            ]
+        };
+        var result = rsc.sanitizeReviewData(review, null, { ticketText: TICKET_MD });
+        assert.equal(result.downgrades, 1, 'only the absent claim demoted');
+        assert.equal(review.issueCounts.blocking, 1, 'verified finding holds the census');
+        assert.equal(review.issueCounts.important, 1);
+        assert.equal(review.recommendation, 'REQUEST_CHANGES', 'a real (verified) blocker remains');
+        assert.equal(result.demotions.length, 1);
+        assert.equal(result.citations.length, 1);
+    });
+
+    test('comment-file reference with a verified claim → rewrite carries the citation, census untouched', function () {
+        var files = {
+            'outputs/pr_review_comments/v.md':
+                '🚨 BLOCKING: According to the ticket, invalid login must return 401.'
+        };
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/auth.js', line: 9, comment: 'outputs/pr_review_comments/v.md' }
+            ]
+        };
+        var result = rsc.sanitizeReviewData(review, function (p) { return files[p] || ''; },
+            { ticketText: TICKET_MD });
+        assert.equal(result.downgrades, 0);
+        assert.equal(result.census, 0);
+        assert.equal(result.rewrites.length, 1, 'file rewrite planned');
+        assert.ok(result.rewrites[0].content.indexOf('ticket.md:3') !== -1, 'citation in the rewritten file');
+        assert.ok(result.rewrites[0].content.indexOf('\uD83D\uDEA8') === 0, 'blocking marker preserved');
+        assert.equal(review.recommendation, 'REQUEST_CHANGES');
+        assert.equal(result.citations.length, 1);
+    });
+
+    test('opts.round flows into the demotion marker payload', function () {
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/a.js', line: 1, severity: 'BLOCKING', body: 'the spec says X is forbidden.' }
+            ]
+        };
+        rsc.sanitizeReviewData(review, null, { round: 3 });
+        assert.ok(review.inlineComments[0].body.indexOf(
+            'dmtools:demoted-from-BLOCKING {"round":3,"reason":"missing-citation"') !== -1);
     });
 });

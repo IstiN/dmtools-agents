@@ -408,11 +408,25 @@ function reanchorLine(item, finding) {
     if (line) item.lastLine = line;
 }
 
+// gh-1334: the spec-claim guard stamps demotions ({reason, claimMatchedTicket}).
+// The first demotion provenance sticks — the identity is known demoted-from-
+// BLOCKING from then on, so later rounds re-elevate it WITH a citation
+// instead of treating it as news.
+function recordDemotionProvenance(item, finding, round) {
+    if (!finding || !finding.demotion || item.demotion) return;
+    item.demotion = {
+        reason: String(finding.demotion.reason || 'missing-citation'),
+        claimMatchedTicket: String(finding.demotion.claimMatchedTicket || 'inconclusive')
+    };
+    item.history.push(historyEntry(round, 'demotion-recorded'));
+}
+
 // Merges a re-raised/confirmed finding into an open identity: severity can
 // only escalate (invariant 2), a later-round re-raise of an open identity is
 // the re-introduced transition.
 function mergeIntoItem(item, finding, round, at, note) {
     var via = note || 're-raise';
+    recordDemotionProvenance(item, finding, round);
     escalateSeverity(item, finding, round);
     if (round > (item.raisedRound || 0) && item.status === STATUS_OPEN) {
         item.status = STATUS_REINTRODUCED;
@@ -442,6 +456,10 @@ function createIdentity(registry, finding, round, at) {
         fixHunk: null,
         withdrawReason: null,
         resolvedAt: null,
+        demotion: (finding && finding.demotion) ? {
+            reason: String(finding.demotion.reason || 'missing-citation'),
+            claimMatchedTicket: String(finding.demotion.claimMatchedTicket || 'inconclusive')
+        } : null,
         history: [historyEntry(round, 'raised')]
     };
     registry.items.push(item);
@@ -553,6 +571,10 @@ function queueCandidate(reg, f, ranked, round, at) {
         reg.pending.push({
             file: fileOf(f), claim: claim, severity: severityClassOf(f.severity),
             line: lineOf(f), similarity: r.similarity, proposedFor: r.item.n,
+            demotion: (f && f.demotion) ? {
+                reason: String(f.demotion.reason || 'missing-citation'),
+                claimMatchedTicket: String(f.demotion.claimMatchedTicket || 'inconclusive')
+            } : null,
             round: round, at: at
         });
     });
@@ -819,6 +841,20 @@ function blockingWithdrawals(items) {
     });
 }
 
+// gh-1334: every identity carrying demotion provenance — the owner sees the
+// demotion history (and the reviewer sees the re-elevation path) alongside
+// the per-round new-identity counts.
+function demotionRecords(items) {
+    return items.filter(function(i) { return !!i.demotion; }).map(function(i) {
+        return {
+            n: i.n, id: i.id, file: i.file, severity: i.severity, claim: i.claim,
+            reason: i.demotion.reason || 'missing-citation',
+            claimMatchedTicket: i.demotion.claimMatchedTicket || 'inconclusive',
+            status: i.status
+        };
+    });
+}
+
 function buildEscalationPacket(registry) {
     var rounds = arrayOrEmpty(registry && registry.rounds);
     var items = arrayOrEmpty(registry && registry.items);
@@ -826,7 +862,8 @@ function buildEscalationPacket(registry) {
         rounds: rounds.map(function(r) {
             return { round: r.round, newIdentities: r.newIdentities || 0 };
         }),
-        blockingWithdrawals: blockingWithdrawals(items)
+        blockingWithdrawals: blockingWithdrawals(items),
+        demotions: demotionRecords(items)
     };
 }
 
@@ -843,6 +880,11 @@ function buildEscalationPacketComment(registry) {
     packet.blockingWithdrawals.forEach(function(w) {
         lines.push('\uD83D\uDEA8 F' + w.n + ' (' + w.severity + ') ' + w.file +
             ' \u2014 withdrawn: "' + reviewVerdicts.markerSafe(w.reason) + '" (no fixing hunk cited)');
+    });
+    packet.demotions.forEach(function(d) {
+        lines.push('\u26A0\uFE0F F' + d.n + ' (' + d.file + ') demoted from BLOCKING \u2014 ' +
+            d.reason + ', claimMatchedTicket: ' + d.claimMatchedTicket +
+            ' (gh-1334; a cited re-raise re-elevates it)');
     });
     return lines.join('\n');
 }
@@ -870,6 +912,14 @@ function buildFindingsInjection(registry) {
     lines.push('|----|--------|----------|------|-------|');
     open.forEach(function(i) {
         lines.push('| F' + i.n + ' | ' + i.status + ' | ' + i.severity + ' | ' + i.file + ' | ' + i.claim + ' |');
+    });
+    open.forEach(function(i) {
+        if (!i.demotion) return;
+        lines.push('');
+        lines.push('- F' + i.n + ' was demoted from BLOCKING (' + (i.demotion.reason || 'missing-citation') +
+            ', claimMatchedTicket: ' + (i.demotion.claimMatchedTicket || 'inconclusive') + '). If your new finding ' +
+            'is this same defect, locate the requirement in the ticket and cite it (e.g. `ticket.md:3`), then confirm ' +
+            '"same as F' + i.n + '" \u2014 a confirmed merge re-elevates the identity to BLOCKING (merges only escalate).');
     });
     if (pending.length) {
         lines.push('');

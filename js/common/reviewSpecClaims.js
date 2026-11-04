@@ -39,10 +39,36 @@
  * BEFORE any verdict, census, or comment body is derived from it, so an
  * uncited spec claim can no longer arm rework or hold a green PR hostage.
  *
+ * gh-1334 — verify the claim against the ticket before demoting: the
+ * gh-1053 rule checked whether the claim is FORMATTED (cited), not whether
+ * it is TRUE. An uncited true claim ("According to the ticket, invalid
+ * login must return 401") was mechanically demoted and real spec drift
+ * could merge. The demotion path now compares the claim against the ticket
+ * text the review run already has (opts.ticketText):
+ *   - requirement verifiably present  → KEEP BLOCKING + auto-append the
+ *     matched citation (e.g. `ticket.md:3`) — a well-formed BLOCKING for
+ *     downstream triage, census untouched;
+ *   - absent / contradicted           → demote as today;
+ *   - inconclusive (thin claim, anchor detached, no ticket text) → demote
+ *     as today. Never auto-escalate on a mismatch.
+ * Every demotion stamps the posted body and the inline entry with a
+ * machine-parsed provenance marker (`dmtools:demoted-from-BLOCKING
+ * {round, reason: missing-citation, claimMatchedTicket}`) — the
+ * finding-identity registry (gh-1332) and the escalation packets surface
+ * it so a later round re-elevates WITH a citation instead of treating a
+ * known defect as news. The module's own doctrine rules the bias: a wrong
+ * "keep BLOCKING" costs one rework lap; a missed real BLOCKING ships a
+ * defect.
+ *
  * Pure module — no dmtools globals. Keep it GraalJS-clean (var + plain
  * functions, JSON-safe data only).
  */
 'use strict';
+
+// Claim normalization/content-word extraction is the gh-1332 registry's
+// (#1332) — the same style the ticket mandates for the match heuristics,
+// so the two consumers never drift apart.
+var findingRegistry = require('./findingRegistry.js');
 
 // A verifiable citation: a file:line reference (Policy.java:61-66,
 // ticket.md:12) or a `#L`-style line anchor (Policy.java#L61,
@@ -194,33 +220,208 @@ function downgradeNote(originalBody) {
         'a verifiable citation and it regains blocking force.';
 }
 
-function downgradeBody(body) {
-    var text = String(body || '');
-    var out = text.replace(/\uD83D\uDEA8/g, '\u26A0\uFE0F');
-    out = out.replace(/(^|[^\w-])BLOCKING\b/gi, '$1IMPORTANT');
-    return out + '\n' + downgradeNote(text);
+// ── gh-1334: ticket-grounded claim verification ──────────────────────────────
+//
+// Cheap, deterministic, no LLM call: normalize the claim (gh-1332 style) and
+// scan the ticket text line by line. Strong anchors get priority — status
+// codes (401, 403) and quoted strings survive paraphrase; the paraphrase
+// tolerance comes from the anchors plus requirement-word overlap, not from
+// any semantic understanding.
+
+// Anchor = a status-code-grade number (2+ digits — 401, 503, 30) or a
+// quoted string. Single digits are noise (list indexes, footnote marks).
+var TICKET_ANCHOR_NUMBER_RE = /\d{2,}/g;
+var TICKET_QUOTED_RE = /"([^"]{2,120})"/g;
+
+// An anchor match still needs requirement-word company (overlap coefficient
+// on the claim's content words) — a bare "401" in an unrelated line must not
+// confirm a claim. A line that shares ≥60% of the smaller word set matches
+// without anchors (near-identical requirement text).
+var TICKET_ANCHOR_MIN_WORD_OVERLAP = 0.2;
+var TICKET_WORD_MATCH_MIN_OVERLAP = 0.6;
+
+// Below this many content words (and without anchors) a claim is too thin
+// to declare confidently absent — the mechanical match abstains.
+var TICKET_MIN_CLAIM_WORDS = 3;
+
+// Attribution vocabulary of the spec-claim phrase itself — it says WHERE the
+// requirement is claimed to live, not what the requirement is. Left in, it
+// would inflate overlap against ticket lines mentioning the ticket.
+var CLAIM_SOURCE_NOISE = {
+    'spec': 1, 'specs': 1, 'specification': 1, 'specifications': 1,
+    'ticket': 1, 'tickets': 1, 'doc': 1, 'docs': 1, 'documentation': 1,
+    'reference': 1, 'standard': 1, 'source': 1,
+    'according': 1, 'says': 1, 'states': 1, 'stating': 1, 'saying': 1
+};
+
+function inconclusiveMatch() {
+    return { outcome: 'inconclusive', line: null, citation: null };
+}
+
+/** The claim's requirement words: attribution phrase and source nouns dropped. */
+function claimWordsForMatch(claim) {
+    var text = String(claim || '');
+    var phrase = findSpecClaimPhrase(text);
+    if (phrase) text = text.replace(phrase, '');
+    var words = findingRegistry.contentWords(findingRegistry.normalizeClaim(text));
+    return words.filter(function(w) { return !CLAIM_SOURCE_NOISE[w]; });
+}
+
+// Anchor tokens of one text: 2+ digit numbers and normalized quoted strings,
+// keyed (quoted strings keep spaces — they are matched by containment).
+function anchorTokensOf(text) {
+    var t = String(text || '');
+    var anchors = {};
+    var m;
+    TICKET_ANCHOR_NUMBER_RE.lastIndex = 0;
+    while ((m = TICKET_ANCHOR_NUMBER_RE.exec(t)) !== null) anchors[m[0]] = true;
+    TICKET_QUOTED_RE.lastIndex = 0;
+    while ((m = TICKET_QUOTED_RE.exec(t)) !== null) {
+        var q = findingRegistry.normalizeClaim(m[1]);
+        if (q) anchors[q] = 'quoted';
+    }
+    TICKET_ANCHOR_NUMBER_RE.lastIndex = 0;
+    TICKET_QUOTED_RE.lastIndex = 0;
+    return anchors;
+}
+
+function numberTokensOf(normalizedText) {
+    var numbers = {};
+    var m;
+    TICKET_ANCHOR_NUMBER_RE.lastIndex = 0;
+    while ((m = TICKET_ANCHOR_NUMBER_RE.exec(normalizedText)) !== null) numbers[m[0]] = true;
+    TICKET_ANCHOR_NUMBER_RE.lastIndex = 0;
+    return numbers;
+}
+
+function anchorCountOnLine(claimAnchors, normalizedLine, lineNumbers) {
+    var count = 0;
+    for (var a in claimAnchors) {
+        if (claimAnchors[a] === 'quoted') {
+            if (normalizedLine.indexOf(a) !== -1) count++;
+        } else if (lineNumbers[a]) {
+            count++;
+        }
+    }
+    return count;
 }
 
 /**
- * Classifies one finding's effective severity (pure — gh-1053 AC2–AC4).
- * severity — the structured severity field ('BLOCKING'/'IMPORTANT'/...),
- * may be absent: the 🚨 marker / BLOCKING word in the body carries blocking
- * force on its own (that is what the machine cross-checks per
- * instructions/pr_review/review_verdict_rules.md).
+ * gh-1334: is the claim's asserted requirement verifiably present in the
+ * ticket text? outcome 'yes' — a line matched (line = 1-based, citation =
+ * '<ticketFile>:<line>'); 'no' — the ticket text was available and the
+ * mechanical comparison confidently misses (no anchor anywhere, requirement
+ * words without a near-identical line); 'inconclusive' — no ticket text,
+ * thin claim, or the claim's anchors exist in the ticket detached from the
+ * requirement (never auto-escalate on a mismatch).
+ */
+function matchClaimInTicket(claim, ticketText, opts) {
+    var text = ticketText == null ? '' : String(ticketText);
+    var file = (opts && opts.ticketFile) || 'ticket.md';
+    if (!text.trim()) return inconclusiveMatch();
+    var claimWords = claimWordsForMatch(claim);
+    var claimAnchors = anchorTokensOf(String(claim || ''));
+    var lines = text.split('\n');
+    var best = null;
+    var anchorSeenSomewhere = false;
+    for (var i = 0; i < lines.length; i++) {
+        var norm = findingRegistry.normalizeClaim(lines[i]);
+        if (!norm) continue;
+        var lineWords = findingRegistry.contentWords(norm);
+        var lineSet = {};
+        lineWords.forEach(function(w) { lineSet[w] = true; });
+        var inter = 0;
+        for (var j = 0; j < claimWords.length; j++) {
+            if (lineSet[claimWords[j]]) inter++;
+        }
+        var overlap = (claimWords.length && lineWords.length)
+            ? inter / Math.min(claimWords.length, lineWords.length) : 0;
+        var anchorCount = anchorCountOnLine(claimAnchors, norm, numberTokensOf(norm));
+        if (anchorCount > 0) anchorSeenSomewhere = true;
+        var matched = (anchorCount > 0 && overlap >= TICKET_ANCHOR_MIN_WORD_OVERLAP) ||
+            overlap >= TICKET_WORD_MATCH_MIN_OVERLAP;
+        if (!matched) continue;
+        if (!best || anchorCount > best.anchorCount ||
+            (anchorCount === best.anchorCount && overlap > best.overlap)) {
+            best = { anchorCount: anchorCount, overlap: overlap, line: i + 1 };
+        }
+    }
+    if (best) {
+        return { outcome: 'yes', line: best.line, citation: file + ':' + best.line };
+    }
+    if (anchorSeenSomewhere) return inconclusiveMatch();
+    var hasAnchors = false;
+    for (var a in claimAnchors) {
+        hasAnchors = true;
+        break;
+    }
+    if (claimWords.length >= TICKET_MIN_CLAIM_WORDS || hasAnchors) {
+        return { outcome: 'no', line: null, citation: null };
+    }
+    return inconclusiveMatch();
+}
+
+// ── gh-1334: demotion provenance marker (consumed by the gh-1332 registry) ───
+
+var DEMOTION_MARKER_PREFIX = '<!-- dmtools:demoted-from-BLOCKING ';
+var DEMOTION_MARKER_SUFFIX = ' -->';
+
+/**
+ * The machine-parsed provenance stamp: the reason and whether the claim
+ * matched the ticket, so the registry can re-elevate a demoted finding with
+ * a citation later instead of treating a known defect as news. Round is
+ * included only when the caller knows it (the sanitizer runs before the
+ * registry round is numbered).
+ */
+function demotionMarker(provenance) {
+    var payload = {};
+    var round = provenance ? parseInt(provenance.round, 10) : NaN;
+    if (round > 0) payload.round = round;
+    payload.reason = 'missing-citation';
+    payload.claimMatchedTicket = (provenance && provenance.claimMatchedTicket) || 'inconclusive';
+    return DEMOTION_MARKER_PREFIX + JSON.stringify(payload) + DEMOTION_MARKER_SUFFIX;
+}
+
+function downgradeBody(body, provenance) {
+    var text = String(body || '');
+    var out = text.replace(/\uD83D\uDEA8/g, '\u26A0\uFE0F');
+    out = out.replace(/(^|[^\w-])BLOCKING\b/gi, '$1IMPORTANT');
+    return out + '\n' + downgradeNote(text) + '\n' + demotionMarker(provenance);
+}
+
+/**
+ * Classifies one finding's effective severity (pure — gh-1053 AC2–AC4,
+ * gh-1334 verification). severity — the structured severity field
+ * ('BLOCKING'/'IMPORTANT'/...), may be absent: the 🚨 marker / BLOCKING word
+ * in the body carries blocking force on its own (that is what the machine
+ * cross-checks per instructions/pr_review/review_verdict_rules.md).
+ * opts.ticketText / opts.ticketFile — the ticket text the review run has
+ * (input/TICKET/); when present, an uncited claim is verified against it
+ * BEFORE the demotion.
  *
- * Returns { severity, blocking, downgraded }:
- *   - uncited external-spec claim as the core claim → severity
- *     'important', blocking false, downgraded true (AC2/AC3);
- *   - anything else → unchanged (AC4 — cited spec claims and ordinary
- *     findings keep full BLOCKING force; incidental spec mentions in a
- *     code-level defect finding keep blocking force too).
+ * Returns { severity, blocking, downgraded } plus, on the gh-1334 paths:
+ *   - claim present in the ticket → { ..., claimVerified: true, citation }
+ *     (KEEP BLOCKING — the caller auto-appends the citation);
+ *   - demoted → { ..., claimMatchedTicket: 'yes'|'no'|'inconclusive' }
+ *     ('yes' here means the anchor was seen but the line did not qualify —
+ *     the mismatch cases demote exactly as today, never escalate).
  */
 function classifyFindingSeverity(body, severity, opts) {
     var text = String(body || '');
     var sev = String(severity || '').toLowerCase();
     var blocking = sev === 'blocking' || BLOCKING_MARKER_RE.test(text);
     if (blocking && isUncitedSpecClaim(text, opts)) {
-        return { severity: 'important', blocking: false, downgraded: true };
+        var match = matchClaimInTicket(coreClaimText(text), opts && opts.ticketText, opts);
+        if (match.outcome === 'yes') {
+            return {
+                severity: 'blocking', blocking: true, downgraded: false,
+                claimVerified: true, citation: match.citation
+            };
+        }
+        return {
+            severity: 'important', blocking: false, downgraded: true,
+            claimMatchedTicket: match.outcome
+        };
     }
     return { severity: blocking ? 'blocking' : sev, blocking: blocking, downgraded: false };
 }
@@ -248,9 +449,13 @@ function planRewrite(out, commentPath, content) {
     return true;
 }
 
-function applyDemotion(c, resolved, out) {
-    var newBody = downgradeBody(resolved.body);
+function applyDemotion(c, resolved, out, provenance) {
+    var newBody = downgradeBody(resolved.body, provenance);
     c.severity = 'IMPORTANT';
+    c.demotion = {
+        reason: 'missing-citation',
+        claimMatchedTicket: (provenance && provenance.claimMatchedTicket) || 'inconclusive'
+    };
     var censusMove = false;
     if (resolved.inline) {
         if (resolved.body) c.body = newBody;
@@ -259,17 +464,48 @@ function applyDemotion(c, resolved, out) {
         censusMove = planRewrite(out, c.comment, newBody);
     }
     if (censusMove) out.census++;
+    out.demotions.push({
+        path: String(c.path || c.file || '?'), line: c.line || null,
+        claimMatchedTicket: c.demotion.claimMatchedTicket, reason: 'missing-citation'
+    });
     out.notes.push('inline comment on ' + String(c.path || c.file || '?') +
-        ' downgraded BLOCKING → IMPORTANT: uncited external-spec claim (gh-1053)');
+        ' downgraded BLOCKING → IMPORTANT: uncited external-spec claim (gh-1053)' +
+        ' [gh-1334 claimMatchedTicket: ' + c.demotion.claimMatchedTicket + ']');
+}
+
+/**
+ * gh-1334 AC1: the uncited claim's requirement is verifiably present in the
+ * ticket — the finding keeps BLOCKING force and gets the matched citation
+ * appended so the posted thread is well-formed for downstream triage and
+ * the census cross-check stays clean (no census move).
+ */
+function applyCitationAppend(c, resolved, citation, out) {
+    var target = String(c.path || c.file || '?');
+    if (resolved.inline && resolved.body) {
+        c.body = appendCitationToBody(resolved.body, citation);
+    } else if (resolved.fromFile && c.comment) {
+        planRewrite(out, c.comment, appendCitationToBody(resolved.body, citation));
+    }
+    out.citations.push({ path: target, line: c.line || null, citation: citation });
+    out.notes.push('inline comment on ' + target +
+        ' kept BLOCKING: claim verified against ' + citation +
+        ' (gh-1334) — citation auto-appended');
 }
 
 function sanitizeOneComment(c, readText, opts, out) {
     var entry = c || {};
     var resolved = resolveCommentBody(entry, readText);
     var verdict = classifyFindingSeverity(resolved.body, entry.severity, opts);
+    if (verdict.claimVerified) {
+        applyCitationAppend(entry, resolved, verdict.citation, out);
+        return;
+    }
     if (!verdict.downgraded) return;
     out.downgrades++;
-    applyDemotion(entry, resolved, out);
+    applyDemotion(entry, resolved, out, {
+        claimMatchedTicket: verdict.claimMatchedTicket,
+        round: opts && opts.round
+    });
 }
 
 function collapseVerdictIfClean(reviewData, counts, out) {
@@ -292,20 +528,36 @@ function rebalanceReviewData(reviewData, out) {
     collapseVerdictIfClean(reviewData, counts, out);
 }
 
+function appendCitationToBody(body, citation) {
+    var text = String(body || '');
+    return text + '\nSource: ' + citation +
+        ' — requirement verified against the ticket text (gh-1334 citation auto-append).';
+}
+
 /**
  * Sanitizes an agent's pr_review.json BEFORE the machine derives verdicts,
- * census, or posted bodies from it (gh-1053 machine-side guard).
+ * census, or posted bodies from it (gh-1053 machine-side guard, extended by
+ * gh-1334).
  *
  * reviewData — the parsed pr_review.json object; mutated in place.
  * readText — OPTIONAL resolver for comment-file references
  *   (inlineComment.comment → markdown text); when omitted, file-referenced
  *   comments are inspected by their reference string only.
- * opts — OPTIONAL { trustedDocHosts: [...] } overriding the default doc
- *   URL hosts accepted as citations.
+ * opts — OPTIONAL { trustedDocHosts: [...], ticketText, ticketFile, round }:
+ *   trustedDocHosts overrides the default doc URL hosts accepted as
+ *   citations; ticketText/ticketFile carry the ticket text the review run
+ *   has (input/TICKET/) for gh-1334 verification; round (when known) is
+ *   stamped into the demotion provenance marker.
  *
  * For every inline finding whose core claim is an uncited external-spec
  * assertion:
- *   - severity field demoted to IMPORTANT;
+ *   - gh-1334: the claim verified against the ticket text — requirement
+ *     present → severity kept BLOCKING and the matched citation (e.g.
+ *     `ticket.md:3`) appended to the body (inline) or planned as a rewrite
+ *     (comment file); census UNTOUCHED;
+ *   - absent / inconclusive → severity field demoted to IMPORTANT;
+ *   - every demotion stamps the body with the `dmtools:demoted-from-BLOCKING`
+ *     marker and the inline entry with the structured `demotion` field;
  *   - inline bodies rewritten in place; file-referenced comments are NOT
  *     written here (pure module) — a rewrite { path, content } is returned
  *     for the caller to apply (once per physical comment file);
@@ -315,13 +567,14 @@ function rebalanceReviewData(reviewData, out) {
  *     collapses to APPROVE — matching the verdict-mapping table (no 🚨
  *     BLOCKING ⇒ APPROVE) so an uncited claim cannot arm rework.
  *
- * Returns { downgrades, census, notes, rewrites } — downgrades counts
- * demoted findings, census the census moves applied (≤ downgrades when one
- * file is referenced twice); notes are human-readable, observable in the
- * workflow log.
+ * Returns { downgrades, census, notes, rewrites, demotions, citations } —
+ * downgrades counts demoted findings, census the census moves applied
+ * (≤ downgrades when one file is referenced twice), demotions the per-entry
+ * provenance records, citations the keep-BLOCKING auto-appends; notes are
+ * human-readable, observable in the workflow log.
  */
 function sanitizeReviewData(reviewData, readText, opts) {
-    var out = { downgrades: 0, census: 0, notes: [], rewrites: [] };
+    var out = { downgrades: 0, census: 0, notes: [], rewrites: [], demotions: [], citations: [] };
     if (!reviewData) return out;
     var list = Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
     for (var i = 0; i < list.length; i++) {
@@ -337,6 +590,9 @@ if (typeof module !== 'undefined' && module.exports) {
         isExternalSpecClaim: isExternalSpecClaim,
         isUncitedSpecClaim: isUncitedSpecClaim,
         coreClaimText: coreClaimText,
+        matchClaimInTicket: matchClaimInTicket,
+        demotionMarker: demotionMarker,
+        DEMOTION_MARKER_PREFIX: DEMOTION_MARKER_PREFIX,
         classifyFindingSeverity: classifyFindingSeverity,
         downgradeBody: downgradeBody,
         sanitizeReviewData: sanitizeReviewData
