@@ -250,6 +250,9 @@ var autoStartModule = require('./common/autoStart.js');
 var commentMarkupModule = require('./common/commentMarkup.js');
 var tcRunRegistryModule = require('./common/tcRunRegistry.js');
 var tcMaintenanceLedgerModule = require('./common/tcMaintenanceLedger.js');
+// gh-1331: the cross-lap alternation layer — the dispatcher (localExecution)
+// requires it; it sits after its registry/ledger deps in the sandbox list.
+var tcAlternationModule = require('./common/tcAlternation.js');
 var tcTriageModule = require('./common/tcTriage.js');
 var bugBookkeepingModule = require('./common/bugBookkeeping.js');
 // gh-1345 rework: the shared SM-job ticket inputs (resolveInputs + the
@@ -1418,6 +1421,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
         { id: 'reviewVerdicts.js', varName: '_rvd', fallbackExpr: helperFallbackExpr(reviewVerdictsModule, 'reviewVerdictsModule') },
         { id: 'tcRunRegistry.js', varName: '_trr', fallbackExpr: helperFallbackExpr(tcRunRegistryModule, 'tcRunRegistryModule') },
         { id: 'tcMaintenanceLedger.js', varName: '_tml', fallbackExpr: helperFallbackExpr(tcMaintenanceLedgerModule, 'tcMaintenanceLedgerModule') },
+        { id: 'tcAlternation.js', varName: '_tal', fallbackExpr: helperFallbackExpr(tcAlternationModule, 'tcAlternationModule') },
         { id: 'tcTriage.js', varName: '_ttg', fallbackExpr: helperFallbackExpr(tcTriageModule, 'tcTriageModule') },
         { id: 'bugBookkeeping.js', varName: '_bbk', fallbackExpr: helperFallbackExpr(bugBookkeepingModule, 'bugBookkeepingModule') },
         { id: 'jobTicketInputs.js', varName: '_jti', fallbackExpr: helperFallbackExpr(jobTicketInputsModule, 'jobTicketInputsModule') }
@@ -1447,6 +1451,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
         '      if (id.indexOf("reviewVerdicts.js") !== -1) return _rvd.exports;\n' +
         '      if (id.indexOf("tcRunRegistry.js") !== -1) return _trr.exports;\n' +
         '      if (id.indexOf("tcMaintenanceLedger.js") !== -1) return _tml.exports;\n' +
+        '      if (id.indexOf("tcAlternation.js") !== -1) return _tal.exports;\n' +
         '      if (id.indexOf("tcTriage.js") !== -1) return _ttg.exports;\n' +
         '      if (id.indexOf("bugBookkeeping.js") !== -1) return _bbk.exports;\n' +
         '      if (id.indexOf("jobTicketInputs.js") !== -1) return _jti.exports;\n' +
