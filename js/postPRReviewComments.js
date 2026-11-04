@@ -1053,9 +1053,19 @@ function stampVerdictRecord(scm, prNumber, headSha, isApproved, recommendation, 
  * the claim it would dilute cross-round similarity (a cited re-raise of a
  * demoted finding could fall below the candidate bar — the amnesia loop
  * gh-1334 closes), so the machine-appended tail is stripped here.
+ *
+ * The cut is at the tail's exact head (reviewSpecClaims.DEMOTION_NOTE_HEAD,
+ * joined by the '\n' separator downgradeBody uses) — never at the generic
+ * '\n---\n' separator: a reviewer-authored claim that legitimately contains
+ * a markdown horizontal rule would lose everything after the rule, and
+ * cross-round similarity would run on truncated text.
  */
+var DEMOTION_TAIL_SEPARATOR = '\n' + reviewSpecClaims.DEMOTION_NOTE_HEAD;
+
 function registryClaimOf(claim) {
-    return String(claim || '').split('\n---\n')[0];
+    var text = String(claim || '');
+    var cut = text.indexOf(DEMOTION_TAIL_SEPARATOR);
+    return cut === -1 ? text : text.substring(0, cut);
 }
 
 /**

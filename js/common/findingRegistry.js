@@ -841,11 +841,16 @@ function blockingWithdrawals(items) {
     });
 }
 
-// gh-1334: every identity carrying demotion provenance — the owner sees the
-// demotion history (and the reviewer sees the re-elevation path) alongside
-// the per-round new-identity counts.
+// gh-1334: OPEN identities carrying demotion provenance — the owner sees the
+// re-elevation path alongside the per-round new-identity counts. Resolved
+// identities (fixed/withdrawn) are excluded: "(gh-1334; a cited re-raise
+// re-elevates it)" is an instruction that no longer applies to a resolved
+// item, and this is the same open-status space buildFindingsInjection
+// renders its demotion guidance from — the two renders agree.
 function demotionRecords(items) {
-    return items.filter(function(i) { return !!i.demotion; }).map(function(i) {
+    return items.filter(function(i) {
+        return !!i.demotion && isOpenStatus(i.status);
+    }).map(function(i) {
         return {
             n: i.n, id: i.id, file: i.file, severity: i.severity, claim: i.claim,
             reason: i.demotion.reason || 'missing-citation',

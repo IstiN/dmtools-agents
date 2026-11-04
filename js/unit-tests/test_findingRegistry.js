@@ -1090,3 +1090,74 @@ suite('gh-1334 — demotions in the escalation packet and the injection', functi
         assert.ok(md.indexOf('same as F2') === -1, 'the clean item gets no re-elevation path');
     });
 });
+
+// gh-1334 rework — the escalation packet must not instruct the owner to
+// re-elevate demotions that no longer apply: a demoted identity that was
+// later fixed or withdrawn is RESOLVED, and "(gh-1334; a cited re-raise
+// re-elevates it)" is an instruction that only makes sense while the item is
+// open. demotionRecords therefore draws from the same open-status dedup space
+// buildFindingsInjection already renders its guidance from — the packet
+// (structured and rendered) lists demotions of open identities only.
+suite('gh-1334 — escalation packet lists demotions of open identities only (rework)', function() {
+
+    function openDemotedRegistry() {
+        var r = loadRegistry();
+        var policy = r.resolveIdentityPolicy({}, null);
+        var demoted = finding('src/auth.ts', 'login must return 401', 'IMPORTANT', 12);
+        demoted.demotion = { reason: 'missing-citation', claimMatchedTicket: 'no' };
+        var reg = r.applyRound(r.emptyRegistry(), { at: '2026-11-03T10:00:00Z', findings: [
+            demoted, finding('src/api.ts', 'retry swallows the timeout error', 'IMPORTANT', 8)
+        ] }, policy).registry;
+        return { r: r, policy: policy, reg: reg };
+    }
+
+    function resolveOne(ctx, disposition) {
+        return ctx.r.applyRound(ctx.reg, { at: '2026-11-04T10:00:00Z', dispositions: [disposition] },
+            ctx.policy).registry;
+    }
+
+    test('a demotion later fixed leaves the packet and the rendered comment', function() {
+        var ctx = openDemotedRegistry();
+        var fixedReg = resolveOne(ctx, { n: 1, status: 'fixed', hunk: 'src/auth.ts:40-48 — guard added' });
+        var packet = ctx.r.buildEscalationPacket(fixedReg);
+        assert.deepEqual(packet.demotions, [], 'resolved identity — no stale re-elevation record');
+        var body = ctx.r.buildEscalationPacketComment(fixedReg);
+        assert.ok(body !== null, 'the packet comment still renders (rounds exist)');
+        assert.equal(body.indexOf('demoted from BLOCKING'), -1,
+            'the rendered comment drops the resolved demotion');
+    });
+
+    test('a demotion later withdrawn leaves the packet and the rendered comment', function() {
+        var ctx = openDemotedRegistry();
+        var withdrawnReg = resolveOne(ctx,
+            { n: 1, status: 'withdrawn', reason: 'the ticket requires no such retention — claim was wrong' });
+        assert.deepEqual(ctx.r.buildEscalationPacket(withdrawnReg).demotions, [],
+            'withdrawn identity — the instruction no longer applies');
+        assert.equal(ctx.r.buildEscalationPacketComment(withdrawnReg).indexOf('demoted from BLOCKING'), -1);
+    });
+
+    test('an open demotion (even alongside a resolved one) still surfaces with its provenance', function() {
+        var ctx = openDemotedRegistry();
+        var demoted2 = finding('src/pay.ts', 'charge retries must be idempotent', 'IMPORTANT', 30);
+        demoted2.demotion = { reason: 'missing-citation', claimMatchedTicket: 'inconclusive' };
+        var mixed = ctx.r.applyRound(ctx.reg, { at: '2026-11-04T10:00:00Z', findings: [demoted2],
+            dispositions: [{ n: 1, status: 'fixed', hunk: 'src/auth.ts:40-48 — guard added' }] },
+            ctx.policy).registry;
+        var packet = ctx.r.buildEscalationPacket(mixed);
+        assert.equal(packet.demotions.length, 1, 'only the still-open demotion is listed');
+        assert.equal(packet.demotions[0].n, 3, 'the new identity is F3 (the global counter keeps F1/F2)');
+        assert.equal(packet.demotions[0].status, 'open');
+        var body = ctx.r.buildEscalationPacketComment(mixed);
+        assert.ok(body.indexOf('F3') !== -1, 'the open demotion renders');
+        assert.ok(body.indexOf('claimMatchedTicket: inconclusive') !== -1);
+        assert.equal(body.indexOf('F1 (src/auth.ts) demoted'), -1, 'the fixed F1 is not rendered');
+    });
+
+    test('buildFindingsInjection keeps rendering only open demotion guidance (unchanged contract)', function() {
+        var ctx = openDemotedRegistry();
+        var fixedReg = resolveOne(ctx, { n: 1, status: 'fixed', hunk: 'src/auth.ts:40-48 — guard added' });
+        var md = ctx.r.buildFindingsInjection(fixedReg);
+        assert.ok(md !== null, 'F2 is still open — the injection renders');
+        assert.equal(md.indexOf('same as F1'), -1, 'the fixed identity gets no guidance');
+    });
+});

@@ -201,6 +201,14 @@ function findSpecClaimPhrase(text) {
     return '';
 }
 
+// The first line of the machine-appended demotion tail (downgradeNote's
+// head, after the '\n' separator downgradeBody joins it with). Exported so
+// consumers that must strip the annotation from a claim (the gh-1332
+// registry identity, js/postPRReviewComments.js registryClaimOf) cut at
+// exactly this point — the generic '\n---\n' separator would truncate
+// reviewer prose that legitimately contains a markdown horizontal rule.
+var DEMOTION_NOTE_HEAD = '---\n' + '\u26A0\uFE0F **Severity demoted';
+
 /**
  * Rewrites a downgraded comment body: 🚨 → ⚠, the BLOCKING word → IMPORTANT
  * (hyphen/word-boundary safe), original claim text preserved, and a note
@@ -212,8 +220,7 @@ function downgradeNote(originalBody) {
     var target = phrase
         ? 'the source the finding references ("' + phrase + '")'
         : 'the source the finding references';
-    return '---\n' +
-        '\u26A0\uFE0F **Severity demoted: unverified external-spec claim (gh-1053)** \u2014 this ' +
+    return DEMOTION_NOTE_HEAD + ': unverified external-spec claim (gh-1053)** \u2014 this ' +
         'finding asserts what an external spec/reference says without quoting the ' +
         'exact source (file:line, `#L` anchor, or trusted doc URL) read during the ' +
         'review. Please confirm against ' + target + '; if confirmed, re-raise with ' +
@@ -321,12 +328,20 @@ function wordOverlap(claimWords, lineWords) {
 /**
  * One ticket line's match quality for the claim — null when the line misses
  * (anchor matches gated by requirement-word overlap, plus the near-identical
- * word-overlap match without anchors).
+ * word-overlap match without anchors). The anchor-free path additionally
+ * requires the LINE itself to be requirement-shaped: the overlap coefficient
+ * divides by min(claimWords, lineWords), so a 1–2-word ticket line (markdown
+ * heading, bullet) whose few content words all appear in the claim would
+ * score 1.0 and mint a fabricated "requirement verified" citation. Anchored
+ * matches keep the low bar — the anchor is claim-specific evidence (a status
+ * code / quoted string the claim itself asserts), not shared prose.
  */
 function claimLineMatch(claimWords, normalizedLine, lineNo, anchorCount) {
-    var overlap = wordOverlap(claimWords, findingRegistry.contentWords(normalizedLine));
+    var lineWords = findingRegistry.contentWords(normalizedLine);
+    var overlap = wordOverlap(claimWords, lineWords);
     var matched = (anchorCount > 0 && overlap >= TICKET_ANCHOR_MIN_WORD_OVERLAP) ||
-        overlap >= TICKET_WORD_MATCH_MIN_OVERLAP;
+        (overlap >= TICKET_WORD_MATCH_MIN_OVERLAP &&
+         lineWords.length >= TICKET_MIN_CLAIM_WORDS);
     if (!matched) return null;
     return { anchorCount: anchorCount, overlap: overlap, line: lineNo };
 }
@@ -451,9 +466,14 @@ function verifiedOrDemotedVerdict(text, opts) {
  * Returns { severity, blocking, downgraded } plus, on the gh-1334 paths:
  *   - claim present in the ticket → { ..., claimVerified: true, citation }
  *     (KEEP BLOCKING — the caller auto-appends the citation);
- *   - demoted → { ..., claimMatchedTicket: 'yes'|'no'|'inconclusive' }
- *     ('yes' here means the anchor was seen but the line did not qualify —
- *     the mismatch cases demote exactly as today, never escalate).
+ *   - demoted → { ..., claimMatchedTicket: 'no'|'inconclusive' }
+ *     ('no' — the ticket text was available and the requirement is
+ *     confidently absent; 'inconclusive' — thin claim, the claim's anchor
+ *     seen detached from the requirement, or no ticket text. 'yes' is
+ *     UNREACHABLE on this branch: a verifiable line match maps to the
+ *     keep-BLOCKING branch above, so a demotion never claims verification —
+ *     it only ever carries the two mismatch outcomes. The demotion marker
+ *     payload and the gh-1332 registry consume these values verbatim.)
  */
 function classifyFindingSeverity(body, severity, opts) {
     var text = String(body || '');
@@ -646,6 +666,7 @@ if (typeof module !== 'undefined' && module.exports) {
         matchClaimInTicket: matchClaimInTicket,
         demotionMarker: demotionMarker,
         DEMOTION_MARKER_PREFIX: DEMOTION_MARKER_PREFIX,
+        DEMOTION_NOTE_HEAD: DEMOTION_NOTE_HEAD,
         classifyFindingSeverity: classifyFindingSeverity,
         downgradeBody: downgradeBody,
         sanitizeReviewData: sanitizeReviewData

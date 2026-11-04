@@ -701,3 +701,135 @@ suite('reviewSpecClaims — sanitizeReviewData with ticket verification (gh-1334
             'dmtools:demoted-from-BLOCKING {"round":3,"reason":"missing-citation"') !== -1);
     });
 });
+
+// gh-1334 rework — the overlap coefficient divides by min(claimWords,
+// lineWords), so a 1–2-word ticket line (markdown heading, bullet) whose few
+// content words all appear in the claim scores 1.0 ≥ TICKET_WORD_MATCH_MIN_
+// OVERLAP and claimLineMatch confirmed it WITHOUT any anchor: a claim the
+// ticket never make was kept BLOCKING with a fabricated "requirement
+// verified" citation pointing at a heading. A line must itself be
+// requirement-shaped (≥ TICKET_MIN_CLAIM_WORDS content words) to confirm a
+// claim on words alone; anchored matches keep the low bar — the anchor is
+// claim-specific evidence, not shared prose.
+suite('reviewSpecClaims — short ticket lines never confirm anchor-free claim (gh-1334 rework)', function () {
+    var rsc = loadSpecClaims();
+
+    var HEADING_TICKET = [
+        '# Payment service',
+        '## Error handling',
+        'Retries use exponential backoff with a 5 second cap.',
+        ''
+    ].join('\n');
+
+    test('a 2-word heading never confirms anchor-free claim — confidently absent', function () {
+        var claim = 'According to the ticket, error handling must redact card numbers from every log line.';
+        var m = rsc.matchClaimInTicket(claim, HEADING_TICKET);
+        assert.equal(m.outcome, 'no', 'the 2-word heading is not requirement-shaped — decidable');
+        assert.equal(m.line, null, 'no citation line minted');
+        assert.equal(m.citation, null);
+    });
+
+    test('a 2-word bullet never confirms anchor-free claim', function () {
+        var ticket = [
+            '# Checkout hardening',
+            '',
+            '- idempotency keys',
+            ''
+        ].join('\n');
+        var m = rsc.matchClaimInTicket(
+            'According to the ticket, idempotency keys must rotate daily and be stored hashed.', ticket);
+        assert.equal(m.outcome, 'no', 'a bare bullet confirms nothing on words alone');
+        assert.equal(m.line, null);
+        assert.equal(m.citation, null);
+    });
+
+    test('sanitizeReviewData demotes the false claim instead of minting a heading citation', function () {
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/payment.js', line: 42, severity: 'BLOCKING',
+                  body: '\uD83D\uDEA8 BLOCKING: According to the ticket, error handling must redact ' +
+                        'card numbers from every log line.' }
+            ]
+        };
+        var result = rsc.sanitizeReviewData(review, null, { ticketText: HEADING_TICKET });
+        assert.equal(result.downgrades, 1, 'the false claim is demoted');
+        assert.equal(result.citations.length, 0, 'no citation minted from a 2-word heading');
+        assert.equal(result.demotions[0].claimMatchedTicket, 'no');
+        assert.equal(review.inlineComments[0].severity, 'IMPORTANT');
+        assert.ok(review.inlineComments[0].body.indexOf('requirement verified') === -1,
+            'no "requirement verified" note appended');
+        assert.ok(review.inlineComments[0].body.indexOf('dmtools:demoted-from-BLOCKING') !== -1,
+            'the demotion provenance marker is stamped');
+        assert.equal(review.issueCounts.blocking, 0, 'the census moves — this BLOCKING was not real');
+        assert.equal(review.issueCounts.important, 1);
+        assert.equal(review.recommendation, 'APPROVE', 'no cited BLOCKING remains after the demotion');
+    });
+
+    test('requirement-shaped lines still confirm anchor-free claims (the floor does not over-demote)', function () {
+        var ticket = [
+            '# Requirements',
+            '',
+            'Invalid login attempts must return a structured error body.',
+            ''
+        ].join('\n');
+        var m = rsc.matchClaimInTicket('invalid login must return a structured error body', ticket);
+        assert.equal(m.outcome, 'yes', 'a 7-content-word requirement line is requirement-shaped');
+        assert.equal(m.citation, 'ticket.md:3');
+    });
+});
+
+// gh-1334 rework — the demoted verdict's machine-parsed contract: the demotion
+// marker payload and the gh-1332 registry read claimMatchedTicket. 'yes' is
+// unreachable on the demoted branch — a verifiable match maps to the
+// keep-BLOCKING branch (claimVerified + citation) — so a demotion can only
+// ever carry 'no' (confidently absent) or 'inconclusive' (thin claim, anchor
+// detached, no ticket text). Pinning the contract so future consumers do not
+// implement against an impossible state.
+suite('reviewSpecClaims — demoted verdicts never carry claimMatchedTicket yes (gh-1334 rework)', function () {
+    var rsc = loadSpecClaims();
+
+    var ABSENT_TICKET = [
+        '# Login service requirements',
+        '',
+        'Invalid login attempts must return HTTP 401 with a structured error body.',
+        ''
+    ].join('\n');
+
+    var DETACHED_ANCHOR_TICKET = [
+        '# Billing API',
+        '',
+        'The health probe answers HTTP 401 when unauthenticated.',
+        ''
+    ].join('\n');
+
+    test('every demotion carries no|inconclusive — never yes (the mismatch space)', function () {
+        var cases = [
+            { want: 'no', ticket: ABSENT_TICKET,
+              body: '\uD83D\uDEA8 BLOCKING: According to the ticket, audit logs must be retained for 7 years.' },
+            { want: 'inconclusive', ticket: DETACHED_ANCHOR_TICKET,
+              body: '\uD83D\uDEA8 BLOCKING: According to the ticket, login failures are reported ' +
+                    'with status 401 and an audit event.' },
+            { want: 'inconclusive', ticket: null,
+              body: '\uD83D\uDEA8 BLOCKING: According to the ticket, invalid login must return 401.' }
+        ];
+        for (var i = 0; i < cases.length; i++) {
+            var verdict = rsc.classifyFindingSeverity(cases[i].body, 'BLOCKING', { ticketText: cases[i].ticket });
+            assert.equal(verdict.downgraded, true, 'case ' + i + ': demoted');
+            assert.equal(verdict.claimMatchedTicket, cases[i].want, 'case ' + i + ': the mismatch outcome');
+            assert.notEqual(verdict.claimMatchedTicket, 'yes', 'case ' + i + ': a demotion never claims yes');
+            assert.equal(verdict.claimVerified, undefined, 'case ' + i + ': no verification on a demotion');
+        }
+    });
+
+    test('yes lives only on the keep-BLOCKING branch (claimVerified + citation, no demotion stamp)', function () {
+        var verdict = rsc.classifyFindingSeverity(
+            '\uD83D\uDEA8 BLOCKING: According to the ticket, invalid login must return 401.',
+            'BLOCKING', { ticketText: ABSENT_TICKET });
+        assert.equal(verdict.claimVerified, true);
+        assert.equal(verdict.citation, 'ticket.md:3');
+        assert.equal(verdict.downgraded, false);
+        assert.equal(verdict.claimMatchedTicket, undefined, 'no mismatch outcome on the verified branch');
+    });
+});

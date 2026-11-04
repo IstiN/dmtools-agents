@@ -3272,4 +3272,43 @@ suite('postPRReviewComments — gh-1334 ticket-grounded spec-claim verification 
         assert.equal(findings[0].claim, 'null deref on empty input.');
         assert.equal(findings[0].demotion, null);
     });
+
+    test('a reviewer claim with a markdown horizontal rule keeps its full text (gh-1334 rework)', function () {
+        var mod = loadWithModuleFileRead({}, []);
+        var body = 'null deref on empty input.\n' +
+            '---\n' +
+            'Same defect hits the batch path for empty arrays.';
+        var reviewData = {
+            recommendation: 'REQUEST_CHANGES',
+            inlineComments: [
+                { path: 'src/a.js', line: 2, severity: 'BLOCKING', body: body }
+            ]
+        };
+        var findings = mod.findingsFromReviewData(reviewData, 'TICKET-1', null);
+        assert.equal(findings[0].claim, body,
+            'a reviewer-authored rule is prose — nothing after it is truncated');
+        assert.equal(findings[0].claim.indexOf('batch path for empty arrays') !== -1, true,
+            'the paragraph after the rule stays in the registry identity');
+    });
+
+    test('the machine demotion tail is cut exactly — prose before it stays intact (gh-1334 rework)', function () {
+        var mod = loadWithModuleFileRead({}, []);
+        var claim = 'According to the ticket, audit logs must be kept for 7 years.';
+        var reviewData = {
+            recommendation: 'APPROVE',
+            inlineComments: [
+                { path: 'src/env.js', line: 1, severity: 'IMPORTANT',
+                  demotion: { reason: 'missing-citation', claimMatchedTicket: 'no' },
+                  body: claim + '\n' +
+                        '---\n' +
+                        '\u26A0\uFE0F **Severity demoted: unverified external-spec claim (gh-1053)** \u2014 please confirm.\n' +
+                        '<!-- dmtools:demoted-from-BLOCKING {"reason":"missing-citation","claimMatchedTicket":"no"} -->'
+                }
+            ]
+        };
+        var findings = mod.findingsFromReviewData(reviewData, 'TICKET-1', null);
+        assert.equal(findings[0].claim, claim,
+            'the registry claim is exactly the reviewer text — no separator, no note, no marker');
+        assert.deepEqual(findings[0].demotion, { reason: 'missing-citation', claimMatchedTicket: 'no' });
+    });
 });
