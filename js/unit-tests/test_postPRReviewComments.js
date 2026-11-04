@@ -179,6 +179,15 @@ function loadSpecClaimsWithRegistry() {
 }
 
 /**
+ * Shared loader for js/common/reviewPolicy.js (gh-1351) — a pure module
+ * whose only collaborator is reviewVerdicts (the censusCount normalization).
+ */
+function loadReviewPolicyModule() {
+    return loadModule('js/common/reviewPolicy.js',
+        makeRequire({ './reviewVerdicts.js': reviewVerdictsReal() }), {});
+}
+
+/**
  * Shared require map for loading js/postPRReviewComments.js in tests — the
  * real module wiring with every common/* collaborator resolved, including
  * the gh-1053 reviewSpecClaims mapping (previously duplicated inline in
@@ -1498,6 +1507,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
             },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
@@ -3590,12 +3600,22 @@ suite('postPRReviewComments — machine-stamped severity markers (gh-1350)', fun
         var calls = [];
         var scm = stampScm(calls);
         mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, body: 'plain note' }, 'PROJ-1', null);
-        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, severity: 'NIT', body: 'nit prose' }, 'PROJ-1', null);
+        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, severity: 'TRIVIAL', body: 'unknown prose' }, 'PROJ-1', null);
 
         assert.equal(calls.length, 2, 'both comment bodies post (the stamp never blocks a post)');
         assert.equal(calls[0].text, 'plain note');
-        assert.equal(calls[1].text, 'nit prose',
-            'the NIT enum lands in part 2 — unknown severities stamp nothing');
+        assert.equal(calls[1].text, 'unknown prose',
+            'unknown severities stamp nothing');
+    });
+
+    test('NIT severity stamps the 🪶 canonical line (gh-1351 4-tier enum)', function() {
+        var mod = loadPostPRReviewComments();
+        var calls = [];
+        var scm = stampScm(calls);
+        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, severity: 'NIT', body: 'nit prose' }, 'PROJ-1', null);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].text, '\uD83E\uDEB6 severity: NIT \u2014\nnit prose');
     });
 
     test('an existing leading canonical line is replaced, not duplicated (idempotent stamp)', function() {
