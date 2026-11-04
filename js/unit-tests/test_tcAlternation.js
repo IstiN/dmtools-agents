@@ -235,6 +235,16 @@ suite('tcAlternation: conflict records (one escalation per pair)', function() {
         assert.equal(alt.openConflictFor(res.registry, 'TS-C'), null);
         assert.equal(alt.openConflictFor(registry.emptyRegistry(), 'TS-A'), null);
     });
+
+    test('AC: the member snapshot is marker-hygiene capped (the record lives in the persistent registry marker)', function() {
+        var huge = new Array(2001).join('x');
+        var res = alt.recordConflicts(tradingRegistry(), alt.scanAlternations(tradingRegistry()), '2026-01-02T00:00:00.000Z', function() {
+            return { verifies: 'BUG-1', testPath: 'p.py', failureSummary: huge, lastGreenSha: 'S1' };
+        });
+        var meta = res.registry.pairs['TS-A|TS-B'].members['TS-A'];
+        assert.ok(meta.failureSummary.length <= 500, 'the snapshot is capped like the ledger notes, got ' + meta.failureSummary.length);
+        assert.equal(res.registry.pairs['TS-A|TS-B'].members['TS-B'].failureSummary, null, 'a missing summary stays null');
+    });
 });
 
 // ── reconciliation: a stable green resolves the conflict ─────────────────────
@@ -339,6 +349,20 @@ suite('tcAlternation: bounce suppression anchors', function() {
         var l = ledgerWithBounceFinding('TS-B', { lastGreenSha: 'S1' });
         assert.equal(alt.bounceSuppression(registry.emptyRegistry(), l, 'TS-B', null, null), null);
         assert.equal(alt.bounceSuppression(registry.emptyRegistry(), tcLedger.emptyLedger(), 'TS-B', null, null), null);
+    });
+
+    test('AC: a finding refreshed by its own suppression still owns the failure (the anchor must not disarm)', function() {
+        var l = ledgerWithBounceFinding('TS-B', { lastGreenSha: 'S1' });
+        // the suppressed lap rewrote the finding (suppressedVerdict): the
+        // verdict became maintenance, the reason names the suppression.
+        var f = tcLedger.openFindings(l)[0];
+        f.verdict = 'maintenance';
+        f.reason = 'suppressed-prior-bounce-same-range';
+        // the registry carries NO bounce anchor (a pre-gh-1331 marker or a
+        // failed marker post) — the ledger anchor is the only line of defense.
+        var s = alt.bounceSuppression(registry.emptyRegistry(), l, 'TS-B', 'S1', 'S3');
+        assert.ok(s, 'a later lap must not re-bounce — the anchor survives its own verdict rewrite');
+        assert.equal(s.kind, 'open-ledger-item');
     });
 });
 
