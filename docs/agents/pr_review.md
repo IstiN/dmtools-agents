@@ -11,7 +11,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `targetRepository` — repository override block (`owner`, `repo`, `baseBranch`, `workingDir`) — run the review against this repository instead of the project default.
 
 - `aiRepository` — repository the AI CLI works in when it differs from the PR repository.
-- `allowApproveWithSuggestions` — when `true`, the reviewer may approve a PR while leaving non-blocking suggestions.
+- `allowApproveWithSuggestions` — legacy knob (gh-1351): policy-derived now; setting it against the resolved `reviewPolicy` logs a conflict audit line and the policy wins.
 - `autoStartRework` — when `true`, automatically trigger the rework workflow when the review asks for changes.
 - `autoStartReworkConfigFile` — agent config file used for the auto-started rework workflow.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.

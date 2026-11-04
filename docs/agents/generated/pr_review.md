@@ -90,6 +90,7 @@ _Post PR Review Comments Action_
   - `customStatuses`
   - `dryRun`
   - `formalGithubReview`
+  - `importantBlocksApproval`
   - `localTeammate`
   - `maxReviewThreadsBeforeForceApprove`
   - `onApproved`
@@ -115,7 +116,6 @@ _Post PR Review Comments Action_
 ## Custom params
 
 - `removeLabel`: `"sm_story_review_triggered"`
-- `allowApproveWithSuggestions`: `true`
 - `checkOpenPR`: `true`
 - `childQuestions` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
@@ -126,6 +126,7 @@ _Post PR Review Comments Action_
 - `reviewPolicy` _(used by JS action)_
 - `reviewPolicy.identity` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
+- `allowApproveWithSuggestions` _(used by JS action)_
 - `autoStartRework` _(used by JS action)_
 - `autoStartReworkConfigFile` _(used by JS action)_
 - `configPath` _(used by JS action)_
@@ -134,6 +135,7 @@ _Post PR Review Comments Action_
 - `customStatuses` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
+- `importantBlocksApproval` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `onApproved` _(used by JS action)_

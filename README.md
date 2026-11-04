@@ -1074,6 +1074,30 @@ module.exports = {
     // Fully replace agent instructions (overrides defaults entirely)
     instructionOverrides: {
         // story_development: ['./custom-instructions/dev.md']
+    },
+
+    // gh-1351 — review policy: the per-tier verdict rules the review legs'
+    // machine enforcement applies (the model verdict is advisory).
+    // Resolution chain: projectConfig.reviewPolicy -> workflow jobParams
+    // -> built-in 'default'. Presets: default / fix-everything / relaxed /
+    // investigation. Unknown tier or bad enum = hard validation error at
+    // leg start. Any 🚨/⚠️ (rework tier) open -> REQUEST_CHANGES; only
+    // 💡/🪶 -> APPROVE. Explicit config may weaken any tier, including
+    // BLOCKING (owner standing approval).
+    reviewPolicy: {
+        preset: 'default',
+        severities: {
+            // round: 'rework' | 'polish' | 'none' — what happens to the thread
+            // fix:   'mandatory' | 'opportunistic' | 'never' — whether rework fixes it
+            BLOCKING:   { round: 'rework', fix: 'mandatory' },
+            IMPORTANT:  { round: 'rework', fix: 'mandatory' },
+            SUGGESTION: { round: 'polish', fix: 'mandatory' },
+            NIT:        { round: 'none',   fix: 'opportunistic' }
+        },
+        bounds: {
+            densityMin: 2,   // floor for the 💡/🪶 thread cap (🚨/⚠️ never capped)
+            densityMax: 8    // ceiling: allowed = clamp(round(2 + 3*sqrt(additions/200)), 2, 8)
+        }
     }
 };
 ```
@@ -1086,6 +1110,7 @@ module.exports = {
 | `jira.statuses`, `jira.issueTypes`, `labels` | Full replacement | Projects with different workflows |
 | `smRules`, `smMergeRules` | Full replacement | Completely different SM rules |
 | `additionalInstructions`, `instructionOverrides` | Full replacement per key | Project-specific agent instructions |
+| `reviewPolicy` | Deep merge (gh-1351) | Per-tier review verdict rules; unknown tier = leg fails validation |
 
 ### Deployment Modes
 

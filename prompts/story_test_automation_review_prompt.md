@@ -43,13 +43,14 @@ You MUST write the following files before finishing:
       "path": "testing/tests/TS-124/...",
       "line": 42,
       "body": "💡 **Suggestion**: ...",
-      "severity": "BLOCKING|IMPORTANT|SUGGESTION"
+      "severity": "BLOCKING|IMPORTANT|SUGGESTION|NIT"
     }
   ],
   "issueCounts": {
     "blocking": 0,
     "important": 0,
-    "suggestion": 0
+    "suggestion": 0,
+    "nits": 0
   }
 }
 ```

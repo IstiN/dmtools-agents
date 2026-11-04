@@ -10,11 +10,16 @@ Example PR test automation review outputs — keep concise:
     {"path":"testing/tests/TEST-123/test_login.py","line":34,"body":"🚨 BLOCKING: Hardcoded selector — Use Page Object method login_page.username_field instead of raw page.locator('#user').","severity":"BLOCKING"},
     {"path":"testing/tests/TEST-123/test_login.py","line":45,"body":"🚨 BLOCKING: time.sleep(5) — Replace with Playwright's expect(...).to_be_visible(timeout=5000).","severity":"BLOCKING"},
     {"path":"testing/tests/TEST-123/test_login.py","line":12,"body":"⚠️ IMPORTANT: Missing config.yaml — Each test folder must include config.yaml with framework, platform, and dependencies.","severity":"IMPORTANT"},
-    {"path":"testing/components/pages/login_page.py","line":8,"body":"💡 SUGGESTION: Add type hints — Constructor parameters lack types. Add driver: IWebDriver and return types.","severity":"SUGGESTION"}
+    {"path":"testing/components/pages/login_page.py","line":8,"body":"💡 SUGGESTION: Add type hints — Constructor parameters lack types. Add driver: IWebDriver and return types.","severity":"SUGGESTION"},
+    {"path":"testing/tests/TEST-123/test_login.py","line":20,"body":"🪶 NIT: Import order — stdlib imports should precede third-party ones.","severity":"NIT"}
   ],
-  "issueCounts": {"blocking":2,"important":1,"suggestions":1}
+  "issueCounts": {"blocking":2,"important":1,"suggestions":1,"nits":1}
 }
 ```
+
+**Severity boundary (gh-1351, 4 tiers)**: a 🪶 NIT changes nothing behavioral and
+nothing documented (style, naming, formatting); a 💡 SUGGESTION changes clarity of
+the documented/behavioral surface. Behavior or contract breakage is ⚠️/🚨.
 
 ### outputs/pr_review.json (APPROVE example)
 ```json

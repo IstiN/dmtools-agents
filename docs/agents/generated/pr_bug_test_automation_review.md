@@ -65,6 +65,7 @@ _Post Story Test Automation Review Comments Action_
   - `customStatuses`
   - `dryRun`
   - `formalGithubReview`
+  - `importantBlocksApproval`
   - `localTeammate`
   - `maxReviewThreadsBeforeForceApprove`
   - `onApproved`
@@ -99,6 +100,7 @@ _Post Story Test Automation Review Comments Action_
 - `customStatuses` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
+- `importantBlocksApproval` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `onApproved` _(used by JS action)_
