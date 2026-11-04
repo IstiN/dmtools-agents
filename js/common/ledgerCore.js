@@ -94,19 +94,26 @@ function refreshFinding(existing, incoming, at) {
 /**
  * Appends a finding into a deep-copied ledger: identity match refreshes,
  * otherwise the normalized entry is pushed. `normalize(input, at)` is the
- * consumer's shape builder (it stamps the id + the consumer fields and
- * returns the canonical entry). Returns the NEW ledger (never mutates the
- * input).
+ * consumer's optional shape builder (it stamps the id + the consumer
+ * fields and returns the canonical entry); when absent the input itself is
+ * the canonical entry. Returns the NEW ledger (never mutates the input).
  */
 function appendFinding(prev, input, normalize) {
     var at = (input && input.at) || new Date().toISOString();
     var l = deepCopyLedger(prev);
     l.at = at;
-    var incoming = normalize(input, at);
+    var incoming = typeof normalize === 'function' ? normalize(input, at) : input;
     var existing = findById(l, incoming.id);
     if (existing) {
         refreshFinding(existing, incoming, at);
     } else {
+        // A fresh entry carries the lifecycle defaults the core owns;
+        // the consumer's normalize (or the raw input) supplies identity
+        // + evidence fields on top.
+        if (incoming.status === undefined) incoming.status = 'open';
+        if (incoming.firstSeenAt === undefined) incoming.firstSeenAt = at;
+        if (incoming.lastSeenAt === undefined) incoming.lastSeenAt = at;
+        if (incoming.occurrences === undefined) incoming.occurrences = 1;
         l.findings.push(incoming);
     }
     return l;

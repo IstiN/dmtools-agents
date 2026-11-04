@@ -32,6 +32,11 @@
 'use strict';
 
 var reviewVerdicts = require('./reviewVerdicts.js');
+// gh-1352 scope 4: the ledger lifecycle (append/refresh/reopen/resolve),
+// the open-set filter and the batched-sweep trigger live in the shared
+// ledger core (the #1345/#1348 pattern extracted) — this module keeps its
+// identity scheme, finding builders, marker persistence and digest face.
+var ledgerCore = require('./ledgerCore.js');
 
 // The registry marker — one line, JSON payload, invisible in the rendered
 // ticket (same protocol family as the gh-807 verdict / gh-1332 registry markers).
