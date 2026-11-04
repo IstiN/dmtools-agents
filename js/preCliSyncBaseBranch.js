@@ -34,6 +34,10 @@ function cleanCommandOutput(output) {
 }
 
 function action(params) {
+    if (params && (params.dryRun === true || params.dryRun === 'true' || (params.jobParams && (params.jobParams.dryRun === true || params.jobParams.dryRun === 'true')))) {
+        console.log('[dryRun] preCliSyncBaseBranch: skipping base branch checkout and pull');
+        return true;
+    }
     var config = configLoader.loadProjectConfig(params.jobParams || params);
     _workingDir = config.workingDir || null;
     var baseBranch = (config.git && config.git.baseBranch) || 'main';

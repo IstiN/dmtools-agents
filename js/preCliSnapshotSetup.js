@@ -165,6 +165,10 @@ function action(params) {
         if (runChainedAction(customParams.chainedPreCliJSAction, params) === false) {
             return false;
         }
+        if ((actualParams && (actualParams.dryRun === true || actualParams.dryRun === 'true')) || (customParams && (customParams.dryRun === true || customParams.dryRun === 'true'))) {
+            console.log('[dryRun] preCliSnapshotSetup: skipping snapshot branch checkout and codegraph sync');
+            return true;
+        }
 
         // 2. Resolve config. paramsForConfigLoad re-attaches params.ticket (sibling of
         // jobParams in the real Teammate execution path) so snapshotBranchResolverFnPath

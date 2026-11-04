@@ -1504,11 +1504,6 @@ function queryRuleTickets(rule, effectiveConfig, effectiveRepoInfo, interpolated
 }
 
 function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
-    if (DRY) {
-        console.log('\n══ [LOCAL·DRY] ' + (rule.description || ('Rule #' + (ruleIndex + 1))) + ' ══');
-        console.log('  [dry] local execution skipped');
-        return { processedKeys: [], skippedKeys: [] };
-    }
     var effectiveConfig = loadRuleConfig(rule);
     // agents#855: per-tracker query override (rule.jqlByTracker) and {stage.KEY} status-or-label clauses,
     // in the syntax of the tracker this run uses. Without either, this is the same interpolation as before.
@@ -1518,7 +1513,7 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
     var effectiveRepoInfo = globalRepoInfo || {};
 
     var label = rule.description || ('Rule #' + (ruleIndex + 1));
-    console.log('\n══ [LOCAL] ' + label + ' ══');
+    console.log('\n══ [' + (DRY ? 'LOCAL·DRY' : 'LOCAL') + '] ' + label + ' ══');
     logRuleQuery(rule, interpolatedJql);
 
     if (rule.enabled === false) {
@@ -1533,6 +1528,26 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
         return { processedKeys: [], skippedKeys: [] };
     }
 
+    if (DRY) {
+        var dryTickets = [];
+        try {
+            dryTickets = queryRuleTickets(rule, effectiveConfig, effectiveRepoInfo, interpolatedJql);
+        } catch (e) {
+            console.error('  ❌ state query failed: ' + (e.message || e));
+            throw e;
+        }
+        if (typeof rule.limit === 'number' && dryTickets.length > rule.limit) {
+            console.log('  Limiting from ' + dryTickets.length + ' to ' + rule.limit + ' ticket(s)');
+            dryTickets = dryTickets.slice(0, rule.limit);
+        }
+        if (dryTickets.length === 0) {
+            console.log('  No tickets found.');
+        } else {
+            console.log('  ' + dryTickets.length + ' tickets found.');
+        }
+        console.log('  [dry] local execution skipped');
+        return { processedKeys: [], skippedKeys: [] };
+    }
     var resolvedCf = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
     var agentConfig = null;
     var cfCandidates = [resolvedCf];

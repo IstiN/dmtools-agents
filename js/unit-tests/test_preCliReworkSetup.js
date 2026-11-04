@@ -1814,3 +1814,21 @@ suite('preCliReworkSetup — gh-1351 reviewPolicy: hard validation + review_poli
     });
 });
 
+suite('preCliReworkSetup — dryRun guard (gh-1356)', function() {
+
+    test('dryRun:true returns early without cli_execute_command or tracker mutations', function() {
+        var h = makeActionHarness({});
+        var result = h.module.action({
+            inputFolderPath: 'input/PROJ-123',
+            dryRun: true,
+            jobParams: { inputFolderPath: 'input/PROJ-123', dryRun: true, customParams: {} }
+        });
+        assert.deepEqual(result, { success: true, dryRun: true });
+        assert.equal(h.calls.checkoutPRBranch.length, 0, 'dryRun must not checkout PR branch');
+        assert.equal(h.calls.runSetupCommands, 0, 'dryRun must not run setup commands');
+        assert.equal(h.calls.postComment.length, 0, 'dryRun must not post comments');
+        assert.equal(h.calls.moveToStatus.length, 0, 'dryRun must not move ticket status');
+    });
+
+});
+

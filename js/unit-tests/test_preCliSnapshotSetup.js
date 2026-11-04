@@ -508,3 +508,21 @@ suite('preCliSnapshotSetup — checkoutSnapshotBranch (gh-1242)', function() {
     });
 
 });
+
+suite('preCliSnapshotSetup — dryRun guard (gh-1356)', function() {
+
+    test('dryRun:true skips snapshot checkout and codegraph sync', function() {
+        var calls = [];
+        var mod = loadPreCliSnapshotSetup(makeConfigLoaderStub('develop/3.9.0'), {
+            cli_execute_command: makeCliMock(calls, {})
+        });
+        var result = mod.action({
+            dryRun: true,
+            ticket: TICKET,
+            customParams: {}
+        });
+        assert.equal(result, true);
+        assert.equal(calls.length, 0, 'dryRun must not execute CLI commands');
+    });
+
+});

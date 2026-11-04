@@ -869,6 +869,10 @@ function action(params) {
         // throws a ReviewPolicyValidationError HERE, before any side effect.
         var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(config, actualParams);
 
+        if ((actualParams && (actualParams.dryRun === true || actualParams.dryRun === 'true')) || (customParams && (customParams.dryRun === true || customParams.dryRun === 'true'))) {
+            console.log('[dryRun] Skipping mutating rework setup (branch checkout, merge, setup commands, tracker/SCM writes)');
+            return { success: true, dryRun: true };
+        }
         restoreArtefactsQuietly(params);
 
         console.log('=== Rework setup for:', ticketKey, '===');

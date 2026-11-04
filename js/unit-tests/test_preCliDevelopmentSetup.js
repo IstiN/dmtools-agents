@@ -1796,3 +1796,67 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
     });
 
 });
+
+suite('preCliDevelopmentSetup.action — dryRun guard (gh-1356)', function() {
+
+    test('dryRun:true skips cli_execute_command and tracker/SCM writes while allowing context fetch', function() {
+        var cliCalls = [];
+        var trackerMoves = [];
+        var labelCalls = [];
+        var questionsFetched = 0;
+        var linkedTestsFetched = 0;
+        var parentContextFetched = 0;
+
+        var mod = loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                'branchSetup.js': loadModule('js/common/branchSetup.js'),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
+                './configLoader.js': {
+                    loadProjectConfig: function() { return makeConfig({ repository: { owner: 'o', repo: 'r' } }); },
+                    paramsForConfigLoad: function(p) { return p; },
+                    resolveBranchName: function() { return 'ai/PROJ-1'; },
+                    resolvePRTargetBranch: function() { return 'master'; }
+                },
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './config.js': NOOP_CONFIG_JS,
+                './fetchQuestionsToInput.js': { action: function() { questionsFetched++; } },
+                './fetchLinkedTestsToInput.js': { action: function() { linkedTestsFetched++; } },
+                './fetchParentContextToInput.js': { action: function() { parentContextFetched++; } },
+                './restoreFromReleases.js': { action: function() { throw new Error('restoreFromReleases must not run in dryRun'); } },
+                './common/setupCommands.js': devSetupCommandsReal,
+                './common/commentMarkup.js': devCommentMarkupModule,
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() { throw new Error('baseBranchMarker must not run in dryRun'); } },
+                './common/trackers.js': {
+                    createTracker: function() {
+                        return {
+                            provider: function() { return 'github'; },
+                            moveToStatus: function(k, s) { trackerMoves.push({ key: k, status: s }); }
+                        };
+                    }
+                }
+            }),
+            {
+                cli_execute_command: function(opts) { cliCalls.push(opts && opts.command); return ''; },
+                github_add_labels: function(a) { labelCalls.push(a); },
+                github_remove_label: function(a) { labelCalls.push(a); }
+            }
+        );
+
+        var res = mod.action({
+            inputFolderPath: 'input/gh-1356',
+            dryRun: true,
+            ticket: { key: 'gh-1356', fields: {} },
+            customParams: {}
+        });
+
+        assert.deepEqual(res, { success: true, dryRun: true });
+        assert.equal(cliCalls.length, 0, 'dryRun must make zero cli_execute_command calls');
+        assert.equal(trackerMoves.length, 0, 'dryRun must perform no tracker status moves');
+        assert.equal(labelCalls.length, 0, 'dryRun must perform no SCM label writes');
+        assert.equal(questionsFetched, 1, 'read-only context fetch (questions) still runs');
+        assert.equal(linkedTestsFetched, 1, 'read-only context fetch (linked tests) still runs');
+        assert.equal(parentContextFetched, 1, 'read-only context fetch (parent context) still runs');
+    });
+
+});

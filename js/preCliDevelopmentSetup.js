@@ -551,6 +551,11 @@ function parseActualParams(params) {
     return params.inputFolderPath ? params : (params.jobParams || params);
 }
 
+/** Detect dryRun mode on top-level params, jobParams, actualParams, or customParams (gh-1356). */
+function isDryRunParams(params) {
+    return branchSetup.isDryRunParams(params);
+}
+
 /**
  * customParams resolution — params.jobParams.customParams wins over
  * actualParams.customParams (jobParams path is the real Teammate execution).
@@ -693,6 +698,13 @@ function action(params) {
         // - Teammate workflow: params.inputFolderPath exists directly
         // - Standalone dmtools (JSRunner): params.jobParams.inputFolderPath
         var actualParams = parseActualParams(params);
+        if (isDryRunParams(params)) {
+            console.log('[dryRun] Skipping mutating development setup (branch checkout, setup commands, tracker/SCM writes)');
+            fetchQuestionsToInput.action(actualParams);
+            runFetchLinkedTestsStep(actualParams);
+            runFetchParentContextStep(actualParams);
+            return { success: true, dryRun: true };
+        }
         // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
         // real Teammate execution path) so baseBranchResolverFnPath/snapshotBranchResolverFnPath
         // can key off the ticket's fixVersion — see configLoader.js for details.
@@ -776,6 +788,7 @@ if (typeof module !== 'undefined' && module.exports) {
         parseActualParams,
         parseCustomParams,
         parseTicketKeyOf,
+        isDryRunParams,
         decideErrorMessage,
         runRestoreFromReleasesStep,
         moveTicketToInDevelopment,

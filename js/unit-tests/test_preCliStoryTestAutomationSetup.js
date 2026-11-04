@@ -1034,3 +1034,31 @@ suite('preCliStoryTestAutomationSetup — gh-1351 reviewPolicy: hard validation 
         assert.contains(String(result.error), 'HUH', 'the unknown tier is named');
     });
 });
+
+suite('preCliStoryTestAutomationSetup — dryRun guard (gh-1356)', function() {
+
+    test('dryRun:true skips branch checkout, code cleanup and status move while writing input context', function() {
+        var written = {};
+        var commands = [];
+        var moves = [];
+        var module = loadPreCliStoryTestAutomationSetup({
+            jira_search_by_jql: function() { return []; },
+            jira_move_to_status: function(opts) { moves.push(opts); },
+            file_write: function(args) { written[args.path] = args.content; },
+            cli_execute_command: function(opts) { commands.push(opts.command); return ''; }
+        });
+
+        var res = module.action({
+            inputFolderPath: 'input/TS-299',
+            dryRun: true,
+            jobParams: { customParams: {} }
+        });
+
+        assert.deepEqual(res, { success: true, dryRun: true });
+        assert.equal(commands.length, 0, 'dryRun must make zero cli_execute_command calls');
+        assert.equal(moves.length, 0, 'dryRun must make zero tracker status moves');
+        assert.ok(written['input/TS-299/review_policy.md'], 'review_policy.md context is still written');
+        assert.ok(written['input/TS-299/linked_test_cases.json'], 'linked_test_cases.json context is still written');
+    });
+
+});

@@ -323,6 +323,10 @@ function action(params) {
         // The tracker exists already so the failure is posted on the ticket.
         var reviewPolicy = resolveLegReviewPolicy(config, params);
 
+        if (branchSetup.isDryRunParams(params)) {
+            console.log('[dryRun] Skipping mutating test rework setup for', ticketKey);
+            return { success: true, dryRun: true };
+        }
         console.log('=== Test rework setup for:', ticketKey, '===');
 
         // Clear stale output files from any previous run so the post-action

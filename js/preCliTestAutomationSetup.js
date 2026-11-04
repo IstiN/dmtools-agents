@@ -178,6 +178,11 @@ function action(params) {
         initTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
         console.log('=== Test automation setup for:', ticketKey, '===');
+        if (branchSetup.isDryRunParams(params)) {
+            console.log('[dryRun] Skipping mutating test automation setup for', ticketKey);
+            fetchLinkedBugsSafely(actualParams);
+            return { success: true, dryRun: true };
+        }
 
         moveTicketToInDevelopment(ticketKey);
         checkoutBranchSafely(ticketKey, config);

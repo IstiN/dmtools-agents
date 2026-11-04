@@ -560,3 +560,26 @@ suite('preCliTestAutomationSetup — checkoutBranch failure tolerance (gh-1242)'
     });
 
 });
+
+suite('preCliTestAutomationSetup — dryRun guard (gh-1356)', function() {
+
+    test('dryRun:true skips ticket move, branch checkout and output cleanup while fetching linked bugs', function() {
+        var moves = [];
+        var commands = [];
+        var bugFetches = [];
+
+        var mod = loadTestAutomationSetup({
+            jira_move_to_status: function(opts) { moves.push(opts); },
+            cli_execute_command: function(opts) { commands.push(opts.command); return ''; },
+            fetchLinkedBugsModule: { action: function(params) { bugFetches.push(params); } }
+        });
+
+        var res = mod.action({ inputFolderPath: 'input/TS-99', dryRun: true });
+
+        assert.deepEqual(res, { success: true, dryRun: true });
+        assert.equal(moves.length, 0, 'dryRun must not move ticket status');
+        assert.equal(commands.length, 0, 'dryRun must not run cli_execute_command');
+        assert.equal(bugFetches.length, 1, 'read-only linked-bug context fetch still runs');
+    });
+
+});

@@ -9130,6 +9130,41 @@ suite('smAgent: forceLocalTeammate CLI override', function() {
         }), 'logs [dry] local teammate message');
     });
 
+
+    test('dryRun:true with localExecution:true logs JQL and applicable ticket count before skipping (gh-1347)', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                'agents/test.json': MINIMAL_AGENT_CONFIG
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }],
+            captureConsole: true
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                description: 'New PBIs with questions asked → auto-tag questions_answered',
+                localExecution: true
+            })
+        ]);
+        params.jobParams.dryRun = true;
+
+        var result = sm.action(params);
+
+        assert.equal(result.processed, 0, 'local execution is still skipped in dryRun');
+        assert.ok(sm.capturedLogs.some(function(l) {
+            return l.indexOf('══ [LOCAL·DRY] New PBIs with questions asked') !== -1;
+        }), 'logs [LOCAL·DRY] header');
+        assert.ok(sm.capturedLogs.some(function(l) {
+            return l.indexOf('JQL: project = P') !== -1;
+        }), 'logs interpolated JQL for localExecution rule in dryRun');
+        assert.ok(sm.capturedLogs.some(function(l) {
+            return l.indexOf('1 tickets found.') !== -1;
+        }), 'logs applicable ticket count for localExecution rule in dryRun');
+        assert.ok(sm.capturedLogs.some(function(l) {
+            return l.indexOf('[dry] local execution skipped') !== -1;
+        }), 'logs [dry] local execution skipped');
+    });
 });
 
 // ── localExecution module loading ─────────────────────────────────────────────

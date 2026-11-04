@@ -890,3 +890,21 @@ suite('preCliTestReworkSetup — gh-1351 reviewPolicy: hard validation + review_
         assert.contains(ctx.tracker.calls.postComment[0].body, 'NOPE');
     });
 });
+
+suite('preCliTestReworkSetup — dryRun guard (gh-1356)', function() {
+
+    test('dryRun:true returns early without cli_execute_command or tracker mutations', function() {
+        var cliCalls = [];
+        var ctx = loadPreCliTestReworkSetup({
+            cli_execute_command: function(opts) { cliCalls.push(opts && opts.command); return ''; }
+        });
+        var p = baseParams();
+        p.dryRun = true;
+        var res = ctx.module.action(p);
+        assert.deepEqual(res, { success: true, dryRun: true });
+        assert.equal(cliCalls.length, 0, 'dryRun must make zero cli_execute_command calls');
+        assert.equal(ctx.tracker.calls.postComment.length, 0, 'dryRun must not post comments');
+        assert.equal(ctx.tracker.calls.moveToStatus.length, 0, 'dryRun must not move ticket status');
+    });
+
+});
