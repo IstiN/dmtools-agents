@@ -66,6 +66,13 @@ function loadPrepareTestPRForReview(mocks) {
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
             './configLoader.js': freshConfigLoader,
+            './common/reviewPolicy.js': (function() {
+                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                return loadModule('js/common/reviewPolicy.js',
+                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+            })(),
             './common/githubHelpers.js': githubHelpers,
             './common/gitOps.js': gitOpsMock,
             './common/scm.js': { createScm: function() { return scmMock; } },

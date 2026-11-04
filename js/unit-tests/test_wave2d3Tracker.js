@@ -269,6 +269,13 @@ function d3LoadPreCli(mocks, scm) {
             loadProjectConfig: function() { return { jira: { statuses: { BACKLOG: 'Backlog' } }, git: { baseBranch: 'main' }, formats: { prTitle: { rework: 'x' } } }; },
             createScm: function() { return scm; }
         },
+        './common/reviewPolicy.js': (function() {
+            var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+            var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': machineAuthor }), {});
+            return loadModule('js/common/reviewPolicy.js',
+                makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+        })(),
         './common/githubHelpers.js': {},
         './common/gitOps.js': {},
         './common/pullRequest.js': {},
