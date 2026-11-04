@@ -36,7 +36,10 @@ _Prepare Test PR For Review Action (preJSAction for test-automation review agent
 - Side effects:
   - git push
 - Parameters (customParams):
+  - `allowApproveWithSuggestions`
   - `branchCreateFnPath`
+  - `importantBlocksApproval`
+  - `maxReviewThreadsBeforeForceApprove`
 
 
 
@@ -71,7 +74,10 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
 ## Custom params
 
 - `removeLabel`: `"sm_test_review_triggered"`
+- `allowApproveWithSuggestions` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
+- `importantBlocksApproval` _(used by JS action)_
+- `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `configPath` _(used by JS action)_
 - `contentOutput` _(used by JS action)_

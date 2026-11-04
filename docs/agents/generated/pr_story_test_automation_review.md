@@ -43,7 +43,10 @@ _Prepare Test PR For Review Action (preJSAction for test-automation review agent
 - Side effects:
   - git push
 - Parameters (customParams):
+  - `allowApproveWithSuggestions`
   - `branchCreateFnPath`
+  - `importantBlocksApproval`
+  - `maxReviewThreadsBeforeForceApprove`
 
 
 ### postJSAction: `postStoryTestAutomationReview.js`
@@ -86,9 +89,11 @@ _Post Story Test Automation Review Comments Action_
 
 - `removeLabel`: `"sm_story_test_review_triggered"`
 - `checkOpenPR`: `true`
-- `branchCreateFnPath` _(used by JS action)_
-- `aiRepository` _(used by JS action)_
 - `allowApproveWithSuggestions` _(used by JS action)_
+- `branchCreateFnPath` _(used by JS action)_
+- `importantBlocksApproval` _(used by JS action)_
+- `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
+- `aiRepository` _(used by JS action)_
 - `autoStartMerge` _(used by JS action)_
 - `autoStartMergeConfigFile` _(used by JS action)_
 - `autoStartRework` _(used by JS action)_
@@ -100,9 +105,7 @@ _Post Story Test Automation Review Comments Action_
 - `customStatuses` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
-- `importantBlocksApproval` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
-- `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `onApproved` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `reviewPolicy` _(used by JS action)_

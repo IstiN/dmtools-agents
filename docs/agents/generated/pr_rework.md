@@ -58,6 +58,7 @@ _Pre-CLI Rework Setup Action (preCliJSAction for pr_rework agent)_
   - git merge
 - Parameters (customParams):
   - `aiRepository`
+  - `allowApproveWithSuggestions`
   - `artefactRepository`
   - `branchCreateFnPath`
   - `branchSyncFnPath`
@@ -66,7 +67,9 @@ _Pre-CLI Rework Setup Action (preCliJSAction for pr_rework agent)_
   - `contexts`
   - `feedbackLoop.qualityGates.gates`
   - `fields`
+  - `importantBlocksApproval`
   - `jql`
+  - `maxReviewThreadsBeforeForceApprove`
   - `parentContextFetch`
   - `restoreFromReleases`
   - `scmProvider`
@@ -148,6 +151,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
   ```
 - `checkOpenPR`: `true`
 - `aiRepository` _(used by JS action)_
+- `allowApproveWithSuggestions` _(used by JS action)_
 - `artefactRepository` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
 - `branchSyncFnPath` _(used by JS action)_
@@ -156,7 +160,9 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `contexts` _(used by JS action)_
 - `feedbackLoop.qualityGates.gates` _(used by JS action)_
 - `fields` _(used by JS action)_
+- `importantBlocksApproval` _(used by JS action)_
 - `jql` _(used by JS action)_
+- `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_
 - `restoreFromReleases` _(used by JS action)_
 - `scmProvider` _(used by JS action)_

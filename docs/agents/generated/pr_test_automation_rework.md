@@ -45,11 +45,14 @@ _Pre-CLI Test Rework Setup Action (preCliJSAction for pr_test_automation_rework)
   - git checkout
   - git merge
 - Parameters (customParams):
+  - `allowApproveWithSuggestions`
   - `branchCreateFnPath`
   - `childQuestions`
   - `contexts`
   - `fields`
+  - `importantBlocksApproval`
   - `jql`
+  - `maxReviewThreadsBeforeForceApprove`
   - `parentContextFetch`
 
 
@@ -88,11 +91,14 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 
 - `removeLabel`: `"sm_test_rework_triggered"`
 - `checkOpenPR`: `true`
+- `allowApproveWithSuggestions` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `contexts` _(used by JS action)_
 - `fields` _(used by JS action)_
+- `importantBlocksApproval` _(used by JS action)_
 - `jql` _(used by JS action)_
+- `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_

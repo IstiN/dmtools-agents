@@ -11,7 +11,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `targetRepository` — repository override block (`owner`, `repo`, `baseBranch`, `workingDir`) — run the review against this repository instead of the project default.
 
 - `aiRepository` — repository the AI CLI works in when it differs from the PR repository.
-- `allowApproveWithSuggestions` — when `true`, the reviewer may approve a PR while leaving non-blocking suggestions.
+- `allowApproveWithSuggestions` — legacy knob (gh-1351): policy-derived now; setting it against the resolved `reviewPolicy` logs a conflict audit line and the policy wins.
 - `autoStartRework` — when `true`, automatically trigger the rework workflow when the review asks for changes.
 - `autoStartReworkConfigFile` — agent config file used for the auto-started rework workflow.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
@@ -57,11 +57,14 @@ _Prepare PR for Review Action (preCliJSAction for pr_review agent)_
 - Side effects:
   - post ticket comment (via tracker)
 - Parameters (customParams):
+  - `allowApproveWithSuggestions`
   - `childQuestions`
   - `commentMarkup`
   - `contexts`
   - `fields`
+  - `importantBlocksApproval`
   - `jql`
+  - `maxReviewThreadsBeforeForceApprove`
   - `parentContextFetch`
   - `reviewPolicy`
   - `reviewPolicy.identity`
@@ -117,16 +120,18 @@ _Post PR Review Comments Action_
 
 - `removeLabel`: `"sm_story_review_triggered"`
 - `checkOpenPR`: `true`
+- `allowApproveWithSuggestions` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
 - `contexts` _(used by JS action)_
 - `fields` _(used by JS action)_
+- `importantBlocksApproval` _(used by JS action)_
 - `jql` _(used by JS action)_
+- `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_
 - `reviewPolicy` _(used by JS action)_
 - `reviewPolicy.identity` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
-- `allowApproveWithSuggestions` _(used by JS action)_
 - `autoStartRework` _(used by JS action)_
 - `autoStartReworkConfigFile` _(used by JS action)_
 - `configPath` _(used by JS action)_
@@ -135,9 +140,7 @@ _Post PR Review Comments Action_
 - `customStatuses` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
-- `importantBlocksApproval` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
-- `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `onApproved` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `smFallback` _(used by JS action)_
