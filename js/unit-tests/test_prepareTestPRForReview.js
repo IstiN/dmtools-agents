@@ -9,18 +9,33 @@ function d4TrackersWith(mocks) {
  * Unit tests for js/prepareTestPRForReview.js
  */
 
-function loadPrepareTestPRForReview(mocks) {
-    var defaults = {
-        jira_get_ticket: function() { return { fields: { status: { name: 'In Testing' } } }; },
-        jira_move_to_status: function() {},
-        jira_post_comment: function() {},
-        jira_add_label: function() {},
-        cli_execute_command: function() { return ''; },
-        file_read: function() { return null; },
-        file_write: function() {}
-    };
+/** Mock defaults every loader variant starts from. */
+var baseMockDefaults = {
+    jira_get_ticket: function() { return { fields: { status: { name: 'In Testing' } } }; },
+    jira_move_to_status: function() {},
+    jira_post_comment: function() {},
+    jira_add_label: function() {},
+    cli_execute_command: function() { return ''; },
+    file_read: function() { return null; },
+    file_write: function() {}
+};
 
-    var allMocks = Object.assign({}, defaults, mocks);
+/** Per-key mock merge: test overrides win over the defaults. */
+function mergedMockOf(mocks, key, defaults) {
+    return Object.assign({}, defaults, (mocks && mocks[key]) || {});
+}
+
+/** gh-1351: the real reviewPolicy module (pure, no dmtools globals). */
+function loadReviewPolicyModuleMock() {
+    var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthor }), {});
+    return loadModule('js/common/reviewPolicy.js',
+        makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+}
+
+function loadPrepareTestPRForReview(mocks) {
+    var allMocks = Object.assign({}, baseMockDefaults, mocks);
 
     var scmMock = Object.assign({
         getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'trackstate' }; },
@@ -50,29 +65,23 @@ function loadPrepareTestPRForReview(mocks) {
         { cli_execute_command: allMocks.cli_execute_command, jira_search_by_jql: allMocks.jira_search_by_jql, file_write: allMocks.file_write }
     );
 
-    var githubHelpers = Object.assign({
+    var githubHelpers = mergedMockOf(mocks, 'githubHelpers', {
         getPRDetails: function() { return null; },
         fetchDiscussionsAndRawData: function() { return { markdown: '', rawThreads: {} }; }
-    }, mocks && mocks.githubHelpers || {});
+    });
 
-    var gitOpsMock = Object.assign({
+    var gitOpsMock = mergedMockOf(mocks, 'gitOpsMock', {
         writePRContext: function() {},
         checkoutPRBranch: function() {},
         getPRDiff: function() { return ''; }
-    }, mocks && mocks.gitOpsMock || {});
+    });
 
     return loadModule(
         'js/prepareTestPRForReview.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
             './configLoader.js': freshConfigLoader,
-            './common/reviewPolicy.js': (function() {
-                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
-                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
-                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
-                return loadModule('js/common/reviewPolicy.js',
-                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
-            })(),
+            './common/reviewPolicy.js': loadReviewPolicyModuleMock(),
             './common/githubHelpers.js': githubHelpers,
             './common/gitOps.js': gitOpsMock,
             './common/scm.js': { createScm: function() { return scmMock; } },

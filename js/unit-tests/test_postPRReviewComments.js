@@ -4,6 +4,12 @@
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+// gh-1351: the real reviewPolicy module (for the legacy-knob audit assertions).
+var reviewPolicyModule = loadModule('js/common/reviewPolicy.js',
+    makeRequire({
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+            makeRequire({ './machineAuthor.js': machineAuthorModule }), {})
+    }), {});
 
 
 var githubHelpersStub = {

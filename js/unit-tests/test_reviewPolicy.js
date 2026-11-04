@@ -464,3 +464,82 @@ suite('reviewPolicy — policyInputContextMarkdown (gh-1351 run-context file bod
         assert.contains(md, 'default');
     });
 });
+
+suite('reviewPolicy — bounds validation branches (gh-1351 ratchet)', function() {
+
+    test('valid numeric bounds ride numericBound and override the defaults', function() {
+        var p = mod.resolveReviewPolicy({ reviewPolicy: {
+            bounds: { densityBase: 1, densityK: 2, densityUnit: 100, densityMin: 1, densityMax: 5, polishMaxThreads: 4 }
+        } }, {});
+        assert.equal(p.bounds.densityBase, 1);
+        assert.equal(p.bounds.densityK, 2);
+        assert.equal(p.bounds.densityUnit, 100);
+        assert.equal(p.bounds.densityMin, 1);
+        assert.equal(p.bounds.densityMax, 5);
+        assert.equal(p.bounds.polishMaxThreads, 4);
+        assert.equal(p.bounds.sweepBatch, 10, 'unnamed bounds keep the epic default');
+    });
+
+    test('numeric bounds coerce numeric strings (documented coercion)', function() {
+        var p = mod.resolveReviewPolicy({ reviewPolicy: { bounds: { densityMax: '6' } } }, {});
+        assert.equal(p.bounds.densityMax, 6);
+    });
+
+    test('non-positive bound throws (0 and negative)', function() {
+        assert.ok(validationErrorMessage(function() {
+            mod.resolveReviewPolicy({ reviewPolicy: { bounds: { densityMax: 0 } } }, {});
+        }), 'zero bound must throw');
+        assert.ok(validationErrorMessage(function() {
+            mod.resolveReviewPolicy({ reviewPolicy: { bounds: { sweepBatch: -3 } } }, {});
+        }), 'negative bound must throw');
+    });
+
+    test('non-finite bound throws (Infinity)', function() {
+        var e = validationErrorMessage(function() {
+            mod.resolveReviewPolicy({ reviewPolicy: { bounds: { densityMax: 1e999 } } }, {});
+        });
+        assert.ok(e, 'Infinity bound must throw');
+    });
+
+    test('valid boolean bound accepted (opportunisticSameFilesOnly false)', function() {
+        var p = mod.resolveReviewPolicy({ reviewPolicy: { bounds: { opportunisticSameFilesOnly: false } } }, {});
+        assert.equal(p.bounds.opportunisticSameFilesOnly, false, 'the boolean override lands');
+        assert.equal(p.bounds.densityMax, 8, 'numbers ride the defaults');
+    });
+
+    test('non-object severities block throws', function() {
+        var e = validationErrorMessage(function() {
+            mod.resolveReviewPolicy({ reviewPolicy: { severities: 'relaxed' } }, {});
+        });
+        assert.ok(e, 'string severities must throw');
+    });
+
+    test('non-object bounds block throws', function() {
+        var e = validationErrorMessage(function() {
+            mod.resolveReviewPolicy({ reviewPolicy: { bounds: 42 } }, {});
+        });
+        assert.ok(e, 'number bounds must throw');
+    });
+
+    test('non-object identity block throws', function() {
+        var e = validationErrorMessage(function() {
+            mod.resolveReviewPolicy({ reviewPolicy: { identity: 'nope' } }, {});
+        });
+        assert.ok(e, 'string identity must throw');
+    });
+
+    test('severity entry that is not an object throws', function() {
+        var e = validationErrorMessage(function() {
+            mod.resolveReviewPolicy({ reviewPolicy: { severities: { NIT: 'polish' } } }, {});
+        });
+        assert.ok(e, 'bare-string severity entry must throw');
+    });
+
+    test('null severities/bounds blocks ride the preset silently', function() {
+        var p = mod.resolveReviewPolicy({ reviewPolicy: { preset: 'relaxed', severities: null, bounds: null, identity: null } }, {});
+        assert.equal(p.preset, 'relaxed');
+        assert.equal(p.severities.SUGGESTION.round, 'none');
+        assert.equal(p.bounds.densityMax, 8);
+        assert.deepEqual(p.identity, {}, 'null identity becomes an empty object');
+    });
+});

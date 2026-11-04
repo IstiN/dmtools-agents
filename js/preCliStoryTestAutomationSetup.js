@@ -407,6 +407,11 @@ function testCaseTypeOf(projectConfig) {
         : 'Test Case';
 }
 
+/** gh-1351: the leg's resolved reviewPolicy — a malformed config throws HERE. */
+function resolveLegReviewPolicy(projectConfig, params) {
+    return reviewPolicyModule.resolveReviewPolicy(projectConfig, params.jobParams || params);
+}
+
 /** Everything the setup steps need, resolved once, in the original order. */
 function resolveSetupContext(params) {
     var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
@@ -416,10 +421,6 @@ function resolveSetupContext(params) {
     var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     var customParams = (params.jobParams || params).customParams || {};
     var tracker = trackersModule.createTracker(projectConfig, customParams);
-    // gh-1351: hard validation at leg start — a malformed reviewPolicy throws
-    // a ReviewPolicyValidationError HERE, before any side effect.
-    var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(
-        projectConfig, params.jobParams || params);
     return {
         actualParams: actualParams,
         folder: folder,
@@ -428,7 +429,7 @@ function resolveSetupContext(params) {
         projectConfig: projectConfig,
         testCaseType: testCaseTypeOf(projectConfig),
         customParams: customParams,
-        reviewPolicy: reviewPolicy,
+        reviewPolicy: resolveLegReviewPolicy(projectConfig, params),
         tracker: tracker,
         statuses: resolveStatuses(customParams),
         testFilesPath: customParams.testFilesGlob || 'testing/'
@@ -535,6 +536,9 @@ if (typeof module !== 'undefined' && module.exports) {
         removeIrrelevantTestCode: removeIrrelevantTestCode,
         removeTestCodeForIrrelevantTc: removeTestCodeForIrrelevantTc,
         getTestCaseDirectory: getTestCaseDirectory,
-        testCaseTypeOf: testCaseTypeOf
+        testCaseTypeOf: testCaseTypeOf,
+        // gh-1351: the leg's reviewPolicy resolution + run-context stamp
+        resolveLegReviewPolicy: resolveLegReviewPolicy,
+        stepWriteReviewPolicyContext: stepWriteReviewPolicyContext
     };
 }
