@@ -1558,18 +1558,27 @@ function gh1331PassedEntry(tcKey) {
     };
 }
 
+/** The default cli answers of the two-guard triage harness (a table, not a branch chain). */
+function gh1331CliTable(opts) {
+    return {
+        'git branch --show-current': 'test/BUG-150',
+        'git rev-parse HEAD': opts.buildSha || 'sha-new',
+        'git status --short -- testing': '?? testing/tests/x.py',
+        'git diff --cached --stat': ' testing/tests/x.py | 1 +'
+    };
+}
+
 /** The two-guard triage harness: configurable comments, build SHA, entries. */
 function gh1331Triage(opts) {
+    var cliTable = gh1331CliTable(opts);
     return triageModule({
         comments: opts.comments || [],
         linkedTestCases: opts.linkedTestCases || gh1331GuardPair(),
+        overall: opts.overall,
         resultEntries: opts.resultEntries,
         cli: opts.cli || function(o) {
-            if (o.command === 'git branch --show-current') return 'test/BUG-150';
-            if (o.command === 'git rev-parse HEAD') return opts.buildSha || 'sha-new';
-            if (o.command === 'git status --short -- testing') return '?? testing/tests/x.py';
-            if (o.command === 'git diff --cached --stat') return ' testing/tests/x.py | 1 +';
-            return '';
+            var answer = cliTable[o.command];
+            return answer === undefined ? '' : answer;
         }
     });
 }

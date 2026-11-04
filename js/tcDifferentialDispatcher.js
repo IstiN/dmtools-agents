@@ -372,39 +372,103 @@ function dispatcherMetaOf(request, vars) {
 }
 
 /**
- * gh-1331: the bounce/escalation gate. Detection runs FIRST (a fresh trade
- * flip marks the pair — the escalation must not wait for the other anchors
- * to expire), then the suppression anchors decide (pair conflict → prior
- * bounce on the same range → open ledger item). A suppressed bounce resolves
- * the request (the attribution completed) and routes as maintenance; an
- * unsuppressed one stamps the registry's bounce anchor for the laps ahead.
+ * The member-evidence snapshot for a pair-conflict record: the dispatched
+ * request carries its own script + last-green build; a partner TC falls back
+ * to its registry record. (The free-text cap is applied by recordConflicts.)
  */
-function gateRouteForAlternation(request, vars, routes, verdict) {
+function dispatcherMetaOf(request, vars) {
+    return function(tcKey) {
+        if (String(tcKey) === String(request.tcKey)) {
+            return {
+                verifies: null,
+                testPath: request.testPath || null,
+                failureSummary: request.failureSummary || null,
+                lastGreenSha: request.lastGreenSha || null
+            };
+        }
+        var state = tcRunRegistry.stateOf(vars.registry, tcKey);
+        return {
+            verifies: null,
+            testPath: null,
+            failureSummary: null,
+            lastGreenSha: state ? state.lastGreenSha : null
+        };
+    };
+}
+
+/** Marks the pair when the request's TC shows the trade signature. */
+function markConflictsFor(request, vars, routes) {
     var detections = tcAlternation.scanAlternations(vars.registry, request.tcKey);
-    if (detections.length) {
-        var marked = tcAlternation.recordConflicts(
-            vars.registry, detections, new Date().toISOString(), dispatcherMetaOf(request, vars));
-        vars.registry = marked.registry;
-        routes.conflicts = routes.conflicts.concat(marked.added);
-    }
-    var suppression = tcAlternation.bounceSuppression(
-        vars.registry, vars.ledger, request.tcKey, request.lastGreenSha, request.sha);
+    if (!detections.length) return;
+    var marked = tcAlternation.recordConflicts(
+        vars.registry, detections, new Date().toISOString(), dispatcherMetaOf(request, vars));
+    vars.registry = marked.registry;
+    routes.conflicts = routes.conflicts.concat(marked.added);
+}
+
+/** The unsuppressed bounce: the earned route, the range anchor stamped for the laps ahead. */
+function routeEarnedBounce(request, vars, routes, verdict) {
     vars.registry = tcRunRegistry.recordBounce(vars.registry, request.tcKey, {
         at: new Date().toISOString(),
         lastGreenSha: request.lastGreenSha,
-        kind: suppression ? 'suppressed' : (verdict.action === tcTriage.ACTION_ESCALATE ? 'escalated' : 'earned')
+        kind: 'earned'
     });
-    vars.ledger = tcMaintenanceLedger.resolveFindings(vars.ledger, [request.id], RESOLVE_VIA_GREEN);
-    if (suppression) {
-        var suppressed = tcAlternation.suppressedVerdict(verdict, suppression);
-        vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, suppressedEntry(request, suppressed));
-        routes.maintained.push(suppressed);
-        routes.suppressedBounces.push({ tcKey: request.tcKey, kind: suppression.kind, reason: suppressed.reason });
-        console.log('gh-1331: bounce for ' + request.tcKey + ' suppressed (' + suppression.kind + ')');
+    routes.bounced.push(verdict);
+}
+
+/**
+ * gh-1331: the earned-bounce gate. Detection runs FIRST (a fresh trade flip
+ * marks the pair — the escalation must not wait for the other anchors to
+ * expire), then the suppression anchors decide (pair conflict → prior bounce
+ * on the same range → open ledger item). A suppressed bounce resolves the
+ * request (the attribution completed) and routes as its own kind — NEVER as
+ * a maintained (red-on-old) finding; an unsuppressed one stamps the
+ * registry's bounce anchor for the laps ahead.
+ */
+function gateBounceRoute(request, vars, routes, verdict) {
+    markConflictsFor(request, vars, routes);
+    var suppression = tcAlternation.bounceSuppression(
+        vars.registry, vars.ledger, request.tcKey, request.lastGreenSha, request.sha);
+    if (!suppression) {
+        routeEarnedBounce(request, vars, routes, verdict);
         return;
     }
-    if (verdict.action === tcTriage.ACTION_BOUNCE) routes.bounced.push(verdict);
-    else routes.escalated.push(verdict);
+    vars.registry = tcRunRegistry.recordBounce(vars.registry, request.tcKey, {
+        at: new Date().toISOString(),
+        lastGreenSha: request.lastGreenSha,
+        kind: 'suppressed'
+    });
+    var suppressed = tcAlternation.suppressedVerdict(verdict, suppression);
+    vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, suppressedEntry(request, suppressed));
+    // the suppressed route has its own bucket: it is the GREEN-on-old case,
+    // so the maintained section's "fails there too" claim must never render
+    // for it (gh-1331 review).
+    routes.suppressedBounces.push({ verdict: suppressed, tcKey: request.tcKey, kind: suppression.kind, reason: suppressed.reason });
+    console.log('gh-1331: bounce for ' + request.tcKey + ' suppressed (' + suppression.kind + ')');
+}
+
+/**
+ * gh-1331: the bounce/escalation gate. gh-1331 review: the suppression gate
+ * covers ACTION_BOUNCE only — a bounce-cap escalation passes through UNGATED,
+ * mirroring the automation leg (gateBounceForAlternation); its loop-stop fact
+ * ("bounce cap reached") reaches the owner instead of being folded away.
+ */
+function gateRouteForAlternation(request, vars, routes, verdict) {
+    // the request is consumed — the bounce/escalation (or its gh-1331
+    // suppression) is the record
+    vars.ledger = tcMaintenanceLedger.resolveFindings(vars.ledger, [request.id], RESOLVE_VIA_GREEN);
+    if (verdict.action !== tcTriage.ACTION_BOUNCE) {
+        // the cap escalation is a loop-stop too — anchor its range so later
+        // laps cannot re-bounce the same unresolved range behind the owner's back
+        vars.registry = tcRunRegistry.recordBounce(vars.registry, request.tcKey, {
+            at: new Date().toISOString(),
+            lastGreenSha: request.lastGreenSha,
+            kind: 'escalated'
+        });
+        routes.escalated.push(verdict);
+        return;
+    }
+    gateBounceRoute(request, vars, routes, verdict);
 }
 
 // ── tracker side effects (quiet — never fail the tick on a write) ────────────
@@ -460,25 +524,42 @@ function clearDispatchLabels(tracker, ticketKey, parkLabel) {
  * automation leg uses (bounce / escalation) plus the ledger digest (the
  * parked section — remaining stalls stay visible).
  */
-function buildReportComment(routes, ledger) {
-    var sections = [];
-    (routes.conflicts || []).forEach(function(record) {
-        sections.push(tcAlternation.buildConflictComment(record));
+function conflictSections(routes) {
+    return (routes.conflicts || []).map(function(record) {
+        return tcAlternation.buildConflictComment(record);
     });
-    if ((routes.suppressedBounces || []).length) {
-        var suppressedLines = ['The scripted differential rerun confirmed the regression, but the bounce is *suppressed* (gh-1331) — a loop-stop anchor owns it:'];
-        routes.suppressedBounces.forEach(function(s) {
-            suppressedLines.push('* ' + s.tcKey + ' — ' + s.reason);
-        });
-        sections.push(suppressedLines.join('\n'));
-    }
+}
+
+/** The suppressed (GREEN-on-old) section — never the maintained template. */
+function suppressedBounceSection(routes) {
+    if (!(routes.suppressedBounces || []).length) return null;
+    var lines = ['The scripted differential rerun confirmed the regression, but the bounce is *suppressed* (gh-1331) — a loop-stop anchor owns it:'];
+    routes.suppressedBounces.forEach(function(s) {
+        lines.push('* ' + s.tcKey + ' — ' + s.reason);
+    });
+    return lines.join('\n');
+}
+
+/** One stall line per unavailable attempt (the request stays parked). */
+function stalledSections(routes) {
+    return routes.stalled.map(function(s) {
+        return 'The differential rerun for ' + s.tcKey + ' could not run' +
+            (s.detail ? ' — ' + s.detail : '') + '. The request stays parked and visible in the maintenance-ledger digest.';
+    });
+}
+
+function buildReportComment(routes, ledger) {
+    var sections = conflictSections(routes);
+    var suppressed = suppressedBounceSection(routes);
+    if (suppressed) sections.push(suppressed);
     if (routes.bounced.length) sections.push(tcTriage.buildBounceComment(routes.bounced));
     if (routes.escalated.length) sections.push(tcTriage.buildEscalationComment(routes.escalated));
+    // the maintained template is ONLY for genuine red-on-old findings — a
+    // suppressed bounce is the green-on-old case and renders its own section
     if (routes.maintained.length) sections.push('The scripted differential rerun (gh-1345) ran the failing TC on its last-green build and it fails there too — ' +
         'the failure predates the change; the finding stays in the TC maintenance ledger.');
-    routes.stalled.forEach(function(s) {
-        sections.push('The differential rerun for ' + s.tcKey + ' could not run' +
-            (s.detail ? ' — ' + s.detail : '') + '. The request stays parked and visible in the maintenance-ledger digest.');
+    stalledSections(routes).forEach(function(section) {
+        sections.push(section);
     });
     if (routes.deferred > 0) {
         sections.push(MAX_DISPATCHES_PER_TICK + '-request-per-tick cap: ' + routes.deferred +
@@ -488,12 +569,21 @@ function buildReportComment(routes, ledger) {
     return sections.join('\n\n');
 }
 
+/** The route names present in a dispatch (gh-1331 review: suppressed laps surface).
+ *  A pair conflict is an escalation SURFACE, not a request route — it is
+ *  reported in the comment + payload, never folded into the action name. */
+function routeNamesOf(routes) {
+    return [
+        [routes.bounced.length, 'bounced'],
+        [routes.escalated.length, 'escalated'],
+        [routes.maintained.length, 'maintained'],
+        [routes.stalled.length, 'stalled'],
+        [(routes.suppressedBounces || []).length, 'suppressed']
+    ].filter(function(present) { return present[0]; }).map(function(present) { return present[1]; });
+}
+
 function routeNameOf(routes) {
-    var names = [];
-    if (routes.bounced.length) names.push('bounced');
-    if (routes.escalated.length) names.push('escalated');
-    if (routes.maintained.length) names.push('maintained');
-    if (routes.stalled.length) names.push('stalled');
+    var names = routeNamesOf(routes);
     return names.length > 1 ? 'mixed' : (names[0] || 'stalled');
 }
 
@@ -590,7 +680,12 @@ function dispatchResult(routes, ticketKey, dispatched) {
         bouncedTestCases: routes.bounced.map(function(v) { return v.tcKey; }),
         maintainedTestCases: routes.maintained.map(function(v) { return v.tcKey; }),
         escalatedTestCases: routes.escalated.map(function(v) { return v.tcKey; }),
-        stalledTestCases: routes.stalled.map(function(s) { return s.tcKey; })
+        stalledTestCases: routes.stalled.map(function(s) { return s.tcKey; }),
+        // gh-1331 review: the new routes are first-class in the payload —
+        // downstream consumers tell a suppressed bounce from a genuine
+        // red-on-old maintenance route, and fresh pair conflicts are visible.
+        suppressedTestCases: (routes.suppressedBounces || []).map(function(s) { return s.tcKey; }),
+        conflicts: (routes.conflicts || []).map(function(record) { return record.pairKey; })
     };
 }
 

@@ -964,25 +964,49 @@ function triageFailedEntry(outcome, entry, vars) {
     routeVerdict(outcome, entry, verdict);
 }
 
+/** The run entry of one TC (the last entry wins), or null. */
+function runEntryOf(result, tcKey) {
+    var entry = null;
+    (result.results || []).forEach(function(e) {
+        if (e && e.testCaseKey === tcKey) entry = e;
+    });
+    return entry;
+}
+
+/** The AC reference of one TC — the linked TC metadata wins over the run entry. */
+function verifiesOf(linked, entry) {
+    return linked.verifies || (entry && entry.verifies) || null;
+}
+
+/** The registry's recorded last-green build of one TC, or null. */
+function lastGreenShaOf(registry, tcKey) {
+    var state = tcRunRegistry.stateOf(registry, tcKey);
+    return state ? state.lastGreenSha : null;
+}
+
 /**
  * The member-evidence snapshot for a pair-conflict record: the AC reference
  * (verifies) from the linked TC metadata, the script + failure summary from
- * the run entry, the recorded last-green build from the registry.
+ * the run entry, the recorded last-green build from the registry. The
+ * free-text cap is applied by recordConflicts (marker hygiene).
+ */
+function pairConflictMetaFor(vars, tcKey) {
+    var linked = linkedRoleSourceOf(vars.linkedMap[tcKey]) || {};
+    var entry = runEntryOf(vars.result, tcKey);
+    return {
+        verifies: verifiesOf(linked, entry),
+        testPath: (entry && entry.testPath) || null,
+        failureSummary: (entry && entry.failureSummary) || null,
+        lastGreenSha: lastGreenShaOf(vars.outcome.registry, tcKey)
+    };
+}
+
+/**
+ * The member-evidence snapshot resolver for a pair-conflict record.
  */
 function pairConflictMetaResolver(vars) {
     return function(tcKey) {
-        var linked = linkedRoleSourceOf(vars.linkedMap[tcKey]) || {};
-        var entry = null;
-        (vars.result.results || []).forEach(function(e) {
-            if (e && e.testCaseKey === tcKey) entry = e;
-        });
-        var state = tcRunRegistry.stateOf(vars.outcome.registry, tcKey);
-        return {
-            verifies: linked.verifies || (entry && entry.verifies) || null,
-            testPath: (entry && entry.testPath) || null,
-            failureSummary: (entry && entry.failureSummary) || null,
-            lastGreenSha: state ? state.lastGreenSha : null
-        };
+        return pairConflictMetaFor(vars, tcKey);
     };
 }
 
@@ -1075,7 +1099,21 @@ function schemaGapHintSection(triage) {
 function triageBugFailures(params, result, ctx, bookkeeping) {
     var at = new Date().toISOString();
     var outcome = newTriageOutcome(bookkeeping);
-    var vars = {
+    var vars = triageVarsFor(result, ctx, at, outcome);
+    (result.results || []).forEach(function(entry) {
+        applyEntryToOutcome(outcome, entry, vars);
+    });
+    crossLapScan(outcome, vars);
+    outcome.registryChanged = JSON.stringify(outcome.registry) !== JSON.stringify(bookkeeping.registry);
+    outcome.ledgerChanged = JSON.stringify(outcome.ledger) !== JSON.stringify(bookkeeping.ledger);
+    outcome.schemaGapHint = schemaGapHintSection(outcome);
+    if (outcome.schemaGapHint) console.warn(outcome.schemaGapHint);
+    return outcome;
+}
+
+/** The shared triage vars for one bug lap (triage and bookkeeping read the same map). */
+function triageVarsFor(result, ctx, at, outcome) {
+    return {
         outcome: outcome,
         result: result,
         bugKey: ctx.storyKey,
@@ -1084,26 +1122,63 @@ function triageBugFailures(params, result, ctx, bookkeeping) {
         runBuildSha: currentBuildSha(result, null, ctx.workingDir),
         at: at
     };
+}
+
+/**
+ * gh-1331: the lap's cross-lap bookkeeping — a stable green resolves marked
+ * pairs (resolution re-enables normal triage), then the full-lap scan marks
+ * any fresh trade flip — the escalation surface rides the digest even when
+ * no bounce was pending this lap.
+ */
+function crossLapScan(outcome, vars) {
+    outcome.registry = tcAlternation.reconcileConflicts(outcome.registry);
+    var lapDetections = tcAlternation.scanAlternations(outcome.registry);
+    if (!lapDetections.length) return;
+    var marked = tcAlternation.recordConflicts(
+        outcome.registry, lapDetections, vars.at, pairConflictMetaResolver(vars));
+    outcome.registry = marked.registry;
+    outcome.newConflicts = outcome.newConflicts.concat(marked.added);
+}
+
+/**
+ * gh-1331 (rework): the cross-lap bookkeeping for an ALL-GREEN bug lap.
+ * The canonical pair-resolution lap has no failed TC — the failed-lap triage
+ * gate never sees it — so the greens, the pair reconciliation and the
+ * marker posting happen HERE: a pair record that never clears would keep
+ * its `contradictory-pair` suppression anchor standing forever, silently
+ * routing the members' future genuine regressions to maintenance.
+ */
+function bookeepGreenBugRun(params, result, ctx) {
+    var at = new Date().toISOString();
+    var bookkeeping = bugBookkeeping.loadBugBookkeeping(getTracker(), ctx.storyKey, params, ctx.config);
+    var outcome = newTriageOutcome(bookkeeping);
+    var vars = triageVarsFor(result, ctx, at, outcome);
     (result.results || []).forEach(function(entry) {
         applyEntryToOutcome(outcome, entry, vars);
     });
-    // gh-1331 cross-lap bookkeeping: a stable green resolves marked pairs
-    // (resolution re-enables normal triage), then the full-lap scan marks any
-    // fresh trade flip — the escalation surface rides the digest even when no
-    // bounce was pending this lap.
-    outcome.registry = tcAlternation.reconcileConflicts(outcome.registry);
-    var lapDetections = tcAlternation.scanAlternations(outcome.registry);
-    if (lapDetections.length) {
-        var marked = tcAlternation.recordConflicts(
-            outcome.registry, lapDetections, at, pairConflictMetaResolver(vars));
-        outcome.registry = marked.registry;
-        outcome.newConflicts = outcome.newConflicts.concat(marked.added);
+    crossLapScan(outcome, vars);
+    postMarkerIfChanged(ctx.storyKey,
+        JSON.stringify(outcome.registry) !== JSON.stringify(bookkeeping.registry),
+        tcRunRegistry.buildRegistryMarker(outcome.registry), 'TC run registry');
+    postConflictEscalationsQuietly(ctx.storyKey, outcome.newConflicts);
+}
+
+/** Best-effort comment post (an escalation surface — never fails the run). */
+function postCommentSafely(storyKey, comment, label) {
+    if (!comment) return;
+    try {
+        getTracker().postComment(storyKey, comment);
+        console.log('✅ Posted', label, 'to', storyKey);
+    } catch (e) {
+        console.warn('Failed to post', label, '(non-fatal):', e);
     }
-    outcome.registryChanged = JSON.stringify(outcome.registry) !== JSON.stringify(bookkeeping.registry);
-    outcome.ledgerChanged = JSON.stringify(outcome.ledger) !== JSON.stringify(bookkeeping.ledger);
-    outcome.schemaGapHint = schemaGapHintSection(outcome);
-    if (outcome.schemaGapHint) console.warn(outcome.schemaGapHint);
-    return outcome;
+}
+
+/** The gh-1331 pair escalations of a lap — one comment per pair (records never re-escalate). */
+function postConflictEscalationsQuietly(storyKey, newConflicts) {
+    (newConflicts || []).forEach(function(record) {
+        postCommentSafely(storyKey, tcAlternation.buildConflictComment(record), 'gh-1331 pair escalation');
+    });
 }
 
 /** Posts a machine marker comment when its payload is not already current. */
@@ -1159,7 +1234,17 @@ function persistBugTestScripts(ctx) {
  * (stories, bugs without failures, and blocked_by_human runs fall through).
  */
 function handleBugWithProductFailure(params, result, ctx) {
-    if (!isTriagableBugRun(params, result, ctx)) {
+    if (!isBookkeepableBugRun(params, result, ctx)) {
+        return null;
+    }
+    if (failedResultsOf(result).length === 0) {
+        // gh-1331 rework: the all-green lap never triages (nothing failed),
+        // but it is exactly the pair-resolution lap — the cross-lap
+        // bookkeeping (greens + reconcileConflicts + markers) runs HERE, or
+        // a marked pair could never clear and its stale contradictory-pair
+        // anchor would suppress the members' future genuine regressions
+        // forever.
+        bookeepGreenBugRun(params, result, ctx);
         return null;
     }
 
@@ -1196,12 +1281,22 @@ function failedResultsOf(result) {
 }
 
 /**
- * The triage gate: bugs only, at least one failed TC, and not a
- * blocked_by_human run (missing setup is environment/ops territory — the
- * blocked gate owns it downstream; nothing there is attributable to the fix).
+ * The bug-run gate for the gh-1331 cross-lap bookkeeping: bugs only, and
+ * never the blocked_by_human lane (missing setup is environment/ops
+ * territory — the blocked gate owns it downstream). EVERY bookkeeping-worthy
+ * bug lap qualifies — failed laps triage, all-green laps reconcile.
+ */
+function isBookkeepableBugRun(params, result, ctx) {
+    if (bugIssueTypeOf(params) !== ctx.jiraConfig.issueTypes.BUG) return false;
+    return (result.overall || '').toLowerCase() !== 'blocked_by_human';
+}
+
+/**
+ * The triage gate: at least one failed TC, and not a blocked_by_human run.
+ * The bug-type and failed-count checks live in the caller's dispatch (the
+ * bookkeeping gate runs wider — all-green laps still book their greens).
  */
 function isTriagableBugRun(params, result, ctx) {
-    if (bugIssueTypeOf(params) !== ctx.jiraConfig.issueTypes.BUG) return false;
     if (failedResultsOf(result).length === 0) return false;
     return (result.overall || '').toLowerCase() !== 'blocked_by_human';
 }

@@ -49,18 +49,18 @@ function redRun(r, tcKey, sha) {
     return registry.recordFailure(r, tcKey, { sha: sha, verdict: 'bounce', role: 'regression-guard' });
 }
 
-function ledgerWithBounceFinding(tcKey, opts) {
-    opts = opts || {};
-    var l = tcLedger.emptyLedger();
-    var verdict = {
+/** The bounce-finding verdict fixture (opts carry the overrides). */
+function bounceFindingVerdict(tcKey, opts) {
+    var action = opts.verdictAction || (opts.resolved ? 'maintenance' : 'bounce');
+    return {
         tcKey: tcKey,
         role: 'regression-guard',
-        action: opts.resolved ? 'maintenance' : 'bounce',
+        action: action,
         reason: 'regression-from-change-range',
         ledgerEntry: {
             tcKey: tcKey,
             role: 'regression-guard',
-            verdict: opts.resolved ? 'maintenance' : 'bounce',
+            verdict: action,
             reason: 'regression-from-change-range',
             evidence: {
                 sha: opts.sha || 'S3',
@@ -78,7 +78,12 @@ function ledgerWithBounceFinding(tcKey, opts) {
             errorClass: 'assertion'
         }
     };
-    l = tcLedger.appendFinding(l, tcLedger.findingFromVerdict(verdict, {}));
+}
+
+function ledgerWithBounceFinding(tcKey, opts) {
+    opts = opts || {};
+    var l = tcLedger.emptyLedger();
+    l = tcLedger.appendFinding(l, tcLedger.findingFromVerdict(bounceFindingVerdict(tcKey, opts), {}));
     if (opts.resolved) {
         l = tcLedger.resolveFindings(l, tcLedger.openFindings(l).map(function(f) { return f.id; }), 'sweep');
     }
@@ -238,8 +243,13 @@ suite('tcAlternation: conflict records (one escalation per pair)', function() {
 
     test('AC: the member snapshot is marker-hygiene capped (the record lives in the persistent registry marker)', function() {
         var huge = new Array(2001).join('x');
-        var res = alt.recordConflicts(tradingRegistry(), alt.scanAlternations(tradingRegistry()), '2026-01-02T00:00:00.000Z', function() {
-            return { verifies: 'BUG-1', testPath: 'p.py', failureSummary: huge, lastGreenSha: 'S1' };
+        var res = alt.recordConflicts(tradingRegistry(), alt.scanAlternations(tradingRegistry()), '2026-01-02T00:00:00.000Z', function(tcKey) {
+            return {
+                verifies: 'BUG-1',
+                testPath: 'p.py',
+                failureSummary: tcKey === 'TS-A' ? huge : null,
+                lastGreenSha: 'S1'
+            };
         });
         var meta = res.registry.pairs['TS-A|TS-B'].members['TS-A'];
         assert.ok(meta.failureSummary.length <= 500, 'the snapshot is capped like the ledger notes, got ' + meta.failureSummary.length);

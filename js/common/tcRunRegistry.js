@@ -150,6 +150,19 @@ function recordGreen(prev, tcKey, evidence) {
 }
 
 /**
+ * The red-stamp fields of one failing run (gh-1331 review: the field
+ * stamping is its own unit — recordFailure only books it into the
+ * registry): the streak advances, the verdict evidence lands, the run
+ * window appends.
+ */
+function applyFailure(state, info, at) {
+    state.lastRedAt = at;
+    state.redRounds = state.redRounds + 1;
+    state.lastVerdict = (info && info.verdict) || null;
+    appendRun(state, 'red', (info && info.sha) || null, at);
+}
+
+/**
  * Records a red run for a TC: advances the consecutive-red streak.
  * Returns the NEW registry (never mutates the input).
  */
@@ -159,10 +172,7 @@ function recordFailure(prev, tcKey, info) {
     r.at = at;
     var state = carriedEntryState(entryOf(r, tcKey));
     state.role = (info && info.role) || state.role;
-    state.lastRedAt = at;
-    state.redRounds = state.redRounds + 1;
-    state.lastVerdict = (info && info.verdict) || null;
-    appendRun(state, 'red', (info && info.sha) || null, at);
+    applyFailure(state, info, at);
     r.tcs[tcKey] = state;
     return r;
 }
