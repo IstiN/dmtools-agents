@@ -38,3 +38,6 @@ site/factory/.playwright-cli/
 # python bytecode caches — regenerated per-run, never commit
 __pycache__/
 *.pyc
+
+# dmtools pipeline runtime artifact (target-workingdir marker - rewritten every leg, gh-1358)
+.dmtools-target-workingdir
