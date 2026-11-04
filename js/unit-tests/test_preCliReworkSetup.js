@@ -12,6 +12,20 @@
 
 var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
 
+// gh-1351: the real reviewPolicy module (pure chain) shared by every
+// preCliReworkSetup loader below — the run-context stamp + leg-start
+// validation read it.
+var gh1351ReviewPolicy = (function() {
+    var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthor }), {});
+    return loadModule('js/common/reviewPolicy.js',
+        makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+})();
+function loadPolicyModule() {
+    return gh1351ReviewPolicy;
+}
+
 var NOOP_MODULE = {};
 
 var reworkCommentMarkupModule = loadModule('js/common/commentMarkup.js',
@@ -36,6 +50,7 @@ function loadPreCliReworkSetup(configLoaderStub, mocks) {
     return loadModule(
         'js/preCliReworkSetup.js',
         makeRequire({
+            './common/reviewPolicy.js': gh1351ReviewPolicy,
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': mocks.__ghStub,
             './forkCheckout.js': forkCheckoutModule,
@@ -438,6 +453,7 @@ function makeActionHarness(overides) {
     var mod = loadModule(
         'js/preCliReworkSetup.js',
         makeRequire({
+            './common/reviewPolicy.js': gh1351ReviewPolicy,
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': ghStub,
             './forkCheckout.js': forkCheckoutModule,
@@ -505,6 +521,7 @@ function makeContractHarness(opts) {
     var mod = loadModule(
         'js/preCliReworkSetup.js',
         makeRequire({
+            './common/reviewPolicy.js': gh1351ReviewPolicy,
             './configLoader.js': { loadHookFn: function() { return null; } },
             './common/githubHelpers.js': makeGhStub(),
             './forkCheckout.js': forkCheckoutModule,
@@ -670,6 +687,7 @@ suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-79
         var mod = loadModule(
             'js/preCliReworkSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': gh1351ReviewPolicy,
                 './configLoader.js': {
                     loadProjectConfig: function() { return { git: { baseBranch: 'master' }, workingDir: null, repository: { owner: 'acme', repo: 'widgets' } }; },
                     paramsForConfigLoad: function(p) { return p; },
@@ -742,6 +760,7 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
         var mod = loadModule(
             'js/preCliReworkSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': gh1351ReviewPolicy,
                 './configLoader.js': {
                     loadProjectConfig: function() {
                         return {
@@ -819,6 +838,7 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
             var mod = loadModule(
                 'js/preCliReworkSetup.js',
                 makeRequire({
+                    './common/reviewPolicy.js': gh1351ReviewPolicy,
                     './configLoader.js': {
                         loadProjectConfig: function() {
                             return {
@@ -1413,6 +1433,7 @@ suite('preCliReworkSetup.action — diff-before-CI-detection (gh-1119 AC7)', fun
         var mod = loadModule(
             'js/preCliReworkSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': gh1351ReviewPolicy,
                 './configLoader.js': {
                     loadProjectConfig: function() {
                         return {
@@ -1664,6 +1685,7 @@ suite('preCliReworkSetup.action — context-assembly branches (gh-1220 character
         var mod = loadModule(
             'js/preCliReworkSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': gh1351ReviewPolicy,
                 './configLoader.js': {
                     loadProjectConfig: function() {
                         return {
@@ -1743,3 +1765,99 @@ suite('preCliReworkSetup.action — context-assembly branches (gh-1220 character
         assert.equal(warned.length, 1, 'the failure is announced once — got: ' + JSON.stringify(h.logs.warn));
     });
 });
+
+suite('preCliReworkSetup — gh-1351 reviewPolicy: hard validation + review_policy.md contract', function() {
+
+    test('ensureInputContextContract stamps review_policy.md (refreshed every leg, like review_state.md)', function() {
+        var h = makeContractHarness();
+        var policy = loadPolicyModule().defaultPolicy();
+        h.mod.ensureInputContextContract('input/PROJ-123', null, 7, contractThreads(['PRRT_a']), [], policy);
+        assert.ok(h.files['input/PROJ-123/review_policy.md'], 'review_policy.md written');
+        assert.contains(h.files['input/PROJ-123/review_policy.md'], '| Severity | Round | Fix | Gates approval |');
+        assert.contains(h.files['input/PROJ-123/review_policy.md'], 'default');
+    });
+
+    test('ensureInputContextContract without an explicit policy still stamps the built-in default', function() {
+        var h = makeContractHarness();
+        var written = h.mod.ensureInputContextContract('input/PROJ-123', null, 7, {}, []);
+        assert.equal(written.indexOf('review_policy.md') !== -1, true,
+            'review_policy.md rides the pinned input contract');
+        assert.contains(h.files['input/PROJ-123/review_policy.md'], 'built-in default');
+    });
+
+    function gh1351ReworkLoad(configOverrides) {
+        var files = {};
+        var errors = [];
+        var config = makeConfig(Object.assign({ workingDir: null }, configOverrides || {}));
+        var configLoaderStub = {
+            loadProjectConfig: function() { return config; },
+            paramsForConfigLoad: function(p) { return p; },
+            loadHookFn: function() { return null; },
+            createScm: function() {
+                return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } };
+            }
+        };
+        var ghStub = makeGhStub();
+        ghStub.findPRForTicket = function() { return { number: 7, url: 'https://github.com/acme/widgets/pull/7' }; };
+        ghStub.getPRDetails = function(scm, number) {
+            return { number: number, title: 't', html_url: 'u', state: 'open',
+                head: { ref: 'ai/PROJ-123', sha: 'sha-123' }, base: { ref: 'master' }, user: { login: 'a' } };
+        };
+        var mod = loadModule(
+            'js/preCliReworkSetup.js',
+            makeRequire({
+                './common/reviewPolicy.js': gh1351ReviewPolicy,
+                './configLoader.js': configLoaderStub,
+                './common/githubHelpers.js': ghStub,
+                './forkCheckout.js': forkCheckoutModule,
+                './common/gitOps.js': {
+                    checkoutPRBranch: function() {}, detectMergeConflicts: function() { return []; },
+                    getPRDiff: function() { return ''; }, writePRContext: function() {},
+                    writeInputFile: function(path, content) { files[path] = content; }
+                },
+                './common/commentMarkup.js': reworkCommentMarkupModule,
+                './fetchQuestionsToInput.js': NOOP_MODULE,
+                './fetchParentContextToInput.js': NOOP_MODULE,
+                './restoreFromReleases.js': NOOP_MODULE,
+                './common/trackers.js': { createTracker: function() { return { postComment: function() {} }; } },
+                './common/setupCommands.js': loadModule('js/common/setupCommands.js'),
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+                './config.js': { resolveStatuses: function() { return {}; } }
+            }),
+            { file_read: function() { return null; }, file_write: function() {}, cli_execute_command: function() { return ''; } }
+        );
+        return {
+            run: function() {
+                var result;
+                try {
+                    result = mod.action({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} } });
+                } catch (e) {
+                    errors.push(String(e));
+                    return { success: false, thrown: true };
+                }
+                return result;
+            },
+            files: files,
+            errors: errors,
+            errorComment: function() { return errors.join('\n'); }
+        };
+    }
+
+    test('malformed project reviewPolicy fails the rework leg at start with the validation message', function() {
+        var h = gh1351ReworkLoad({ reviewPolicy: { preset: 'nope' } });
+        var result = h.run();
+        assert.equal(result.success, false, 'the rework leg fails at start');
+        var evidence = String(result.error || '') + h.errors.join('\n');
+        assert.contains(evidence, 'nope', 'the invalid preset is named');
+        assert.equal(Object.keys(h.files).indexOf('input/PROJ-123/review_policy.md'), -1,
+            'no policy file is stamped when the config is malformed');
+    });
+
+    test('a valid project policy is stamped into the rework run context', function() {
+        var h = gh1351ReworkLoad({ reviewPolicy: { preset: 'fix-everything' } });
+        var result = h.run();
+        assert.equal(result.success, true, 'a valid policy never fails the leg');
+        assert.contains(h.files['input/PROJ-123/review_policy.md'], 'fix-everything');
+    });
+});
+

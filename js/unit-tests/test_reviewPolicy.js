@@ -424,3 +424,43 @@ suite('reviewPolicy — census key mapping', function() {
         assert.deepEqual(mod.gatingCensusCount({ suggestion: 3 }, p), { count: 0, tier: null });
     });
 });
+
+suite('reviewPolicy — policyInputContextMarkdown (gh-1351 run-context file body)', function() {
+
+    test('renders the resolved preset, the resolution source and the tier table', function() {
+        var p = mod.presetPolicy('fix-everything');
+        var md = mod.policyInputContextMarkdown(p);
+        assert.contains(md, '# Review Policy');
+        assert.contains(md, 'fix-everything');
+        assert.contains(md, 'built-in preset');
+        assert.contains(md, 'projectConfig.reviewPolicy');
+        assert.contains(md, '| Severity | Round | Fix | Gates approval |');
+        assert.contains(md, '🪶 NIT | polish | mandatory |');
+    });
+
+    test('carries the density cap formula and the top-K/digest reviewer duties', function() {
+        var md = mod.policyInputContextMarkdown(mod.defaultPolicy());
+        assert.contains(md, 'clamp(round(2 + 3*sqrt(additions/200)), 2, 8)');
+        assert.contains(md, 'top-K', 'the reviewer ranks findings and posts top-K threads');
+        assert.contains(md, 'digest', 'overflow becomes a ranked digest list in the general comment');
+        assert.contains(md, 'never capped', '🚨/⚠️ threads are never capped');
+    });
+
+    test('carries the downgrade protocol wording (epic §3 escape hatch)', function() {
+        var md = mod.policyInputContextMarkdown(mod.defaultPolicy());
+        assert.contains(md, 'downgrade');
+        assert.contains(md, 'justification', 'a ⚠️→💡 downgrade needs a written justification in the census');
+    });
+
+    test('carries the machine-enforcement doctrine (model advisory, machine enforces)', function() {
+        var md = mod.policyInputContextMarkdown(mod.defaultPolicy());
+        assert.contains(md, 'advisory');
+        assert.contains(md, 'REQUEST_CHANGES');
+        assert.contains(md, 'APPROVE');
+    });
+
+    test('missing policy argument renders the built-in default', function() {
+        var md = mod.policyInputContextMarkdown(null);
+        assert.contains(md, 'default');
+    });
+});

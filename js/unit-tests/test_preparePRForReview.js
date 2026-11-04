@@ -689,3 +689,61 @@ test('buildSuccessResult shape', function() {
 });
 
 });
+
+suite('preparePRForReview — gh-1351 reviewPolicy: hard validation + run-context stamp', function() {
+
+    function gh1351PolicyLoad(opts) {
+        return prLoad(Object.assign({
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' } },
+            scm: { getPrComments: function() { return []; } }
+        }, opts || {}));
+    }
+
+    test('malformed projectConfig.reviewPolicy fails the leg at setup with the validation message', function() {
+        var rec = prRecorder();
+        var loaded = gh1351PolicyLoad({
+            record: rec,
+            config: {
+                repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' },
+                reviewPolicy: { severities: { BOGUS: { round: 'rework', fix: 'mandatory' } } }
+            }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.equal(result, false, 'the leg fails before any PR context is assembled');
+        var setupError = rec.comments.filter(function(c) {
+            return String(c.args && c.args.comment).indexOf('PR Review Setup Error') !== -1;
+        });
+        assert.equal(setupError.length, 1, 'the setup error comment is posted');
+        assert.contains(setupError[0].args.comment, 'BOGUS', 'the unknown tier is named');
+        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writePRContext'; }).length, 0,
+            'no side effect runs — validation happens before context assembly');
+    });
+
+    test('a valid project policy is stamped into the run context as review_policy.md', function() {
+        var rec = prRecorder();
+        var loaded = gh1351PolicyLoad({
+            record: rec,
+            config: {
+                repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' },
+                reviewPolicy: { preset: 'relaxed' }
+            }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success, 'a valid policy never fails the leg');
+        var writes = rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile' && g.path === 'input/TS-42/review_policy.md'; });
+        assert.equal(writes.length, 1, 'exactly one review_policy.md write');
+        assert.contains(writes[0].content, 'relaxed');
+        assert.contains(writes[0].content, '| Severity | Round | Fix | Gates approval |');
+    });
+
+    test('missing config stamps the built-in default silently', function() {
+        var rec = prRecorder();
+        var loaded = gh1351PolicyLoad({ record: rec });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        var writes = rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile' && g.path === 'input/TS-42/review_policy.md'; });
+        assert.equal(writes.length, 1, 'the default policy is still stamped — every run context carries it');
+        assert.contains(writes[0].content, 'default');
+    });
+
+});

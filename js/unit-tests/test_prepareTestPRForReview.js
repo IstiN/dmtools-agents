@@ -789,3 +789,80 @@ suite('prepareTestPRForReview: action error paths (gh-1186)', function() {
         assert.ok(comments.some(function(c) { return c.indexOf('Could not determine repository') !== -1; }));
     });
 });
+
+suite('prepareTestPRForReview — gh-1351 reviewPolicy: hard validation + run-context stamp', function() {
+
+    function gh1351Load(fileReadOverride) {
+        var gitOpsWrites = [];
+        return loadPrepareTestPRForReview({
+            file_read: function(args) {
+                var p = args && (args.path || args);
+                if (fileReadOverride && fileReadOverride(p) !== undefined) return fileReadOverride(p);
+                if (p && p.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            gitOpsMock: {
+                writeInputFile: function(path, content, label) { gitOpsWrites.push({ path: path, content: content }); }
+            },
+            githubHelpers: {
+                getPRDetails: function() {
+                    return { number: 55, html_url: 'https://github.com/IstiN/trackstate/pull/55',
+                        head: { ref: 'test/TS-90', sha: 'abc' }, base: { ref: 'main' }, changed_files: 3 };
+                },
+                fetchDiscussionsAndRawData: function() { return { markdown: '', rawThreads: {} }; }
+            },
+            scmMock: {
+                listPrs: function(state) {
+                    if (state === 'open') {
+                        return [{ number: 55, head: { ref: 'test/TS-90' }, html_url: 'https://github.com/IstiN/trackstate/pull/55' }];
+                    }
+                    return [];
+                }
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command.indexOf('rm -f') === 0) return '';
+                return '';
+            }
+        }) && gitOpsWrites;
+    }
+
+    test('a valid project policy is stamped as review_policy.md in the test-review input folder', function() {
+        var writes = gh1351Load(function(p) {
+            if (p === '.dmtools/config.js') {
+                return 'module.exports = { reviewPolicy: { preset: "fix-everything" } };';
+            }
+            return undefined;
+        });
+        var stamp = writes.filter(function(w) { return w.path === 'input/TS-90/review_policy.md'; });
+        assert.equal(stamp.length, 1, 'exactly one review_policy.md write, got: ' + JSON.stringify(writes.map(function(w) { return w.path; })));
+        assert.contains(stamp[0].content, 'fix-everything');
+    });
+
+    test('missing config stamps the built-in default silently', function() {
+        var writes = gh1351Load(null);
+        var stamp = writes.filter(function(w) { return w.path === 'input/TS-90/review_policy.md'; });
+        assert.equal(stamp.length, 1);
+        assert.contains(stamp[0].content, 'built-in default');
+    });
+
+    test('malformed project reviewPolicy fails the leg at setup with the validation message', function() {
+        var comments = [];
+        var module = loadPrepareTestPRForReview({
+            file_read: function(args) {
+                var p = args && (args.path || args);
+                if (p === '.dmtools/config.js') {
+                    return 'module.exports = { reviewPolicy: { severities: { WAT: { round: "rework", fix: "mandatory" } } } };';
+                }
+                if (p && p.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            cli_execute_command: function() { return ''; }
+        });
+        var result = module.action({ jobParams: { inputFolderPath: 'input/TS-90', customParams: {} } });
+        assert.equal(result, false, 'the leg fails before any PR context is assembled');
+        var setupError = comments.filter(function(c) { return String(c).indexOf('Test PR Review Setup Error') !== -1; });
+        assert.equal(setupError.length, 1, 'the setup error comment is posted');
+        assert.contains(setupError[0], 'WAT', 'the unknown tier is named');
+    });
+});
