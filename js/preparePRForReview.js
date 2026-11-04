@@ -57,14 +57,14 @@ function parseContext(params) {
 
 function loadContext(ctx) {
     ctx.config = configLoader.loadProjectConfig(ctx.params.jobParams || ctx.params);
-    // gh-1351: hard validation at leg start — a malformed reviewPolicy throws
-    // a ReviewPolicyValidationError HERE, before any side effect (the action
-    // catch posts the setup-error comment and the leg fails).
-    ctx.reviewPolicy = reviewPolicyModule.resolveReviewPolicy(
-        ctx.config, ctx.params.jobParams || ctx.params);
     ctx.scm = configLoader.createScm(ctx.config);
     ctx.tracker = trackersModule.createTracker(ctx.config,
         (ctx.params.jobParams && ctx.params.jobParams.customParams) || ctx.params.customParams || {});
+    // gh-1351: hard validation at leg start — a malformed reviewPolicy throws
+    // a ReviewPolicyValidationError HERE, before any side effect. The tracker
+    // is created FIRST so the failure is posted on the ticket, not just logged.
+    ctx.reviewPolicy = reviewPolicyModule.resolveReviewPolicy(
+        ctx.config, ctx.params.jobParams || ctx.params);
     return ctx;
 }
 
@@ -406,7 +406,12 @@ function action(params) {
     // block-scoped `noTicket` when the try threw early).
     var ctx = { noTicket: false, tracker: null };
     try {
-        ctx = loadContext(parseContext(params));
+        // loadContext MUTATES ctx in place and returns it — the in-place
+        // mutation is load-bearing (gh-1351): a reviewPolicy validation error
+        // thrown mid-load still leaves the resolved tracker on the ctx the
+        // catch uses, so the failure is posted on the ticket, not just logged.
+        ctx = parseContext(params);
+        loadContext(ctx);
 
         logPreparationStart(ctx);
 

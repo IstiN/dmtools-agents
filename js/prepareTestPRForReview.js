@@ -351,12 +351,12 @@ function resolveReviewSetup(params) {
     const inputFolder = getInputFolder(params, ticketKey);
     const issueType = getIssueType(params);
     var config = configLoader.loadProjectConfig(params.jobParams || params);
+    initTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
     // gh-1351: hard validation at leg start — a malformed reviewPolicy throws
-    // a ReviewPolicyValidationError HERE, before any side effect (the action
-    // catch posts the setup-error comment and the leg fails).
+    // a ReviewPolicyValidationError HERE, before any side effect. The tracker
+    // is initialized FIRST so the failure is posted on the ticket.
     var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(
         config, params.jobParams || params);
-    initTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
     return {
         ticketKey: ticketKey,
         inputFolder: inputFolder,

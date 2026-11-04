@@ -861,8 +861,13 @@ function action(params) {
         var customParams = runtime.customParams;
         var scm = runtime.scm;
         // Probe the tracker provider once — the same script then runs unchanged
-        // on Jira / ADO / GitHub deployments.
+        // on Jira / ADO / GitHub deployments. Created BEFORE the policy
+        // resolution (gh-1351) so a validation failure is posted on the
+        // ticket, not just logged.
         tracker = trackersModule.createTracker(config, customParams);
+        // gh-1351: hard validation at leg start — a malformed reviewPolicy
+        // throws a ReviewPolicyValidationError HERE, before any side effect.
+        var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(config, actualParams);
 
         restoreArtefactsQuietly(params);
 
@@ -923,8 +928,9 @@ function action(params) {
         // gh-799: pinned input contract — whatever armed this leg, the input
         // folder now ALWAYS carries the complete open-item picture (threads
         // with ids, CI failures, review verdict). Non-fatal: a placeholder
-        // write failure must not kill the leg.
-        enforceReworkInputContract(inputFolder, scm, prDetails, inputContext.discussionData, inputContext.failedChecks);
+        // write failure must not kill the leg. gh-1351: the resolved
+        // reviewPolicy rides the contract (review_policy.md).
+        enforceReworkInputContract(inputFolder, scm, prDetails, inputContext.discussionData, inputContext.failedChecks, reviewPolicy);
 
         // Step 7 & parent context + gh-1064 session delta snapshot/manifest
         enrichReworkInputStep(params, actualParams, {

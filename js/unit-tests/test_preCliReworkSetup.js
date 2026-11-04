@@ -410,6 +410,11 @@ function makeActionHarness(overides) {
         repository: overides.repository,
         jira: overides.jira
     };
+    // gh-1351: configPatch lets a test serve a project reviewPolicy (or any
+    // other config field) through the standard action harness.
+    if (overides.configPatch) {
+        Object.assign(config, overides.configPatch);
+    }
 
     var configLoaderStub = {
         loadProjectConfig: function() {
@@ -1785,79 +1790,26 @@ suite('preCliReworkSetup — gh-1351 reviewPolicy: hard validation + review_poli
         assert.contains(h.files['input/PROJ-123/review_policy.md'], 'built-in default');
     });
 
-    function gh1351ReworkLoad(configOverrides) {
-        var files = {};
-        var errors = [];
-        var config = makeConfig(Object.assign({ workingDir: null }, configOverrides || {}));
-        var configLoaderStub = {
-            loadProjectConfig: function() { return config; },
-            paramsForConfigLoad: function(p) { return p; },
-            loadHookFn: function() { return null; },
-            createScm: function() {
-                return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } };
-            }
-        };
-        var ghStub = makeGhStub();
-        ghStub.findPRForTicket = function() { return { number: 7, url: 'https://github.com/acme/widgets/pull/7' }; };
-        ghStub.getPRDetails = function(scm, number) {
-            return { number: number, title: 't', html_url: 'u', state: 'open',
-                head: { ref: 'ai/PROJ-123', sha: 'sha-123' }, base: { ref: 'master' }, user: { login: 'a' } };
-        };
-        var mod = loadModule(
-            'js/preCliReworkSetup.js',
-            makeRequire({
-                './common/reviewPolicy.js': gh1351ReviewPolicy,
-                './configLoader.js': configLoaderStub,
-                './common/githubHelpers.js': ghStub,
-                './forkCheckout.js': forkCheckoutModule,
-                './common/gitOps.js': {
-                    checkoutPRBranch: function() {}, detectMergeConflicts: function() { return []; },
-                    getPRDiff: function() { return ''; }, writePRContext: function() {},
-                    writeInputFile: function(path, content) { files[path] = content; }
-                },
-                './common/commentMarkup.js': reworkCommentMarkupModule,
-                './fetchQuestionsToInput.js': NOOP_MODULE,
-                './fetchParentContextToInput.js': NOOP_MODULE,
-                './restoreFromReleases.js': NOOP_MODULE,
-                './common/trackers.js': { createTracker: function() { return { postComment: function() {} }; } },
-                './common/setupCommands.js': loadModule('js/common/setupCommands.js'),
-                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
-                './config.js': { resolveStatuses: function() { return {}; } }
-            }),
-            { file_read: function() { return null; }, file_write: function() {}, cli_execute_command: function() { return ''; } }
-        );
-        return {
-            run: function() {
-                var result;
-                try {
-                    result = mod.action({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} } });
-                } catch (e) {
-                    errors.push(String(e));
-                    return { success: false, thrown: true };
-                }
-                return result;
-            },
-            files: files,
-            errors: errors,
-            errorComment: function() { return errors.join('\n'); }
-        };
-    }
+    test('a valid project policy is stamped into the rework run context', function() {
+        var h = makeActionHarness({
+            configPatch: { reviewPolicy: { preset: 'fix-everything' } }
+        });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} } });
+        assert.equal(result.success, true, 'a valid policy never fails the leg');
+        assert.ok(h.files['input/PROJ-123/review_policy.md'], 'review_policy.md written by the leg');
+        assert.contains(h.files['input/PROJ-123/review_policy.md'], 'fix-everything');
+    });
 
     test('malformed project reviewPolicy fails the rework leg at start with the validation message', function() {
-        var h = gh1351ReworkLoad({ reviewPolicy: { preset: 'nope' } });
-        var result = h.run();
+        var h = makeActionHarness({
+            configPatch: { reviewPolicy: { preset: 'nope' } }
+        });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} } });
         assert.equal(result.success, false, 'the rework leg fails at start');
-        var evidence = String(result.error || '') + h.errors.join('\n');
+        var evidence = String(result.error || '') + h.logs.error.join('\n');
         assert.contains(evidence, 'nope', 'the invalid preset is named');
         assert.equal(Object.keys(h.files).indexOf('input/PROJ-123/review_policy.md'), -1,
             'no policy file is stamped when the config is malformed');
-    });
-
-    test('a valid project policy is stamped into the rework run context', function() {
-        var h = gh1351ReworkLoad({ reviewPolicy: { preset: 'fix-everything' } });
-        var result = h.run();
-        assert.equal(result.success, true, 'a valid policy never fails the leg');
-        assert.contains(h.files['input/PROJ-123/review_policy.md'], 'fix-everything');
     });
 });
 
