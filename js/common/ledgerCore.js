@@ -74,12 +74,14 @@ var CORE_REFRESH_KEYS = ['note', 'sha', 'envFingerprint', 'lastGreenSha',
 /**
  * Refreshes an identity match in place: occurrences++, lastSeenAt moves,
  * the incoming evidence fields win, and a RESOLVED finding REOPENS (the
- * sweep did not stick — the re-occurrence is the evidence).
+ * sweep did not stick — the re-occurrence is the evidence). `refreshKeys`
+ * is the consumer's optional evidence slice (defaults to the core list).
  */
-function refreshFinding(existing, incoming, at) {
+function refreshFinding(existing, incoming, at, refreshKeys) {
+    var keys = Array.isArray(refreshKeys) ? refreshKeys : CORE_REFRESH_KEYS;
     existing.lastSeenAt = at;
     existing.occurrences = (existing.occurrences || 1) + 1;
-    CORE_REFRESH_KEYS.forEach(function (k) {
+    keys.forEach(function (k) {
         if (incoming[k] !== null && incoming[k] !== undefined) existing[k] = incoming[k];
     });
     if (existing.status === 'resolved') {
@@ -96,16 +98,18 @@ function refreshFinding(existing, incoming, at) {
  * otherwise the normalized entry is pushed. `normalize(input, at)` is the
  * consumer's optional shape builder (it stamps the id + the consumer
  * fields and returns the canonical entry); when absent the input itself is
- * the canonical entry. Returns the NEW ledger (never mutates the input).
+ * the canonical entry. `refreshKeys` is the consumer's optional evidence
+ * slice (see refreshFinding). Returns the NEW ledger (never mutates the
+ * input).
  */
-function appendFinding(prev, input, normalize) {
+function appendFinding(prev, input, normalize, refreshKeys) {
     var at = (input && input.at) || new Date().toISOString();
     var l = deepCopyLedger(prev);
     l.at = at;
     var incoming = typeof normalize === 'function' ? normalize(input, at) : input;
     var existing = findById(l, incoming.id);
     if (existing) {
-        refreshFinding(existing, incoming, at);
+        refreshFinding(existing, incoming, at, refreshKeys);
     } else {
         // A fresh entry carries the lifecycle defaults the core owns;
         // the consumer's normalize (or the raw input) supplies identity

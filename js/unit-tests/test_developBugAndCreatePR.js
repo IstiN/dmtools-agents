@@ -116,7 +116,8 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
 
     var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}));
     var reviewVerdictsModule = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorModule }));
-    var tcLedgerModule = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './reviewVerdicts.js': reviewVerdictsModule }));
+var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
+    var tcLedgerModule = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,  './reviewVerdicts.js': reviewVerdictsModule }));
     var requireMap = {
         './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
         './config.js': configModule,
@@ -179,7 +180,7 @@ var bugBookkeepingModule = loadModule('js/common/bugBookkeeping.js', makeRequire
             './machineAuthor.js': loadModule('js/common/machineAuthor.js')
         }))
     })),
-    './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+    './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
         './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
             './machineAuthor.js': loadModule('js/common/machineAuthor.js')
         }))
@@ -796,7 +797,7 @@ suite('developBugAndCreatePR', function() {
                 }),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
-                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
                     './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
                         './machineAuthor.js': loadModule('js/common/machineAuthor.js')
                     }))
@@ -978,7 +979,7 @@ function loadBugForMissingResponseResume(opts) {
             './common/outputFiles.js': realOutputFiles,
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
             './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
-            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
                 './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
                     './machineAuthor.js': loadModule('js/common/machineAuthor.js')
                 }))
@@ -1443,7 +1444,7 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './common/trackers.js': loadTrackersDev(allMocks),
                 './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
-                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
                     './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
                         './machineAuthor.js': loadModule('js/common/machineAuthor.js')
                     }))

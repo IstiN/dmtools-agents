@@ -100,14 +100,15 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
         './common/tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
             './reviewVerdicts.js': reviewVerdictsReal()
         }), {}),
-        './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
+        './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
             './reviewVerdicts.js': reviewVerdictsReal()
         }), {}),
         './common/tcAlternation.js': loadModule('js/common/tcAlternation.js', makeRequire({
             './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
                 './reviewVerdicts.js': reviewVerdictsReal()
             }), {}),
-            './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+            './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
                 './reviewVerdicts.js': reviewVerdictsReal()
             }), {})
         }), {}),
@@ -116,7 +117,7 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
             './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
                 './reviewVerdicts.js': reviewVerdictsReal()
             }), {}),
-            './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+            './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
                 './reviewVerdicts.js': reviewVerdictsReal()
             }), {}),
             './machineAuthor.js': machineAuthorReal()
@@ -18239,7 +18240,7 @@ suite('smAgent: runLocalAction TC-maintenance helper layer (gh-1345)', function(
         var reviewVerdictsMod = loadModule('js/common/reviewVerdicts.js', makeRequire({
             './machineAuthor.js': machineAuthorMod
         }));
-        var tcLedgerMod = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+        var tcLedgerMod = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
             './reviewVerdicts.js': reviewVerdictsMod
         }));
         var parked = {
