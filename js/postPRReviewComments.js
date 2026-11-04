@@ -102,8 +102,9 @@ function hasPrApprovedLabel(ticket) {
 
 /**
  * Count open review threads / general comments on a PR.
- * Used as a safety valve: after many review rounds, an APPROVE with remaining
- * suggestions is allowed so the loop terminates.
+ * Kept post-gh-1351 as a read-only thread census utility (the force-approve
+ * valve it once fed was replaced by machine enforcement); no production
+ * caller remains.
  */
 function countReviewThreads(scm, pullRequestId) {
     var count = 0;
@@ -1263,6 +1264,37 @@ function postFindingRegistryUpdate(ctx, pr, reviewData) {
  * @param {Object} reviewData - Parsed pr_review.json data
  * @param {string} prUrl - PR URL for linking
  */
+/** The outcome badge panel for the tracker comment (pure). */
+function outcomeBadgePanel(m, recommendation) {
+    if (recommendation === 'APPROVE') {
+        return m.panel(null, '✅ ' + m.bold('APPROVED') + ' - AI review passed. Awaiting required reviewer approval to merge.', 'bgColor=#E3FCEF|borderColor=#00875A') + '\n\n';
+    }
+    if (recommendation === 'BLOCK') {
+        return m.panel(null, '🚨 ' + m.bold('BLOCKED') + ' - Critical issues must be fixed before merge', 'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
+    }
+    return m.panel(null, '⚠️ ' + m.bold('CHANGES REQUESTED') + ' - Issues found, ticket returned to In Rework', 'bgColor=#FFF7E6|borderColor=#FF991F') + '\n\n';
+}
+
+/** The census summary lines — gh-1351: 🪶 nits + the ranked digest lines join. */
+function censusSummaryLines(m, issueCounts) {
+    return '* 🚨 Blocking Issues: ' + m.bold(String(issueCounts.blocking)) + '\n' +
+        '* ⚠️ Important Issues: ' + m.bold(String(issueCounts.important)) + '\n' +
+        '* 💡 Suggestions: ' + m.bold(String(issueCounts.suggestions)) + '\n' +
+        '* 🪶 Nits: ' + m.bold(String(issueCounts.nits)) + '\n' +
+        '* 📋 Digest lines: ' + m.bold(String(issueCounts.digest)) + '\n\n';
+}
+
+/**
+ * gh-1351: the resolved reviewPolicy table stamped into the review summary
+ * (this comment) so the rework leg and every human reader can trace the
+ * verdict to the policy that produced it. '' when no policy rode the run.
+ */
+function policyStampSection(m, policy) {
+    if (!policy || policy.source === undefined) return '';
+    return m.h(3, 'Review Policy (' + String(policy.source) + (policy.preset ? ', preset ' + policy.preset : '') + ')') + '\n' +
+        reviewPolicyModule.policyTableBody(policy) + '\n\n';
+}
+
 function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, policy) {
     try {
         const m = commentMarkup.forTicket(ticketKey);
@@ -1271,33 +1303,14 @@ function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, 
         // Add outcome badge
         // Normalize: LLM sometimes returns "APPROVED" instead of "APPROVE"
         const recommendation = (reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES').replace(/^APPROVED$/, 'APPROVE');
-        if (recommendation === 'APPROVE') {
-            comment += m.panel(null, '✅ ' + m.bold('APPROVED') + ' - AI review passed. Awaiting required reviewer approval to merge.', 'bgColor=#E3FCEF|borderColor=#00875A') + '\n\n';
-        } else if (recommendation === 'BLOCK') {
-            comment += m.panel(null, '🚨 ' + m.bold('BLOCKED') + ' - Critical issues must be fixed before merge', 'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
-        } else {
-            comment += m.panel(null, '⚠️ ' + m.bold('CHANGES REQUESTED') + ' - Issues found, ticket returned to In Rework', 'bgColor=#FFF7E6|borderColor=#FF991F') + '\n\n';
-        }
+        comment += outcomeBadgePanel(m, recommendation);
 
         // Add issue summary (gh-1350: the normalized census — singular
         // `suggestion` spellings render, missing counts stay 0)
         const issueCounts = normalizeIssueCounts(reviewData);
         comment += m.h(3, 'Issue Summary') + '\n';
-        comment += '* 🚨 Blocking Issues: ' + m.bold(String(issueCounts.blocking)) + '\n';
-        comment += '* ⚠️ Important Issues: ' + m.bold(String(issueCounts.important)) + '\n';
-        comment += '* 💡 Suggestions: ' + m.bold(String(issueCounts.suggestions)) + '\n';
-        // gh-1351: the 4-tier census — posted 🪶 threads and the ranked
-        // digest lines the density cap diverted into the general comment.
-        comment += '* 🪶 Nits: ' + m.bold(String(issueCounts.nits)) + '\n';
-        comment += '* 📋 Digest lines: ' + m.bold(String(issueCounts.digest)) + '\n\n';
-
-        // gh-1351: the resolved reviewPolicy table — stamped into the review
-        // run context (this summary) so the rework leg and every human
-        // reader can trace the verdict to the policy that produced it.
-        if (policy && policy.source !== undefined) {
-            comment += m.h(3, 'Review Policy (' + String(policy.source) + (policy.preset ? ', preset ' + policy.preset : '') + ')') + '\n';
-            comment += reviewPolicyModule.policyTableBody(policy) + '\n\n';
-        }
+        comment += censusSummaryLines(m, issueCounts);
+        comment += policyStampSection(m, policy);
 
         if (prUrl) {
             comment += m.h(3, 'Pull Request') + '\n';
@@ -1484,16 +1497,22 @@ function unchangedVerdict(recommendation) {
  * CORRECTED census (posted evidence outranks a lying counter), so the
  * cross-check cannot be nullified by a census-clean recomputation.
  */
+/** The census copy the machine recomputation reads: posted evidence bumps blocking to ≥ 1. */
+function correctedCensusOf(issueCounts) {
+    var corrected = {};
+    var source = issueCounts || {};
+    for (var key in source) {
+        if (Object.prototype.hasOwnProperty.call(source, key)) corrected[key] = source[key];
+    }
+    corrected.blocking = Math.max(reviewVerdicts.censusCount(source.blocking), 1);
+    return corrected;
+}
+
 function censusCrossCheckOverride(reviewData, recommendation, issueCounts) {
     if (!postedBlockingSeverity(reviewData)) return unchangedVerdict(recommendation);
     if (reviewVerdicts.censusCount(issueCounts && issueCounts.blocking) > 0) return unchangedVerdict(recommendation);
     if (recommendation !== 'APPROVE') return unchangedVerdict(recommendation);
-    var corrected = {};
-    for (var key in (issueCounts || {})) {
-        if (Object.prototype.hasOwnProperty.call(issueCounts || {}, key)) corrected[key] = issueCounts[key];
-    }
-    corrected.blocking = Math.max(reviewVerdicts.censusCount(issueCounts && issueCounts.blocking), 1);
-    return { recommendation: 'REQUEST_CHANGES', overridden: true, issueCounts: corrected };
+    return { recommendation: 'REQUEST_CHANGES', overridden: true, issueCounts: correctedCensusOf(issueCounts) };
 }
 
 function buildCensusCrossCheckWarning(issueCounts) {
@@ -1560,45 +1579,13 @@ function buildApprovalOverrideWarning(issueCounts) {
         'Overriding to REQUEST_CHANGES. Set allowApproveWithSuggestions=true in customParams to allow.';
 }
 
-function threadLimitConfigured(prNumber, repoInfo, maxThreadLimit) {
-    return !!prNumber && !!repoInfo && !!maxThreadLimit && maxThreadLimit > 0;
-}
-
-function shouldProbeThreadLimit(recommendation, hasOpenIssues, allowApproveWithSuggestions, prNumber, repoInfo, maxThreadLimit) {
-    if (!verdictNeedsIssueOverride(recommendation, hasOpenIssues, allowApproveWithSuggestions)) return false;
-    return threadLimitConfigured(prNumber, repoInfo, maxThreadLimit);
-}
-
-function threadCountExceedsLimit(scm, prNumber, maxThreadLimit) {
-    try {
-        var reviewThreadCount = countReviewThreads(scm, prNumber);
-        if (reviewThreadCount >= maxThreadLimit) {
-            console.warn(
-                '⚠️ PR has ' + reviewThreadCount + ' review threads (>= limit ' + maxThreadLimit + '). ' +
-                'Forcing APPROVE despite remaining suggestions to break the review loop.'
-            );
-            return true;
-        }
-        return false;
-    } catch (e) {
-        console.warn('Could not apply review-thread limit:', e.message || e);
-        return false;
-    }
-}
-
-/**
- * Safety valve: after many review rounds, force-approve an APPROVE verdict
- * even if suggestions remain, so the review/rework loop cannot run forever.
- */
-function probeThreadLimitOverride(scm, prNumber, recommendation, hasOpenIssues, allowApproveWithSuggestions, repoInfo, maxThreadLimit) {
-    if (!shouldProbeThreadLimit(recommendation, hasOpenIssues, allowApproveWithSuggestions, prNumber, repoInfo, maxThreadLimit)) return false;
-    return threadCountExceedsLimit(scm, prNumber, maxThreadLimit);
-}
-
-function maxThreadLimitOf(customParams) {
-    if (!customParams) return 0;
-    return orZero(customParams.maxReviewThreadsBeforeForceApprove);
-}
+// gh-1351: the legacy thread-limit force-approve machinery
+// (threadLimitConfigured / shouldProbeThreadLimit / threadCountExceedsLimit /
+// probeThreadLimitOverride / maxThreadLimitOf) is GONE — machine enforcement
+// recomputes the verdict from the census + resolved policy, and the
+// `maxReviewThreadsBeforeForceApprove` knob is rejected alongside the policy
+// (reviewPolicyModule.legacyKnobAudit). Thread budgets are policy bounds
+// (bounds.densityMax / bounds.polishMaxThreads), never a force-approve valve.
 
 /**
  * Formal GitHub review resolution chain (first explicit win):
@@ -2657,8 +2644,10 @@ if (typeof module !== 'undefined' && module.exports) {
         decideApproval,
         isApprovalOverridden,
         buildApprovalOverrideWarning,
-        shouldProbeThreadLimit,
-        maxThreadLimitOf,
+        correctedCensusOf,
+        outcomeBadgePanel,
+        censusSummaryLines,
+        policyStampSection,
         resolveFormalReviewEnabled,
         parseLinkedIssueNumber,
         parseBranchIssueNumber,

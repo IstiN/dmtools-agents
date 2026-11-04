@@ -2575,21 +2575,34 @@ suite('postPRReviewComments — gh-926 extracted pipeline helpers', function() {
         assert.contains(warning, 'allowApproveWithSuggestions=true');
     });
 
-    test('shouldProbeThreadLimit + maxThreadLimitOf: probe only under full preconditions', function() {
-        var mod = loadPostPRReviewComments();
+    // gh-1351: the force-approve probe is GONE — the legacy
+    // `maxReviewThreadsBeforeForceApprove` knob is rejected alongside the
+    // resolved policy (the audit logs the conflict, the policy wins).
+    test('legacy maxReviewThreadsBeforeForceApprove is rejected alongside the policy (audit line)', function() {
+        loadPostPRReviewComments();
+        var audit = reviewPolicyModule.legacyKnobAudit({ maxReviewThreadsBeforeForceApprove: 2 });
+        assert.equal(audit.lines.length, 1, 'exactly the rejection line');
+        assert.contains(audit.lines[0], 'maxReviewThreadsBeforeForceApprove=2 is rejected alongside the policy');
+        assert.contains(audit.lines[0], 'densityMax=8');
+    });
 
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, GH926_REPO, 2), true);
-        assert.equal(mod.shouldProbeThreadLimit('REQUEST_CHANGES', true, false, 42, GH926_REPO, 2), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', false, false, 42, GH926_REPO, 2), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, true, 42, GH926_REPO, 2), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, null, GH926_REPO, 2), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, null, 2), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, GH926_REPO, 0), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, GH926_REPO, undefined), false);
+    test('gh926ScmReadMocks defaults and overrides cover every branch', function() {
+        var empty = gh926ScmReadMocks({});
+        assert.deepEqual(empty.listPrs(), []);
+        assert.equal(empty.getRemoteRepoInfo(), null);
+        assert.deepEqual(empty.fetchDiscussions().rawThreads.threads, []);
+        assert.deepEqual(empty.listReviews(), []);
 
-        assert.equal(mod.maxThreadLimitOf({ maxReviewThreadsBeforeForceApprove: 5 }), 5);
-        assert.equal(mod.maxThreadLimitOf({}), 0);
-        assert.equal(mod.maxThreadLimitOf(undefined), 0);
+        var full = gh926ScmReadMocks({
+            openPrs: [{ number: 7 }],
+            repoInfo: { owner: 'o', repo: 'r' },
+            threads: [{ id: 't1' }],
+            existingReviews: [{ id: 'r1' }]
+        });
+        assert.deepEqual(full.listPrs(), [{ number: 7 }]);
+        assert.deepEqual(full.getRemoteRepoInfo(), { owner: 'o', repo: 'r' });
+        assert.deepEqual(full.fetchDiscussions().rawThreads.threads, [{ id: 't1' }]);
+        assert.deepEqual(full.listReviews(), [{ id: 'r1' }]);
     });
 
     test('resolveFormalReviewEnabled: per-run flag beats project default beats off', function() {

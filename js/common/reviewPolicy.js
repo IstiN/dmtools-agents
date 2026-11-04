@@ -426,30 +426,49 @@ function machineApprovalDecision(rawRecommendation, census, policy) {
  * logged as a conflict and the policy wins. Returns { lines, derived } —
  * the caller logs the lines verbatim.
  */
-function legacyKnobAudit(customParams, policy) {
-    var p = policy || defaultPolicy();
-    var derived = {
+function derivedKnobsOf(p) {
+    return {
         allowApproveWithSuggestions: true,
         importantBlocksApproval: p.severities.IMPORTANT.round === 'rework',
         maxReviewThreadsBeforeForceApprove: p.bounds.densityMax
     };
+}
+
+/** allowApproveWithSuggestions=false is a policy conflict — one audit line. */
+function auditAllowApproveWithSuggestionsKnob(customParams, p) {
+    if (!customParams || customParams.allowApproveWithSuggestions !== false) return null;
+    return 'reviewPolicy: legacy allowApproveWithSuggestions=false conflicts with the resolved policy (' +
+        p.preset + ') — policy wins: only rework-tier (' + TIER_EMOJI.BLOCKING + '/' + TIER_EMOJI.IMPORTANT +
+        ') findings gate approval';
+}
+
+/** An explicit importantBlocksApproval that disagrees — one audit line. */
+function auditImportantBlocksApprovalKnob(customParams, derived) {
+    if (!customParams || typeof customParams.importantBlocksApproval !== 'boolean' ||
+        customParams.importantBlocksApproval === derived.importantBlocksApproval) return null;
+    return 'reviewPolicy: legacy importantBlocksApproval=' + customParams.importantBlocksApproval +
+        ' conflicts with the resolved policy — policy wins: IMPORTANT ' +
+        (derived.importantBlocksApproval ? 'gates' : 'does not gate') + ' approval';
+}
+
+/** The thread-limit force-approve knob is rejected alongside the policy. */
+function auditMaxReviewThreadsKnob(customParams, p) {
+    if (!customParams || !(customParams.maxReviewThreadsBeforeForceApprove > 0)) return null;
+    return 'reviewPolicy: legacy maxReviewThreadsBeforeForceApprove=' +
+        customParams.maxReviewThreadsBeforeForceApprove + ' is rejected alongside the policy — thread budgets are ' +
+        'policy bounds (densityMax=' + p.bounds.densityMax + ', polishMaxThreads=' + p.bounds.polishMaxThreads + ')';
+}
+
+function legacyKnobAudit(customParams, policy) {
+    var p = policy || defaultPolicy();
+    var derived = derivedKnobsOf(p);
     var lines = [];
-    if (customParams && customParams.allowApproveWithSuggestions === false) {
-        lines.push('reviewPolicy: legacy allowApproveWithSuggestions=false conflicts with the resolved policy (' +
-            p.preset + ') — policy wins: only rework-tier (' + TIER_EMOJI.BLOCKING + '/' + TIER_EMOJI.IMPORTANT +
-            ') findings gate approval');
-    }
-    if (customParams && typeof customParams.importantBlocksApproval === 'boolean' &&
-        customParams.importantBlocksApproval !== derived.importantBlocksApproval) {
-        lines.push('reviewPolicy: legacy importantBlocksApproval=' + customParams.importantBlocksApproval +
-            ' conflicts with the resolved policy — policy wins: IMPORTANT ' +
-            (derived.importantBlocksApproval ? 'gates' : 'does not gate') + ' approval');
-    }
-    if (customParams && customParams.maxReviewThreadsBeforeForceApprove > 0) {
-        lines.push('reviewPolicy: legacy maxReviewThreadsBeforeForceApprove=' +
-            customParams.maxReviewThreadsBeforeForceApprove + ' is rejected alongside the policy — thread budgets are ' +
-            'policy bounds (densityMax=' + p.bounds.densityMax + ', polishMaxThreads=' + p.bounds.polishMaxThreads + ')');
-    }
+    var first = auditAllowApproveWithSuggestionsKnob(customParams, p);
+    if (first) lines.push(first);
+    var second = auditImportantBlocksApprovalKnob(customParams, derived);
+    if (second) lines.push(second);
+    var third = auditMaxReviewThreadsKnob(customParams, p);
+    if (third) lines.push(third);
     return { lines: lines, derived: derived };
 }
 
