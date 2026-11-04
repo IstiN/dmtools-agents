@@ -897,23 +897,33 @@ function buildEscalationPacketComment(registry) {
  * confirmation, and the structured answer contract. Null when there is
  * nothing open and nothing pending — a resolved registry injects nothing.
  */
-function buildFindingsInjection(registry) {
-    var open = openItems(registry);
-    var pending = (registry && Array.isArray(registry.pending)) ? registry.pending : [];
-    if (!open.length && !pending.length) return null;
-    var lines = [];
-    lines.push('## Previously raised findings (review-round registry)');
-    lines.push('');
-    lines.push('These defects were raised on earlier review rounds of this PR. For each finding below: ' +
-        'verify fixed (cite the fixing hunk), withdraw (reason required), or mark re-introduced. ' +
-        'New claims need new evidence — a claim already on this list is answered, not re-raised.');
-    lines.push('');
-    lines.push('| id | status | severity | file | claim |');
-    lines.push('|----|--------|----------|------|-------|');
-    open.forEach(function(i) {
-        lines.push('| F' + i.n + ' | ' + i.status + ' | ' + i.severity + ' | ' + i.file + ' | ' + i.claim + ' |');
+/** The protocol header of the injection (what the reviewer must do per row). */
+function injectionHeaderLines() {
+    return [
+        '## Previously raised findings (review-round registry)',
+        '',
+        'These defects were raised on earlier review rounds of this PR. For each finding below: ' +
+            'verify fixed (cite the fixing hunk), withdraw (reason required), or mark re-introduced. ' +
+            'New claims need new evidence — a claim already on this list is answered, not re-raised.',
+        '',
+        '| id | status | severity | file | claim |',
+        '|----|--------|----------|------|-------|'
+    ];
+}
+
+/** One markdown table row per open identity (stable F-labels). */
+function findingTableRows(items) {
+    return items.map(function(i) {
+        return '| F' + i.n + ' | ' + i.status + ' | ' + i.severity + ' | ' + i.file + ' | ' + i.claim + ' |';
     });
-    open.forEach(function(i) {
+}
+
+// gh-1334: re-elevation guidance under the table — one block per demoted
+// identity; the reviewer closes the gh-1332 amnesia loop by re-raising WITH
+// a citation and confirming "same as F<n>" (merges only escalate).
+function demotionGuidanceLines(items) {
+    var lines = [];
+    items.forEach(function(i) {
         if (!i.demotion) return;
         lines.push('');
         lines.push('- F' + i.n + ' was demoted from BLOCKING (' + (i.demotion.reason || 'missing-citation') +
@@ -921,36 +931,53 @@ function buildFindingsInjection(registry) {
             'is this same defect, locate the requirement in the ticket and cite it (e.g. `ticket.md:3`), then confirm ' +
             '"same as F' + i.n + '" \u2014 a confirmed merge re-elevates the identity to BLOCKING (merges only escalate).');
     });
+    return lines;
+}
+
+/** One line per pending candidate awaiting one-word confirmation. */
+function pendingCandidateLines(pending) {
+    return pending.map(function(c) {
+        return '- Round ' + c.round + ' finding "' + c.claim + '" (' + c.file +
+            (c.line ? ':' + c.line : '') + ') is possibly same as F' + c.proposedFor +
+            ' \u2014 confirm ("same as F' + c.proposedFor + '") or mark it "new".';
+    });
+}
+
+/** The structured findingReview answer contract the next round must follow. */
+function findingAnswerContractLines() {
+    return [
+        '',
+        '### How to answer',
+        '',
+        'Add a `findingReview` block to `outputs/pr_review.json` (alongside `inlineComments`):',
+        '',
+        '```json',
+        '{"findingReview": {',
+        '  "dispositions": [',
+        '    {"n": 1, "status": "fixed", "hunk": "<file:lines \\u2014 the fixing hunk>"},',
+        '    {"n": 2, "status": "withdrawn", "reason": "<why this is not a defect>"},',
+        '    {"n": 3, "status": "re-introduced"}',
+        '  ],',
+        '  "confirmations": [',
+        '    {"proposedFor": 1, "same": true}',
+        '  ]',
+        '}}',
+        '```',
+        '',
+        'Unconfirmed candidates become new identities (the merge bias is confirm-only); ' +
+            'a genuinely new finding on a resolved item is expected to be raised again with new evidence.'
+    ];
+}
+
+function buildFindingsInjection(registry) {
+    var open = openItems(registry);
+    var pending = (registry && Array.isArray(registry.pending)) ? registry.pending : [];
+    if (!open.length && !pending.length) return null;
+    var lines = [].concat(injectionHeaderLines(), findingTableRows(open), demotionGuidanceLines(open));
     if (pending.length) {
-        lines.push('');
-        lines.push('### Candidates pending confirmation');
-        pending.forEach(function(c) {
-            lines.push('- Round ' + c.round + ' finding "' + c.claim + '" (' + c.file +
-                (c.line ? ':' + c.line : '') + ') is possibly same as F' + c.proposedFor +
-                ' \u2014 confirm ("same as F' + c.proposedFor + '") or mark it "new".');
-        });
+        lines = lines.concat(['', '### Candidates pending confirmation'], pendingCandidateLines(pending));
     }
-    lines.push('');
-    lines.push('### How to answer');
-    lines.push('');
-    lines.push('Add a `findingReview` block to `outputs/pr_review.json` (alongside `inlineComments`):');
-    lines.push('');
-    lines.push('```json');
-    lines.push('{"findingReview": {');
-    lines.push('  "dispositions": [');
-    lines.push('    {"n": 1, "status": "fixed", "hunk": "<file:lines \\u2014 the fixing hunk>"},');
-    lines.push('    {"n": 2, "status": "withdrawn", "reason": "<why this is not a defect>"},');
-    lines.push('    {"n": 3, "status": "re-introduced"}');
-    lines.push('  ],');
-    lines.push('  "confirmations": [');
-    lines.push('    {"proposedFor": 1, "same": true}');
-    lines.push('  ]');
-    lines.push('}}');
-    lines.push('```');
-    lines.push('');
-    lines.push('Unconfirmed candidates become new identities (the merge bias is confirm-only); ' +
-        'a genuinely new finding on a resolved item is expected to be raised again with new evidence.');
-    return lines.join('\n');
+    return lines.concat(findingAnswerContractLines()).join('\n');
 }
 
 if (typeof module !== 'undefined' && module.exports) {

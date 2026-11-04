@@ -153,8 +153,11 @@ A finding whose core claim is "**the spec / reference / ticket / external tool s
 
 Without a verifiable citation:
 
+- **Before emitting a spec-claim finding without a citation, locate the requirement in the ticket and cite it (for example `ticket.md:12`) — an uncited true claim is demoted mechanically.**
 - Downgrade the finding to ⚠️ **IMPORTANT**, phrased as a question: "Please confirm against `<source>` — if confirmed, this becomes blocking."
 - Never let an uncited spec assertion be the sole reason for `REQUEST_CHANGES`.
+
+The machine applies the same discipline (and a safety net against coin-flip formatting): every uncited spec claim is cross-checked against the ticket text the run already has under `input/`. When the requirement is verifiably present there, the finding keeps 🚨 BLOCKING force and the matched citation is auto-appended; when the ticket contradicts it, lacks it, or the mechanical check is inconclusive, the finding is demoted and stamped `demoted-from-BLOCKING` — the finding-identity registry keeps it re-elevatable in a later round by adding a citation instead of raising the same defect as new.
 
 This is not a strictness cut: a spec-claim finding **with** a verifiable citation keeps full 🚨 BLOCKING force.
 

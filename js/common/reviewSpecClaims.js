@@ -306,6 +306,76 @@ function anchorCountOnLine(claimAnchors, normalizedLine, lineNumbers) {
     return count;
 }
 
+/** Overlap coefficient between the claim's requirement words and one line's. */
+function wordOverlap(claimWords, lineWords) {
+    var lineSet = {};
+    for (var i = 0; i < lineWords.length; i++) lineSet[lineWords[i]] = true;
+    var inter = 0;
+    for (var j = 0; j < claimWords.length; j++) {
+        if (lineSet[claimWords[j]]) inter++;
+    }
+    return (claimWords.length && lineWords.length)
+        ? inter / Math.min(claimWords.length, lineWords.length) : 0;
+}
+
+/**
+ * One ticket line's match quality for the claim — null when the line misses
+ * (anchor matches gated by requirement-word overlap, plus the near-identical
+ * word-overlap match without anchors).
+ */
+function claimLineMatch(claimWords, normalizedLine, lineNo, anchorCount) {
+    var overlap = wordOverlap(claimWords, findingRegistry.contentWords(normalizedLine));
+    var matched = (anchorCount > 0 && overlap >= TICKET_ANCHOR_MIN_WORD_OVERLAP) ||
+        overlap >= TICKET_WORD_MATCH_MIN_OVERLAP;
+    if (!matched) return null;
+    return { anchorCount: anchorCount, overlap: overlap, line: lineNo };
+}
+
+/** Is the candidate a better citation source than the incumbent best? */
+function betterTicketLineMatch(candidate, best) {
+    if (!best) return true;
+    if (candidate.anchorCount !== best.anchorCount) {
+        return candidate.anchorCount > best.anchorCount;
+    }
+    return candidate.overlap > best.overlap;
+}
+
+/**
+ * Scans every ticket line: the best match and whether a claim anchor was
+ * seen anywhere (matched or not — an anchor detached from the requirement
+ * is exactly the inconclusive case).
+ */
+function scanTicketLines(claimWords, claimAnchors, lines) {
+    var best = null;
+    var anchorSeen = false;
+    for (var i = 0; i < lines.length; i++) {
+        var norm = findingRegistry.normalizeClaim(lines[i]);
+        if (!norm) continue;
+        var anchorCount = anchorCountOnLine(claimAnchors, norm, numberTokensOf(norm));
+        if (anchorCount > 0) anchorSeen = true;
+        var m = claimLineMatch(claimWords, norm, i + 1, anchorCount);
+        if (m && betterTicketLineMatch(m, best)) best = m;
+    }
+    return { best: best, anchorSeen: anchorSeen };
+}
+
+function hasAnyAnchor(anchors) {
+    for (var a in anchors) return true;
+    return false;
+}
+
+/** The tail verdict of the mechanical comparison (gh-1334 bias: demote). */
+function ticketMatchVerdict(scan, claimWords, claimAnchors, file) {
+    if (scan.best) {
+        return { outcome: 'yes', line: scan.best.line, citation: file + ':' + scan.best.line };
+    }
+    if (scan.anchorSeen) return inconclusiveMatch();
+    if (claimWords.length >= TICKET_MIN_CLAIM_WORDS || hasAnyAnchor(claimAnchors)) {
+        return { outcome: 'no', line: null, citation: null };
+    }
+    return inconclusiveMatch();
+}
+
 /**
  * gh-1334: is the claim's asserted requirement verifiably present in the
  * ticket text? outcome 'yes' — a line matched (line = 1-based, citation =
@@ -321,44 +391,8 @@ function matchClaimInTicket(claim, ticketText, opts) {
     if (!text.trim()) return inconclusiveMatch();
     var claimWords = claimWordsForMatch(claim);
     var claimAnchors = anchorTokensOf(String(claim || ''));
-    var lines = text.split('\n');
-    var best = null;
-    var anchorSeenSomewhere = false;
-    for (var i = 0; i < lines.length; i++) {
-        var norm = findingRegistry.normalizeClaim(lines[i]);
-        if (!norm) continue;
-        var lineWords = findingRegistry.contentWords(norm);
-        var lineSet = {};
-        lineWords.forEach(function(w) { lineSet[w] = true; });
-        var inter = 0;
-        for (var j = 0; j < claimWords.length; j++) {
-            if (lineSet[claimWords[j]]) inter++;
-        }
-        var overlap = (claimWords.length && lineWords.length)
-            ? inter / Math.min(claimWords.length, lineWords.length) : 0;
-        var anchorCount = anchorCountOnLine(claimAnchors, norm, numberTokensOf(norm));
-        if (anchorCount > 0) anchorSeenSomewhere = true;
-        var matched = (anchorCount > 0 && overlap >= TICKET_ANCHOR_MIN_WORD_OVERLAP) ||
-            overlap >= TICKET_WORD_MATCH_MIN_OVERLAP;
-        if (!matched) continue;
-        if (!best || anchorCount > best.anchorCount ||
-            (anchorCount === best.anchorCount && overlap > best.overlap)) {
-            best = { anchorCount: anchorCount, overlap: overlap, line: i + 1 };
-        }
-    }
-    if (best) {
-        return { outcome: 'yes', line: best.line, citation: file + ':' + best.line };
-    }
-    if (anchorSeenSomewhere) return inconclusiveMatch();
-    var hasAnchors = false;
-    for (var a in claimAnchors) {
-        hasAnchors = true;
-        break;
-    }
-    if (claimWords.length >= TICKET_MIN_CLAIM_WORDS || hasAnchors) {
-        return { outcome: 'no', line: null, citation: null };
-    }
-    return inconclusiveMatch();
+    var scan = scanTicketLines(claimWords, claimAnchors, text.split('\n'));
+    return ticketMatchVerdict(scan, claimWords, claimAnchors, file);
 }
 
 // ── gh-1334: demotion provenance marker (consumed by the gh-1332 registry) ───
@@ -389,6 +423,21 @@ function downgradeBody(body, provenance) {
     return out + '\n' + downgradeNote(text) + '\n' + demotionMarker(provenance);
 }
 
+/** The verified-keep / demoted-with-provenance split of the gh-1334 check. */
+function verifiedOrDemotedVerdict(text, opts) {
+    var match = matchClaimInTicket(coreClaimText(text), opts && opts.ticketText, opts);
+    if (match.outcome === 'yes') {
+        return {
+            severity: 'blocking', blocking: true, downgraded: false,
+            claimVerified: true, citation: match.citation
+        };
+    }
+    return {
+        severity: 'important', blocking: false, downgraded: true,
+        claimMatchedTicket: match.outcome
+    };
+}
+
 /**
  * Classifies one finding's effective severity (pure — gh-1053 AC2–AC4,
  * gh-1334 verification). severity — the structured severity field
@@ -411,17 +460,7 @@ function classifyFindingSeverity(body, severity, opts) {
     var sev = String(severity || '').toLowerCase();
     var blocking = sev === 'blocking' || BLOCKING_MARKER_RE.test(text);
     if (blocking && isUncitedSpecClaim(text, opts)) {
-        var match = matchClaimInTicket(coreClaimText(text), opts && opts.ticketText, opts);
-        if (match.outcome === 'yes') {
-            return {
-                severity: 'blocking', blocking: true, downgraded: false,
-                claimVerified: true, citation: match.citation
-            };
-        }
-        return {
-            severity: 'important', blocking: false, downgraded: true,
-            claimMatchedTicket: match.outcome
-        };
+        return verifiedOrDemotedVerdict(text, opts);
     }
     return { severity: blocking ? 'blocking' : sev, blocking: blocking, downgraded: false };
 }
@@ -449,28 +488,42 @@ function planRewrite(out, commentPath, content) {
     return true;
 }
 
-function applyDemotion(c, resolved, out, provenance) {
-    var newBody = downgradeBody(resolved.body, provenance);
-    c.severity = 'IMPORTANT';
-    c.demotion = {
+/** The gh-1334 provenance stamped on a demotion (defaults: inconclusive). */
+function demotionProvenanceOf(provenance) {
+    return {
         reason: 'missing-citation',
         claimMatchedTicket: (provenance && provenance.claimMatchedTicket) || 'inconclusive'
     };
-    var censusMove = false;
+}
+
+/** The finding's path reference — path, then file, then '?' (unknown). */
+function targetRefOf(c) {
+    return String(c.path || c.file || '?');
+}
+
+/** Census move for one demoted PHYSICAL comment (file rewrites may dedupe). */
+function demotionCensusMove(c, resolved, out, newBody) {
     if (resolved.inline) {
         if (resolved.body) c.body = newBody;
-        censusMove = true;
-    } else if (resolved.fromFile && c.comment) {
-        censusMove = planRewrite(out, c.comment, newBody);
+        return true;
     }
-    if (censusMove) out.census++;
+    if (resolved.fromFile && c.comment) return planRewrite(out, c.comment, newBody);
+    return false;
+}
+
+function applyDemotion(c, resolved, out, provenance) {
+    var demotion = demotionProvenanceOf(provenance);
+    var target = targetRefOf(c);
+    c.severity = 'IMPORTANT';
+    c.demotion = demotion;
+    if (demotionCensusMove(c, resolved, out, downgradeBody(resolved.body, provenance))) out.census++;
     out.demotions.push({
-        path: String(c.path || c.file || '?'), line: c.line || null,
-        claimMatchedTicket: c.demotion.claimMatchedTicket, reason: 'missing-citation'
+        path: target, line: c.line || null,
+        claimMatchedTicket: demotion.claimMatchedTicket, reason: 'missing-citation'
     });
-    out.notes.push('inline comment on ' + String(c.path || c.file || '?') +
+    out.notes.push('inline comment on ' + target +
         ' downgraded BLOCKING → IMPORTANT: uncited external-spec claim (gh-1053)' +
-        ' [gh-1334 claimMatchedTicket: ' + c.demotion.claimMatchedTicket + ']');
+        ' [gh-1334 claimMatchedTicket: ' + demotion.claimMatchedTicket + ']');
 }
 
 /**
