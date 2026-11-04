@@ -1066,6 +1066,7 @@ suite('postPRReviewComments', function() {
                 ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
@@ -1303,12 +1304,49 @@ function loadReviewActionHarness(opts) {
 
     var mod = gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged, rec);
 
-    return {
+    // gh-1351 machine-enforcement capture: the policy audits are LOG lines
+    // (legacy-knob conflicts, density overflow) — capture what the wrapped
+    // action() run emitted so tests can assert on them without scraping the
+    // whole suite log.
+    var capture = { lines: [], active: false };
+    var harness = {
         mod: mod,
         ops: ops,
+        conflicts: [],
+        warnings: [],
         opNames: function() { return ops.map(function(o) { return o.op; }); },
         opsOf: function(op) { return ops.filter(function(o) { return o.op === op; }); }
     };
+    harness = gh926AttachLogCapture(harness, mod, capture);
+    return harness;
+}
+
+// Wraps console.warn/console.log during one action() call and files the
+// captured lines into harness.conflicts ('reviewPolicy:' audit lines) and
+// harness.warnings ('density audit' lines). The wrappers are installed once
+// per harness; the runner's real console still receives everything.
+function gh926AttachLogCapture(harness, mod, capture) {
+    var realWarn = console.warn;
+    var realLog = console.log;
+    var captureLine = function(line) {
+        if (!capture.active) return;
+        capture.lines.push(String(line));
+    };
+    console.warn = function(msg) { captureLine(msg); return realWarn(msg); };
+    console.log = function(msg) { captureLine(msg); return realLog(msg); };
+    var rawAction = mod.action;
+    mod.action = function(params) {
+        capture.lines = [];
+        capture.active = true;
+        try {
+            return rawAction(params);
+        } finally {
+            capture.active = false;
+            harness.conflicts = capture.lines.filter(function(l) { return l.indexOf('reviewPolicy:') !== -1; });
+            harness.warnings = capture.lines.filter(function(l) { return l.indexOf('density audit') !== -1; });
+        }
+    };
+    return harness;
 }
 
 // Mock builders below are named function declarations (not nested closures) on
@@ -2315,6 +2353,7 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
                 './machineAuthor.js': machineAuthorReal(),
                 './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
