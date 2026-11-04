@@ -1021,6 +1021,26 @@ function githubProvider(cfg) {
             return _ghResolveThread(owner, repo, prNumber, thread);
         },
 
+        // ── gh-1352 review debt ledger primitives (the triage deferral) ──
+        // The ledger is a machine-authored dmtools: marker family on the
+        // PR: read = the same comment fetch the verdict records use
+        // (memoized), write = github_create_comment (PRs are issues
+        // upstream — the trackers.js parity). gitlab twin: no note
+        // primitives yet — prCommentList returns [] and postPrComment
+        // warns + no-ops, so the triage path fails closed on deferral
+        // (mandatory-fix tiers then skip as needsFixOrDefer, never close
+        // without their ledger finding).
+        prCommentList: function (prNumber) {
+            return _ghFetchPrComments(owner, repo, prNumber);
+        },
+
+        postPrComment: function (prNumber, body) {
+            return github_create_comment({
+                workspace: owner, repository: repo,
+                pullRequestId: String(prNumber), text: body
+            });
+        },
+
         activeMachineRuns: function (workflowFile) {
             return _ghActiveMachineRuns(workflowFile);
         },
