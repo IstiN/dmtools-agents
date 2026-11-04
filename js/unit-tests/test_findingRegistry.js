@@ -1073,4 +1073,20 @@ suite('gh-1334 — demotions in the escalation packet and the injection', functi
         var md = r.buildFindingsInjection(reg);
         assert.equal(md.indexOf('demoted from BLOCKING'), -1);
     });
+
+    test('a demoted and a clean open item side by side → exactly one demotion guidance block', function() {
+        var r = loadRegistry();
+        var demoted = finding('src/auth.ts', 'login must return 401', 'IMPORTANT', 12);
+        demoted.demotion = { reason: 'missing-citation', claimMatchedTicket: 'no' };
+        var policy = r.resolveIdentityPolicy({}, null);
+        var reg = r.applyRound(r.emptyRegistry(), { at: '2026-11-03T10:00:00Z',
+            findings: [demoted, finding('src/api.ts', 'retry swallows the timeout error', 'IMPORTANT', 8)] },
+            policy).registry;
+        var md = r.buildFindingsInjection(reg);
+        assert.equal(md.split('demoted from BLOCKING').length - 1, 1, 'one guidance block only');
+        assert.ok(md.indexOf('same as F1') !== -1, 'the demoted identity is named');
+        assert.ok(md.indexOf('| F2 | open | IMPORTANT | src/api.ts |') !== -1,
+            'the clean item stays a plain table row, no hint');
+        assert.ok(md.indexOf('same as F2') === -1, 'the clean item gets no re-elevation path');
+    });
 });

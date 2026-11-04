@@ -412,6 +412,93 @@ suite('reviewSpecClaims — matchClaimInTicket (gh-1334)', function () {
     });
 });
 
+// gh-1334 best-line selection — the mechanical match scans every ticket line
+// and must pick ONE citation. Selection contract (pinned before the CRAP
+// refactor split the scan into helpers — the helpers must keep these exact
+// outcomes): the strongest anchor wins over a stronger word overlap; among
+// equal anchor counts the higher requirement-word overlap wins; a weaker
+// later line never displaces the incumbent.
+suite('reviewSpecClaims — matchClaimInTicket best-line selection (gh-1334)', function () {
+    var rsc = loadSpecClaims();
+
+    test('the anchored line wins over a later, stronger pure-overlap line', function () {
+        var ticket = [
+            '# Requirements',
+            '',
+            'Invalid login attempts must return HTTP 401 with a structured error body.',
+            'Invalid login must return a structured error body too.',
+            ''
+        ].join('\n');
+        var m = rsc.matchClaimInTicket('invalid login must return a structured error body', ticket);
+        assert.equal(m.outcome, 'yes');
+        assert.equal(m.line, 3, 'anchor 401 outranks the later near-identical anchor-free line');
+        assert.equal(m.citation, 'ticket.md:3');
+    });
+
+    test('equal anchor counts → the higher requirement-word overlap wins (later line)', function () {
+        var ticket = [
+            '# Requirements',
+            '',
+            'Unauthorized requests get HTTP 401 back from the service.',
+            'Unauthorized login requests must receive HTTP 401 responses.',
+            ''
+        ].join('\n');
+        var m = rsc.matchClaimInTicket('unauthorized login requests must receive http 401', ticket);
+        assert.equal(m.outcome, 'yes');
+        assert.equal(m.line, 4, 'line 4 mirrors the claim more closely at equal anchor count');
+        assert.equal(m.citation, 'ticket.md:4');
+    });
+
+    test('equal anchor counts, later line with lower overlap → the incumbent stays', function () {
+        var ticket = [
+            '# Requirements',
+            '',
+            'Invalid login attempts must return HTTP 401 with a structured error body.',
+            'Invalid login must return 401 and a structured error body immediately.',
+            ''
+        ].join('\n');
+        var m = rsc.matchClaimInTicket('invalid login must return 401 with a structured error body', ticket);
+        assert.equal(m.outcome, 'yes');
+        assert.equal(m.line, 3, 'the later same-anchor line overlaps less — first match kept');
+        assert.equal(m.citation, 'ticket.md:3');
+    });
+
+    test('near-identical requirement text matches without any anchor in the ticket', function () {
+        var ticket = [
+            '# Requirements',
+            '',
+            'Invalid login attempts must return a structured error body.',
+            ''
+        ].join('\n');
+        var m = rsc.matchClaimInTicket('invalid login must return a structured error body', ticket);
+        assert.equal(m.outcome, 'yes', 'word-overlap match needs no status-code anchor');
+        assert.equal(m.line, 3);
+        assert.equal(m.citation, 'ticket.md:3');
+    });
+
+    test('anchor in the claim but nowhere in the ticket → confidently absent', function () {
+        var ticket = [
+            '# Requirements',
+            '',
+            'Every login failure is answered politely.',
+            ''
+        ].join('\n');
+        var m = rsc.matchClaimInTicket('According to the ticket, login failures return code 401.', ticket);
+        assert.equal(m.outcome, 'no', 'the 401 anchor is absent from every line — decidable');
+    });
+
+    test('anchor in a thin claim, ticket without it → confidently absent', function () {
+        var ticket = [
+            '# Requirements',
+            '',
+            'Every login failure is answered politely.',
+            ''
+        ].join('\n');
+        var m = rsc.matchClaimInTicket('the spec says 401 required', ticket);
+        assert.equal(m.outcome, 'no', 'too thin for word overlap, but the anchor decides absence');
+    });
+});
+
 suite('reviewSpecClaims — demotion provenance marker (gh-1334)', function () {
     var rsc = loadSpecClaims();
 
