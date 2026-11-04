@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-04T05:04:55.074Z",
+  "ticketKey": "gh-1334",
+  "headSha": "85840ef01023b576e6fc8a8b496a2087ab432a6d",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:00ae55404d0c2c4d",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:2f6497595fa708b1",
+      "size": 23487
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:62d14dc0d8226db1",
+      "size": 7738
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:ee8c534f8a789b6b",
+      "size": 2827
+    },
+    "request.md": {
+      "hash": "fnv1a64:20e64c5ad9436a58",
+      "size": 5250
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:ff44ef1714041e21",
+      "size": 1374
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:34f575a0c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:f1179eefb5e51deb",
+      "size": 5408
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:20e64c5ad9436a58",
+      "size": 5250
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6zc-iY",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/reviewSpecClaims.js:310",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: the anchor-free word match keeps FALSE claims BLOCKING and mints a fabricated citation — reproducible with any short ticket line (heading/bullet)**\n\n`wordOverlap` (js/common/reviewSpecClaims.js:310) uses the overlap coefficient alone: `inter / Math.min(claimWords, lineWords)`. For a 1–2-word ticket line the denominator is the line, so **any** line whose few content words all appear in the claim scores 1.0 ≥ `TICKET_WORD_MATCH_MIN_OVERLAP` (0.6, js/common/reviewSpecClaims.js:241) and `claimLineMatch` (js/common/reviewSpecClaims.js:326-329) confirms it **without any anchor**. Markdown tickets are full of 1–2-word lines (headings, bullets), so a claim the ticket never makes is \"verified\".\n\nReproduced end-to-end through the production sanitizer (`node`, current HEAD):\n\n```text\nticket.md:\n  # Payment service\n  ## Error handling\n  Retries use exponential backoff with a 5 second cap.\n\nclaim (uncited spec claim): \"According to the ticket, error handling must redact\ncard numbers from every log line.\"   ← the ticket NEVER says this\n\nsanitizeReviewData(...) with { ticketText }:\n  downgrades: 0\n  severity kept: BLOCKING\n  census blocking: 1 | recommendation: REQUEST_CHANGES\n  citation minted: [{\"path\":\"src/payment.js\",\"line\":42,\"citation\":\"ticket.md:3\"}]\n\nposted body:\n  🚨 BLOCKING: According to the ticket, error handling must redact card numbers ...\n  Source: ticket.md:3 — requirement verified against the ticket text (gh-1334 citation auto-append).\n```\n\n`ticket.md:3` is just the heading `## Error handling` — the auto-appended \"requirement verified against the ticket text\" line is **false evidence**: downstream triage and the machine treat it as ground truth, the census holds, and rework arms on a possibly-green PR — exactly the gh-1053 pathology, but now with a citation that *looks* authoritative and is harder to disprove. A bullet fixture fails the same way: claim \"idempotency keys must rotate daily and be stored hashed\" is confirmed by the bare line `- idempotency keys` (citation `ticket.md:3`).\n\nNote the sibling function in this same repo already documents this exact failure mode and guards against it — `js/common/findingRegistry.js:205-206`: *\"Jaccard alone punishes subset paraphrases; the overlap coefficient alone overates tiny sets\"* — which is why `claimSimilarity` uses the mean of Jaccard and overlap.\n\n**Suggested fix** (validated against this PR's own fixtures): gate the anchor-free path on the *line's* content-word count — a line must itself be requirement-shaped to confirm a claim on words alone:\n\n```javascript\nfunction claimLineMatch(claimWords, normalizedLine, lineNo, anchorCount) {\n    var overlap = wordOverlap(claimWords, findingRegistry.contentWords(normalizedLine));\n    var matched = (anchorCount > 0 && overlap >= TICKET_ANCHOR_MIN_WORD_OVERLAP) ||\n        (overlap >= TICKET_WORD_MATCH_MIN_OVERLAP &&\n         findingRegistry.contentWords(normalizedLine).length >= TICKET_MIN_CLAIM_WORDS);\n    ...\n}\n```\n\nWith the floor, both repro claims fall to `no` (anchor unseen anywhere, ≥3 claim words → confidently absent → demote as today), while every existing `matchClaimInTicket` fixture still passes: AC1/AC4 lines carry 9 content words, the best-line fixtures 7–9, and the near-identical no-anchor fixture 9. Consider floored line length for the anchored path too (a bare `401` on a 2-word line still passes today, js/common/reviewSpecClaims.js:328) — at minimum please add a negative test pinning \"a 1–2-word ticket line never confirms an anchor-free claim\"."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zc-kB",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/reviewSpecClaims.js:454",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: stale contract doc — a demoted verdict can never carry `claimMatchedTicket: 'yes'`**\n\nThe rewritten docstring of `classifyFindingSeverity` (js/common/reviewSpecClaims.js:454-456) documents the demoted branch as:\n\n```text\n- demoted → { ..., claimMatchedTicket: 'yes'|'no'|'inconclusive' }\n  ('yes' here means the anchor was seen but the line did not qualify — ...)\n```\n\nThat value is unreachable: `ticketMatchVerdict` (js/common/reviewSpecClaims.js:366-374) returns `yes` only when a line actually matched (`scan.best`), and `verifiedOrDemotedVerdict` (js/common/reviewSpecClaims.js:443-456) maps `yes` to the `claimVerified` keep-BLOCKING branch. The \"anchor seen but the line did not qualify\" case returns `inconclusive` (`scan.anchorSeen` → `inconclusiveMatch()`), so a demotion can only ever carry `no` or `inconclusive`. This module is a machine-parsed contract (the marker payload and the registry read these values) — please correct the doc so future consumers don't implement against an impossible state."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zc-mX",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/findingRegistry.js:847",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: escalation packet lists demotions for resolved identities too — goes stale on long-lived PRs**\n\n`demotionRecords` (js/common/findingRegistry.js:847-858) filters only on `!!i.demotion` — a demoted identity that was later **fixed** or **withdrawn** still shows up in every escalation packet, and `buildEscalationPacketComment` (js/common/findingRegistry.js:884-888) renders it without the status: `⚠️ F3 (src/auth.ts) demoted from BLOCKING — ... (a cited re-raise re-elevates it)` — an instruction that no longer applies to a resolved item.\n\n`buildFindingsInjection` already renders its demotion guidance from `openItems` only (js/common/findingRegistry.js:951), so the two renders disagree. Consider filtering `demotionRecords` to open statuses (or rendering `d.status` in the packet line). The structured packet does carry `status`, but the human-facing comment ignores it."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zc-p-",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postPRReviewComments.js:1057",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `registryClaimOf` truncates reviewer claims that legitimately contain a `---` horizontal rule**\n\n`registryClaimOf` (js/postPRReviewComments.js:1057-1059) strips the machine-appended demotion tail by splitting on the generic separator:\n\n```javascript\nreturn String(claim || '').split('\\n---\\n')[0];\n```\n\nThe demotion tail is `'\\n' + downgradeNote(...)` where `downgradeNote` starts with `'---\\n'` — so splitting on `'\\n---\\n'` works for machine output, but it applies to **every** claim, including clean ones. A reviewer-authored multi-paragraph claim containing a markdown horizontal rule (`\\n---\\n`) loses everything after the rule in the registry identity — similarity for cross-round dedup is then computed on truncated text, weakening gh-1332 matching.\n\nStripping only the known machine tail would be precise and loss-free: cut at the first occurrence of `'\\n---\\n⚠️ **Severity demoted'` (or of the `dmtools:demoted-from-BLOCKING` marker prefix, already exported as `reviewSpecClaims.DEMOTION_MARKER_PREFIX`). Edge case — identity matching only, no posting impact; the new tests pin only the demotion-tail shape."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:86409a1d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: the anchor-free word match keeps FALSE claims BLOCKING and mints a fabricated citation — reproducible with any short ticket line (heading/bullet)**\n\n`wordOverlap` (js/common/reviewSpecClaims.js:310) uses the overlap coefficient alone: `inter / Math.min(claimWords, lineWords)`. For a 1–2-word ticket line the denominator is the line, so **any** line whose few content words all appear in the claim scores 1.0 ≥ `TICKET_WORD_MATCH_MIN_OVERLAP` (0.6, js/common/reviewSpecClaims.js:241) and `claimLineMatch` (js/common/reviewSpecClaims.js:326-329) confirms it **without any anchor**. Markdown tickets are full of 1–2-word lines (headings, bullets), so a claim the ticket never makes is \"verified\".\n\nReproduced end-to-end through the production sanitizer (`node`, current HEAD):\n\n```text\nticket.md:\n  # Payment service\n  ## Error handling\n  Retries use exponential backoff with a 5 second cap.\n\nclaim (uncited spec claim): \"According to the ticket, error handling must redact\ncard numbers from every log line.\"   ← the ticket NEVER says this\n\nsanitizeReviewData(...) with { ticketText }:\n  downgrades: 0\n  severity kept: BLOCKING\n  census blocking: 1 | recommendation: REQUEST_CHANGES\n  citation minted: [{\"path\":\"src/payment.js\",\"line\":42,\"citation\":\"ticket.md:3\"}]\n\nposted body:\n  🚨 BLOCKING: According to the ticket, error handling must redact card numbers ...\n  Source: ticket.md:3 — requirement verified against the ticket text (gh-1334 citation auto-append).\n```\n\n`ticket.md:3` is just the heading `## Error handling` — the auto-appended \"requirement verified against the ticket text\" line is **false evidence**: downstream triage and the machine treat it as ground truth, the census holds, and rework arms on a possibly-green PR — exactly the gh-1053 pathology, but now with a citation that *looks* authoritative and is harder to disprove. A bullet fixture fails the same way: claim \"idempotency keys must rotate daily and be stored hashed\" is confirmed by the bare line `- idempotency keys` (citation `ticket.md:3`).\n\nNote the sibling function in this same repo already documents this exact failure mode and guards against it — `js/common/findingRegistry.js:205-206`: *\"Jaccard alone punishes subset paraphrases; the overlap coefficient alone overates tiny sets\"* — which is why `claimSimilarity` uses the mean of Jaccard and overlap.\n\n**Suggested fix** (validated against this PR's own fixtures): gate the anchor-free path on the *line's* content-word count — a line must itself be requirement-shaped to confirm a claim on words alone:\n\n```javascript\nfunction claimLineMatch(claimWords, normalizedLine, lineNo, anchorCount) {\n    var overlap = wordOverlap(claimWords, findingRegistry.contentWords(normalizedLine));\n    var matched = (anchorCount > 0 && overlap >= TICKET_ANCHOR_MIN_WORD_OVERLAP) ||\n        (overlap >= TICKET_WORD_MATCH_MIN_OVERLAP &&\n         findingRegistry.contentWords(normalizedLine).length >= TICKET_MIN_CLAIM_WORDS);\n    ...\n}\n```\n\nWith the floor, both repro claims fall to `no` (anchor unseen anywhere, ≥3 claim words → confidently absent → demote as today), while every existing `matchClaimInTicket` fixture still passes: AC1/AC4 lines carry 9 content words, the best-line fixtures 7–9, and the near-identical no-anchor fixture 9. Consider floored line length for the anchored path too (a bare `401` on a 2-word line still passes today, js/common/reviewSpecClaims.js:328) — at minimum please add a negative test pinning \"a 1–2-word ticket line never confirms an anchor-free claim\"."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:56087289",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: stale contract doc — a demoted verdict can never carry `claimMatchedTicket: 'yes'`**\n\nThe rewritten docstring of `classifyFindingSeverity` (js/common/reviewSpecClaims.js:454-456) documents the demoted branch as:\n\n```text\n- demoted → { ..., claimMatchedTicket: 'yes'|'no'|'inconclusive' }\n  ('yes' here means the anchor was seen but the line did not qualify — ...)\n```\n\nThat value is unreachable: `ticketMatchVerdict` (js/common/reviewSpecClaims.js:366-374) returns `yes` only when a line actually matched (`scan.best`), and `verifiedOrDemotedVerdict` (js/common/reviewSpecClaims.js:443-456) maps `yes` to the `claimVerified` keep-BLOCKING branch. The \"anchor seen but the line did not qualify\" case returns `inconclusive` (`scan.anchorSeen` → `inconclusiveMatch()`), so a demotion can only ever carry `no` or `inconclusive`. This module is a machine-parsed contract (the marker payload and the registry read these values) — please correct the doc so future consumers don't implement against an impossible state."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:48b152d7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: escalation packet lists demotions for resolved identities too — goes stale on long-lived PRs**\n\n`demotionRecords` (js/common/findingRegistry.js:847-858) filters only on `!!i.demotion` — a demoted identity that was later **fixed** or **withdrawn** still shows up in every escalation packet, and `buildEscalationPacketComment` (js/common/findingRegistry.js:884-888) renders it without the status: `⚠️ F3 (src/auth.ts) demoted from BLOCKING — ... (a cited re-raise re-elevates it)` — an instruction that no longer applies to a resolved item.\n\n`buildFindingsInjection` already renders its demotion guidance from `openItems` only (js/common/findingRegistry.js:951), so the two renders disagree. Consider filtering `demotionRecords` to open statuses (or rendering `d.status` in the packet line). The structured packet does carry `status`, but the human-facing comment ignores it."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:235b17fe",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `registryClaimOf` truncates reviewer claims that legitimately contain a `---` horizontal rule**\n\n`registryClaimOf` (js/postPRReviewComments.js:1057-1059) strips the machine-appended demotion tail by splitting on the generic separator:\n\n```javascript\nreturn String(claim || '').split('\\n---\\n')[0];\n```\n\nThe demotion tail is `'\\n' + downgradeNote(...)` where `downgradeNote` starts with `'---\\n'` — so splitting on `'\\n---\\n'` works for machine output, but it applies to **every** claim, including clean ones. A reviewer-authored multi-paragraph claim containing a markdown horizontal rule (`\\n---\\n`) loses everything after the rule in the registry identity — similarity for cross-round dedup is then computed on truncated text, weakening gh-1332 matching.\n\nStripping only the known machine tail would be precise and loss-free: cut at the first occurrence of `'\\n---\\n⚠️ **Severity demoted'` (or of the `dmtools:demoted-from-BLOCKING` marker prefix, already exported as `reviewSpecClaims.DEMOTION_MARKER_PREFIX`). Edge case — identity matching only, no posting impact; the new tests pin only the demotion-tail shape."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:a1e613f4",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head da66540fe89a50c85fa8ceb7492f7b68764d1b4e — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:de783426",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 220949fbb2c18c2a7cb115294a30b5d3b357c5d8 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:5a6693cb",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1349\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:b628093c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: One 🚨 BLOCKING: the new gh-1334 ticket-verification matcher keeps FALSE uncited claims BLOCKING and auto-appends a fabricated \"requirement verified\" citation when the ticket has a 1–2-word line (heading/bullet) sharing its words with the claim — reproduced end-to-end through `sanitizeReviewData`. Verified otherwise: canonical suite 8274/0 green, `crap4js` ratchet exit 0 (0 regressions vs released baseline), duplication ratchet OK, `snapshots/pr_review.md` fresh, no open threads from earlier rounds.\n\n**Key Issues**:\n1. 🚨 `js/common/reviewSpecClaims.js:310` — overlap-coefficient-only match (`min()` denominator) → false \"keep BLOCKING\" + fabricated `Source: ticket.md:N` citation; `findingRegistry.js:205-206` documents this exact failure mode and guards against it via mean(Jaccard, overlap). Fix: floor the anchor-free path on the ticket line's content-word count (validated against this PR's fixtures).\n2. 💡 `js/common/reviewSpecClaims.js:454` — docstring documents an unreachable `claimMatchedTicket: 'yes'` on demotions (machine-parsed contract).\n3. 💡 `js/common/findingRegistry.js:847` — escalation packet lists demotions of resolved (fixed/withdrawn) identities; injection renders open-only — renders disagree.\n4. 💡 `js/postPRReviewComments.js:1057` — `registryClaimOf` splits on the generic `\\n---\\n`, truncating reviewer claims that legitimately contain a horizontal rule.\n\n**Next Steps**:\n1. Floor the anchor-free word match on the ticket line's content-word count (≥ `TICKET_MIN_CLAIM_WORDS`) and add the negative test \"a 1–2-word ticket line never confirms an anchor-free claim\".\n2. Correct the `classifyFindingSeverity` docstring (drop `yes` from the demoted branch).\n3. Filter `demotionRecords` to open statuses or render status in the packet line.\n4. Strip only the machine tail (marker prefix) instead of the generic `\\n---\\n` separator."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    }
+  ]
+}
