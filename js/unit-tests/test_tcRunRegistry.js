@@ -74,6 +74,8 @@ suite('tcRunRegistry: greens validate guards and record fingerprints', function(
     });
 });
 
+var REGISTRY_MARKER_NO_PAIRS = '<!-- dmtools:tc-run-registry {"v":1,"at":"2026-01-01T00:00:00.000Z","tcs":{"TS-1":{"role":"regression-guard","validated":true,"lastGreenSha":"sha-a","lastGreenEnvFingerprint":"env-1","lastGreenAt":"2026-01-01T00:00:00.000Z","greens":1,"redRounds":0,"lastRedAt":null,"lastVerdict":null}}} -->\nold fixture';
+
 suite('tcRunRegistry: marker persistence (house dmtools: pattern)', function() {
 
     test('marker round-trips through parse with the machine-author trust gate', function() {
@@ -122,7 +124,6 @@ suite('tcRunRegistry: marker persistence (house dmtools: pattern)', function() {
 // ── gh-1331: the cross-lap history beside lastGreenSha ────────────────────────
 
 // A pre-gh-1331 registry marker: no pairs map, no run history, no bounce record.
-var REGISTRY_MARKER_NO_PAIRS = '<!-- dmtools:tc-run-registry {"v":1,"at":"2026-01-01T00:00:00.000Z","tcs":{"TS-1":{"role":"regression-guard","validated":true,"lastGreenSha":"sha-a","lastGreenEnvFingerprint":"env-1","lastGreenAt":"2026-01-01T00:00:00.000Z","greens":1,"redRounds":0,"lastRedAt":null,"lastVerdict":null}}} -->\nold fixture';
 
 suite('tcRunRegistry: gh-1331 run history (last K runs + shas beside lastGreenSha)', function() {
 

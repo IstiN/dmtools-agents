@@ -23,6 +23,10 @@ var tcLedger = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
     './reviewVerdicts.js': reviewVerdicts
 }));
 var tcTriage = loadModule('js/common/tcTriage.js', makeRequire({}));
+var tcAlternation = loadModule('js/common/tcAlternation.js', makeRequire({
+    './tcRunRegistry.js': tcRunRegistry,
+    './tcMaintenanceLedger.js': tcLedger
+}));
 var bugBookkeeping = loadModule('js/common/bugBookkeeping.js', makeRequire({
     './tcRunRegistry.js': tcRunRegistry,
     './tcMaintenanceLedger.js': tcLedger,
@@ -153,6 +157,7 @@ function loadDispatcher(shell, jiraMocks, configExtra) {
         './common/tcTriage.js': tcTriage,
         './common/tcMaintenanceLedger.js': tcLedger,
         './common/tcRunRegistry.js': tcRunRegistry,
+        './common/tcAlternation.js': tcAlternation,
         './common/bugBookkeeping.js': bugBookkeeping,
         './common/jobTicketInputs.js': jobTicketInputs
     })), Object.assign({}, { cli_execute_command: shell }, jiraMocks || {}));
@@ -292,11 +297,16 @@ suite('tcDifferentialDispatcher: green-on-old — the earned bounce', function()
         assert.ok(run.latestLedger, 'the updated ledger marker was posted');
         assert.equal(tcLedger.differentialRequests(run.latestLedger).length, 0);
         assert.deepEqual(labelNames(run.jira), ['sm_tc_differential_triggered', 'tc_differential_pending']);
-        // the run registry is NOT rewritten by the dispatcher (the red streak
-        // that created the request stays the bounce-cap input)
+        // gh-1331: the dispatcher stamps the bounce anchor into the registry
+        // (the cross-lap suppression input the next lap reads)
         var registryBodies = run.jira.comments.map(function(c) { return c.comment; })
             .filter(function(b) { return String(b).indexOf('<!-- dmtools:tc-run-registry ') !== -1; });
-        assert.equal(registryBodies.length, 0);
+        assert.equal(registryBodies.length, 1, 'the registry marker lands with the bounce anchor');
+        var registry = tcRunRegistry.latestRegistry(
+            [{ body: registryBodies[0], user: { login: 'ai-teammate' } }],
+            { authorLogins: ['ai-teammate'] }).registry;
+        assert.equal(registry.tcs['TS-7'].lastBounceRange, 'facade12345');
+        assert.equal(registry.tcs['TS-7'].lastBounceKind, 'earned');
     });
 });
 

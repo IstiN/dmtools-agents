@@ -1653,12 +1653,12 @@ suite('postStoryTestAutomationResults: gh-1331 residue 2 — open items dedup, n
                 gh1331Comment(gh1331BounceFindingLedgerMarker('TS-152'))
             ],
             buildSha: 'sha-new2',
-            resultEntries: [gh1331FailedEntry('TS-152')]
+            resultEntries: [gh1331PassedEntry('TS-153'), gh1331FailedEntry('TS-152')]
         });
         var result = t.run();
         assert.equal(result.status, 'test_maintenance');
         assert.ok(!t.statusMoves.some(function(m) { return m.key === 'BUG-150'; }), 'bug NOT re-bounced');
-        var finding = gh1331Ledger.openFindings(gh1331PostedLedger(t))[0];
+        var finding = gh1331Ledger.openFindings(gh1331PostedLedger(t)).filter(function(f) { return f.tcKey === 'TS-152'; })[0];
         assert.equal(finding.occurrences, 2, 'the ledger entry is refreshed, not duplicated');
         assert.equal(finding.reason, 'suppressed-open-ledger-item');
     });
@@ -1676,7 +1676,7 @@ suite('postStoryTestAutomationResults: gh-1331 residue 2 — open items dedup, n
                 gh1331Comment(gh1331Ledger.buildLedgerMarker(claim))
             ],
             buildSha: 'sha-new2',
-            resultEntries: [gh1331FailedEntry('TS-152')]
+            resultEntries: [gh1331PassedEntry('TS-153'), gh1331FailedEntry('TS-152')]
         });
         var result = t.run();
         assert.equal(result.status, 'test_maintenance', 'the dev claim anchors the same failing build');
@@ -1690,7 +1690,7 @@ suite('postStoryTestAutomationResults: gh-1331 residue 2 — open items dedup, n
         var t = gh1331Triage({
             comments: [gh1331Comment(gh1331Registry.buildRegistryMarker(r))],
             buildSha: 'sha-new2',
-            resultEntries: [gh1331FailedEntry('TS-152')]
+            resultEntries: [gh1331PassedEntry('TS-153'), gh1331FailedEntry('TS-152')]
         });
         var result = t.run();
         assert.equal(result.status, 'failed', 'the prior bounce was on another range — this regression earns its bounce');

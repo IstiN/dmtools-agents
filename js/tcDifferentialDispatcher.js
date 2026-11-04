@@ -55,6 +55,8 @@ const { resolveStatuses } = require('./config.js');
 var tcTriage = require('./common/tcTriage.js');
 var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
 var tcRunRegistry = require('./common/tcRunRegistry.js');
+// gh-1331: the dispatcher honors the cross-lap alternation suppression.
+var tcAlternation = require('./common/tcAlternation.js');
 var bugBookkeeping = require('./common/bugBookkeeping.js');
 var jobTicketInputs = require('./common/jobTicketInputs.js');
 
@@ -329,6 +331,82 @@ function maintenanceEntry(request, verdict) {
     return entry;
 }
 
+/**
+ * gh-1331: the ledger entry for a SUPPRESSED bounce — the scripted rerun
+ * completed the attribution (green on the last-green build), but a
+ * suppression anchor owns the loop-stop. The same identity reopens as
+ * maintenance debt (the guard is still red and nobody is fixing it — sweep
+ * work), reason naming the anchor.
+ */
+function suppressedEntry(request, suppressedVerdict) {
+    var planned = suppressedVerdict.ledgerEntry || {};
+    var entry = baseLedgerEntry(request, planned.verdict || 'maintenance',
+        planned.reason || 'suppressed-contradictory-pair');
+    entry.evidence = { differential: 'green', suppression: suppressedVerdict.reason };
+    return entry;
+}
+
+/**
+ * The member-evidence snapshot for a pair-conflict record: the dispatched
+ * request carries its own script + last-green build; a partner TC falls back
+ * to its registry record.
+ */
+function dispatcherMetaOf(request, vars) {
+    return function(tcKey) {
+        if (String(tcKey) === String(request.tcKey)) {
+            return {
+                verifies: null,
+                testPath: request.testPath || null,
+                failureSummary: request.failureSummary || null,
+                lastGreenSha: request.lastGreenSha || null
+            };
+        }
+        var state = tcRunRegistry.stateOf(vars.registry, tcKey);
+        return {
+            verifies: null,
+            testPath: null,
+            failureSummary: null,
+            lastGreenSha: state ? state.lastGreenSha : null
+        };
+    };
+}
+
+/**
+ * gh-1331: the bounce/escalation gate. Detection runs FIRST (a fresh trade
+ * flip marks the pair — the escalation must not wait for the other anchors
+ * to expire), then the suppression anchors decide (pair conflict → prior
+ * bounce on the same range → open ledger item). A suppressed bounce resolves
+ * the request (the attribution completed) and routes as maintenance; an
+ * unsuppressed one stamps the registry's bounce anchor for the laps ahead.
+ */
+function gateRouteForAlternation(request, vars, routes, verdict) {
+    var detections = tcAlternation.scanAlternations(vars.registry, request.tcKey);
+    if (detections.length) {
+        var marked = tcAlternation.recordConflicts(
+            vars.registry, detections, new Date().toISOString(), dispatcherMetaOf(request, vars));
+        vars.registry = marked.registry;
+        routes.conflicts = routes.conflicts.concat(marked.added);
+    }
+    var suppression = tcAlternation.bounceSuppression(
+        vars.registry, vars.ledger, request.tcKey, request.lastGreenSha, request.sha);
+    vars.registry = tcRunRegistry.recordBounce(vars.registry, request.tcKey, {
+        at: new Date().toISOString(),
+        lastGreenSha: request.lastGreenSha,
+        kind: suppression ? 'suppressed' : (verdict.action === tcTriage.ACTION_ESCALATE ? 'escalated' : 'earned')
+    });
+    vars.ledger = tcMaintenanceLedger.resolveFindings(vars.ledger, [request.id], RESOLVE_VIA_GREEN);
+    if (suppression) {
+        var suppressed = tcAlternation.suppressedVerdict(verdict, suppression);
+        vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, suppressedEntry(request, suppressed));
+        routes.maintained.push(suppressed);
+        routes.suppressedBounces.push({ tcKey: request.tcKey, kind: suppression.kind, reason: suppressed.reason });
+        console.log('gh-1331: bounce for ' + request.tcKey + ' suppressed (' + suppression.kind + ')');
+        return;
+    }
+    if (verdict.action === tcTriage.ACTION_BOUNCE) routes.bounced.push(verdict);
+    else routes.escalated.push(verdict);
+}
+
 // ── tracker side effects (quiet — never fail the tick on a write) ────────────
 
 function postCommentQuietly(tracker, ticketKey, comment) {
@@ -377,12 +455,23 @@ function clearDispatchLabels(tracker, ticketKey, parkLabel) {
 // ── the report ────────────────────────────────────────────────────────────────
 
 /**
- * One dispatcher report per bug: the mechanical routes rendered by the same
- * surfaces the automation leg uses (bounce / escalation) plus the ledger
- * digest (the parked section — remaining stalls stay visible).
+ * One dispatcher report per bug: the gh-1331 pair escalations + suppressed
+ * bounces lead, then the mechanical routes rendered by the same surfaces the
+ * automation leg uses (bounce / escalation) plus the ledger digest (the
+ * parked section — remaining stalls stay visible).
  */
 function buildReportComment(routes, ledger) {
     var sections = [];
+    (routes.conflicts || []).forEach(function(record) {
+        sections.push(tcAlternation.buildConflictComment(record));
+    });
+    if ((routes.suppressedBounces || []).length) {
+        var suppressedLines = ['The scripted differential rerun confirmed the regression, but the bounce is *suppressed* (gh-1331) — a loop-stop anchor owns it:'];
+        routes.suppressedBounces.forEach(function(s) {
+            suppressedLines.push('* ' + s.tcKey + ' — ' + s.reason);
+        });
+        sections.push(suppressedLines.join('\n'));
+    }
     if (routes.bounced.length) sections.push(tcTriage.buildBounceComment(routes.bounced));
     if (routes.escalated.length) sections.push(tcTriage.buildEscalationComment(routes.escalated));
     if (routes.maintained.length) sections.push('The scripted differential rerun (gh-1345) ran the failing TC on its last-green build and it fails there too — ' +
@@ -428,10 +517,9 @@ function routeOne(request, vars, routes) {
         tcRunRegistry.redRoundsOf(vars.registry, request.tcKey), vars.maxRework);
     console.log('Differential outcome for', request.tcKey, 'on the last-green build:', run.outcome, '→', verdict.action);
     if (verdict.action === tcTriage.ACTION_BOUNCE || verdict.action === tcTriage.ACTION_ESCALATE) {
-        // the request is consumed — the bounce/escalation is the record
-        vars.ledger = tcMaintenanceLedger.resolveFindings(vars.ledger, [request.id], RESOLVE_VIA_GREEN);
-        if (verdict.action === tcTriage.ACTION_BOUNCE) routes.bounced.push(verdict);
-        else routes.escalated.push(verdict);
+        // the request is consumed — the bounce/escalation (or its gh-1331
+        // suppression) is the record
+        gateRouteForAlternation(request, vars, routes, verdict);
         return;
     }
     vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, maintenanceEntry(request, verdict));
@@ -439,7 +527,7 @@ function routeOne(request, vars, routes) {
 }
 
 function dispatchRequests(requests, vars) {
-    var routes = { bounced: [], escalated: [], maintained: [], stalled: [], deferred: 0 };
+    var routes = { bounced: [], escalated: [], maintained: [], stalled: [], deferred: 0, conflicts: [], suppressedBounces: [] };
     var bounded = requests.slice(0, MAX_DISPATCHES_PER_TICK);
     routes.deferred = requests.length - bounded.length;
     bounded.forEach(function(request) {
@@ -474,13 +562,19 @@ function unconfiguredGuardResult(params, config, tracker, ticketKey) {
     return { success: true, action: 'unconfigured_parked', ticketKey: ticketKey };
 }
 
-/** The ledger marker + route report + label tail of a dispatching run. */
-function reportRoutes(tracker, ticketKey, vars, originalLedger, routes) {
+/** The ledger + registry markers and the route report tail of a dispatching run. */
+function reportRoutes(tracker, ticketKey, vars, originalLedger, originalRegistry, routes) {
     var ledgerChanged = JSON.stringify(vars.ledger) !== JSON.stringify(originalLedger);
     postMarkerQuietly(tracker, ticketKey, ledgerChanged,
         tcMaintenanceLedger.buildLedgerMarker(vars.ledger), 'TC maintenance ledger');
+    // gh-1331: the gate mutates the registry too (pair records, bounce
+    // anchors) — the marker must land or the next lap reads stale history.
+    var registryChanged = JSON.stringify(vars.registry) !== JSON.stringify(originalRegistry);
+    postMarkerQuietly(tracker, ticketKey, registryChanged,
+        tcRunRegistry.buildRegistryMarker(vars.registry), 'TC run registry');
     var hasRoutes = routes.bounced.length || routes.escalated.length ||
-        routes.maintained.length || routes.stalled.length;
+        routes.maintained.length || routes.stalled.length || routes.conflicts.length ||
+        routes.suppressedBounces.length;
     if (hasRoutes) {
         postCommentQuietly(tracker, ticketKey, buildReportComment(routes, vars.ledger));
     }
@@ -533,7 +627,7 @@ function action(params) {
     if (routes.bounced.length) {
         moveBugToDevelopmentQuietly(tracker, ticketKey, statuses);
     }
-    reportRoutes(tracker, ticketKey, vars, bookkeeping.ledger, routes);
+    reportRoutes(tracker, ticketKey, vars, bookkeeping.ledger, bookkeeping.registry, routes);
     if (!tcMaintenanceLedger.differentialRequests(vars.ledger).length) {
         clearDispatchLabels(tracker, ticketKey, parkLabel);
     }

@@ -27,6 +27,8 @@ var shared = require('./postStoryTestAutomationShared.js');
 var tcTriage = require('./common/tcTriage.js');
 var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
 var tcRunRegistry = require('./common/tcRunRegistry.js');
+// gh-1331: cross-lap alternation detection + earned-bounce suppression.
+var tcAlternation = require('./common/tcAlternation.js');
 // gh-1329 review: the shared "load bug bookkeeping" helper (one getIssue,
 // one machine-author resolution) for both legs that read the markers.
 var bugBookkeeping = require('./common/bugBookkeeping.js');
@@ -895,6 +897,7 @@ function newTriageOutcome(bookkeeping) {
     return {
         bounced: [], routed: [], escalated: [], transient: [],
         schemaGapTestCases: [],
+        newConflicts: [],
         registry: bookkeeping.registry, ledger: bookkeeping.ledger
     };
 }
@@ -945,18 +948,84 @@ function triageFailedEntry(outcome, entry, vars) {
     if (vars.role === tcTriage.ROLE_OWN && !entryCarriesTriageFields(entry)) {
         outcome.schemaGapTestCases.push(vars.tcKey);
     }
+    if (verdict.action !== tcTriage.ACTION_NONE) {
+        // A transient flake (retry green) is "nothing happened" — it
+        // never counts toward the bounce streak. The failing build sha
+        // rides along: the gh-1331 run history groups laps by build.
+        outcome.registry = tcRunRegistry.recordFailure(outcome.registry, vars.tcKey, {
+            at: vars.at, verdict: verdict.action, role: vars.role, sha: verdict.evidence.sha
+        });
+    }
+    verdict = gateBounceForAlternation(outcome, verdict, vars);
     if (verdict.ledgerEntry) {
         outcome.ledger = tcMaintenanceLedger.appendFinding(
             outcome.ledger, tcMaintenanceLedger.findingFromVerdict(verdict, { at: vars.at }));
     }
-    if (verdict.action !== tcTriage.ACTION_NONE) {
-        // A transient flake (retry green) is "nothing happened" — it
-        // never counts toward the bounce streak.
-        outcome.registry = tcRunRegistry.recordFailure(outcome.registry, vars.tcKey, {
-            at: vars.at, verdict: verdict.action, role: vars.role
+    routeVerdict(outcome, entry, verdict);
+}
+
+/**
+ * The member-evidence snapshot for a pair-conflict record: the AC reference
+ * (verifies) from the linked TC metadata, the script + failure summary from
+ * the run entry, the recorded last-green build from the registry.
+ */
+function pairConflictMetaResolver(vars) {
+    return function(tcKey) {
+        var linked = linkedRoleSourceOf(vars.linkedMap[tcKey]) || {};
+        var entry = null;
+        (vars.result.results || []).forEach(function(e) {
+            if (e && e.testCaseKey === tcKey) entry = e;
+        });
+        var state = tcRunRegistry.stateOf(vars.outcome.registry, tcKey);
+        return {
+            verifies: linked.verifies || (entry && entry.verifies) || null,
+            testPath: (entry && entry.testPath) || null,
+            failureSummary: (entry && entry.failureSummary) || null,
+            lastGreenSha: state ? state.lastGreenSha : null
+        };
+    };
+}
+
+/**
+ * gh-1331: the earned-bounce gate. Detection runs FIRST (a fresh trade flip
+ * marks the pair even when another anchor would have suppressed this lap —
+ * the escalation must not wait for the anchor to expire), then the
+ * suppression anchors decide (pair conflict → prior bounce on the same range
+ * → open ledger item). A suppressed bounce converts to a test-side
+ * maintenance route (bug untouched, ledger refreshed); an unsuppressed bounce
+ * stamps the registry's bounce anchor for the laps that follow.
+ */
+function gateBounceForAlternation(outcome, verdict, vars) {
+    if (verdict.action === tcTriage.ACTION_BOUNCE) {
+        var detections = tcAlternation.scanAlternations(outcome.registry, verdict.tcKey);
+        if (detections.length) {
+            var recorded = tcAlternation.recordConflicts(
+                outcome.registry, detections, vars.at, pairConflictMetaResolver(vars));
+            outcome.registry = recorded.registry;
+            outcome.newConflicts = outcome.newConflicts.concat(recorded.added);
+        }
+        var suppression = tcAlternation.bounceSuppression(
+            outcome.registry, outcome.ledger, verdict.tcKey,
+            verdict.evidence.lastGreenSha, verdict.evidence.sha);
+        outcome.registry = tcRunRegistry.recordBounce(outcome.registry, verdict.tcKey, {
+            at: vars.at,
+            lastGreenSha: verdict.evidence.lastGreenSha,
+            kind: suppression ? 'suppressed' : 'earned'
+        });
+        if (suppression) {
+            console.log('gh-1331: bounce for ' + verdict.tcKey + ' suppressed (' + suppression.kind + ')');
+            return tcAlternation.suppressedVerdict(verdict, suppression);
+        }
+        return verdict;
+    }
+    if (verdict.action === tcTriage.ACTION_ESCALATE) {
+        // the cap escalation is a loop-stop too — anchor its range so later
+        // laps cannot re-bounce the same unresolved range behind the owner's back
+        outcome.registry = tcRunRegistry.recordBounce(outcome.registry, verdict.tcKey, {
+            at: vars.at, lastGreenSha: verdict.evidence.lastGreenSha, kind: 'escalated'
         });
     }
-    routeVerdict(outcome, entry, verdict);
+    return verdict;
 }
 
 function recordPassedEntry(outcome, entry, vars) {
@@ -1018,6 +1087,18 @@ function triageBugFailures(params, result, ctx, bookkeeping) {
     (result.results || []).forEach(function(entry) {
         applyEntryToOutcome(outcome, entry, vars);
     });
+    // gh-1331 cross-lap bookkeeping: a stable green resolves marked pairs
+    // (resolution re-enables normal triage), then the full-lap scan marks any
+    // fresh trade flip — the escalation surface rides the digest even when no
+    // bounce was pending this lap.
+    outcome.registry = tcAlternation.reconcileConflicts(outcome.registry);
+    var lapDetections = tcAlternation.scanAlternations(outcome.registry);
+    if (lapDetections.length) {
+        var marked = tcAlternation.recordConflicts(
+            outcome.registry, lapDetections, at, pairConflictMetaResolver(vars));
+        outcome.registry = marked.registry;
+        outcome.newConflicts = outcome.newConflicts.concat(marked.added);
+    }
     outcome.registryChanged = JSON.stringify(outcome.registry) !== JSON.stringify(bookkeeping.registry);
     outcome.ledgerChanged = JSON.stringify(outcome.ledger) !== JSON.stringify(bookkeeping.ledger);
     outcome.schemaGapHint = schemaGapHintSection(outcome);
@@ -1154,7 +1235,11 @@ function differentialRequested(triage) {
 }
 
 function digestSections(triage) {
-    var sections = [];
+    // gh-1331: a fresh contradictory pair escalates FIRST — the owner surface
+    // leads the digest, one comment per pair (records never re-escalate).
+    var sections = (triage.newConflicts || []).map(function(record) {
+        return tcAlternation.buildConflictComment(record);
+    });
     if (triage.routed.length > 0) sections.push(tcTriage.buildTriageComment(triage.routed));
     if (triage.escalated.length > 0) sections.push(tcTriage.buildEscalationComment(triage.escalated));
     if (triage.schemaGapHint) sections.push(triage.schemaGapHint);
