@@ -248,7 +248,12 @@ var TICKET_ANCHOR_MIN_WORD_OVERLAP = 0.2;
 var TICKET_WORD_MATCH_MIN_OVERLAP = 0.6;
 
 // Below this many content words (and without anchors) a claim is too thin
-// to declare confidently absent — the mechanical match abstains.
+// to declare confidently absent — the mechanical match abstains. The same
+// floor gates the anchor-free LINE match (gh-1334 rework): a ticket line
+// shorter than this is not requirement-shaped and must not confirm a claim
+// on words alone (the overlap coefficient's min() denominator would let a
+// heading/bullet whose few words appear in the claim score 1.0 — a
+// fabricated citation).
 var TICKET_MIN_CLAIM_WORDS = 3;
 
 // Attribution vocabulary of the spec-claim phrase itself — it says WHERE the
@@ -328,22 +333,29 @@ function wordOverlap(claimWords, lineWords) {
 /**
  * One ticket line's match quality for the claim — null when the line misses
  * (anchor matches gated by requirement-word overlap, plus the near-identical
- * word-overlap match without anchors). The anchor-free path additionally
- * requires the LINE itself to be requirement-shaped: the overlap coefficient
- * divides by min(claimWords, lineWords), so a 1–2-word ticket line (markdown
- * heading, bullet) whose few content words all appear in the claim would
- * score 1.0 and mint a fabricated "requirement verified" citation. Anchored
- * matches keep the low bar — the anchor is claim-specific evidence (a status
- * code / quoted string the claim itself asserts), not shared prose.
+ * word-overlap match without anchors).
  */
 function claimLineMatch(claimWords, normalizedLine, lineNo, anchorCount) {
     var lineWords = findingRegistry.contentWords(normalizedLine);
     var overlap = wordOverlap(claimWords, lineWords);
     var matched = (anchorCount > 0 && overlap >= TICKET_ANCHOR_MIN_WORD_OVERLAP) ||
-        (overlap >= TICKET_WORD_MATCH_MIN_OVERLAP &&
-         lineWords.length >= TICKET_MIN_CLAIM_WORDS);
+        anchorFreeLineMatch(claimWords, lineWords, overlap);
     if (!matched) return null;
     return { anchorCount: anchorCount, overlap: overlap, line: lineNo };
+}
+
+/**
+ * The anchor-free confirmation (near-identical requirement text) — gated on
+ * the LINE being requirement-shaped: the overlap coefficient divides by
+ * min(claimWords, lineWords), so a 1–2-word ticket line (markdown heading,
+ * bullet) whose few content words all appear in the claim would score 1.0
+ * and mint a fabricated "requirement verified" citation. Anchored matches
+ * keep the low bar — the anchor is claim-specific evidence (a status code /
+ * quoted string the claim itself asserts), not shared prose.
+ */
+function anchorFreeLineMatch(claimWords, lineWords, overlap) {
+    return overlap >= TICKET_WORD_MATCH_MIN_OVERLAP &&
+        lineWords.length >= TICKET_MIN_CLAIM_WORDS;
 }
 
 /** Is the candidate a better citation source than the incumbent best? */
