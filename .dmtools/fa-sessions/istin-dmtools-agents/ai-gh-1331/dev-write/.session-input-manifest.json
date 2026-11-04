@@ -1,0 +1,221 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-04T01:43:36.822Z",
+  "ticketKey": "pr-1348",
+  "headSha": "ccb6d2313088a683e8a6c8b9fb3dbc48f967e026",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:9cab63f1502bdfe9",
+      "size": 51424
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:a2f922a06fd05cb3",
+      "size": 4738612
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:6602cdd74b508c21",
+      "size": 1773
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:13230822df434a09",
+      "size": 12303
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:40a81d418bbb4993",
+      "size": 29391
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:0c6627d1f138b030",
+      "size": 14822
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:abb8bc50e182dc1c",
+      "size": 3483
+    },
+    "request.md": {
+      "hash": "fnv1a64:bd95827b496fe1a7",
+      "size": 3138
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:4fd984232d1d14d7",
+      "size": 1907
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:5ca46773c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:c3863c509f1ab698",
+      "size": 3221
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:bd95827b496fe1a7",
+      "size": 3138
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6zaHFv",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/tcAlternation.js:144",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: red CI — `crap` ratchet fails (14 new functions over the CRAP threshold 8)**\n\nThe head commit `cb6d231` is red on the required quality gate:\n\n```\nNEW > 8  js/common/tcAlternation.js::detectAlternation: 14\nNEW > 8  js/common/tcAlternation.js::scanAlternations: 9\nNEW > 8  js/common/tcAlternation.js::recordConflicts: 12.1\nNEW > 8  js/common/tcAlternation.js::openConflictFor: 8.5\nNEW > 8  js/common/tcAlternation.js::reconcileConflicts: 13.3\nNEW > 8  js/common/tcAlternation.js::anchorsMatch: 9.5\nNEW > 8  js/common/tcAlternation.js::openLedgerAnchor: 10\nNEW > 8  js/common/tcAlternation.js::bounceSuppression: 9\nNEW > 8  js/common/tcAlternation.js::buildConflictComment: 9\nNEW > 8  js/common/tcRunRegistry.js::recordFailure: 9\nNEW > 8  js/postStoryTestAutomationResults.js::pairConflictMetaResolver: 13\nNEW > 8  js/tcDifferentialDispatcher.js::buildReportComment: 9\nNEW > 8  js/unit-tests/test_postStoryTestAutomationResults.js::gh1331Triage: 9\nNEW > 8  js/unit-tests/test_tcAlternation.js::ledgerWithBounceFinding: 9\n0 regression(s), 14 new over threshold, 0 improvement(s), 0 removed\n##[error]Process completed with exit code 2.\n```\n\nGate: `.github/workflows/quality.yml` `CRAP_THRESHOLD: '8'` — every function NOT in the released `crap-baseline.json` (i.e. all new code) must measure ≤ 8. The unit tests themselves are green (8235 passed, 0 failed) — this is purely the complexity ratchet, and it blocks the merge (`crap:regression` label armed).\n\nSuggested decompositions (extract a helper per flagged unit — complexity, not size, is what the gate scores):\n\n- `detectAlternation` (14) — extract the per-build classification (`classifyBuild(runsA, runsB, sha)` → `'trade-A' | 'trade-B' | 'stable-green' | 'neutral'`) and keep the walk + signature check in the outer function.\n- `recordConflicts` (12.1) — extract `buildConflictRecord(detection, at, metaOf)`.\n- `reconcileConflicts` (13.3) — extract `isStableGreenPair(r, members)` / iterate a pre-filtered open-pairs list.\n- `pairConflictMetaResolver` (13) — extract `findEntryFor(results, tcKey)` and build the meta object in a helper.\n- `openLedgerAnchor` (10) / `bounceSuppression` (9) / `anchorsMatch` (9.5) — split the `owns` predicate and the sha matching into named helpers.\n- `buildConflictComment` (9) / `buildReportComment` (9) — one line-builder per section.\n- `recordFailure` (9, tcRunRegistry) — move the field stamping (`lastRedAt`/`redRounds`/`lastVerdict`/`appendRun`) into a small `applyFailure(state, info, at)` helper.\n- Test helpers (`gh1331Triage`, `ledgerWithBounceFinding`) — table-drive the configurable fields instead of the `if` chains.\n\nThen re-run the gate locally before pushing: `crap4js . --coverage <coverage> --threshold 8 --baseline <crap-baseline.json>` (same invocation as the `Ratchet` step in `quality.yml`)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zaHHR",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postStoryTestAutomationResults.js:1094",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: the advertised resolution is unreachable — `reconcileConflicts` never runs on the all-green lap that is supposed to clear the pair**\n\nThe PR description's exit contract (pr_info.md, \"Key decisions\" + the lap-by-lap table) states:\n\n> \"Resolution is mechanical: both members green on one build reconciles the pair and re-enables normal triage\"\n> | n | green | green (same build) | — | pair reconciled → normal triage re-enables |\n\nBut `reconcileConflicts` (and `recordGreen`) are only reachable through `triageBugFailures`, which is gated by `isTriagableBugRun`:\n\n```js\n// js/postStoryTestAutomationResults.js:1161-1165\nfunction handleBugWithProductFailure(params, result, ctx) {\n    if (!isTriagableBugRun(params, result, ctx)) {\n        return null;                       // ← all-green bug run bails here\n    }\n```\n```js\n// js/postStoryTestAutomationResults.js:1203-1207\nfunction isTriagableBugRun(params, result, ctx) {\n    if (bugIssueTypeOf(params) !== ctx.jiraConfig.issueTypes.BUG) return false;\n    if (failedResultsOf(result).length === 0) return false;   // ← the resolution lap has NO failures\n```\n\nThe canonical resolution lap — both guards pass, nothing else fails — has `failedResultsOf(result).length === 0`, so the run never reaches line 1094: the pair record is **never reconciled**, the greens are never recorded, and no registry marker is posted. Consequences:\n\n1. After the owner/dev actually fixes the contradiction and the pair goes green once, the pair record stands forever. Every **future genuine regression** of either member is still suppressed by the `contradictory-pair` anchor (`bounceSuppression` anchor 1 is sha-independent) and silently routed to the maintenance/sweep lane — with no new escalation, because `recordConflicts` never re-marks a standing pair and the one escalation is long past. The stale suppression permanently degrades triage for that bug.\n2. The only reconciliation path left is a coincidence lap: at least one OTHER TC fails (making the run triagable) while both members' latest runs are green on the same build. In the common case (only the pair exists) that lap never comes.\n\nNote the unit test \"after a stable green the pair no longer suppresses\" cannot catch this: it builds the registry directly and never exercises the all-green wiring through `handleBugWithProductFailure`.\n\nSuggested fixes (any of these restores the exit contract):\n\n- Run the cross-lap bookkeeping for ALL bug runs, not only failed ones: move the `reconcileConflicts` + greens + marker posting out of the `failedResultsOf(result).length > 0` gate (e.g. call a small `bookkeepingForBugRun` step before the triage gate), or\n- Reconcile inside `bounceSuppression`/detection: treat a stable green found during the newest-first walk as a resolution signal even without a full lap scan, and/or\n- Add a regression test: all-green bug run on a registry carrying an open pair → pair cleared, next red earns its bounce."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zaHIg",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/tcDifferentialDispatcher.js:401",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the dispatcher report contradicts itself for suppressed bounces**\n\n`gateRouteForAlternation` pushes the suppressed verdict into `routes.maintained`:\n\n```js\n// js/tcDifferentialDispatcher.js:398-402\nif (suppression) {\n    var suppressed = tcAlternation.suppressedVerdict(verdict, suppression);\n    ...\n    routes.maintained.push(suppressed);          // ← lands in the `maintained` bucket\n    routes.suppressedBounces.push({ ... });\n```\n\nand `buildReportComment` renders a fixed template for every `maintained` item:\n\n```js\n// js/tcDifferentialDispatcher.js:472-473\nif (routes.maintained.length) sections.push('The scripted differential rerun (gh-1345) ran the failing TC on its last-green build and it fails there too — ' +\n    'the failure predates the change; the finding stays in the TC maintenance ledger.');\n```\n\nA suppressed bounce is the GREEN-on-old case (the rerun **confirmed** the regression), so for every suppressed request the ticket gets BOTH sections: *\"…the bounce is suppressed (gh-1331) — a loop-stop anchor owns it\"* **and** *\"…it fails there too — the failure predates the change\"*. The second sentence is factually wrong about the key evidence and will mislead the owner reading the report.\n\nFix: keep suppressed verdicts out of `routes.maintained` (or make the maintained section render per-item text chosen by `v.suppression`), so a suppressed route produces only the suppressed section. The `test_tcDifferentialDispatcher.js` gh-1331 fixture asserts `maintainedTestCases` but never asserts the rendered comment — add an assertion that the \"fails there too\" line is absent for suppressed routes."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zaHJ5",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/tcAlternation.js:302",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the open-ledger anchor disarms itself after its first use — `suppressedVerdict` rewrites the finding's verdict to `maintenance`, which the `owns` check then rejects**\n\n`openLedgerAnchor` only accepts findings that \"own\" the failure:\n\n```js\n// js/common/tcAlternation.js:302-303\nvar owns = finding.verdict === 'bounce' || finding.verdict === 'escalate' ||\n    finding.source === tcMaintenanceLedger.SOURCE_DEV;\n```\n\nBut when the suppression fires, the verdict appended/refreshed into the ledger is the *converted* one — `suppressedVerdict` sets `ledgerEntry.verdict = ACTION_MAINTENANCE` (`'maintenance'`) with reason `suppressed-*`:\n\n```js\n// js/common/tcAlternation.js:355-360\nv.action = ACTION_MAINTENANCE;\nv.reason = reason;\nif (v.ledgerEntry) {\n    v.ledgerEntry.verdict = ACTION_MAINTENANCE;\n    v.ledgerEntry.reason = reason;\n}\n```\n\n`appendFinding` → `refreshFinding` then overwrites the prior `bounce` finding's verdict with `'maintenance'`. On a later lap over the same range, that finding no longer matches `owns` → the `open-ledger-item` anchor silently stops matching.\n\nToday this is masked for fresh laps because the registry bounce anchor (`lastBounceRange`, anchor 2) covers the same range — but the ledger anchor is the only line of defense exactly when the registry anchor is absent, i.e. registries persisted by **pre-gh-1331** markers (no `lastBounceRange`) or a marker whose posting failed (`postMarkerQuietly` is best-effort). In that state the third lap re-bounces the bug — the very ping-pong this PR exists to stop.\n\nFix: make the `owns` predicate recognize the suppression itself, e.g. also accept `String(finding.reason || '').indexOf('suppressed-') === 0` (or add an explicit `finding.verdict === 'maintenance' && finding.reason` prefix table). One unit test: ledger finding already refreshed to `verdict='maintenance', reason='suppressed-prior-bounce-same-range'` on the same range, registry WITHOUT `lastBounceRange` → `bounceSuppression` still returns `open-ledger-item`."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zaHLQ",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/tcDifferentialDispatcher.js:398",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: the two surfaces treat ACTION_ESCALATE under suppression inconsistently**\n\nIn the dispatcher gate, the suppression branch runs for **both** bounce and escalation verdicts — a cap escalation (`bounce-cap-reached`, the guard failed `maxReworkRounds` times) is converted to maintenance and `routes.escalated` never receives it:\n\n```js\n// js/tcDifferentialDispatcher.js:398-407\nif (suppression) {\n    var suppressed = tcAlternation.suppressedVerdict(verdict, suppression);   // action escalate → maintenance\n    ...\n    return;                                                                    // escalation swallowed\n}\nif (verdict.action === tcTriage.ACTION_BOUNCE) routes.bounced.push(verdict);\nelse routes.escalated.push(verdict);\n```\n\nThe automation leg (`gateBounceForAlternation`) is the opposite: it gates only `ACTION_BOUNCE` and lets `ACTION_ESCALATE` pass through ungated (it just stamps `kind: 'escalated'`).\n\nSame input (open pair conflict + cap escalation), different owner surface depending on which leg processed the lap: the dispatcher leg loses the \"bounce cap reached\" fact entirely (the pair escalation was posted once and never mentions the cap). If intentional (the pair escalation subsumes the cap), say so in a comment; otherwise gate only `ACTION_BOUNCE` here too, mirroring `gateBounceForAlternation`."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zaHMb",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postStoryTestAutomationResults.js:983",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: pair-record member snapshots bypass marker hygiene — `failureSummary` is copied untruncated into the persistent registry payload**\n\nThe ledger caps free-text evidence at 500 chars (`tcMaintenanceLedger.MAX_NOTE_LENGTH`, applied via `truncate` in `FINDING_FIELD_TABLE`) precisely because \"agent-authored evidence can be arbitrarily large; the ledger carries pointers, not essays\". The pair-conflict snapshot skips that discipline:\n\n```js\n// js/postStoryTestAutomationResults.js:983 (and tcDifferentialDispatcher.js dispatcherMetaOf:365)\nfailureSummary: (entry && entry.failureSummary) || null,\n```\n\n`recordConflicts` stores the result in `registry.pairs[pairKey].members[tcKey]`, and the pair record lives in the `dmtools:tc-run-registry` marker payload **indefinitely** (until reconciliation, which per the other thread may never run). An agent-supplied failure summary can therefore inflate every subsequent registry marker posted to the bug ticket, and `buildConflictComment` renders it verbatim into the escalation comment.\n\nFix: truncate at the snapshot point (reuse a 500-char cap like the ledger's `truncate`, or carry `failedDescriptionFile` as the pointer instead of the summary text)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6zaHNz",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/tcDifferentialDispatcher.js:530",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: the job result payload doesn't expose the new gh-1331 routes**\n\n`dispatchRequests` now accumulates `routes.conflicts` and `routes.suppressedBounces` (line 530), but `dispatchResult` (unchanged below) only maps the pre-existing buckets:\n\n```js\nbouncedTestCases: routes.bounced.map(...),\nmaintainedTestCases: routes.maintained.map(...),   // suppressed TCs are indistinguishable here\nescalatedTestCases: routes.escalated.map(...),\nstalledTestCases: routes.stalled.map(...)\n```\n\nDownstream consumers (SM logs, observability) can't tell a suppressed bounce from a genuine red-on-old maintenance route, and fresh pair conflicts are invisible in the result. Add `suppressedTestCases` / `conflicts` (pair keys) to the payload — symmetric with `routeNameOf`, which could also surface `conflicts.length` in the action name instead of silently folding suppressed laps into `maintained`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:607165a7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: red CI — `crap` ratchet fails (14 new functions over the CRAP threshold 8)**\n\nThe head commit `cb6d231` is red on the required quality gate:\n\n```\nNEW > 8  js/common/tcAlternation.js::detectAlternation: 14\nNEW > 8  js/common/tcAlternation.js::scanAlternations: 9\nNEW > 8  js/common/tcAlternation.js::recordConflicts: 12.1\nNEW > 8  js/common/tcAlternation.js::openConflictFor: 8.5\nNEW > 8  js/common/tcAlternation.js::reconcileConflicts: 13.3\nNEW > 8  js/common/tcAlternation.js::anchorsMatch: 9.5\nNEW > 8  js/common/tcAlternation.js::openLedgerAnchor: 10\nNEW > 8  js/common/tcAlternation.js::bounceSuppression: 9\nNEW > 8  js/common/tcAlternation.js::buildConflictComment: 9\nNEW > 8  js/common/tcRunRegistry.js::recordFailure: 9\nNEW > 8  js/postStoryTestAutomationResults.js::pairConflictMetaResolver: 13\nNEW > 8  js/tcDifferentialDispatcher.js::buildReportComment: 9\nNEW > 8  js/unit-tests/test_postStoryTestAutomationResults.js::gh1331Triage: 9\nNEW > 8  js/unit-tests/test_tcAlternation.js::ledgerWithBounceFinding: 9\n0 regression(s), 14 new over threshold, 0 improvement(s), 0 removed\n##[error]Process completed with exit code 2.\n```\n\nGate: `.github/workflows/quality.yml` `CRAP_THRESHOLD: '8'` — every function NOT in the released `crap-baseline.json` (i.e. all new code) must measure ≤ 8. The unit tests themselves are green (8235 passed, 0 failed) — this is purely the complexity ratchet, and it blocks the merge (`crap:regression` label armed).\n\nSuggested decompositions (extract a helper per flagged unit — complexity, not size, is what the gate scores):\n\n- `detectAlternation` (14) — extract the per-build classification (`classifyBuild(runsA, runsB, sha)` → `'trade-A' | 'trade-B' | 'stable-green' | 'neutral'`) and keep the walk + signature check in the outer function.\n- `recordConflicts` (12.1) — extract `buildConflictRecord(detection, at, metaOf)`.\n- `reconcileConflicts` (13.3) — extract `isStableGreenPair(r, members)` / iterate a pre-filtered open-pairs list.\n- `pairConflictMetaResolver` (13) — extract `findEntryFor(results, tcKey)` and build the meta object in a helper.\n- `openLedgerAnchor` (10) / `bounceSuppression` (9) / `anchorsMatch` (9.5) — split the `owns` predicate and the sha matching into named helpers.\n- `buildConflictComment` (9) / `buildReportComment` (9) — one line-builder per section.\n- `recordFailure` (9, tcRunRegistry) — move the field stamping (`lastRedAt`/`redRounds`/`lastVerdict`/`appendRun`) into a small `applyFailure(state, info, at)` helper.\n- Test helpers (`gh1331Triage`, `ledgerWithBounceFinding`) — table-drive the configurable fields instead of the `if` chains.\n\nThen re-run the gate locally before pushing: `crap4js . --coverage <coverage> --threshold 8 --baseline <crap-baseline.json>` (same invocation as the `Ratchet` step in `quality.yml`)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:93bf4417",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: the advertised resolution is unreachable — `reconcileConflicts` never runs on the all-green lap that is supposed to clear the pair**\n\nThe PR description's exit contract (pr_info.md, \"Key decisions\" + the lap-by-lap table) states:\n\n> \"Resolution is mechanical: both members green on one build reconciles the pair and re-enables normal triage\"\n> | n | green | green (same build) | — | pair reconciled → normal triage re-enables |\n\nBut `reconcileConflicts` (and `recordGreen`) are only reachable through `triageBugFailures`, which is gated by `isTriagableBugRun`:\n\n```js\n// js/postStoryTestAutomationResults.js:1161-1165\nfunction handleBugWithProductFailure(params, result, ctx) {\n    if (!isTriagableBugRun(params, result, ctx)) {\n        return null;                       // ← all-green bug run bails here\n    }\n```\n```js\n// js/postStoryTestAutomationResults.js:1203-1207\nfunction isTriagableBugRun(params, result, ctx) {\n    if (bugIssueTypeOf(params) !== ctx.jiraConfig.issueTypes.BUG) return false;\n    if (failedResultsOf(result).length === 0) return false;   // ← the resolution lap has NO failures\n```\n\nThe canonical resolution lap — both guards pass, nothing else fails — has `failedResultsOf(result).length === 0`, so the run never reaches line 1094: the pair record is **never reconciled**, the greens are never recorded, and no registry marker is posted. Consequences:\n\n1. After the owner/dev actually fixes the contradiction and the pair goes green once, the pair record stands forever. Every **future genuine regression** of either member is still suppressed by the `contradictory-pair` anchor (`bounceSuppression` anchor 1 is sha-independent) and silently routed to the maintenance/sweep lane — with no new escalation, because `recordConflicts` never re-marks a standing pair and the one escalation is long past. The stale suppression permanently degrades triage for that bug.\n2. The only reconciliation path left is a coincidence lap: at least one OTHER TC fails (making the run triagable) while both members' latest runs are green on the same build. In the common case (only the pair exists) that lap never comes.\n\nNote the unit test \"after a stable green the pair no longer suppresses\" cannot catch this: it builds the registry directly and never exercises the all-green wiring through `handleBugWithProductFailure`.\n\nSuggested fixes (any of these restores the exit contract):\n\n- Run the cross-lap bookkeeping for ALL bug runs, not only failed ones: move the `reconcileConflicts` + greens + marker posting out of the `failedResultsOf(result).length > 0` gate (e.g. call a small `bookkeepingForBugRun` step before the triage gate), or\n- Reconcile inside `bounceSuppression`/detection: treat a stable green found during the newest-first walk as a resolution signal even without a full lap scan, and/or\n- Add a regression test: all-green bug run on a registry carrying an open pair → pair cleared, next red earns its bounce."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:19fb7095",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the dispatcher report contradicts itself for suppressed bounces**\n\n`gateRouteForAlternation` pushes the suppressed verdict into `routes.maintained`:\n\n```js\n// js/tcDifferentialDispatcher.js:398-402\nif (suppression) {\n    var suppressed = tcAlternation.suppressedVerdict(verdict, suppression);\n    ...\n    routes.maintained.push(suppressed);          // ← lands in the `maintained` bucket\n    routes.suppressedBounces.push({ ... });\n```\n\nand `buildReportComment` renders a fixed template for every `maintained` item:\n\n```js\n// js/tcDifferentialDispatcher.js:472-473\nif (routes.maintained.length) sections.push('The scripted differential rerun (gh-1345) ran the failing TC on its last-green build and it fails there too — ' +\n    'the failure predates the change; the finding stays in the TC maintenance ledger.');\n```\n\nA suppressed bounce is the GREEN-on-old case (the rerun **confirmed** the regression), so for every suppressed request the ticket gets BOTH sections: *\"…the bounce is suppressed (gh-1331) — a loop-stop anchor owns it\"* **and** *\"…it fails there too — the failure predates the change\"*. The second sentence is factually wrong about the key evidence and will mislead the owner reading the report.\n\nFix: keep suppressed verdicts out of `routes.maintained` (or make the maintained section render per-item text chosen by `v.suppression`), so a suppressed route produces only the suppressed section. The `test_tcDifferentialDispatcher.js` gh-1331 fixture asserts `maintainedTestCases` but never asserts the rendered comment — add an assertion that the \"fails there too\" line is absent for suppressed routes."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:ce8fc819",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the open-ledger anchor disarms itself after its first use — `suppressedVerdict` rewrites the finding's verdict to `maintenance`, which the `owns` check then rejects**\n\n`openLedgerAnchor` only accepts findings that \"own\" the failure:\n\n```js\n// js/common/tcAlternation.js:302-303\nvar owns = finding.verdict === 'bounce' || finding.verdict === 'escalate' ||\n    finding.source === tcMaintenanceLedger.SOURCE_DEV;\n```\n\nBut when the suppression fires, the verdict appended/refreshed into the ledger is the *converted* one — `suppressedVerdict` sets `ledgerEntry.verdict = ACTION_MAINTENANCE` (`'maintenance'`) with reason `suppressed-*`:\n\n```js\n// js/common/tcAlternation.js:355-360\nv.action = ACTION_MAINTENANCE;\nv.reason = reason;\nif (v.ledgerEntry) {\n    v.ledgerEntry.verdict = ACTION_MAINTENANCE;\n    v.ledgerEntry.reason = reason;\n}\n```\n\n`appendFinding` → `refreshFinding` then overwrites the prior `bounce` finding's verdict with `'maintenance'`. On a later lap over the same range, that finding no longer matches `owns` → the `open-ledger-item` anchor silently stops matching.\n\nToday this is masked for fresh laps because the registry bounce anchor (`lastBounceRange`, anchor 2) covers the same range — but the ledger anchor is the only line of defense exactly when the registry anchor is absent, i.e. registries persisted by **pre-gh-1331** markers (no `lastBounceRange`) or a marker whose posting failed (`postMarkerQuietly` is best-effort). In that state the third lap re-bounces the bug — the very ping-pong this PR exists to stop.\n\nFix: make the `owns` predicate recognize the suppression itself, e.g. also accept `String(finding.reason || '').indexOf('suppressed-') === 0` (or add an explicit `finding.verdict === 'maintenance' && finding.reason` prefix table). One unit test: ledger finding already refreshed to `verdict='maintenance', reason='suppressed-prior-bounce-same-range'` on the same range, registry WITHOUT `lastBounceRange` → `bounceSuppression` still returns `open-ledger-item`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:dc30598e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: the two surfaces treat ACTION_ESCALATE under suppression inconsistently**\n\nIn the dispatcher gate, the suppression branch runs for **both** bounce and escalation verdicts — a cap escalation (`bounce-cap-reached`, the guard failed `maxReworkRounds` times) is converted to maintenance and `routes.escalated` never receives it:\n\n```js\n// js/tcDifferentialDispatcher.js:398-407\nif (suppression) {\n    var suppressed = tcAlternation.suppressedVerdict(verdict, suppression);   // action escalate → maintenance\n    ...\n    return;                                                                    // escalation swallowed\n}\nif (verdict.action === tcTriage.ACTION_BOUNCE) routes.bounced.push(verdict);\nelse routes.escalated.push(verdict);\n```\n\nThe automation leg (`gateBounceForAlternation`) is the opposite: it gates only `ACTION_BOUNCE` and lets `ACTION_ESCALATE` pass through ungated (it just stamps `kind: 'escalated'`).\n\nSame input (open pair conflict + cap escalation), different owner surface depending on which leg processed the lap: the dispatcher leg loses the \"bounce cap reached\" fact entirely (the pair escalation was posted once and never mentions the cap). If intentional (the pair escalation subsumes the cap), say so in a comment; otherwise gate only `ACTION_BOUNCE` here too, mirroring `gateBounceForAlternation`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:2b09a3b6",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: pair-record member snapshots bypass marker hygiene — `failureSummary` is copied untruncated into the persistent registry payload**\n\nThe ledger caps free-text evidence at 500 chars (`tcMaintenanceLedger.MAX_NOTE_LENGTH`, applied via `truncate` in `FINDING_FIELD_TABLE`) precisely because \"agent-authored evidence can be arbitrarily large; the ledger carries pointers, not essays\". The pair-conflict snapshot skips that discipline:\n\n```js\n// js/postStoryTestAutomationResults.js:983 (and tcDifferentialDispatcher.js dispatcherMetaOf:365)\nfailureSummary: (entry && entry.failureSummary) || null,\n```\n\n`recordConflicts` stores the result in `registry.pairs[pairKey].members[tcKey]`, and the pair record lives in the `dmtools:tc-run-registry` marker payload **indefinitely** (until reconciliation, which per the other thread may never run). An agent-supplied failure summary can therefore inflate every subsequent registry marker posted to the bug ticket, and `buildConflictComment` renders it verbatim into the escalation comment.\n\nFix: truncate at the snapshot point (reuse a 500-char cap like the ledger's `truncate`, or carry `failedDescriptionFile` as the pointer instead of the summary text)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:dcf5cea7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: the job result payload doesn't expose the new gh-1331 routes**\n\n`dispatchRequests` now accumulates `routes.conflicts` and `routes.suppressedBounces` (line 530), but `dispatchResult` (unchanged below) only maps the pre-existing buckets:\n\n```js\nbouncedTestCases: routes.bounced.map(...),\nmaintainedTestCases: routes.maintained.map(...),   // suppressed TCs are indistinguishable here\nescalatedTestCases: routes.escalated.map(...),\nstalledTestCases: routes.stalled.map(...)\n```\n\nDownstream consumers (SM logs, observability) can't tell a suppressed bounce from a genuine red-on-old maintenance route, and fresh pair conflicts are invisible in the result. Add `suppressedTestCases` / `conflicts` (pair keys) to the payload — symmetric with `routeNameOf`, which could also surface `conflicts.length` in the action name instead of silently folding suppressed laps into `maintained`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:578afe0b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head ccb6d2313088a683e8a6c8b9fb3dbc48f967e026 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-04:a538bae6",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-04",
+      "updatedAt": "2026-11-04",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST CHANGES\n\n**Summary**: Red CI on head `cb6d231`: the `crap` ratchet fails with 14 new functions over the CRAP threshold 8 (`quality.yml CRAP_THRESHOLD='8'`, exit 2) — unit tests themselves are green (8235 passed, 0 failed). One correctness blocker beyond CI: the advertised pair resolution is unreachable, because `reconcileConflicts` only runs inside the failed-TC triage gate and the all-green lap that should clear a pair never triages.\n\n**Key Issues**:\n- 🚨 `crap` gate red — 14 new functions over threshold 8 (9 in `tcAlternation.js` alone); needs helper extraction + a local ratchet re-run before push\n- 🚨 Pair reconciliation never fires on the canonical all-green lap (`isTriagableBugRun` bails on `failedResultsOf().length === 0`) → stale pair records suppress future genuine regressions forever, with no re-escalation\n- ⚠️ Dispatcher report renders the contradictory \"fails there too — failure predates the change\" template for suppressed (green-on-old) bounces\n- ⚠️ `openLedgerAnchor`'s `owns` check is disarmed by `suppressedVerdict`'s own verdict rewrite (`bounce` → `maintenance`) once a finding is refreshed\n- 💡 Escalate-verdict asymmetry between the dispatcher and automation-leg gates; untruncated `failureSummary` in persistent pair records; result payload omits conflicts/suppressed routes\n\n**Next Steps**:\n1. Decompose the flagged functions below the CRAP threshold and re-run the `crap4js` ratchet locally (same invocation as `quality.yml`)\n2. Move the gh-1331 bookkeeping (greens + `reconcileConflicts` + marker) out of the failed-only gate, and add an all-green-lap regression test\n3. Exclude suppressed verdicts from the `routes.maintained` template and let `owns` recognize `suppressed-*` reasons"
+    }
+  ]
+}
