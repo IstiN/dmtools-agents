@@ -257,6 +257,14 @@ suite('wave2d1 tracker — preCli setups / writeSolutionAndLabels', function() {
         var mod = loadModule('js/preCliStoryTestAutomationSetup.js', makeRequire({
             // gh-1247: the module now routes branch setup through common/branchSetup.js.
             'branchSetup.js': loadModule('js/common/branchSetup.js'),
+            // gh-1351: the setup resolves + validates reviewPolicy at leg start.
+            './common/reviewPolicy.js': (function() {
+                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                return loadModule('js/common/reviewPolicy.js',
+                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+            })(),
             './config.js': configModule,
             './common/trackers.js': d1Trackers(mocks),
             './configLoader.js': makeDefaultConfigLoaderMock(),

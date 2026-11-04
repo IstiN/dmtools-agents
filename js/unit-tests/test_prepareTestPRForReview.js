@@ -832,7 +832,8 @@ suite('prepareTestPRForReview — gh-1351 reviewPolicy: hard validation + run-co
     }
 
     test('a valid project policy is stamped as review_policy.md in the test-review input folder', function() {
-        var h = gh1351Load(function(p) {
+        var h = gh1351Load(function(args) {
+            var p = args && (args.path || args);
             if (p === '.dmtools/config.js') {
                 return 'module.exports = { reviewPolicy: { preset: "fix-everything" } };';
             }
