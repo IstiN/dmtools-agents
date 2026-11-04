@@ -100,8 +100,7 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
         './common/tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
             './reviewVerdicts.js': reviewVerdictsReal()
         }), {}),
-var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
-        './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
+        './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})), 
             './reviewVerdicts.js': reviewVerdictsReal()
         }), {}),
         './common/tcAlternation.js': loadModule('js/common/tcAlternation.js', makeRequire({
