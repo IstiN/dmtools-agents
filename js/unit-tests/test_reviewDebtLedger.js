@@ -86,7 +86,7 @@ suite('reviewDebtLedger — findings keyed by the #1332 identity', function () {
     test('free text is truncated (marker hygiene) and the ledger round-trips the marker', function () {
         var m = mod();
         var t = thread({ claim: 'x' });
-        for (var i = 0; i < 200; i++) t.claim += ' y';
+        for (var i = 0; i < 300; i++) t.claim += ' y';
         var l = m.appendDebtFinding(m.emptyLedger(), t);
         var parsed = m.parseDebtComments([machineComment(marker(l))], ALLOW);
         assert.equal(parsed.length, 1);
@@ -148,7 +148,7 @@ suite('reviewDebtLedger — the batched sweep trigger (>=10 open or oldest >=30d
         var m = mod();
         var l = m.appendDebtFinding(m.emptyLedger(), thread({ at: '2026-10-01T00:00:00.000Z', claim: 'stale one' }));
         l = m.appendDebtFinding(l, thread({ path: 'js/smAgent.js', claim: 'fresh one', at: '2026-11-04T00:00:00.000Z' }));
-        var stale = m.staleFindings(l, '2026-11-05T00:00:00.000Z');
+        var stale = m.staleDebtFindings(l, '2026-11-05T00:00:00.000Z');
         assert.equal(stale.length, 1);
         assert.contains(stale[0].claim, 'stale one');
     });
