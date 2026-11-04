@@ -52,6 +52,15 @@ var configLoader = require('./configLoader.js');
 // the machineAuthor knob.
 var reviewVerdictsModule = require('./common/reviewVerdicts.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
+// gh-1352 (epic §4-disposition, part 3/4): the triage path closes
+// machine-owned threads with machine-parsed disposition tags under the
+// resolved reviewPolicy, defers mandatory-fix work to the review debt
+// ledger, and dispatches the bounded polish lap when the approved head's
+// census is polish-tier-only.
+var reviewDispositionsModule = require('./common/reviewDispositions.js');
+var reviewDebtLedgerModule = require('./common/reviewDebtLedger.js');
+var reviewPolicyModule = require('./common/reviewPolicy.js');
+var polishLapModule = require('./common/polishLap.js');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure decision core — decideActions(state, cfg) → actions[]
@@ -153,8 +162,9 @@ function decideRedPrActions(pr, has, reworkExhausted, rounds) {
 
 // ── green + approved ─────────────────────────────────────────────────────
 // BEHIND updates the branch; CLEAN (or mergeable=true) merges with
-// merge-trigger parity; BLOCKED is the unresolved-thread conversation gate
-// (gh-828) resolved in-tick; anything else waits for a human look.
+// merge-trigger parity and then triages leftover machine threads; BLOCKED
+// is the unresolved-thread conversation gate (gh-828) resolved in-tick by
+// the gh-1352 disposition loop; anything else waits for a human look.
 function decideApprovedGreenActions(pr) {
     if (pr.mergeState === 'BEHIND') {
         return [{ type: 'updateBranch',
@@ -162,25 +172,27 @@ function decideApprovedGreenActions(pr) {
     }
     if (pr.mergeState === 'CLEAN' || pr.mergeable === true) {
         return [{ type: 'merge',
-            reason: 'approved + green + mergeable (merge-trigger parity)' }];
+            reason: 'approved + green + mergeable (merge-trigger parity)' },
+        { type: 'dispositionLoop', allowPolish: false,
+            reason: 'post-merge triage hygiene (gh-1352): resolve machine-owned threads with policy dispositions (no polish lap — merge parity owns a clean head)' }];
     }
     if (pr.mergeState === 'BLOCKED') {
         // gh-828 (live fa #1457–#1470, 2026-10-10): BLOCKED on an
         // approved green head is the unresolved-thread conversation
-        // gate (gh-683 branch protection). The rework arm is withheld
-        // on APPROVE+blocking=0 (gh-807) and the rework leg is the
-        // only other owner of thread resolution — so the machine's own
-        // non-blocking suggestion threads held every approved PR
-        // BLOCKED for ~8h. Resolve them IN-TICK: gate on the head's
-        // effective machine verdict record (APPROVE + census
-        // blocking=0), then ack-reply + resolve each unresolved
-        // machine-authored non-blocking thread (bounded, idempotent).
-        // Human threads never resolve here (AC3) — they keep BLOCKED
-        // and surface to humans. If threads were not the blocker
-        // (e.g. a pending required check also reads BLOCKED), the leg
-        // is a harmless no-op and the next tick re-evaluates.
-        return [{ type: 'resolveSuggestionThreads',
-            reason: 'approved + BLOCKED — unresolved-thread conversation gate (gh-828): resolve machine-owned non-blocking threads in-tick' }];
+        // gate (gh-683 branch protection). gh-1352 generalizes the
+        // in-tick resolution into the DISPOSITION LOOP: the bounded
+        // polish lap dispatches when the census is polish-tier-only
+        // (once per head, instability-budgeted), and every machine-owned
+        // thread otherwise closes with a machine-parsed disposition tag
+        // under the reviewPolicy — fixed / wontfix / duplicate / defered
+        // (mandatory-fix tiers defer INTO the review debt ledger, so a
+        // deferral is never a silent drop). Human threads never resolve
+        // here (AC3) — they keep BLOCKED and surface to humans. If
+        // threads were not the blocker (e.g. a pending required check
+        // also reads BLOCKED), the loop is a harmless no-op and the
+        // next tick re-evaluates.
+        return [{ type: 'dispositionLoop', allowPolish: true,
+            reason: 'approved + BLOCKED — the disposition loop (gh-828/gh-1352): polish lap when the census is polish-only, else triage with dispositions' }];
     }
     return [{ type: 'skip',
         reason: 'approved but merge state ' + pr.mergeState }];
@@ -266,6 +278,8 @@ function executeAction(provider, action, issue, cfg) {
             return provider.closeIssue(issue.number, cfg.closeComment);
         case 'resolveSuggestionThreads':
             return resolveSuggestionThreads(provider, action.prNumber, action.headSha, cfg);
+        case 'dispositionLoop':
+            return dispositionLoop(provider, issue, action, cfg);
         default:
             return null;
     }
@@ -312,34 +326,64 @@ function selectResolvableThreadsFor(provider, prNumber, headSha, logins, cfg) {
     });
 }
 
-// Resolve FIRST, ack only on success (gh-828 review round 3): with
-// reply-first, a persistent resolve failure (transient GraphQL error,
-// token drift) leaves the thread unresolved; the next tick re-selects it
-// and posts another ack — one duplicate per tick, unbounded. A resolved
-// thread missing its ack is a cosmetic loss the code already tolerates
-// (replyToThread may fail after a successful resolve); an unresolved
-// thread carrying fresh acks is spam. Returns the credited resolve count.
-function resolveEachThread(provider, prNumber, resolvable, ack) {
-    var resolved = 0;
-    resolvable.forEach(function (t) {
-        try {
-            provider.resolveThread(prNumber, t);
-            resolved++;
-        } catch (eResolve) {
-            console.warn('  ⚠️ resolveThread failed on PR #' + prNumber + ': ' + (eResolve.message || eResolve));
-            return;
-        }
-        try {
-            provider.replyToThread(prNumber, t, ack);
-        } catch (eReply) {
-            console.warn('  ⚠️ ack reply failed on a resolved thread of PR #' + prNumber + ': ' + (eReply.message || eReply));
-        }
-    });
-    return resolved;
+// gh-1352: the review debt ledger primitives on the provider — without
+// them (gitlab twin, bare test mocks) deferral is unavailable and
+// mandatory-fix tiers skip (needsFixOrDefer) instead of closing unfixed.
+function ledgerAvailableOn(provider) {
+    return typeof provider.prCommentList === 'function' &&
+        typeof provider.postPrComment === 'function';
 }
 
+// Defer ONE machine-owned thread into the review debt ledger (gh-1352):
+// append the finding keyed by the #1332 identity, post the ledger marker +
+// the async digest in ONE comment, and return the stamped finding id —
+// the `defered: <id>` tag value. The ledger core dedups (the same
+// observation re-raised refreshes occurrences) and reopens swept findings,
+// so a deferral that re-appears never duplicates.
+function deferThreadToLedger(provider, prNumber, thread, tierKey, logins) {
+    var comments = provider.prCommentList(prNumber);
+    var opts = { authorLogins: logins };
+    var l = reviewDebtLedgerModule.latestDebtLedger(comments, opts) ||
+        reviewDebtLedgerModule.emptyLedger();
+    l = reviewDebtLedgerModule.appendDebtFinding(l, {
+        threadId: thread.threadId,
+        path: thread.path || '',
+        claim: thread.body || '',
+        severityClass: tierKey,
+        originPr: prNumber,
+        threadUrl: thread.threadUrl || null
+    });
+    provider.postPrComment(prNumber,
+        reviewDebtLedgerModule.buildDebtMarker(l) + '\n' +
+        reviewDebtLedgerModule.buildDebtDigest(l));
+    var stamped = null;
+    l.findings.forEach(function (f) {
+        if (f && (f.originThread === thread.threadId)) stamped = f.id;
+    });
+    return stamped;
+}
+
+/**
+ * gh-1352 — the triage executor (the gh-828 resolution leg generalized):
+ * each selected machine-owned thread closes under the resolved reviewPolicy
+ * with a machine-parsed disposition tag —
+ *
+ *   fixed: <ref>      a lap addressed it (opts.fixedThreadIds);
+ *   wontfix: <reason> the tier's fix is never/opportunistic (nits by
+ *                     default policy);
+ *   defered: <id>     the tier's fix is mandatory and the debt ledger is
+ *                     reachable — the finding lives in the review-side
+ *                     ledger (the batched sweep PR owns it);
+ *   (skip)            fix mandatory and NO deferral available → the thread
+ *                     stays open, counted as needsFixOrDefer (the new
+ *                     severity-aware skip beside threadSkipReason).
+ *
+ * Resolve FIRST, ack only on success (gh-828 review round 3); the ledger
+ * append lands BEFORE the resolve so a failed deferral never closes a
+ * mandatory-fix thread. Returns the per-tag counters.
+ */
 function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
-    var none = { resolved: 0 };
+    var none = { resolved: 0, fixed: 0, wontfix: 0, duplicate: 0, defered: 0, needsFixOrDefer: 0 };
     if (!supportsThreadResolution(provider)) {
         console.warn('  ⚠️ resolveSuggestionThreads: provider lacks the verdict/thread primitives — skipped (gitlab twin has none yet)');
         return none;
@@ -362,11 +406,107 @@ function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
             ', already resolved ' + sel.skipped.resolved + ', no id ' + sel.skipped.noThreadId + ')');
         return none;
     }
-    var ack = reviewVerdictsModule.buildThreadAckReply();
-    var resolved = resolveEachThread(provider, prNumber, sel.resolvable, ack);
-    console.log('  ✅ resolveSuggestionThreads on PR #' + prNumber + ': resolved ' + resolved +
-        '/' + sel.resolvable.length + ' non-blocking machine thread(s)');
-    return { resolved: resolved };
+    var policy = (cfg && cfg.reviewPolicy) || reviewPolicyModule.defaultPolicy();
+    var ledgerOk = ledgerAvailableOn(provider);
+    var out = { resolved: 0, fixed: 0, wontfix: 0, duplicate: 0, defered: 0, needsFixOrDefer: 0 };
+    sel.resolvable.forEach(function (t) {
+        var disp = reviewDispositionsModule.dispositionForThread(t, policy, { allowDefer: ledgerOk });
+        if (!disp) {
+            // fix mandatory with no deferral available — the thread stays
+            // open (the fix-or-defer gate; never close unfixed work).
+            out.needsFixOrDefer++;
+            return;
+        }
+        if (disp.defer) {
+            try {
+                disp.value = deferThreadToLedger(provider, prNumber, t, disp.tier, logins);
+            } catch (eLedger) {
+                console.warn('  ⚠️ debt-ledger append failed on PR #' + prNumber + ': ' +
+                    (eLedger.message || eLedger) + ' — the thread stays open (fail closed)');
+                out.needsFixOrDefer++;
+                return;
+            }
+            if (!disp.value) {
+                console.warn('  ⚠️ debt-ledger append did not stamp a finding id on PR #' + prNumber +
+                    ' — the thread stays open (fail closed)');
+                out.needsFixOrDefer++;
+                return;
+            }
+        }
+        var ack = reviewDispositionsModule.buildThreadAckReply(
+            { tag: disp.tag, value: disp.value, tier: disp.tier });
+        try {
+            provider.resolveThread(prNumber, t);
+            out.resolved++;
+            out[disp.tag] = (out[disp.tag] || 0) + 1;
+        } catch (eResolve) {
+            console.warn('  ⚠️ resolveThread failed on PR #' + prNumber + ': ' + (eResolve.message || eResolve));
+            return;
+        }
+        try {
+            provider.replyToThread(prNumber, t, ack);
+        } catch (eReply) {
+            console.warn('  ⚠️ ack reply failed on a resolved thread of PR #' + prNumber + ': ' + (eReply.message || eReply));
+        }
+    });
+    console.log('  ✅ resolveSuggestionThreads on PR #' + prNumber + ': resolved ' + out.resolved +
+        '/' + sel.resolvable.length + ' machine thread(s) — fixed ' + out.fixed + ', wontfix ' +
+        out.wontfix + ', defered ' + out.defered + ', needs-fix-or-defer ' + out.needsFixOrDefer);
+    return out;
+}
+
+/**
+ * gh-1352 — the disposition loop executor (the BLOCKED branch's action,
+ * and the post-merge hygiene pass): dispatch the bounded polish lap when
+ * the approved head's census is polish-tier-only (once per head,
+ * instability-budgeted — the lap owns its threads), otherwise hand every
+ * selected thread to the triage executor with dispositions. The polish
+ * gate failing (records/primitives) falls OPEN to triage — the loop is
+ * never wedged by one leg's read.
+ */
+function dispositionLoop(provider, issue, action, cfg) {
+    var prNumber = action.prNumber;
+    var headSha = action.headSha;
+    if (action.allowPolish !== false) {
+        try {
+            var d = polishGateDecision(provider, prNumber, headSha, cfg);
+            if (d && d.dispatch) {
+                console.log('  🔬 gh-' + issue.number + ' polish lap dispatched on PR #' + prNumber +
+                    ' (' + d.reason + ', top-K ' + (d.plan ? d.plan.lapThreads.length : 0) +
+                    ', overflow ' + (d.plan ? d.plan.overflowThreads.length : 0) + ')');
+                provider.dispatchLeg(issue, 'polish', d.reason, cfg.workflowFile);
+                return { polished: true, plan: d.plan };
+            }
+            if (d && d.trigger) {
+                console.log('  ⏭️  gh-' + issue.number + ' polish lap not dispatched (' + d.reason +
+                    ') — the threads triage below');
+            }
+        } catch (ePolish) {
+            console.warn('  ⚠️ polish gate failed on PR #' + prNumber + ': ' +
+                (ePolish.message || ePolish) + ' — falling open to triage');
+        }
+    }
+    return resolveSuggestionThreads(provider, prNumber, headSha, cfg);
+}
+
+// The polish-lap gate (gh-1352 scope 3): the effective APPROVE record for
+// the head, the parsed lap markers (machine-authored only) and the open
+// thread list feed the pure polishDecision. Returns null when the gate
+// cannot run (no head/logins, missing comment primitives) — never throws.
+function polishGateDecision(provider, prNumber, headSha, cfg) {
+    var logins = machineLoginsOf(cfg);
+    if (!headSha || !logins.length || typeof provider.prCommentList !== 'function' ||
+        typeof provider.verdictRecords !== 'function' ||
+        typeof provider.reviewThreadList !== 'function') {
+        return null;
+    }
+    var records = provider.verdictRecords(prNumber, { authorLogins: logins });
+    var effective = reviewVerdictsModule.latestVerdictForHead(records, headSha);
+    if (!effective) return null;
+    var policy = (cfg && cfg.reviewPolicy) || reviewPolicyModule.defaultPolicy();
+    var laps = polishLapModule.parsePolishLapMarkers(provider.prCommentList(prNumber), { authorLogins: logins });
+    return polishLapModule.polishDecision(effective.record, policy,
+        provider.reviewThreadList(prNumber), headSha, laps);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -420,6 +560,12 @@ function resolveMachineSmConfig(p, projectConfig) {
     // operator tuning the wrong bound.
     cfg.maxResolveThreads = resolveMaxResolveThreads(override, p,
         reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP);
+    // gh-1352: the disposition loop closes threads under the resolved
+    // reviewPolicy (projectConfig.reviewPolicy > jobParams.reviewPolicy >
+    // the built-in default) — the same resolution chain the review leg's
+    // verdict layer uses (gh-1351), so triage and review never disagree
+    // about what a tier requires.
+    cfg.reviewPolicy = reviewPolicyModule.resolveReviewPolicy(projectConfig, p);
     return cfg;
 }
 
@@ -611,6 +757,9 @@ if (typeof module !== 'undefined' && module.exports) {
         // gh-1242: exported for unit tests (every switch arm incl. the
         // gh-828 thread-resolution leg).
         resolveSuggestionThreads: resolveSuggestionThreads,
+        // gh-1352: the disposition loop (polish gate + triage executor).
+        dispositionLoop: dispositionLoop,
+        polishGateDecision: polishGateDecision,
         executeAction: executeAction,
         resolveMachineSmConfig: resolveMachineSmConfig,
         resolveRepoCfg: resolveRepoCfg,

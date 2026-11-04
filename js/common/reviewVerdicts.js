@@ -838,6 +838,7 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveLoserLabel: resolveLoserLabel,
         buildReconciliationComment: buildReconciliationComment,
         reconcileDecision: reconcileDecision,
+        latestVerdictForHead: latestVerdictForHead,
         armReworkDecision: armReworkDecision,
         threadSeverity: threadSeverity,
         machineSeverityLine: machineSeverityLine,

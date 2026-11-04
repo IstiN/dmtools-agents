@@ -7,14 +7,51 @@
  */
 /* global suite, test, assert, loadModule, makeRequire */
 
+// gh-1352: the disposition-loop modules (reviewPolicy, reviewDispositions,
+// reviewDebtLedger, polishLap) join the agent's require map — every
+// loadModule('js/machineSmAgent.js') site shares one map factory so the
+// gh-823 pack-require rule stays satisfied in every suite.
+function rvShared() {
+    if (!rvShared.mod) rvShared.mod = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': maShared() }), {});
+    return rvShared.mod;
+}
+
+function maShared() {
+    if (!maShared.mod) maShared.mod = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    return maShared.mod;
+}
+
+function agentModuleMap(projectConfig, holder) {
+    var policy = loadModule('js/common/reviewPolicy.js',
+        makeRequire({ './reviewVerdicts.js': rvShared() }), {});
+    return {
+        './configLoader.js': { loadProjectConfig: function () { return projectConfig || {}; } },
+        './common/smProvider.js': { createSmProvider: function () { return holder ? holder.provider : {}; } },
+        './common/reviewVerdicts.js': rvShared(),
+        './common/machineAuthor.js': maShared(),
+        './common/reviewPolicy.js': policy,
+        './common/reviewDispositions.js': loadModule('js/common/reviewDispositions.js',
+            makeRequire({ './reviewVerdicts.js': rvShared(), './reviewPolicy.js': policy }), {}),
+        './common/reviewDebtLedger.js': loadModule('js/common/reviewDebtLedger.js',
+            makeRequire({
+                './reviewVerdicts.js': rvShared(),
+                './findingRegistry.js': loadModule('js/common/findingRegistry.js',
+                    makeRequire({ './reviewVerdicts.js': rvShared() }), {}),
+                './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({}))
+            }), {}),
+        './common/polishLap.js': loadModule('js/common/polishLap.js',
+            makeRequire({
+                './reviewVerdicts.js': rvShared(),
+                './machineAuthor.js': maShared(),
+                './reviewPolicy.js': policy
+            }), {})
+    };
+}
+
 suite('machineSm decision core', function () {
 
-    var agent = loadModule('js/machineSmAgent.js', makeRequire({
-        './configLoader.js': { loadProjectConfig: function () { return {}; } },
-        './common/smProvider.js': { createSmProvider: function () { return {}; } },
-        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
-        './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-    }), {
+    var agent = loadModule('js/machineSmAgent.js', makeRequire(agentModuleMap({}, null)), {
         cli_execute_command: function () { return '{}'; }
     });
 
@@ -228,12 +265,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
     };
 
     // gh-823: every require of the agent must resolve in the map.
-    var agent = loadModule('js/machineSmAgent.js', makeRequire({
-        './configLoader.js': { loadProjectConfig: function () { return {}; } },
-        './common/smProvider.js': { createSmProvider: function () { return {}; } },
-        './common/reviewVerdicts.js': rvReal(),
-        './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-    }), {
+    var agent = loadModule('js/machineSmAgent.js', makeRequire(agentModuleMap({}, null)), {
         cli_execute_command: function () { return '{}'; }
     });
 
