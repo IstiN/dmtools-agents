@@ -8,25 +8,39 @@ minutes). These rules govern the verdict; every other instruction
 
 ## Verdict mapping
 
-Classify findings exactly as instructed:
+Classify findings exactly as instructed (gh-1351, 4 tiers):
 
 - 🚨 **BLOCKING** — correctness/bug findings: broken behavior, failing
   gates (red CI), scope violations, security issues, data loss.
 - ⚠️ **IMPORTANT** — real maintainability debt worth fixing, but the PR
   works as shipped.
-- 💡 **SUGGESTION** — style, wording, import order, doc-comment refs, polish.
+- 💡 **SUGGESTION** — clarity of the documented/behavioral surface:
+  missing docs, unclear contract, better API shape.
+- 🪶 **NIT** — changes nothing behavioral and nothing documented: style,
+  formatting, naming micro-preferences.
 
-Then map to the verdict:
+Then map to the verdict (the machine recomputes it from the census —
+`postPRReviewComments` treats your token as advisory):
 
 | Findings | `recommendation` |
 |---|---|
-| Any 🚨 BLOCKING (correctness/bug) | `REQUEST_CHANGES` — or `BLOCK` for security / data loss |
-| No 🚨 BLOCKING — only ⚠️ / 💡 remain | `APPROVE` |
+| Any 🚨 BLOCKING | `REQUEST_CHANGES` — or `BLOCK` for security / data loss |
+| Any ⚠️ IMPORTANT (no 🚨) | `REQUEST_CHANGES` (gates approval — policy default) |
+| Only 💡 / 🪶 remain | `APPROVE` — the cycle converges |
 
-`APPROVE` with remaining ⚠️/💡 findings is the expected terminal state
-(`allowApproveWithSuggestions: true`): post every remaining finding as
-before (inline threads + general comment) — they do **not** block the merge
-and must **not** trigger another rework round.
+**Downgrade protocol (gh-1351):** when the rework lap downgraded a specific ⚠️ to 💡 **with a
+written justification in the census** (the thread reply states why the finding is not
+maintainability debt), classify that finding 💡 in this round's census — the false-⚠️ review
+converges to APPROVE without a code change. Without the written justification, keep ⚠️: a silent
+downgrade does not exist, and the machine recomputes the verdict from the census you post.
+
+`APPROVE` with remaining 💡/🪶 findings is the expected terminal state
+(the resolved policy's `allowApproveWithSuggestions` derives from the
+tier table — SUGGESTION rounds polish, NIT rounds none): post every
+remaining finding as before (inline threads + general comment) — they do
+**not** block the merge and must **not** trigger another rework round.
+An open ⚠️ **does** gate approval unless the project's `reviewPolicy`
+explicitly weakens it (owner standing-approval doctrine, epic §4.4).
 
 ## Anti-patterns
 

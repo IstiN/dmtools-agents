@@ -41,6 +41,7 @@ function loadPrReviewComments() {
         './common/githubHelpers.js': { findPRForTicket: function() { return null; }, findMergedPRForTicket: function() { return null; } },
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+        './common/reviewPolicy.js': loadModule('js/common/reviewPolicy.js', makeRequire({ './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
         './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js', makeRequire({}), {}),

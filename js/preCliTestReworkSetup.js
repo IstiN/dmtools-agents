@@ -16,6 +16,10 @@ const branchSetup = require('./common/branchSetup.js');
 const trackersModule = require('./common/trackers.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
+// gh-1351 (hoisted, never lazy — the gh-823 pack-require rule): the review
+// policy config — resolved once here so a malformed config fails the leg at
+// start, and the resolved table is stamped into the rework run context.
+var reviewPolicyModule = require('./common/reviewPolicy.js');
 
 // ── Pure parse/build helpers (gh-1042) ──────────────────────────────────────
 
@@ -281,6 +285,30 @@ function findTestPRForTicket(scm, ticketKey) {
     }
 }
 
+/** The leg's resolved reviewPolicy — params resolution mirrors config loading. */
+function resolveLegReviewPolicy(config, params) {
+    return reviewPolicyModule.resolveReviewPolicy(config, params.jobParams || params);
+}
+
+/**
+ * gh-1351: stamp the resolved reviewPolicy into the rework run context
+ * (`review_policy.md`) so the rework agent answers threads under the same
+ * policy the machine enforced when the review ran. Non-fatal.
+ */
+function writeReviewPolicyContext(inputFolder, reviewPolicy) {
+    try {
+        gitOps.writeInputFile(
+            inputFolder + '/review_policy.md',
+            reviewPolicyModule.policyInputContextMarkdown(reviewPolicy),
+            'review_policy.md (resolved review policy — gh-1351)'
+        );
+        console.log('✅ Review policy stamped into the run context (review_policy.md, preset ' +
+            reviewPolicy.preset + ')');
+    } catch (policyErr) {
+        console.warn('review_policy.md stamp failed (non-fatal):', policyErr.message || policyErr);
+    }
+}
+
 function action(params) {
     var tracker = null;
     try {
@@ -290,6 +318,10 @@ function action(params) {
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = configLoader.createScm(config);
         tracker = trackersModule.createTracker(config, parseCustomParams(params, actualParams));
+        // gh-1351: hard validation at leg start — a malformed reviewPolicy
+        // throws a ReviewPolicyValidationError HERE, before any side effect.
+        // The tracker exists already so the failure is posted on the ticket.
+        var reviewPolicy = resolveLegReviewPolicy(config, params);
 
         console.log('=== Test rework setup for:', ticketKey, '===');
 
@@ -345,6 +377,9 @@ function action(params) {
         // Step 6: Write context files
         gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
 
+        // gh-1351: stamp the resolved reviewPolicy into the rework run context.
+        writeReviewPolicyContext(inputFolder, reviewPolicy);
+
         // Step 7 (+7b): question subtasks and linked bugs (extra context)
         fetchExtras(actualParams);
 
@@ -385,6 +420,8 @@ if (typeof module !== 'undefined' && module.exports) {
         postReworkStartedComment,
         parseErrorTicketKey,
         createErrorTracker,
-        reportActionError
+        reportActionError,
+        resolveLegReviewPolicy,
+        writeReviewPolicyContext
     };
 }

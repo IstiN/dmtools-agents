@@ -12,6 +12,20 @@
 
 var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
 
+// gh-1351: the real reviewPolicy module (pure chain) shared by every
+// preCliReworkSetup loader below — the run-context stamp + leg-start
+// validation read it.
+var gh1351ReviewPolicy = (function() {
+    var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthor }), {});
+    return loadModule('js/common/reviewPolicy.js',
+        makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+})();
+function loadPolicyModule() {
+    return gh1351ReviewPolicy;
+}
+
 var NOOP_MODULE = {};
 
 var reworkCommentMarkupModule = loadModule('js/common/commentMarkup.js',
@@ -36,6 +50,7 @@ function loadPreCliReworkSetup(configLoaderStub, mocks) {
     return loadModule(
         'js/preCliReworkSetup.js',
         makeRequire({
+            './common/reviewPolicy.js': gh1351ReviewPolicy,
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': mocks.__ghStub,
             './forkCheckout.js': forkCheckoutModule,
@@ -395,6 +410,11 @@ function makeActionHarness(overides) {
         repository: overides.repository,
         jira: overides.jira
     };
+    // gh-1351: configPatch lets a test serve a project reviewPolicy (or any
+    // other config field) through the standard action harness.
+    if (overides.configPatch) {
+        Object.assign(config, overides.configPatch);
+    }
 
     var configLoaderStub = {
         loadProjectConfig: function() {
@@ -438,6 +458,7 @@ function makeActionHarness(overides) {
     var mod = loadModule(
         'js/preCliReworkSetup.js',
         makeRequire({
+            './common/reviewPolicy.js': gh1351ReviewPolicy,
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': ghStub,
             './forkCheckout.js': forkCheckoutModule,
@@ -505,6 +526,7 @@ function makeContractHarness(opts) {
     var mod = loadModule(
         'js/preCliReworkSetup.js',
         makeRequire({
+            './common/reviewPolicy.js': gh1351ReviewPolicy,
             './configLoader.js': { loadHookFn: function() { return null; } },
             './common/githubHelpers.js': makeGhStub(),
             './forkCheckout.js': forkCheckoutModule,
@@ -531,23 +553,24 @@ function contractThreads(ids) {
 
 suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-799 AC1)', function() {
 
-    test('CI-red armer fixture: threads + failures fetched → only review_state.md is added', function() {
+    test('CI-red armer fixture: threads + failures fetched → review_state.md + review_policy.md added', function() {
         var h = makeContractHarness();
         var written = h.mod.ensureInputContextContract('input/PROJ-123', null, 7,
             contractThreads(['PRRT_a', 'PRRT_b']), [{ name: 'build', conclusion: 'failure' }]);
 
-        assert.deepEqual(written, ['review_state.md'],
-            'the two fetched halves are already written by writePRContext/detectFailedChecks — no double write');
+        assert.deepEqual(written, ['review_state.md', 'review_policy.md'],
+            'the two fetched halves are already written by writePRContext/detectFailedChecks — no double write; ' +
+            'gh-1351: the policy stamp refreshes every leg like review_state.md');
         assert.ok(h.files['input/PROJ-123/review_state.md'], 'review_state.md always written');
     });
 
-    test('manual-dispatch fixture: zero threads, zero failures → non-empty placeholders for all three', function() {
+    test('manual-dispatch fixture: zero threads, zero failures → non-empty placeholders for all four', function() {
         var h = makeContractHarness();
         var written = h.mod.ensureInputContextContract('input/PROJ-123', null, 7, {}, []);
 
         written.sort();
-        assert.deepEqual(written, ['ci_failures.md', 'pr_discussions_raw.json', 'review_state.md'],
-            'an armer that skips a file is a regression — the trio is pinned');
+        assert.deepEqual(written, ['ci_failures.md', 'pr_discussions_raw.json', 'review_policy.md', 'review_state.md'],
+            'an armer that skips a file is a regression — the trio + gh-1351 policy stamp is pinned');
 
         var raw = JSON.parse(h.files['input/PROJ-123/pr_discussions_raw.json']);
         assert.ok(raw && Array.isArray(raw.threads) && raw.threads.length === 0,
@@ -670,6 +693,7 @@ suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-79
         var mod = loadModule(
             'js/preCliReworkSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': gh1351ReviewPolicy,
                 './configLoader.js': {
                     loadProjectConfig: function() { return { git: { baseBranch: 'master' }, workingDir: null, repository: { owner: 'acme', repo: 'widgets' } }; },
                     paramsForConfigLoad: function(p) { return p; },
@@ -742,6 +766,7 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
         var mod = loadModule(
             'js/preCliReworkSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': gh1351ReviewPolicy,
                 './configLoader.js': {
                     loadProjectConfig: function() {
                         return {
@@ -819,6 +844,7 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
             var mod = loadModule(
                 'js/preCliReworkSetup.js',
                 makeRequire({
+                    './common/reviewPolicy.js': gh1351ReviewPolicy,
                     './configLoader.js': {
                         loadProjectConfig: function() {
                             return {
@@ -1413,6 +1439,7 @@ suite('preCliReworkSetup.action — diff-before-CI-detection (gh-1119 AC7)', fun
         var mod = loadModule(
             'js/preCliReworkSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': gh1351ReviewPolicy,
                 './configLoader.js': {
                     loadProjectConfig: function() {
                         return {
@@ -1664,6 +1691,7 @@ suite('preCliReworkSetup.action — context-assembly branches (gh-1220 character
         var mod = loadModule(
             'js/preCliReworkSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': gh1351ReviewPolicy,
                 './configLoader.js': {
                     loadProjectConfig: function() {
                         return {
@@ -1743,3 +1771,46 @@ suite('preCliReworkSetup.action — context-assembly branches (gh-1220 character
         assert.equal(warned.length, 1, 'the failure is announced once — got: ' + JSON.stringify(h.logs.warn));
     });
 });
+
+suite('preCliReworkSetup — gh-1351 reviewPolicy: hard validation + review_policy.md contract', function() {
+
+    test('ensureInputContextContract stamps review_policy.md (refreshed every leg, like review_state.md)', function() {
+        var h = makeContractHarness();
+        var policy = loadPolicyModule().defaultPolicy();
+        h.mod.ensureInputContextContract('input/PROJ-123', null, 7, contractThreads(['PRRT_a']), [], policy);
+        assert.ok(h.files['input/PROJ-123/review_policy.md'], 'review_policy.md written');
+        assert.contains(h.files['input/PROJ-123/review_policy.md'], '| Severity | Round | Fix | Gates approval |');
+        assert.contains(h.files['input/PROJ-123/review_policy.md'], 'default');
+    });
+
+    test('ensureInputContextContract without an explicit policy still stamps the built-in default', function() {
+        var h = makeContractHarness();
+        var written = h.mod.ensureInputContextContract('input/PROJ-123', null, 7, {}, []);
+        assert.equal(written.indexOf('review_policy.md') !== -1, true,
+            'review_policy.md rides the pinned input contract');
+        assert.contains(h.files['input/PROJ-123/review_policy.md'], 'built-in default');
+    });
+
+    test('a valid project policy is stamped into the rework run context', function() {
+        var h = makeActionHarness({
+            configPatch: { reviewPolicy: { preset: 'fix-everything' } }
+        });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} } });
+        assert.equal(result.success, true, 'a valid policy never fails the leg');
+        assert.ok(h.files['input/PROJ-123/review_policy.md'], 'review_policy.md written by the leg');
+        assert.contains(h.files['input/PROJ-123/review_policy.md'], 'fix-everything');
+    });
+
+    test('malformed project reviewPolicy fails the rework leg at start with the validation message', function() {
+        var h = makeActionHarness({
+            configPatch: { reviewPolicy: { preset: 'nope' } }
+        });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} } });
+        assert.equal(result.success, false, 'the rework leg fails at start');
+        var evidence = String(result.error || '') + h.logs.error.join('\n');
+        assert.contains(evidence, 'nope', 'the invalid preset is named');
+        assert.equal(Object.keys(h.files).indexOf('input/PROJ-123/review_policy.md'), -1,
+            'no policy file is stamped when the config is malformed');
+    });
+});
+

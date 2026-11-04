@@ -190,6 +190,7 @@
         "js/unit-tests/test_dartSetup.js",
         "js/unit-tests/test_toolchainSummary.js",
         "js/unit-tests/test_reviewVerdicts.js",
+        "js/unit-tests/test_reviewPolicy.js",
         "js/unit-tests/test_reviewSpecClaims.js",
         "js/unit-tests/test_mergeBot.js",
         "js/unit-tests/test_mergeTrigger.js",

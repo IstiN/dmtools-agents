@@ -25,6 +25,11 @@ const tokenUsageComment = require('./common/tokenUsageComment.js');
 var gh = require('./common/githubHelpers.js');
 const commentMarkup = require('./common/commentMarkup.js');
 var reviewVerdicts = require('./common/reviewVerdicts.js');
+// gh-1351 (hoisted, never lazy — the gh-823 pack-require rule): the
+// reviewPolicy config + verdict layer — the machine approval recomputation
+// (model advisory, machine enforces), the legacy-knob audit and the density
+// control.
+var reviewPolicyModule = require('./common/reviewPolicy.js');
 // gh-1332 (hoisted, never lazy — the gh-823 pack-require rule): the
 // finding-identity registry — the review-round dedup. The round's structured
 // inlineComments already carry path/severity/claim, so registering the round
@@ -97,8 +102,9 @@ function hasPrApprovedLabel(ticket) {
 
 /**
  * Count open review threads / general comments on a PR.
- * Used as a safety valve: after many review rounds, an APPROVE with remaining
- * suggestions is allowed so the loop terminates.
+ * Kept post-gh-1351 as a read-only thread census utility (the force-approve
+ * valve it once fed was replaced by machine enforcement); no production
+ * caller remains.
  */
 function countReviewThreads(scm, pullRequestId) {
     var count = 0;
@@ -991,37 +997,58 @@ function dismissEachChangeRequest(scm, pullRequestId, reviews) {
  */
 function postVerdictRecord(scm, repoInfo, prNumber, isApproved, recommendation, issueCounts, provider) {
     try {
-        postVerdictRecordChecked(scm, repoInfo, prNumber, isApproved, recommendation, issueCounts, provider);
+        return postVerdictRecordChecked(scm, repoInfo, prNumber, isApproved, recommendation, issueCounts, provider);
     } catch (e) {
         console.warn('verdict record post failed (non-fatal):', e.message || e);
+        return null;
     }
 }
 
 function postVerdictRecordChecked(scm, repoInfo, prNumber, isApproved, recommendation, issueCounts, provider) {
-    var headSha = resolveHeadSha(repoInfo, prNumber);
-    if (headSha === null) return; // probe failure — already warned
+    // The same probe feeds the density audit (gh-1351): the PR object's
+    // additions field sizes the 💡/🪶 thread cap. null → the audit skips.
+    var prObj = probePrObject(repoInfo, prNumber);
+    if (prObj === null) return null;
+    var headSha = headShaOfObject(prObj);
     if (!headSha) {
         console.warn('verdict record: PR #' + prNumber + ' has no head sha — record not posted');
-        return;
+        return null;
     }
     stampVerdictRecord(scm, prNumber, headSha, isApproved, recommendation, issueCounts, provider);
+    return prObj;
 }
 
-function resolveHeadSha(repoInfo, prNumber) {
+/**
+ * One best-effort PR object probe (github_get_pr) for the verdict record +
+ * the density audit. Returns the parsed object, or null when the probe
+ * fails (already warned — the callers degrade, never fail).
+ */
+function probePrObject(repoInfo, prNumber) {
     try {
         var prRaw = github_get_pr({
             workspace: repoInfo.owner, repository: repoInfo.repo, pullRequestId: String(prNumber)
         });
-        return headShaOf(prRaw);
+        return prObjectOf(prRaw);
     } catch (headErr) {
         console.warn('verdict record: head sha probe failed — record not posted:', headErr.message || headErr);
         return null;
     }
 }
 
-function headShaOf(prRaw) {
-    var prObj = typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
-    return headShaOfObject(prObj);
+function prObjectOf(prRaw) {
+    if (typeof prRaw === 'string') {
+        try {
+            return JSON.parse(prRaw) || {};
+        } catch (e) {
+            return {};
+        }
+    }
+    return prRaw || {};
+}
+
+function prAdditionsOf(prRaw) {
+    var obj = prObjectOf(prRaw);
+    return typeof obj.additions === 'number' ? obj.additions : null;
 }
 
 function headShaOfObject(prObj) {
@@ -1237,7 +1264,38 @@ function postFindingRegistryUpdate(ctx, pr, reviewData) {
  * @param {Object} reviewData - Parsed pr_review.json data
  * @param {string} prUrl - PR URL for linking
  */
-function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl) {
+/** The outcome badge panel for the tracker comment (pure). */
+function outcomeBadgePanel(m, recommendation) {
+    if (recommendation === 'APPROVE') {
+        return m.panel(null, '✅ ' + m.bold('APPROVED') + ' - AI review passed. Awaiting required reviewer approval to merge.', 'bgColor=#E3FCEF|borderColor=#00875A') + '\n\n';
+    }
+    if (recommendation === 'BLOCK') {
+        return m.panel(null, '🚨 ' + m.bold('BLOCKED') + ' - Critical issues must be fixed before merge', 'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
+    }
+    return m.panel(null, '⚠️ ' + m.bold('CHANGES REQUESTED') + ' - Issues found, ticket returned to In Rework', 'bgColor=#FFF7E6|borderColor=#FF991F') + '\n\n';
+}
+
+/** The census summary lines — gh-1351: 🪶 nits + the ranked digest lines join. */
+function censusSummaryLines(m, issueCounts) {
+    return '* 🚨 Blocking Issues: ' + m.bold(String(issueCounts.blocking)) + '\n' +
+        '* ⚠️ Important Issues: ' + m.bold(String(issueCounts.important)) + '\n' +
+        '* 💡 Suggestions: ' + m.bold(String(issueCounts.suggestions)) + '\n' +
+        '* 🪶 Nits: ' + m.bold(String(issueCounts.nits)) + '\n' +
+        '* 📋 Digest lines: ' + m.bold(String(issueCounts.digest)) + '\n\n';
+}
+
+/**
+ * gh-1351: the resolved reviewPolicy table stamped into the review summary
+ * (this comment) so the rework leg and every human reader can trace the
+ * verdict to the policy that produced it. '' when no policy rode the run.
+ */
+function policyStampSection(m, policy) {
+    if (!policy || policy.source === undefined) return '';
+    return m.h(3, 'Review Policy (' + String(policy.source) + (policy.preset ? ', preset ' + policy.preset : '') + ')') + '\n' +
+        reviewPolicyModule.policyTableBody(policy) + '\n\n';
+}
+
+function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, policy) {
     try {
         const m = commentMarkup.forTicket(ticketKey);
         let comment = m.h(2, '🔍 Automated PR Review Completed') + '\n\n';
@@ -1245,21 +1303,14 @@ function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl) 
         // Add outcome badge
         // Normalize: LLM sometimes returns "APPROVED" instead of "APPROVE"
         const recommendation = (reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES').replace(/^APPROVED$/, 'APPROVE');
-        if (recommendation === 'APPROVE') {
-            comment += m.panel(null, '✅ ' + m.bold('APPROVED') + ' - AI review passed. Awaiting required reviewer approval to merge.', 'bgColor=#E3FCEF|borderColor=#00875A') + '\n\n';
-        } else if (recommendation === 'BLOCK') {
-            comment += m.panel(null, '🚨 ' + m.bold('BLOCKED') + ' - Critical issues must be fixed before merge', 'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
-        } else {
-            comment += m.panel(null, '⚠️ ' + m.bold('CHANGES REQUESTED') + ' - Issues found, ticket returned to In Rework', 'bgColor=#FFF7E6|borderColor=#FF991F') + '\n\n';
-        }
+        comment += outcomeBadgePanel(m, recommendation);
 
         // Add issue summary (gh-1350: the normalized census — singular
         // `suggestion` spellings render, missing counts stay 0)
         const issueCounts = normalizeIssueCounts(reviewData);
         comment += m.h(3, 'Issue Summary') + '\n';
-        comment += '* 🚨 Blocking Issues: ' + m.bold(String(issueCounts.blocking)) + '\n';
-        comment += '* ⚠️ Important Issues: ' + m.bold(String(issueCounts.important)) + '\n';
-        comment += '* 💡 Suggestions: ' + m.bold(String(issueCounts.suggestions)) + '\n\n';
+        comment += censusSummaryLines(m, issueCounts);
+        comment += policyStampSection(m, policy);
 
         if (prUrl) {
             comment += m.h(3, 'Pull Request') + '\n';
@@ -1366,6 +1417,12 @@ function normalizeRecommendation(reviewData) {
     return (reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES').replace(/^APPROVED$/, 'APPROVE');
 }
 
+// The advisory token exactly as the model emitted it (pre-cross-check,
+// pre-machine-recomputation) — carried on the result for auditability.
+function advisoryTokenOf(reviewData) {
+    return normalizeRecommendation(reviewData);
+}
+
 // gh-1350 census normalization: the agent sometimes emits the singular
 // `suggestion` spelling — both spellings are the same census (the plural
 // wins when both are present). `nits` and `digest` ride the normalized
@@ -1435,13 +1492,27 @@ function unchangedVerdict(recommendation) {
  * `issueCounts.blocking == 0` overrides an approving verdict to
  * REQUEST_CHANGES. A census that already counts the thread, a
  * non-approving verdict, and reviews without posted BLOCKING severities
- * pass through unchanged.
+ * pass through unchanged. The returned corrected census bumps `blocking` to
+ * 1 when the override fires — the gh-1351 machine recomputation reads the
+ * CORRECTED census (posted evidence outranks a lying counter), so the
+ * cross-check cannot be nullified by a census-clean recomputation.
  */
+/** The census copy the machine recomputation reads: posted evidence bumps blocking to ≥ 1. */
+function correctedCensusOf(issueCounts) {
+    var corrected = {};
+    var source = issueCounts || {};
+    for (var key in source) {
+        if (Object.prototype.hasOwnProperty.call(source, key)) corrected[key] = source[key];
+    }
+    corrected.blocking = Math.max(reviewVerdicts.censusCount(source.blocking), 1);
+    return corrected;
+}
+
 function censusCrossCheckOverride(reviewData, recommendation, issueCounts) {
     if (!postedBlockingSeverity(reviewData)) return unchangedVerdict(recommendation);
     if (reviewVerdicts.censusCount(issueCounts && issueCounts.blocking) > 0) return unchangedVerdict(recommendation);
     if (recommendation !== 'APPROVE') return unchangedVerdict(recommendation);
-    return { recommendation: 'REQUEST_CHANGES', overridden: true };
+    return { recommendation: 'REQUEST_CHANGES', overridden: true, issueCounts: correctedCensusOf(issueCounts) };
 }
 
 function buildCensusCrossCheckWarning(issueCounts) {
@@ -1453,6 +1524,33 @@ function buildCensusCrossCheckWarning(issueCounts) {
 
 function hasAllowApproveWithSuggestions(customParams) {
     return !!(customParams && customParams.allowApproveWithSuggestions === true);
+}
+
+/**
+ * The verdict gate (gh-1351): do any approval-gating threads remain? Under
+ * the resolved policy that is every tier whose round is `rework` — the
+ * default preset: any 🚨 BLOCKING or ⚠️ IMPORTANT open.
+ */
+function hasBlockingOrImportant(issueCounts, policy) {
+    return reviewPolicyModule.hasBlockingOrImportant(issueCounts, policy);
+}
+
+/**
+ * The machine approval recomputation (gh-1351): the advisory token in, the
+ * EFFECTIVE decision out — computed from the severity census + the resolved
+ * policy. Delegates to the pure policy module.
+ */
+function machineApprovalFromCensus(recommendation, issueCounts, policy) {
+    return reviewPolicyModule.machineApprovalDecision(recommendation, issueCounts, policy);
+}
+
+/**
+ * The machine-enforcement audit line for a recomputed verdict (the model is
+ * advisory, the machine enforces).
+ */
+function buildMachineVerdictLog(machine, recommendation) {
+    return '⚖️ Machine enforcement (gh-1351): advisory ' + recommendation +
+        ' → effective ' + machine.verdict + ' — ' + machine.reason;
 }
 
 /**
@@ -1481,45 +1579,13 @@ function buildApprovalOverrideWarning(issueCounts) {
         'Overriding to REQUEST_CHANGES. Set allowApproveWithSuggestions=true in customParams to allow.';
 }
 
-function threadLimitConfigured(prNumber, repoInfo, maxThreadLimit) {
-    return !!prNumber && !!repoInfo && !!maxThreadLimit && maxThreadLimit > 0;
-}
-
-function shouldProbeThreadLimit(recommendation, hasOpenIssues, allowApproveWithSuggestions, prNumber, repoInfo, maxThreadLimit) {
-    if (!verdictNeedsIssueOverride(recommendation, hasOpenIssues, allowApproveWithSuggestions)) return false;
-    return threadLimitConfigured(prNumber, repoInfo, maxThreadLimit);
-}
-
-function threadCountExceedsLimit(scm, prNumber, maxThreadLimit) {
-    try {
-        var reviewThreadCount = countReviewThreads(scm, prNumber);
-        if (reviewThreadCount >= maxThreadLimit) {
-            console.warn(
-                '⚠️ PR has ' + reviewThreadCount + ' review threads (>= limit ' + maxThreadLimit + '). ' +
-                'Forcing APPROVE despite remaining suggestions to break the review loop.'
-            );
-            return true;
-        }
-        return false;
-    } catch (e) {
-        console.warn('Could not apply review-thread limit:', e.message || e);
-        return false;
-    }
-}
-
-/**
- * Safety valve: after many review rounds, force-approve an APPROVE verdict
- * even if suggestions remain, so the review/rework loop cannot run forever.
- */
-function probeThreadLimitOverride(scm, prNumber, recommendation, hasOpenIssues, allowApproveWithSuggestions, repoInfo, maxThreadLimit) {
-    if (!shouldProbeThreadLimit(recommendation, hasOpenIssues, allowApproveWithSuggestions, prNumber, repoInfo, maxThreadLimit)) return false;
-    return threadCountExceedsLimit(scm, prNumber, maxThreadLimit);
-}
-
-function maxThreadLimitOf(customParams) {
-    if (!customParams) return 0;
-    return orZero(customParams.maxReviewThreadsBeforeForceApprove);
-}
+// gh-1351: the legacy thread-limit force-approve machinery
+// (threadLimitConfigured / shouldProbeThreadLimit / threadCountExceedsLimit /
+// probeThreadLimitOverride / maxThreadLimitOf) is GONE — machine enforcement
+// recomputes the verdict from the census + resolved policy, and the
+// `maxReviewThreadsBeforeForceApprove` knob is rejected alongside the policy
+// (reviewPolicyModule.legacyKnobAudit). Thread budgets are policy bounds
+// (bounds.densityMax / bounds.polishMaxThreads), never a force-approve valve.
 
 /**
  * Formal GitHub review resolution chain (first explicit win):
@@ -1814,6 +1880,28 @@ function hasGitHubTarget(pr, repoInfo) {
     return !!(pr.number && repoInfo);
 }
 
+/**
+ * gh-1351 machine-side density audit (epic §4.6): the posted 💡/🪶 thread
+ * census vs `allowed = clamp(round(2 + 3*sqrt(additions/200)), 2, 8)`.
+ * The reviewer ranks and posts top-K, the overflow rides the digest list —
+ * the machine only AUDITS (warn), it never fails the leg. Skipped when the
+ * PR object probe carried no additions count (unknown diff size must not
+ * false-warn).
+ */
+function auditDensityAgainstPolicy(issueCounts, prObj, policy) {
+    try {
+        var additions = prAdditionsOf(prObj);
+        if (additions === null) return null;
+        var bounds = policy && policy.bounds;
+        var audit = reviewPolicyModule.densityAudit(issueCounts, additions, bounds);
+        if (audit.warning) console.warn(audit.warning);
+        return audit;
+    } catch (e) {
+        console.warn('density audit failed (non-fatal):', e.message || e);
+        return null;
+    }
+}
+
 function postGeneralCommentIfPresent(ctx, pr, reviewData) {
     if (!reviewData.generalComment) return;
     postGeneralComment(ctx.scm, pr.number, reviewData.generalComment, ctx.ticketKey, ctx.workingDir);
@@ -1904,8 +1992,13 @@ function postGitHubReview(ctx, pr, repoInfo, reviewData, isApproved, recommendat
 
     // gh-807 verdict persistence: the machine-parseable record
     // (head sha + effective verdict + census) the tick reconciles
-    // per head — see js/common/reviewVerdicts.js.
-    postVerdictRecord(ctx.scm, repoInfo, pr.number, isApproved, recommendation, issueCounts, scmProviderOf(ctx.config));
+    // per head — see js/common/reviewVerdicts.js. Returns the probed
+    // PR object (null when the probe failed) for the density audit.
+    var prObj = postVerdictRecord(ctx.scm, repoInfo, pr.number, isApproved, recommendation, issueCounts, scmProviderOf(ctx.config));
+
+    // gh-1351 machine density audit (§4.6): posted 💡/🪶 threads vs the
+    // policy cap for the diff size — warn-only, never fails the leg.
+    auditDensityAgainstPolicy(issueCounts, prObj, ctx.reviewPolicy);
 
     // gh-1332 finding-identity registry: the round's findings are registered
     // mechanically against the previous rounds (dedup across review legs).
@@ -2276,11 +2369,12 @@ function finalizeReviewRun(ctx, params, isApproved) {
     postTokenUsageQuietly(ctx, params);
 }
 
-function buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo) {
+function buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo, advisoryRecommendation) {
     return {
         success: true,
         message: isApproved ? 'PR approved — awaiting reviewer merge' : 'Changes requested, ticket returned to In Development',
         recommendation: recommendation,
+        advisoryRecommendation: advisoryRecommendation || recommendation,
         issueCounts: reviewData.issueCounts,
         githubCommentsPosted: !!(pr.number && repoInfo)
     };
@@ -2366,6 +2460,11 @@ function buildReviewContext(params) {
         ticketKey: resolveReviewTicketKey(params, prAnchor),
         jiraReview: orEmpty(params.response),
         config: config,
+        // gh-1351: the resolved reviewPolicy governs the verdict — a
+        // malformed config throws HERE (a hard validation error at the
+        // leg's start of post-processing; the pre-cli action fails the leg
+        // even earlier) and no side effect runs.
+        reviewPolicy: reviewPolicyModule.resolveReviewPolicy(config, jp),
         machineAuthor: machineAuthorModule.resolveMachineAuthor(jp, config),
         workingDir: config.workingDir || null,
         scm: scmModule.createScm(config),
@@ -2430,24 +2529,36 @@ function action(params) {
         var recommendation = normalizeRecommendation(reviewData);
         var issueCounts = normalizeIssueCounts(reviewData);
 
+        // gh-1351: the resolved reviewPolicy governs this leg — the table is
+        // logged (and stamped into the run context by the pre-cli action) so
+        // every decision is traceable to the policy that produced it.
+        console.log(reviewPolicyModule.policyTableMarkdown(ctx.reviewPolicy));
+        reviewPolicyModule.legacyKnobAudit(ctx.customParams, ctx.reviewPolicy).lines.forEach(function(line) {
+            console.warn(line);
+        });
+
         // gh-1350 census cross-check (review_verdict_rules.md enforcement):
         // a posted inline BLOCKING severity with an empty blocking census
         // cannot ride an approval — the verdict flips to REQUEST_CHANGES.
+        // Fires BEFORE the machine recomputation: posted evidence corrects
+        // the census the recomputation reads.
         var censusCrossCheck = censusCrossCheckOverride(reviewData, recommendation, issueCounts);
         recommendation = censusCrossCheck.recommendation;
         if (censusCrossCheck.overridden) {
+            issueCounts = censusCrossCheck.issueCounts;
             console.warn(buildCensusCrossCheckWarning(issueCounts));
         }
 
-        var hasOpenIssues = hasAnyOpenIssue(issueCounts);
-        var allowApproveWithSuggestions = hasAllowApproveWithSuggestions(ctx.customParams);
-        var forceApproveDueToThreadLimit = probeThreadLimitOverride(
-            ctx.scm, pr.number, recommendation, hasOpenIssues, allowApproveWithSuggestions,
-            repoInfo, maxThreadLimitOf(ctx.customParams));
-        var isApproved = decideApproval(recommendation, hasOpenIssues, allowApproveWithSuggestions, forceApproveDueToThreadLimit);
-        if (isApprovalOverridden(recommendation, hasOpenIssues, allowApproveWithSuggestions, forceApproveDueToThreadLimit)) {
-            console.warn(buildApprovalOverrideWarning(issueCounts));
+        // gh-1351 machine enforcement: the approval is recomputed from the
+        // severity census + the resolved policy — the model verdict is
+        // advisory. Any 🚨/⚠️ (rework-tier) thread open → REQUEST_CHANGES;
+        // only 💡/🪶 → APPROVE (suggestion-only cycles converge).
+        var machine = machineApprovalFromCensus(recommendation, issueCounts, ctx.reviewPolicy);
+        var isApproved = machine.approved;
+        if (machine.recomputed) {
+            console.warn(buildMachineVerdictLog(machine, recommendation));
         }
+        recommendation = machine.verdict;
 
         // Step 4: Post all comments to GitHub PR (always, regardless of outcome)
         postGitHubReview(ctx, pr, repoInfo, reviewData, isApproved, recommendation, issueCounts);
@@ -2458,7 +2569,7 @@ function action(params) {
         }
 
         // Step 6: Post review to the ticket (merge is handled by SM/required reviewers, not by this agent)
-        postReviewToJira(tracker, ctx.ticketKey, ctx.jiraReview, reviewData, pr.url);
+        postReviewToJira(tracker, ctx.ticketKey, ctx.jiraReview, reviewData, pr.url, ctx.reviewPolicy);
 
         // Step 7: Update ticket status based on outcome
         applyTicketOutcome(tracker, ctx.ticketKey, statuses, isApproved, pr, repoInfo);
@@ -2483,7 +2594,7 @@ function action(params) {
 
         finalizeReviewRun(ctx, params, isApproved);
 
-        return buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo);
+        return buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo, advisoryTokenOf(reviewData));
 
     } catch (error) {
         return reportReviewError(params, tracker, error);
@@ -2518,17 +2629,25 @@ if (typeof module !== 'undefined' && module.exports) {
         parsePRInfoMarkdown,
         readPRInfoMarkdown,
         normalizeRecommendation,
+        advisoryTokenOf,
         normalizeIssueCounts,
         hasAnyOpenIssue,
         censusCrossCheckOverride,
         buildCensusCrossCheckWarning,
         machineStampedInlineText,
         hasAllowApproveWithSuggestions,
+        hasBlockingOrImportant,
+        machineApprovalFromCensus,
+        buildMachineVerdictLog,
+        auditDensityAgainstPolicy,
+        prAdditionsOf,
         decideApproval,
         isApprovalOverridden,
         buildApprovalOverrideWarning,
-        shouldProbeThreadLimit,
-        maxThreadLimitOf,
+        correctedCensusOf,
+        outcomeBadgePanel,
+        censusSummaryLines,
+        policyStampSection,
         resolveFormalReviewEnabled,
         parseLinkedIssueNumber,
         parseBranchIssueNumber,

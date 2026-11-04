@@ -4,6 +4,12 @@
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+// gh-1351: the real reviewPolicy module (for the legacy-knob audit assertions).
+var reviewPolicyModule = loadModule('js/common/reviewPolicy.js',
+    makeRequire({
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+            makeRequire({ './machineAuthor.js': machineAuthorModule }), {})
+    }), {});
 
 
 var githubHelpersStub = {
@@ -179,6 +185,15 @@ function loadSpecClaimsWithRegistry() {
 }
 
 /**
+ * Shared loader for js/common/reviewPolicy.js (gh-1351) — a pure module
+ * whose only collaborator is reviewVerdicts (the censusCount normalization).
+ */
+function loadReviewPolicyModule() {
+    return loadModule('js/common/reviewPolicy.js',
+        makeRequire({ './reviewVerdicts.js': reviewVerdictsReal() }), {});
+}
+
+/**
  * Shared require map for loading js/postPRReviewComments.js in tests — the
  * real module wiring with every common/* collaborator resolved, including
  * the gh-1053 reviewSpecClaims mapping (previously duplicated inline in
@@ -199,6 +214,7 @@ function prReviewRequireMap(overrides) {
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+        './common/reviewPolicy.js': loadReviewPolicyModule(),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
             './machineAuthor.js': machineAuthorReal(),
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
@@ -499,6 +515,7 @@ suite('postPRReviewComments', function() {
                     './common/tokenUsageComment.js': opts.tokenUsage || { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './common/reviewPolicy.js': loadReviewPolicyModule(),
                     './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
@@ -753,6 +770,7 @@ suite('postPRReviewComments', function() {
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './common/reviewPolicy.js': loadReviewPolicyModule(),
                     './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
@@ -1066,6 +1084,7 @@ suite('postPRReviewComments', function() {
                 ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
@@ -1303,12 +1322,49 @@ function loadReviewActionHarness(opts) {
 
     var mod = gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged, rec);
 
-    return {
+    // gh-1351 machine-enforcement capture: the policy audits are LOG lines
+    // (legacy-knob conflicts, density overflow) — capture what the wrapped
+    // action() run emitted so tests can assert on them without scraping the
+    // whole suite log.
+    var capture = { lines: [], active: false };
+    var harness = {
         mod: mod,
         ops: ops,
+        conflicts: [],
+        warnings: [],
         opNames: function() { return ops.map(function(o) { return o.op; }); },
         opsOf: function(op) { return ops.filter(function(o) { return o.op === op; }); }
     };
+    harness = gh926AttachLogCapture(harness, mod, capture);
+    return harness;
+}
+
+// Wraps console.warn/console.log during one action() call and files the
+// captured lines into harness.conflicts ('reviewPolicy:' audit lines) and
+// harness.warnings ('density audit' lines). The wrappers are installed once
+// per harness; the runner's real console still receives everything.
+function gh926AttachLogCapture(harness, mod, capture) {
+    var realWarn = console.warn;
+    var realLog = console.log;
+    var captureLine = function(line) {
+        if (!capture.active) return;
+        capture.lines.push(String(line));
+    };
+    console.warn = function(msg) { captureLine(msg); return realWarn(msg); };
+    console.log = function(msg) { captureLine(msg); return realLog(msg); };
+    var rawAction = mod.action;
+    mod.action = function(params) {
+        capture.lines = [];
+        capture.active = true;
+        try {
+            return rawAction(params);
+        } finally {
+            capture.active = false;
+            harness.conflicts = capture.lines.filter(function(l) { return l.indexOf('reviewPolicy:') !== -1; });
+            harness.warnings = capture.lines.filter(function(l) { return l.indexOf('density audit') !== -1; });
+        }
+    };
+    return harness;
 }
 
 // Mock builders below are named function declarations (not nested closures) on
@@ -1460,6 +1516,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
             },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
@@ -1532,7 +1589,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         );
     });
 
-    test('APPROVE with suggestions (no knobs) is overridden: record says REQUEST_CHANGES, In Rework + rework labels + SM', function() {
+    test('suggestions-only APPROVE with no knobs: the policy approves (allowApproveWithSuggestions is policy-derived)', function() {
         var h = loadReviewActionHarness({
             reviewData: {
                 recommendation: 'APPROVE',
@@ -1546,33 +1603,23 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         var result = h.mod.action(gh926ActionParams({}));
 
         assert.equal(result.success, true);
-        assert.equal(result.message, 'Changes requested, ticket returned to In Development');
-        assert.equal(result.recommendation, 'APPROVE', 'the raw verdict is preserved in the result');
-        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"REQUEST_CHANGES"',
-            'the record stamps what the leg DID, not the raw token');
-        assert.deepEqual(h.opNames(), [
-            'github_get_pr',
-            'scm.addComment',
-            'jira.postComment',
-            'jira.moveToStatus',
-            'jira.addLabel',
-            'scm.addLabel',
-            'jira.removeLabel',
-            'jira.addLabel',
-            'jira.addLabel',
-            'autoStart.triggerSmIfIdle',
-            'tokenUsage'
-        ], 'side-effect order drifted');
-        assert.equal(h.opsOf('jira.moveToStatus')[0].statusName, 'In Rework');
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'the resolved policy decides — only rework-tier (🚨/⚠️) threads gate approval');
+        assert.equal(result.recommendation, 'APPROVE', 'the effective verdict is the machine verdict');
+        assert.equal(result.advisoryRecommendation, 'APPROVE', 'the advisory token is carried for audit');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"');
         assert.deepEqual(
             h.opsOf('jira.addLabel').map(function(o) { return o.label; }),
-            ['ai_pr_reviewed', 'sm_story_rework_triggered', 'agent:rework']
+            ['pr_approved', 'ai_pr_reviewed'],
+            'no rework markers on approval'
         );
-        assert.equal(h.opsOf('scm.addLabel').filter(function(o) { return o.label === 'pr_approved'; }).length, 0,
-            'an overridden approve must NOT arm the merge pipeline');
+        var summary = h.opsOf('jira.postComment').map(function(o) { return o.comment; }).join('\n');
+        assert.contains(summary, 'Review Policy (built-in default, preset default)',
+            'the policy table is stamped into the review summary — the rework run context traces the verdict to the policy');
+        assert.contains(summary, '| Severity | Round |', 'the table itself rides the summary');
     });
 
-    test('allowApproveWithSuggestions=true keeps APPROVE effective', function() {
+    test('IMPORTANT gates approval (gh-1351): allowApproveWithSuggestions cannot approve an open ⚠️', function() {
         var h = loadReviewActionHarness({
             reviewData: {
                 recommendation: 'APPROVE',
@@ -1585,13 +1632,192 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
 
         var result = h.mod.action(gh926ActionParams({ customParams: { allowApproveWithSuggestions: true } }));
 
-        assert.equal(result.message, 'PR approved — awaiting reviewer merge');
+        assert.equal(result.message, 'Changes requested, ticket returned to In Development',
+            'an open IMPORTANT thread gates approval per the policy — the legacy knob is not honored');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"REQUEST_CHANGES"',
+            'the record stamps the recomputed verdict, not the advisory token');
+        assert.equal(h.opsOf('jira.moveToStatus').length, 1, 'rework runs');
+        assert.equal(h.opsOf('scm.addLabel').filter(function(o) { return o.label === 'pr_approved'; }).length, 0,
+            'an important-gated approve must NOT arm the merge pipeline');
+    });
+
+    test('suggestions-only APPROVE with the legacy knob true stays approved (knob honored — no 🚨/⚠️ open)', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 2 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({ customParams: { allowApproveWithSuggestions: true } }));
+
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'only 💡/🪶 open → APPROVE (the knob is honored when no rework-tier thread is open)');
         assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"');
-        assert.equal(h.opsOf('jira.moveToStatus').length, 0);
         assert.ok(h.opsOf('scm.addLabel').some(function(o) { return o.label === 'pr_approved'; }));
     });
 
-    test('dispatch-race guard: threads >= maxReviewThreadsBeforeForceApprove force-approves despite suggestions', function() {
+    test('legacy knob conflict: allowApproveWithSuggestions=false + suggestion-only census → policy wins, conflict logged', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 3 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({ customParams: { allowApproveWithSuggestions: false } }));
+
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'the resolved policy decides — only rework-tier threads gate approval');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"');
+        assert.ok(h.conflicts.some(function(line) {
+            return line.indexOf('allowApproveWithSuggestions=false') !== -1 &&
+                line.indexOf('policy wins') !== -1;
+        }), 'the knob conflict is logged: got ' + JSON.stringify(h.conflicts));
+    });
+
+    test('convergence: REQUEST_CHANGES token over a rework-tier-clean census recomputes to APPROVE', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'REQUEST_CHANGES',
+                issueCounts: { blocking: 0, important: 0, suggestions: 1, nits: 1 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'a suggestion-only cycle must converge — the machine recomputes');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"',
+            'the record stamps the recomputed APPROVE');
+        assert.ok(h.opsOf('scm.addLabel').some(function(o) { return o.label === 'pr_approved'; }));
+    });
+
+    test('BLOCK passes through: the machine never upgrades a security/data-loss call', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'BLOCK',
+                issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.message, 'Changes requested, ticket returned to In Development');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"BLOCK"');
+    });
+
+    test('investigation policy (explicit config): blocking census does not gate approval', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 1, important: 1 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            config: { reviewPolicy: { preset: 'investigation' } }
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'every tier is round none in investigation — the config IS the owner standing approval');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"');
+    });
+
+    test('malformed policy config fails the leg with a validation message', function() {
+        var h = loadReviewActionHarness({
+            reviewData: GH926_CLEAN_APPROVE,
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            config: { reviewPolicy: { severities: { TRIVIAL: { round: 'none', fix: 'never' } } } }
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.success, false, 'the leg fails loudly');
+        assert.contains(result.error, 'TRIVIAL', 'the validation message names the unknown tier');
+        assert.deepEqual(h.opNames(), ['jira.postComment'], 'no side effects before validation');
+    });
+
+    test('machine enforcement recomputes verdicts from census + policy; the census cross-check still fires first', function() {
+        // Posted inline BLOCKING severity + census blocking 0: the gh-1350
+        // cross-check overrides the token to REQUEST_CHANGES; the machine
+        // verdict keeps it (gating census 0, but the posted evidence wins).
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                inlineComments: [
+                    { path: 'src/a.js', line: 1, severity: 'BLOCKING', body: 'it breaks' }
+                ]
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.message, 'Changes requested, ticket returned to In Development');
+        assert.contains(
+            h.opsOf('scm.addComment').map(function(o) { return o.body; }).join('\n---\n'),
+            '"verdict":"REQUEST_CHANGES"',
+            'the record rides the same addComment stream as the fallback inline post'
+        );
+    });
+
+    test('density audit: over-posted 💡 threads warn (never fail the leg)', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 10 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            githubPr: { number: 42, head: { sha: 'sha0000' }, additions: 50 }
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.success, true, 'the audit is warn-only');
+        assert.ok(h.warnings.some(function(line) {
+            return line.indexOf('density audit') !== -1 && line.indexOf('allows 4') !== -1;
+        }), 'the density overflow warns with the allowed cap: ' + JSON.stringify(h.warnings));
+    });
+
+    test('density audit: within the cap stays silent', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 1 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            githubPr: { number: 42, head: { sha: 'sha0000' }, additions: 1000 }
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.success, true);
+        assert.equal(h.warnings.filter(function(line) { return line.indexOf('density audit') !== -1; }).length, 0);
+    });
+
+    test('dispatch-race guard (legacy valve retired): the policy owns thread budgets — approval is census-driven', function() {
         var h = loadReviewActionHarness({
             reviewData: {
                 recommendation: 'APPROVE',
@@ -1605,29 +1831,13 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
 
         var result = h.mod.action(gh926ActionParams({ customParams: { maxReviewThreadsBeforeForceApprove: 2 } }));
 
-        assert.equal(result.message, 'PR approved — awaiting reviewer merge', 'forced approve at the limit');
-        assert.ok(h.opsOf('scm.addLabel').some(function(o) { return o.label === 'pr_approved'; }));
-        assert.equal(h.opsOf('jira.moveToStatus').length, 0);
-        assert.equal(h.opsOf('github_get_pr').length, 1, 'verdict record still probed the head');
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge',
+            'the census is rework-tier clean → approved without any legacy valve');
+        assert.ok(h.conflicts.some(function(line) {
+            return line.indexOf('maxReviewThreadsBeforeForceApprove') !== -1;
+        }), 'the rejected legacy knob is logged: ' + JSON.stringify(h.conflicts));
     });
 
-    test('dispatch-race guard: threads under the limit still override to REQUEST_CHANGES', function() {
-        var h = loadReviewActionHarness({
-            reviewData: {
-                recommendation: 'APPROVE',
-                issueCounts: { blocking: 0, important: 0, suggestions: 3 },
-                inlineComments: []
-            },
-            repoInfo: GH926_REPO,
-            prInfoContent: GH926_PR_INFO_42,
-            threads: [{ id: 1 }]
-        });
-
-        var result = h.mod.action(gh926ActionParams({ customParams: { maxReviewThreadsBeforeForceApprove: 2 } }));
-
-        assert.equal(result.message, 'Changes requested, ticket returned to In Development');
-        assert.equal(h.opsOf('jira.moveToStatus').length, 1);
-    });
 
     test('autoStartRework opt-in triggers the configured workflow and skips the SM rework fallback', function() {
         var h = loadReviewActionHarness({
@@ -1723,7 +1933,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         var h = loadReviewActionHarness({
             reviewData: {
                 recommendation: 'REQUEST_CHANGES',
-                issueCounts: { blocking: 0, important: 0, suggestions: 1 },
+                issueCounts: { blocking: 1, important: 0, suggestions: 0 },
                 inlineComments: []
             },
             repoInfo: null
@@ -2156,6 +2366,7 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
                 './machineAuthor.js': machineAuthorReal(),
                 './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
@@ -2251,6 +2462,7 @@ function gh926ResumeRequire(opts) {
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+        './common/reviewPolicy.js': loadReviewPolicyModule(),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
         './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
@@ -2369,21 +2581,34 @@ suite('postPRReviewComments — gh-926 extracted pipeline helpers', function() {
         assert.contains(warning, 'allowApproveWithSuggestions=true');
     });
 
-    test('shouldProbeThreadLimit + maxThreadLimitOf: probe only under full preconditions', function() {
-        var mod = loadPostPRReviewComments();
+    // gh-1351: the force-approve probe is GONE — the legacy
+    // `maxReviewThreadsBeforeForceApprove` knob is rejected alongside the
+    // resolved policy (the audit logs the conflict, the policy wins).
+    test('legacy maxReviewThreadsBeforeForceApprove is rejected alongside the policy (audit line)', function() {
+        loadPostPRReviewComments();
+        var audit = reviewPolicyModule.legacyKnobAudit({ maxReviewThreadsBeforeForceApprove: 2 });
+        assert.equal(audit.lines.length, 1, 'exactly the rejection line');
+        assert.contains(audit.lines[0], 'maxReviewThreadsBeforeForceApprove=2 is rejected alongside the policy');
+        assert.contains(audit.lines[0], 'densityMax=8');
+    });
 
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, GH926_REPO, 2), true);
-        assert.equal(mod.shouldProbeThreadLimit('REQUEST_CHANGES', true, false, 42, GH926_REPO, 2), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', false, false, 42, GH926_REPO, 2), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, true, 42, GH926_REPO, 2), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, null, GH926_REPO, 2), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, null, 2), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, GH926_REPO, 0), false);
-        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, GH926_REPO, undefined), false);
+    test('gh926ScmReadMocks defaults and overrides cover every branch', function() {
+        var empty = gh926ScmReadMocks({});
+        assert.deepEqual(empty.listPrs(), []);
+        assert.equal(empty.getRemoteRepoInfo(), null);
+        assert.deepEqual(empty.fetchDiscussions().rawThreads.threads, []);
+        assert.deepEqual(empty.listReviews(), []);
 
-        assert.equal(mod.maxThreadLimitOf({ maxReviewThreadsBeforeForceApprove: 5 }), 5);
-        assert.equal(mod.maxThreadLimitOf({}), 0);
-        assert.equal(mod.maxThreadLimitOf(undefined), 0);
+        var full = gh926ScmReadMocks({
+            openPrs: [{ number: 7 }],
+            repoInfo: { owner: 'o', repo: 'r' },
+            threads: [{ id: 't1' }],
+            existingReviews: [{ id: 'r1' }]
+        });
+        assert.deepEqual(full.listPrs(), [{ number: 7 }]);
+        assert.deepEqual(full.getRemoteRepoInfo(), { owner: 'o', repo: 'r' });
+        assert.deepEqual(full.fetchDiscussions().rawThreads.threads, [{ id: 't1' }]);
+        assert.deepEqual(full.listReviews(), [{ id: 'r1' }]);
     });
 
     test('resolveFormalReviewEnabled: per-run flag beats project default beats off', function() {
@@ -2588,6 +2813,7 @@ function loadForPrSearch(foundPr) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
@@ -3392,12 +3618,22 @@ suite('postPRReviewComments — machine-stamped severity markers (gh-1350)', fun
         var calls = [];
         var scm = stampScm(calls);
         mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, body: 'plain note' }, 'PROJ-1', null);
-        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, severity: 'NIT', body: 'nit prose' }, 'PROJ-1', null);
+        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, severity: 'TRIVIAL', body: 'unknown prose' }, 'PROJ-1', null);
 
         assert.equal(calls.length, 2, 'both comment bodies post (the stamp never blocks a post)');
         assert.equal(calls[0].text, 'plain note');
-        assert.equal(calls[1].text, 'nit prose',
-            'the NIT enum lands in part 2 — unknown severities stamp nothing');
+        assert.equal(calls[1].text, 'unknown prose',
+            'unknown severities stamp nothing');
+    });
+
+    test('NIT severity stamps the 🪶 canonical line (gh-1351 4-tier enum)', function() {
+        var mod = loadPostPRReviewComments();
+        var calls = [];
+        var scm = stampScm(calls);
+        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, severity: 'NIT', body: 'nit prose' }, 'PROJ-1', null);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].text, '\uD83E\uDEB6 severity: NIT \u2014\nnit prose');
     });
 
     test('an existing leading canonical line is replaced, not duplicated (idempotent stamp)', function() {

@@ -13,13 +13,16 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
         file_write: function() {}
     };
 
+    // gh-1351: configLoaderFileRead lets a test serve a project
+    // .dmtools/config.js to the config loader only (reviewPolicy cases).
+    var configLoaderFileRead = (mocks && mocks.configLoaderFileRead) || function() { return null; };
     var freshConfigLoader = loadModule(
         'js/configLoader.js',
         makeRequire({
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } }
         }),
-        { file_read: function() { return null; } }
+        { file_read: configLoaderFileRead }
     );
 
     var prHelper = loadModule(
@@ -42,6 +45,13 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
     return loadModule(
         'js/preCliStoryTestAutomationSetup.js',
         makeRequire({
+            './common/reviewPolicy.js': (function() {
+                            var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                            var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                                makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                            return loadModule('js/common/reviewPolicy.js',
+                                makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+                        })(),
             'branchSetup.js': bsWith(allMocks),
             './config.js': configModule,
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
@@ -49,10 +59,24 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
             './common/pullRequest.js': prHelper,
             './common/githubHelpers.js': githubHelpers,
             './common/scm.js': { createScm: function() { return {}; } },
-            './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js', makeRequire({}))
+            './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js', makeRequire({})),
+            // gh-1351: the real reviewPolicy chain — leg-start validation +
+            // the review_policy.md stamp read it.
+            './common/reviewPolicy.js': (function() {
+                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                return loadModule('js/common/reviewPolicy.js',
+                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+            })()
         }),
         allMocks
     );
+}
+
+// Alias for the gh-1351 suites — the loader above reads mocks.configLoaderFileRead.
+function loadPreCliStoryTestAutomationSetupWithConfigRead(mocks) {
+    return loadPreCliStoryTestAutomationSetup(mocks);
 }
 
 suite('preCliStoryTestAutomationSetup', function() {
@@ -173,6 +197,13 @@ suite('preCliStoryTestAutomationSetup', function() {
         module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': (function() {
+                                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                                return loadModule('js/common/reviewPolicy.js',
+                                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+                            })(),
                 'branchSetup.js': bsWith(null),
                 './config.js': configModule,
                 './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
@@ -249,6 +280,13 @@ suite('preCliStoryTestAutomationSetup', function() {
         module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': (function() {
+                                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                                return loadModule('js/common/reviewPolicy.js',
+                                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+                            })(),
                 'branchSetup.js': bsWith(outerMocks),
                 './config.js': configModule,
                 './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
@@ -329,6 +367,13 @@ function loadForPrContext(mocks, opts) {
     return loadModule(
         'js/preCliStoryTestAutomationSetup.js',
         makeRequire({
+            './common/reviewPolicy.js': (function() {
+                            var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                            var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                                makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                            return loadModule('js/common/reviewPolicy.js',
+                                makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+                        })(),
             'branchSetup.js': bsWith(allMocks),
             './config.js': configModule,
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
@@ -637,6 +682,13 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
         return loadModule(
             'js/preCliStoryTestAutomationSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': (function() {
+                                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                                return loadModule('js/common/reviewPolicy.js',
+                                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+                            })(),
                 'branchSetup.js': bsWith(helperMocks),
                 './config.js': configModule,
                 './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
@@ -778,6 +830,13 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
         module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': (function() {
+                                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                                return loadModule('js/common/reviewPolicy.js',
+                                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+                            })(),
                 'branchSetup.js': bsWith(outerMocks),
                 './config.js': configModule,
                 './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
@@ -822,6 +881,13 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
         var module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
             makeRequire({
+                './common/reviewPolicy.js': (function() {
+                                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                                return loadModule('js/common/reviewPolicy.js',
+                                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+                            })(),
                 'branchSetup.js': bsWith(outerMocks),
                 './config.js': configModule,
                 './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
@@ -917,5 +983,54 @@ suite('preCliStoryTestAutomationSetup: stamped role fields in linked_test_cases.
             } }
         ], 'BUG-1');
         assert.contains(written['input/BUG-1/linked_test_cases.md'], 'Verifies: BUG-1');
+    });
+});
+
+suite('preCliStoryTestAutomationSetup — gh-1351 reviewPolicy: hard validation + review_policy.md stamp', function() {
+
+    function policyLoaderHarness(configLoaderFileRead, extraMocks) {
+        var written = [];
+        var mocks = Object.assign({
+            configLoaderFileRead: configLoaderFileRead,
+            file_write: function(args) { written.push({ path: args.path, content: args.content }); },
+            jira_search_by_jql: function() { return []; },
+            cli_execute_command: function() { return ''; }
+        }, extraMocks || {});
+        var module = loadPreCliStoryTestAutomationSetupWithConfigRead(mocks);
+        return { module: module, written: written };
+    }
+
+    test('a valid project policy is stamped as review_policy.md in the rework input folder', function() {
+        var h = policyLoaderHarness(function(args) {
+            var p = args && (args.path || args);
+            if (p === '.dmtools/config.js') return 'module.exports = { reviewPolicy: { preset: "investigation" } };';
+            return null;
+        });
+        var result = h.module.action({ inputFolderPath: 'input/TS-210', jobParams: { customParams: {} } });
+        assert.notEqual(result.success, false, 'a valid policy never fails the leg');
+        var stamp = h.written.filter(function(w) { return w.path === 'input/TS-210/review_policy.md'; });
+        assert.equal(stamp.length, 1, 'exactly one review_policy.md write, got: ' + JSON.stringify(h.written.map(function(w) { return w.path; })));
+        assert.contains(stamp[0].content, 'investigation');
+    });
+
+    test('missing config stamps the built-in default silently', function() {
+        var h = policyLoaderHarness(null);
+        h.module.action({ inputFolderPath: 'input/TS-210', jobParams: { customParams: {} } });
+        var stamp = h.written.filter(function(w) { return w.path === 'input/TS-210/review_policy.md'; });
+        assert.equal(stamp.length, 1);
+        assert.contains(stamp[0].content, 'built-in default');
+    });
+
+    test('malformed project reviewPolicy fails the leg at start with the validation message', function() {
+        var h = policyLoaderHarness(function(args) {
+            var p = args && (args.path || args);
+            if (p === '.dmtools/config.js') {
+                return 'module.exports = { reviewPolicy: { severities: { HUH: { round: "rework", fix: "mandatory" } } } };';
+            }
+            return null;
+        });
+        var result = h.module.action({ inputFolderPath: 'input/TS-210', jobParams: { customParams: {} } });
+        assert.equal(result.success, false, 'the leg fails before any side effect');
+        assert.contains(String(result.error), 'HUH', 'the unknown tier is named');
     });
 });

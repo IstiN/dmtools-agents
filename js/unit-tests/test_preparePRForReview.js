@@ -121,6 +121,17 @@ function prParentMock(opts, record) {
     };
 }
 
+// gh-1351: the expected review_policy.md body for the built-in default policy
+// (the real policy chain, same as production).
+function reviewPolicyContextContent() {
+    var machineAuthor = machineAuthorReal();
+    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthor }), {});
+    var reviewPolicy = loadModule('js/common/reviewPolicy.js',
+        makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+    return reviewPolicy.policyInputContextMarkdown(reviewPolicy.defaultPolicy());
+}
+
 /**
  * Loads js/preparePRForReview.js with injected fakes.
  * See the suites below for the opts each test uses.
@@ -140,6 +151,12 @@ function prLoad(opts) {
         './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
             './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+        }), {}),
+        // gh-1351: the real reviewPolicy chain — the leg-start validation and
+        // the review_policy.md stamp read it.
+        './common/reviewPolicy.js': loadModule('js/common/reviewPolicy.js', makeRequire({
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
                 makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
         }), {}),
@@ -195,7 +212,9 @@ suite('preparePRForReview — gh-1332 finding-registry injection', function() {
         });
         var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
         assert.ok(result.success);
-        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile'; }).length, 0);
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' && String(g.path).indexOf('pr_findings.md') !== -1;
+        }).length, 0, 'no pr_findings.md write (the gh-1351 review_policy.md stamp is a separate, intended write)');
     });
 
     test('a forged registry (non-machine author) is invisible — nothing injects', function() {
@@ -208,7 +227,9 @@ suite('preparePRForReview — gh-1332 finding-registry injection', function() {
         });
         var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
         assert.ok(result.success);
-        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile'; }).length, 0);
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' && String(g.path).indexOf('pr_findings.md') !== -1;
+        }).length, 0, 'no pr_findings.md write (the gh-1351 review_policy.md stamp is a separate, intended write)');
     });
 
     test('comment-read failure is non-fatal', function() {
@@ -220,7 +241,9 @@ suite('preparePRForReview — gh-1332 finding-registry injection', function() {
         });
         var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
         assert.ok(result.success, 'the injection never breaks review setup');
-        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile'; }).length, 0);
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' && String(g.path).indexOf('pr_findings.md') !== -1;
+        }).length, 0, 'no pr_findings.md write (the gh-1351 review_policy.md stamp is a separate, intended write)');
     });
 
     test('a provider without getPrComments skips the injection quietly', function() {
@@ -231,7 +254,9 @@ suite('preparePRForReview — gh-1332 finding-registry injection', function() {
         });
         var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
         assert.ok(result.success);
-        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile'; }).length, 0);
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' && String(g.path).indexOf('pr_findings.md') !== -1;
+        }).length, 0, 'no pr_findings.md write (the gh-1351 review_policy.md stamp is a separate, intended write)');
     });
 });
 
@@ -260,7 +285,11 @@ test('ticket-anchored: assembles PR context, posts review-started comment, retur
         { fn: 'getPRDiff', baseBranch: 'main', headBranch: 'ai/TS-42', workingDir: undefined },
         { fn: 'writePRContext', inputFolder: 'input/TS-42', prNumber: 42,
             diff: 'diff --git a/x b/x', markdown: '# PR Discussion History',
-            rawThreads: [{ index: 1, body: 'x' }] }
+            rawThreads: [{ index: 1, body: 'x' }] },
+        // gh-1351: the resolved reviewPolicy rides every review run context.
+        { fn: 'writeInputFile', path: 'input/TS-42/review_policy.md',
+            content: reviewPolicyContextContent(),
+            label: 'review_policy.md (resolved review policy — gh-1351)' }
     ]);
     assert.deepEqual(rec.ghCalls.map(function(c) { return c.fn; }),
         ['findPRForTicket', 'getPRDetails', 'fetchDiscussionsAndRawData', 'detectFailedChecks']);
@@ -521,9 +550,12 @@ test('checkout failure is non-fatal: review continues', function() {
     var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: {} });
 
     assert.equal(result.success, true);
-    assert.equal(rec.gitOps.length, 3);
+    // gh-1351: checkout still fails → 3 git ops + the review_policy.md stamp.
+    assert.equal(rec.gitOps.length, 4);
     assert.deepEqual(rec.gitOps[0], { fn: 'checkoutPRBranch', branchName: 'ai/TS-42', workingDir: '/w', baseBranch: 'main' });
     assert.deepEqual(rec.gitOps[1], { fn: 'getPRDiff', baseBranch: 'main', headBranch: 'ai/TS-42', workingDir: '/w' });
+    assert.deepEqual(rec.gitOps[3], { fn: 'writeInputFile', path: 'input/TS-42/review_policy.md',
+        content: reviewPolicyContextContent(), label: 'review_policy.md (resolved review policy — gh-1351)' });
 });
 
 test('missing head branch: checkout skipped, diff head null, branch unknown in comment', function() {
@@ -687,5 +719,63 @@ test('buildSuccessResult shape', function() {
         m.buildSuccessResult({ number: 7, html_url: 'u' }, 'br', { owner: 'o', repo: 'r' }),
         { success: true, prNumber: 7, prUrl: 'u', branchName: 'br', owner: 'o', repo: 'r' });
 });
+
+});
+
+suite('preparePRForReview — gh-1351 reviewPolicy: hard validation + run-context stamp', function() {
+
+    function gh1351PolicyLoad(opts) {
+        return prLoad(Object.assign({
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' } },
+            scm: { getPrComments: function() { return []; } }
+        }, opts || {}));
+    }
+
+    test('malformed projectConfig.reviewPolicy fails the leg at setup with the validation message', function() {
+        var rec = prRecorder();
+        var loaded = gh1351PolicyLoad({
+            record: rec,
+            config: {
+                repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' },
+                reviewPolicy: { severities: { BOGUS: { round: 'rework', fix: 'mandatory' } } }
+            }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.equal(result, false, 'the leg fails before any PR context is assembled');
+        var setupError = rec.comments.filter(function(c) {
+            return String(c.args && c.args.comment).indexOf('PR Review Setup Error') !== -1;
+        });
+        assert.equal(setupError.length, 1, 'the setup error comment is posted');
+        assert.contains(setupError[0].args.comment, 'BOGUS', 'the unknown tier is named');
+        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writePRContext'; }).length, 0,
+            'no side effect runs — validation happens before context assembly');
+    });
+
+    test('a valid project policy is stamped into the run context as review_policy.md', function() {
+        var rec = prRecorder();
+        var loaded = gh1351PolicyLoad({
+            record: rec,
+            config: {
+                repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' },
+                reviewPolicy: { preset: 'relaxed' }
+            }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success, 'a valid policy never fails the leg');
+        var writes = rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile' && g.path === 'input/TS-42/review_policy.md'; });
+        assert.equal(writes.length, 1, 'exactly one review_policy.md write');
+        assert.contains(writes[0].content, 'relaxed');
+        assert.contains(writes[0].content, '| Severity | Round | Fix | Gates approval |');
+    });
+
+    test('missing config stamps the built-in default silently', function() {
+        var rec = prRecorder();
+        var loaded = gh1351PolicyLoad({ record: rec });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        var writes = rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile' && g.path === 'input/TS-42/review_policy.md'; });
+        assert.equal(writes.length, 1, 'the default policy is still stamped — every run context carries it');
+        assert.contains(writes[0].content, 'default');
+    });
 
 });

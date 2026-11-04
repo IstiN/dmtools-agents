@@ -20,6 +20,10 @@ var commentMarkup = require('./common/commentMarkup.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 var forkCheckout = require('./common/forkCheckout.js');
+// gh-1351 (hoisted, never lazy — the gh-823 pack-require rule): the review
+// policy config — resolved once here so a malformed config fails the leg at
+// start, and the resolved table is stamped into the rework run context.
+var reviewPolicyModule = require('./common/reviewPolicy.js');
 const { resolveStatuses } = require('./config.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
@@ -366,7 +370,7 @@ function buildReviewStateMd(scm, prNumber, discussionData) {
  *
  * @returns {string[]} the files this call wrote
  */
-function ensureInputContextContract(inputFolder, scm, prNumber, discussionData, failedChecks) {
+function ensureInputContextContract(inputFolder, scm, prNumber, discussionData, failedChecks, reviewPolicy) {
     var written = [];
     var rawThreads = discussionData && discussionData.rawThreads;
     var hasThreadData = !!(rawThreads && rawThreads.threads && rawThreads.threads.length > 0);
@@ -395,6 +399,16 @@ function ensureInputContextContract(inputFolder, scm, prNumber, discussionData, 
         'review_state.md (review verdict + open threads)'
     );
     written.push('review_state.md');
+
+    // gh-1351: the resolved reviewPolicy is refreshed EVERY leg like
+    // review_state.md — the rework agent answers threads under the same
+    // policy the machine enforced when the review ran.
+    gitOps.writeInputFile(
+        inputFolder + '/review_policy.md',
+        reviewPolicyModule.policyInputContextMarkdown(reviewPolicy),
+        'review_policy.md (resolved review policy — gh-1351)'
+    );
+    written.push('review_policy.md');
 
     if (written.length > 0) {
         console.log('✅ Input contract (gh-799): ensured ' + written.join(', '));
@@ -807,9 +821,9 @@ function writeReworkInputContext(inputFolder, config, scm, pr, prDetails, branch
  * failures, review verdict). Non-fatal: a placeholder write failure must not
  * kill the leg. (gh-1220) Extracted from action().
  */
-function enforceReworkInputContract(inputFolder, scm, prDetails, discussionData, failedChecks) {
+function enforceReworkInputContract(inputFolder, scm, prDetails, discussionData, failedChecks, reviewPolicy) {
     try {
-        ensureInputContextContract(inputFolder, scm, prDetails.number, discussionData, failedChecks);
+        ensureInputContextContract(inputFolder, scm, prDetails.number, discussionData, failedChecks, reviewPolicy);
     } catch (e) {
         console.warn('Input contract enforcement failed (non-fatal):', e);
     }
@@ -847,8 +861,13 @@ function action(params) {
         var customParams = runtime.customParams;
         var scm = runtime.scm;
         // Probe the tracker provider once — the same script then runs unchanged
-        // on Jira / ADO / GitHub deployments.
+        // on Jira / ADO / GitHub deployments. Created BEFORE the policy
+        // resolution (gh-1351) so a validation failure is posted on the
+        // ticket, not just logged.
         tracker = trackersModule.createTracker(config, customParams);
+        // gh-1351: hard validation at leg start — a malformed reviewPolicy
+        // throws a ReviewPolicyValidationError HERE, before any side effect.
+        var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(config, actualParams);
 
         restoreArtefactsQuietly(params);
 
@@ -909,8 +928,9 @@ function action(params) {
         // gh-799: pinned input contract — whatever armed this leg, the input
         // folder now ALWAYS carries the complete open-item picture (threads
         // with ids, CI failures, review verdict). Non-fatal: a placeholder
-        // write failure must not kill the leg.
-        enforceReworkInputContract(inputFolder, scm, prDetails, inputContext.discussionData, inputContext.failedChecks);
+        // write failure must not kill the leg. gh-1351: the resolved
+        // reviewPolicy rides the contract (review_policy.md).
+        enforceReworkInputContract(inputFolder, scm, prDetails, inputContext.discussionData, inputContext.failedChecks, reviewPolicy);
 
         // Step 7 & parent context + gh-1064 session delta snapshot/manifest
         enrichReworkInputStep(params, actualParams, {

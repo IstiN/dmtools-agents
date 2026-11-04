@@ -24,6 +24,10 @@ var forkCheckout = require('./common/forkCheckout.js');
 // minting a duplicate thread.
 var machineAuthorModule = require('./common/machineAuthor.js');
 var findingRegistry = require('./common/findingRegistry.js');
+// gh-1351 (hoisted, never lazy — the gh-823 pack-require rule): the review
+// policy config — resolved once here so a malformed config fails the leg at
+// start, and the resolved table is stamped into the review run context.
+var reviewPolicyModule = require('./common/reviewPolicy.js');
 
 // ── Parsing / context ────────────────────────────────────────────────────────
 
@@ -56,6 +60,11 @@ function loadContext(ctx) {
     ctx.scm = configLoader.createScm(ctx.config);
     ctx.tracker = trackersModule.createTracker(ctx.config,
         (ctx.params.jobParams && ctx.params.jobParams.customParams) || ctx.params.customParams || {});
+    // gh-1351: hard validation at leg start — a malformed reviewPolicy throws
+    // a ReviewPolicyValidationError HERE, before any side effect. The tracker
+    // is created FIRST so the failure is posted on the ticket, not just logged.
+    ctx.reviewPolicy = reviewPolicyModule.resolveReviewPolicy(
+        ctx.config, ctx.params.jobParams || ctx.params);
     return ctx;
 }
 
@@ -231,6 +240,30 @@ function writePrContext(ctx, prDetails, diff, discussionData) {
     console.log('PR context files written successfully');
 }
 
+// ── gh-1351: the review-policy run-context stamp ─────────────────────────────
+
+/**
+ * Stamps the resolved reviewPolicy into the review run context
+ * (`review_policy.md`) so the reviewer ranks and posts under the SAME policy
+ * the machine enforces. Non-fatal end to end: a lost file degrades to the
+ * pre-gh-1351 behavior (the policy still governs the machine verdict).
+ */
+function writeReviewPolicyContext(ctx) {
+    try {
+        gitOps.writeInputFile(
+            ctx.inputFolder + '/review_policy.md',
+            reviewPolicyModule.policyInputContextMarkdown(ctx.reviewPolicy),
+            'review_policy.md (resolved review policy — gh-1351)'
+        );
+        console.log('✅ Review policy stamped into the run context (review_policy.md, preset ' +
+            ctx.reviewPolicy.preset + ')');
+        return true;
+    } catch (e) {
+        console.warn('review_policy.md stamp failed (non-fatal):', e.message || e);
+        return false;
+    }
+}
+
 // ── gh-1332: the finding-identity registry injection ─────────────────────────
 
 function machineAuthorLoginsOf(ctx) {
@@ -373,7 +406,12 @@ function action(params) {
     // block-scoped `noTicket` when the try threw early).
     var ctx = { noTicket: false, tracker: null };
     try {
-        ctx = loadContext(parseContext(params));
+        // loadContext MUTATES ctx in place and returns it — the in-place
+        // mutation is load-bearing (gh-1351): a reviewPolicy validation error
+        // thrown mid-load still leaves the resolved tracker on the ctx the
+        // catch uses, so the failure is posted on the ticket, not just logged.
+        ctx = parseContext(params);
+        loadContext(ctx);
 
         logPreparationStart(ctx);
 
@@ -402,6 +440,10 @@ function action(params) {
         var diff = generateDiff(ctx, prDetails, branchName);
         var discussionData = fetchDiscussionData(ctx, prOutcome.pr.number);
         writePrContext(ctx, prDetails, diff, discussionData);
+
+        // gh-1351: stamp the resolved reviewPolicy into the run context so
+        // the reviewer ranks/posts under the policy the machine enforces.
+        writeReviewPolicyContext(ctx);
 
         // Step 6.5: inject the finding-identity registry (gh-1332) — the
         // previously raised findings this round must answer, not re-raise.

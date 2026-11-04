@@ -39,12 +39,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START([PR ready for review]) --> READ["1. Read input context:<br/>instruction.md, ticket.md, pr_info.md,<br/>pr_diff.txt, pr_files.txt, ci_failures.md,<br/>ci_failures_full.log, pr_discussions.md,<br/>pr_discussions_raw.json"]
+    START([PR ready for review]) --> READ["1. Read input context:<br/>instruction.md, ticket.md, review_policy.md, pr_info.md,<br/>pr_diff.txt, pr_files.txt, ci_failures.md,<br/>ci_failures_full.log, pr_discussions.md,<br/>pr_discussions_raw.json"]
     READ --> DIFF["2. Run diff checklist on pr_diff.txt"]
     DIFF --> FILES["3. Read full content of every changed file"]
     FILES --> CODEGRAPH["4. Use CodeGraph:<br/>callers/callees of changed symbols,<br/>search for sensitive patterns,<br/>impact analysis"]
     CODEGRAPH --> DIMS["5. Evaluate review dimensions:<br/>Security · Architecture/OOP · Code quality<br/>Test coverage · Duplication · Backward compatibility"]
-    DIMS --> SEVERITY["6. Classify each finding:<br/>BLOCKING / IMPORTANT / SUGGESTION"]
+    DIMS --> SEVERITY["6. Classify each finding:<br/>BLOCKING / IMPORTANT / SUGGESTION / NIT<br/>(severity census gates approval per review_policy.md)"]
     SEVERITY --> EXHAUST["7. Exhaustive pass:<br/>re-read changed files,<br/>surface ALL remaining issues"]
     EXHAUST --> OUTPUT["8. Write outputs:<br/>pr_review.json · pr_review_general.md · pr_review_comments/*.md"]
     OUTPUT --> END([End])
@@ -63,7 +63,8 @@ flowchart TD
         P5_FULL["5️⃣ input/TICKET/ci_failures_full.log — full CI logs"]
         P6["6️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
         P7["7️⃣ input/TICKET/pr_findings.md — previously raised findings (when present)"]
-        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7
+        P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol (gh-1351)"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8
     end
 
     subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
@@ -143,9 +144,29 @@ Classify every finding before writing outputs:
 
 - **BLOCKING** — merge would cause a bug, security issue, data loss, or CI break. Must be fixed.
 - **IMPORTANT** — real maintainability or correctness issue. Strongly prefer fixing before merge.
-- **SUGGESTION** — optional improvement, style, or future polish. Does not block merge.
+- **SUGGESTION** — optional improvement to the documented/behavioral surface (missing docs, unclear contract, better API shape). Does not block merge.
+- **NIT** — changes nothing behavioral and nothing documented: style, formatting, naming micro-preferences. Never blocks merge, never triggers a lap.
 
 When in doubt, start one level higher; downgrade only after confirming the risk is negligible.
+
+### Density control — post top-K, digest the overflow (gh-1351)
+
+`review_policy.md` in the input folder carries the resolved policy and its density cap
+(`allowed = clamp(round(2 + 3*sqrt(additions/200)), 2, 8)` — 20→3 · 50→4 · 200→5 · 800→8):
+
+- The cap applies to 💡 SUGGESTION / 🪶 NIT threads only — 🚨/⚠️ findings are **never capped** and always post as threads.
+- Rank your 💡/🪶 findings by value and post only the top-K as inline threads.
+- The overflow becomes a **ranked digest list** in the general comment (one line each: `path:line — finding`).
+- The census counts posted threads + digest lines (`issueCounts.suggestions`/`nits` count posts, `digest` counts the overflow lines).
+- The machine audits the posted thread count against the cap (warn only — it never fails the leg).
+
+### Downgrade protocol — honor a justified ⚠️→💡 from rework (gh-1351)
+
+A rework lap may downgrade a specific ⚠️ IMPORTANT finding to 💡 SUGGESTION **only with a written
+justification in the census** (its thread reply and response summary). When the justification is
+present, classify the finding 💡 in this round's census — a false-⚠️ review converges to APPROVE
+without a code change. A silent downgrade does not exist: without the written justification, keep
+⚠️ IMPORTANT and the cycle repeats.
 
 ### External-spec evidence rule
 
@@ -239,12 +260,12 @@ flowchart TD
     F1["outputs/pr_review_general.md — brief Markdown summary, under 20 lines, bullet-focused"]
     F2["Required sections: Summary, Key Issues, Next Steps"]
     F3["outputs/pr_review.json — valid JSON with recommendation, summary, inlineComments, issueCounts"]
-    F4["Each inline comment: path, line, startLine, side, comment, severity (BLOCKING|IMPORTANT|SUGGESTION)"]
+    F4["Each inline comment: path, line, startLine, side, comment, severity (BLOCKING|IMPORTANT|SUGGESTION|NIT)"]
     F5["comment must be a path to a file under outputs/pr_review_comments/<name>.md"]
     F6["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
     F7["If ci_failures.md present → include each failure as 🚨 BLOCKING (full logs in ci_failures_full.log)"]
     F8["Keep summary under 2 sentences — put details in inline comment files, not in general text"]
-    F9["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional"]
+    F9["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional clarity · NIT = style only"]
     F10["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
     F11["Inline comments MUST target a line that appears in the PR diff<br/>If the line is not in the diff, the comment becomes a general PR comment instead of a review thread"]
     F12["Use line numbers from the right-hand side of diff hunks<br/>If pr_diff.txt is truncated, run git diff origin/{base}...HEAD to see the full diff"]
@@ -266,11 +287,18 @@ Example PR review outputs — keep concise:
   "inlineComments": [
     {"path":"src/auth/UserService.js","line":45,"comment":"outputs/pr_review_comments/comment1.md","severity":"BLOCKING"},
     {"path":"src/auth/LoginController.js","line":78,"comment":"outputs/pr_review_comments/comment2.md","severity":"IMPORTANT"},
-    {"path":"src/utils/validation.js","line":23,"comment":"outputs/pr_review_comments/comment3.md","severity":"SUGGESTION"}
+    {"path":"src/utils/validation.js","line":23,"comment":"outputs/pr_review_comments/comment3.md","severity":"SUGGESTION"},
+    {"path":"src/auth/LoginController.js","line":20,"comment":"outputs/pr_review_comments/comment4.md","severity":"NIT"}
   ],
-  "issueCounts": {"blocking":1,"important":1,"suggestions":1}
+  "issueCounts": {"blocking":1,"important":1,"suggestions":1,"nits":1}
 }
 ```
+
+**Severity boundary (gh-1351, 4 tiers)**: a 🪶 NIT changes nothing behavioral and
+nothing documented (style, naming, formatting, micro-symmetry); a 💡 SUGGESTION
+changes clarity of the documented/behavioral surface (missing docs, unclear
+contract, better API shape). Anything that changes behavior or breaks a
+documented contract is ⚠️ IMPORTANT or 🚨 BLOCKING.
 
 ### outputs/pr_review_general.md
 ```markdown
@@ -317,25 +345,39 @@ minutes). These rules govern the verdict; every other instruction
 
 ## Verdict mapping
 
-Classify findings exactly as instructed:
+Classify findings exactly as instructed (gh-1351, 4 tiers):
 
 - 🚨 **BLOCKING** — correctness/bug findings: broken behavior, failing
   gates (red CI), scope violations, security issues, data loss.
 - ⚠️ **IMPORTANT** — real maintainability debt worth fixing, but the PR
   works as shipped.
-- 💡 **SUGGESTION** — style, wording, import order, doc-comment refs, polish.
+- 💡 **SUGGESTION** — clarity of the documented/behavioral surface:
+  missing docs, unclear contract, better API shape.
+- 🪶 **NIT** — changes nothing behavioral and nothing documented: style,
+  formatting, naming micro-preferences.
 
-Then map to the verdict:
+Then map to the verdict (the machine recomputes it from the census —
+`postPRReviewComments` treats your token as advisory):
 
 | Findings | `recommendation` |
 |---|---|
-| Any 🚨 BLOCKING (correctness/bug) | `REQUEST_CHANGES` — or `BLOCK` for security / data loss |
-| No 🚨 BLOCKING — only ⚠️ / 💡 remain | `APPROVE` |
+| Any 🚨 BLOCKING | `REQUEST_CHANGES` — or `BLOCK` for security / data loss |
+| Any ⚠️ IMPORTANT (no 🚨) | `REQUEST_CHANGES` (gates approval — policy default) |
+| Only 💡 / 🪶 remain | `APPROVE` — the cycle converges |
 
-`APPROVE` with remaining ⚠️/💡 findings is the expected terminal state
-(`allowApproveWithSuggestions: true`): post every remaining finding as
-before (inline threads + general comment) — they do **not** block the merge
-and must **not** trigger another rework round.
+**Downgrade protocol (gh-1351):** when the rework lap downgraded a specific ⚠️ to 💡 **with a
+written justification in the census** (the thread reply states why the finding is not
+maintainability debt), classify that finding 💡 in this round's census — the false-⚠️ review
+converges to APPROVE without a code change. Without the written justification, keep ⚠️: a silent
+downgrade does not exist, and the machine recomputes the verdict from the census you post.
+
+`APPROVE` with remaining 💡/🪶 findings is the expected terminal state
+(the resolved policy's `allowApproveWithSuggestions` derives from the
+tier table — SUGGESTION rounds polish, NIT rounds none): post every
+remaining finding as before (inline threads + general comment) — they do
+**not** block the merge and must **not** trigger another rework round.
+An open ⚠️ **does** gate approval unless the project's `reviewPolicy`
+explicitly weakens it (owner standing-approval doctrine, epic §4.4).
 
 ## Anti-patterns
 

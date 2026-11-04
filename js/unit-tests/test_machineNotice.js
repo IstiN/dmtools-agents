@@ -76,6 +76,13 @@ function loadPreCliReworkSetup(mocks, gitOpsStub) {
         'js/preCliReworkSetup.js',
         makeRequire({
             './configLoader.js': { loadHookFn: function() { return null; }, paramsForConfigLoad: function(p) { return p; } },
+            './common/reviewPolicy.js': (function() {
+                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                return loadModule('js/common/reviewPolicy.js',
+                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+            })(),
             './common/githubHelpers.js': {
                 _isScm: function() { return false; },
                 buildOriginFetchCommand: function() { return 'git fetch origin'; },

@@ -684,6 +684,13 @@ suite('sessionDelta — UT-4 & IT-1: composite resume prompt & bash provider int
             makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
         var reworkMod = loadModule('js/preCliReworkSetup.js', makeRequire({
             './configLoader.js': { loadHookFn: function() { return null; } },
+            './common/reviewPolicy.js': (function() {
+                var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                    makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                return loadModule('js/common/reviewPolicy.js',
+                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+            })(),
             './common/githubHelpers.js': { buildOriginFetchCommand: function() { return ''; } },
             './forkCheckout.js': forkCheckoutMod,
             './common/gitOps.js': {},

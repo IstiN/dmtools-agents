@@ -9,18 +9,33 @@ function d4TrackersWith(mocks) {
  * Unit tests for js/prepareTestPRForReview.js
  */
 
-function loadPrepareTestPRForReview(mocks) {
-    var defaults = {
-        jira_get_ticket: function() { return { fields: { status: { name: 'In Testing' } } }; },
-        jira_move_to_status: function() {},
-        jira_post_comment: function() {},
-        jira_add_label: function() {},
-        cli_execute_command: function() { return ''; },
-        file_read: function() { return null; },
-        file_write: function() {}
-    };
+/** Mock defaults every loader variant starts from. */
+var baseMockDefaults = {
+    jira_get_ticket: function() { return { fields: { status: { name: 'In Testing' } } }; },
+    jira_move_to_status: function() {},
+    jira_post_comment: function() {},
+    jira_add_label: function() {},
+    cli_execute_command: function() { return ''; },
+    file_read: function() { return null; },
+    file_write: function() {}
+};
 
-    var allMocks = Object.assign({}, defaults, mocks);
+/** Per-key mock merge: test overrides win over the defaults. */
+function mergedMockOf(mocks, key, defaults) {
+    return Object.assign({}, defaults, (mocks && mocks[key]) || {});
+}
+
+/** gh-1351: the real reviewPolicy module (pure, no dmtools globals). */
+function loadReviewPolicyModuleMock() {
+    var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthor }), {});
+    return loadModule('js/common/reviewPolicy.js',
+        makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+}
+
+function loadPrepareTestPRForReview(mocks) {
+    var allMocks = Object.assign({}, baseMockDefaults, mocks);
 
     var scmMock = Object.assign({
         getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'trackstate' }; },
@@ -33,7 +48,9 @@ function loadPrepareTestPRForReview(mocks) {
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return scmMock; } }
         }),
-        { file_read: function() { return null; } }
+        // gh-1351: configLoaderFileRead lets a test serve a project
+        // .dmtools/config.js to the config loader only (reviewPolicy cases).
+        { file_read: (mocks && mocks.configLoaderFileRead) || function() { return null; } }
     );
 
     var prHelper = loadModule(
@@ -48,22 +65,23 @@ function loadPrepareTestPRForReview(mocks) {
         { cli_execute_command: allMocks.cli_execute_command, jira_search_by_jql: allMocks.jira_search_by_jql, file_write: allMocks.file_write }
     );
 
-    var githubHelpers = Object.assign({
+    var githubHelpers = mergedMockOf(mocks, 'githubHelpers', {
         getPRDetails: function() { return null; },
         fetchDiscussionsAndRawData: function() { return { markdown: '', rawThreads: {} }; }
-    }, mocks && mocks.githubHelpers || {});
+    });
 
-    var gitOpsMock = Object.assign({
+    var gitOpsMock = mergedMockOf(mocks, 'gitOpsMock', {
         writePRContext: function() {},
         checkoutPRBranch: function() {},
         getPRDiff: function() { return ''; }
-    }, mocks && mocks.gitOpsMock || {});
+    });
 
     return loadModule(
         'js/prepareTestPRForReview.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
             './configLoader.js': freshConfigLoader,
+            './common/reviewPolicy.js': loadReviewPolicyModuleMock(),
             './common/githubHelpers.js': githubHelpers,
             './common/gitOps.js': gitOpsMock,
             './common/scm.js': { createScm: function() { return scmMock; } },
@@ -787,5 +805,81 @@ suite('prepareTestPRForReview: action error paths (gh-1186)', function() {
         var result = module.action({ jobParams: { inputFolderPath: 'input/TS-103', customParams: {} } });
         assert.equal(result, false);
         assert.ok(comments.some(function(c) { return c.indexOf('Could not determine repository') !== -1; }));
+    });
+});
+
+suite('prepareTestPRForReview — gh-1351 reviewPolicy: hard validation + run-context stamp', function() {
+
+    function gh1351Load(configLoaderFileRead) {
+        var gitOpsWrites = [];
+        var module = loadPrepareTestPRForReview({
+            configLoaderFileRead: configLoaderFileRead,
+            gitOpsMock: {
+                writeInputFile: function(path, content, label) { gitOpsWrites.push({ path: path, content: content }); }
+            },
+            githubHelpers: {
+                getPRDetails: function() {
+                    return { number: 55, html_url: 'https://github.com/IstiN/trackstate/pull/55',
+                        head: { ref: 'test/TS-90', sha: 'abc' }, base: { ref: 'main' }, changed_files: 3 };
+                },
+                fetchDiscussionsAndRawData: function() { return { markdown: '', rawThreads: {} }; }
+            },
+            scmMock: {
+                listPrs: function(state) {
+                    if (state === 'open') {
+                        return [{ number: 55, head: { ref: 'test/TS-90' }, html_url: 'https://github.com/IstiN/trackstate/pull/55' }];
+                    }
+                    return [];
+                }
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command.indexOf('rm -f') === 0) return '';
+                return '';
+            }
+        });
+        return { module: module, writes: gitOpsWrites };
+    }
+
+    test('a valid project policy is stamped as review_policy.md in the test-review input folder', function() {
+        var h = gh1351Load(function(args) {
+            var p = args && (args.path || args);
+            if (p === '.dmtools/config.js') {
+                return 'module.exports = { reviewPolicy: { preset: "fix-everything" } };';
+            }
+            return null;
+        });
+        var result = h.module.action({ jobParams: { inputFolderPath: 'input/TS-90', customParams: {} } });
+        assert.notEqual(result, false, 'a valid policy never fails the leg');
+        var stamp = h.writes.filter(function(w) { return w.path === 'input/TS-90/review_policy.md'; });
+        assert.equal(stamp.length, 1, 'exactly one review_policy.md write, got: ' + JSON.stringify(h.writes.map(function(w) { return w.path; })));
+        assert.contains(stamp[0].content, 'fix-everything');
+    });
+
+    test('missing config stamps the built-in default silently', function() {
+        var h = gh1351Load(null);
+        h.module.action({ jobParams: { inputFolderPath: 'input/TS-90', customParams: {} } });
+        var stamp = h.writes.filter(function(w) { return w.path === 'input/TS-90/review_policy.md'; });
+        assert.equal(stamp.length, 1);
+        assert.contains(stamp[0].content, 'built-in default');
+    });
+
+    test('malformed project reviewPolicy fails the leg at setup with the validation message', function() {
+        var comments = [];
+        var module = loadPrepareTestPRForReview({
+            configLoaderFileRead: function(args) {
+                var p = args && (args.path || args);
+                if (p === '.dmtools/config.js') {
+                    return 'module.exports = { reviewPolicy: { severities: { WAT: { round: "rework", fix: "mandatory" } } } };';
+                }
+                return null;
+            },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            cli_execute_command: function() { return ''; }
+        });
+        var result = module.action({ jobParams: { inputFolderPath: 'input/TS-90', customParams: {} } });
+        assert.equal(result, false, 'the leg fails before any PR context is assembled');
+        var setupError = comments.filter(function(c) { return String(c).indexOf('Test PR Review Setup Error') !== -1; });
+        assert.equal(setupError.length, 1, 'the setup error comment is posted');
+        assert.contains(setupError[0], 'WAT', 'the unknown tier is named');
     });
 });

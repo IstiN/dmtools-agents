@@ -123,6 +123,15 @@ function loadPreCliTestReworkSetup(overrides) {
                 './common/gitOps.js': gitOps,
                 './common/pullRequest.js': prHelper,
                 './common/trackers.js': trackers,
+                // gh-1351: the real reviewPolicy chain — leg-start validation
+                // + the review_policy.md stamp read it.
+                './common/reviewPolicy.js': (function() {
+                    var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+                    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                        makeRequire({ './machineAuthor.js': machineAuthor }), {});
+                    return loadModule('js/common/reviewPolicy.js',
+                        makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+                })(),
                 './fetchQuestionsToInput.js': fetchQuestions,
                 './fetchLinkedBugsToInput.js': fetchBugs
             }),
@@ -825,4 +834,59 @@ suite('preCliTestReworkSetup — error-reporting helpers (gh-1042)', function() 
         assert.contains(ctx.tracker.calls.postComment[0].body, '{code}Error: kaboom{code}');
     });
 
+});
+
+suite('preCliTestReworkSetup — gh-1351 reviewPolicy: hard validation + review_policy.md stamp', function() {
+
+    function reviewPolicyLoader(config) {
+        return {
+            loadProjectConfig: function() { return config || REWORK_SETUP_CONFIG; },
+            createScm: function() { return makeScmMock(); },
+            formatTemplate: formatTemplateVars
+        };
+    }
+
+    test('a valid project policy is stamped as review_policy.md in the test-rework input folder', function() {
+        var writes = [];
+        var config = Object.assign({}, REWORK_SETUP_CONFIG, { reviewPolicy: { preset: 'relaxed' } });
+        var ctx = loadPreCliTestReworkSetup({
+            configLoader: reviewPolicyLoader(config),
+            gitOps: {
+                writeInputFile: function(path, content, label) { writes.push({ path: path, content: content }); }
+            }
+        });
+        var result = ctx.module.action(baseParams());
+        assert.notEqual(result, false, 'a valid policy never fails the leg');
+        var stamp = writes.filter(function(w) { return w.path === 'input/PROJ-12/review_policy.md'; });
+        assert.equal(stamp.length, 1, 'exactly one review_policy.md write');
+        assert.contains(stamp[0].content, 'relaxed');
+    });
+
+    test('missing config stamps the built-in default silently', function() {
+        var writes = [];
+        var ctx = loadPreCliTestReworkSetup({
+            configLoader: reviewPolicyLoader(null),
+            gitOps: {
+                writeInputFile: function(path, content, label) { writes.push({ path: path, content: content }); }
+            }
+        });
+        ctx.module.action(baseParams());
+        var stamp = writes.filter(function(w) { return w.path === 'input/PROJ-12/review_policy.md'; });
+        assert.equal(stamp.length, 1);
+        assert.contains(stamp[0].content, 'built-in default');
+    });
+
+    test('malformed project reviewPolicy fails the leg at setup with the validation message', function() {
+        var config = Object.assign({}, REWORK_SETUP_CONFIG, {
+            reviewPolicy: { severities: { NOPE: { round: 'rework', fix: 'mandatory' } } }
+        });
+        var ctx = loadPreCliTestReworkSetup({
+            configLoader: reviewPolicyLoader(config)
+        });
+        var result = ctx.module.action(baseParams());
+        assert.equal(result.success, false, 'the leg fails before any side effect');
+        assert.contains(String(result.error), 'NOPE', 'the unknown tier is named');
+        assert.equal(ctx.tracker.calls.postComment.length, 1, 'the failure is posted on the ticket');
+        assert.contains(ctx.tracker.calls.postComment[0].body, 'NOPE');
+    });
 });

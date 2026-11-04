@@ -82,7 +82,7 @@ flowchart TD
 flowchart TD
     START([Test automation PR ready for review]) --> PROJ["Read instruction.md from repo root if it exists"]
     PROJ --> INPUT["Read PR context from input folder"]
-    INPUT --> INPUTS["ticket.md, pr_info.md, pr_diff.txt, pr_files.txt, ci_failures.md, ci_failures_full.log, pr_discussions.md, pr_discussions_raw.json"]
+    INPUT --> INPUTS["ticket.md, review_policy.md, pr_info.md, pr_diff.txt, pr_files.txt, ci_failures.md, ci_failures_full.log, pr_discussions.md, pr_discussions_raw.json"]
     INPUTS --> EXPLORE["Explore codebase structure in testing/ folder"]
     EXPLORE --> SCOPE["Confirm scope: review test code only inside testing/"]
     SCOPE --> CORRECT["Compare test steps against Test Case: objective, preconditions, steps, expected result"]
@@ -125,7 +125,7 @@ flowchart TD
     F1["outputs/response.md — tracker-agnostic Markdown, under 20 lines, bullet-focused"]
     F2["Required sections: Summary, Correctness, Architecture, Code Quality, Framework Usage, Test Data, Recommendation"]
     F3["outputs/pr_review.json — valid JSON with recommendation (APPROVE|BLOCK|REQUEST_CHANGES), summary, inlineComments, issueCounts"]
-    F4["Each inline comment: path, line, startLine, side, body, severity (BLOCKING|IMPORTANT|SUGGESTION)"]
+    F4["Each inline comment: path, line, startLine, side, body, severity (BLOCKING|IMPORTANT|SUGGESTION|NIT)"]
     F5["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
     F6["If ci_failures.md present → include each failure as 🚨 BLOCKING (full logs in ci_failures_full.log)"]
     F7["Keep summary under 2 sentences — put details in inline comments, not in general text"]
@@ -149,11 +149,16 @@ Example PR test automation review outputs — keep concise:
     {"path":"testing/tests/TEST-123/test_login.py","line":34,"body":"🚨 BLOCKING: Hardcoded selector — Use Page Object method login_page.username_field instead of raw page.locator('#user').","severity":"BLOCKING"},
     {"path":"testing/tests/TEST-123/test_login.py","line":45,"body":"🚨 BLOCKING: time.sleep(5) — Replace with Playwright's expect(...).to_be_visible(timeout=5000).","severity":"BLOCKING"},
     {"path":"testing/tests/TEST-123/test_login.py","line":12,"body":"⚠️ IMPORTANT: Missing config.yaml — Each test folder must include config.yaml with framework, platform, and dependencies.","severity":"IMPORTANT"},
-    {"path":"testing/components/pages/login_page.py","line":8,"body":"💡 SUGGESTION: Add type hints — Constructor parameters lack types. Add driver: IWebDriver and return types.","severity":"SUGGESTION"}
+    {"path":"testing/components/pages/login_page.py","line":8,"body":"💡 SUGGESTION: Add type hints — Constructor parameters lack types. Add driver: IWebDriver and return types.","severity":"SUGGESTION"},
+    {"path":"testing/tests/TEST-123/test_login.py","line":20,"body":"🪶 NIT: Import order — stdlib imports should precede third-party ones.","severity":"NIT"}
   ],
-  "issueCounts": {"blocking":2,"important":1,"suggestions":1}
+  "issueCounts": {"blocking":2,"important":1,"suggestions":1,"nits":1}
 }
 ```
+
+**Severity boundary (gh-1351, 4 tiers)**: a 🪶 NIT changes nothing behavioral and
+nothing documented (style, naming, formatting); a 💡 SUGGESTION changes clarity of
+the documented/behavioral surface. Behavior or contract breakage is ⚠️/🚨.
 
 ### outputs/pr_review.json (APPROVE example)
 ```json

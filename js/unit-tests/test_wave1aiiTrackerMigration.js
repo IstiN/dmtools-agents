@@ -41,6 +41,13 @@ function w2LoadSA(rec) {
 function w2LoadPR(rec) {
     return loadModule('js/preparePRForReview.js', makeRequire({
         './configLoader.js': { loadProjectConfig: function() { return {}; }, createScm: function() { return { getRemoteRepoInfo: function() { return null; } }; } },
+        './common/reviewPolicy.js': (function() {
+            var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+            var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': machineAuthor }), {});
+            return loadModule('js/common/reviewPolicy.js',
+                makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+        })(),
         './common/githubHelpers.js': {},
         './common/gitOps.js': {},
         './common/commentMarkup.js': loadModule('js/common/commentMarkup.js', makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') })),

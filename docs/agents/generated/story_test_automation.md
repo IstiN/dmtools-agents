@@ -44,12 +44,16 @@ _Pre-CLI Story Test Automation Setup Action_
 - Source: `agents/js/preCliStoryTestAutomationSetup.js`
 - Writes:
   - `input/<KEY>/merge_conflicts.md`
+  - `input/<KEY>/review_policy.md`
   - `outputs/review_replies.json`
 - Side effects:
   - git push
   - git checkout
 - Parameters (customParams):
+  - `allowApproveWithSuggestions`
   - `branchCreateFnPath`
+  - `importantBlocksApproval`
+  - `maxReviewThreadsBeforeForceApprove`
   - `testFilesGlob`
 
 
@@ -85,7 +89,10 @@ _Post Story Test Automation Results Action_
 
 - `removeLabel`: `"sm_story_test_automation_triggered"`
 - `checkOpenPR` _(used by JS action)_
+- `allowApproveWithSuggestions` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
+- `importantBlocksApproval` _(used by JS action)_
+- `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `testFilesGlob` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `configPath` _(used by JS action)_
