@@ -1541,3 +1541,42 @@ suite('preCliMobileTestAutomationSetup — gh-1223 characterization: base sync &
     });
 
 });
+
+suite('preCliMobileTestAutomationSetup — dryRun guard (gh-1356)', function() {
+
+    test('dryRun:true skips status move, branch checkout and Bitrise/simulator calls while fetching linked test cases', function() {
+        var writtenFiles = {};
+        var moves = [];
+        var commands = [];
+
+        var m = loadPreCli({
+            jira_move_to_status: function(opts) { moves.push(opts); },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(path) { writtenFiles[path] = true; },
+            cli_execute_command: function(opts) { commands.push(opts.command); return ''; }
+        });
+
+        var res = m.action({
+            dryRun: true,
+            jobParams: {
+                inputFolderPath: 'input/PROJ-8104',
+                dryRun: true,
+                customParams: {
+                    targetRepository: {
+                        owner: 'ExampleOrg',
+                        repo: 'example-mobile-app-automation',
+                        baseBranch: 'main',
+                        workingDir: '/tmp/automation-repo'
+                    }
+                }
+            }
+        });
+
+        assert.deepEqual(res, { success: true, dryRun: true });
+        assert.equal(moves.length, 0, 'dryRun must not move ticket status');
+        assert.equal(commands.length, 0, 'dryRun must not execute CLI commands');
+        assert.ok(writtenFiles['input/PROJ-8104/linked_test_cases.md'],
+            'read-only linked_test_cases.md context still written');
+    });
+
+});

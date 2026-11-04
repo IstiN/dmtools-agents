@@ -443,6 +443,17 @@ function checkoutTestBranchHead(ticketKey, config, deps) {
     return { branchName: branchName, workingDir: workingDir, exec: exec };
 }
 
+/**
+ * gh-1356: returns true when `params` carries dryRun: true (or 'true') at the
+ * top level, under `jobParams`, or under `customParams`.
+ */
+function isDryRunParams(params) {
+    if (!params) return false;
+    if (params.dryRun === true || params.dryRun === 'true') return true;
+    var jp = params.jobParams || {};
+    return jp.dryRun === true || jp.dryRun === 'true';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         configureGitAuthor: configureGitAuthor,
@@ -467,5 +478,6 @@ if (typeof module !== 'undefined' && module.exports) {
         findPrForBranch: findPrForBranch,
         findMergedPrForBranch: findMergedPrForBranch,
         checkoutTestBranchHead: checkoutTestBranchHead
+        , isDryRunParams: isDryRunParams
     };
 }

@@ -772,3 +772,21 @@ suite('checkoutBranch — gh-1318 repro over a real git repo', function() {
     });
 
 });
+
+suite('checkoutBranch — dryRun guard (gh-1356)', function() {
+
+    test('dryRun:true skips git commands', function() {
+        var calls = [];
+        var mod = loadCheckoutBranch(makeConfigLoaderStub(makeConfig(), {}), {
+            cli_execute_command: makeCliMock(calls, {})
+        });
+        var res = mod.action({
+            dryRun: true,
+            ticket: { key: 'BUG-1' },
+            jobParams: { dryRun: true, customParams: {} }
+        });
+        assert.deepEqual(res, { success: true, dryRun: true });
+        assert.equal(calls.length, 0, 'dryRun must make zero cli_execute_command calls');
+    });
+
+});
