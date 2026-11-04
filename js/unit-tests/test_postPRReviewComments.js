@@ -1227,6 +1227,17 @@ suite('postPRReviewComments — gh-807 verdict persistence (postVerdictRecord)',
         assert.contains(mod.__testHarness.addedComments[0].body, '"verdict":"BLOCK"');
         assert.contains(mod.__testHarness.addedComments[1].body, '"verdict":"REQUEST_CHANGES"');
     });
+    test('gh-1350: the verdict record stamps nits/digest from the normalized census', function() {
+        var mod = makeMod({});
+        withGlobals(mod, function() {
+            mod.postVerdictRecord(mod.__testHarness.scm,
+                { owner: 'epam', repo: 'dmtools-dart' }, 1428, true, 'APPROVE',
+                { blocking: 0, important: 1, suggestions: 2, nits: 3, digest: 4 });
+        });
+        var body = mod.__testHarness.addedComments[0].body;
+        assert.contains(body, '"nits":3');
+        assert.contains(body, '"digest":4');
+    });
 
     test('a head-less PR (probe failure / no sha) posts NO record — never a head-less verdict', function() {
         var mod = makeMod({ pr: { number: 7 } });
@@ -2323,7 +2334,8 @@ suite('postPRReviewComments — gh-926 extracted pipeline helpers', function() {
     test('normalizeIssueCounts + hasAnyOpenIssue: any non-zero count opens issues', function() {
         var mod = loadPostPRReviewComments();
 
-        assert.deepEqual(mod.normalizeIssueCounts({}), { blocking: 0, important: 0, suggestions: 0 });
+        assert.deepEqual(mod.normalizeIssueCounts({}),
+            { blocking: 0, important: 0, suggestions: 0, nits: 0, digest: 0 });
         assert.equal(mod.hasAnyOpenIssue({ blocking: 0, important: 0, suggestions: 0 }), false);
         assert.equal(mod.hasAnyOpenIssue({ blocking: 1 }), true);
         assert.equal(mod.hasAnyOpenIssue({ important: 2 }), true);
@@ -3310,5 +3322,245 @@ suite('postPRReviewComments — gh-1334 ticket-grounded spec-claim verification 
         assert.equal(findings[0].claim, claim,
             'the registry claim is exactly the reviewer text — no separator, no note, no marker');
         assert.deepEqual(findings[0].demotion, { reason: 'missing-citation', claimMatchedTicket: 'no' });
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// gh-1350 (epic gh-1328 step 1/4) — review-marker integrity:
+//   - machine-stamped severity prefixes on posted inline threads (built
+//     from the structured JSON severity field, never the comment prose);
+//   - census cross-check at verdict processing: a posted BLOCKING severity
+//     with issueCounts.blocking == 0 overrides the verdict;
+//   - census normalization: singular/plural suggestion spellings, nits +
+//     digest plumbed into the verdict record.
+// ═════════════════════════════════════════════════════════════════════════
+
+suite('postPRReviewComments — machine-stamped severity markers (gh-1350)', function() {
+    // Minimal anchored-diff scm recorder (the poster needs the line in the diff).
+    function stampScm(calls) {
+        return {
+            getPrDiff: function() {
+                return 'diff --git a/src/a.js b/src/a.js\n' +
+                    'index 1111111..2222222 100644\n' +
+                    '--- a/src/a.js\n' +
+                    '+++ b/src/a.js\n' +
+                    '@@ -1,2 +1,3 @@\n' +
+                    ' context\n' +
+                    '+target line\n' +
+                    ' more context\n';
+            },
+            addInlineComment: function(prId, path, line, text, startLine, side) {
+                calls.push({ path: path, line: line, text: text, side: side });
+            },
+            addComment: function(prId, text) {
+                calls.push({ fallback: true, text: text });
+            }
+        };
+    }
+
+    test('AC1 corruption replay: prose 🚨 severity: none + JSON IMPORTANT posts ⚠️ severity: IMPORTANT', function() {
+        var mod = loadPostPRReviewComments();
+        var calls = [];
+        mod.postInlineComment(stampScm(calls), 9, {
+            path: 'src/a.js', line: 2, severity: 'IMPORTANT',
+            body: '\uD83D\uDEA8 severity: NONE \u2014\nthe agent claims this is fine'
+        }, 'PROJ-1', null);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].text,
+            '\u26A0\uFE0F severity: IMPORTANT \u2014\nthe agent claims this is fine',
+            'exactly ONE severity line — machine-stamped from the JSON field; ' +
+            'the corrupted severity prose never reaches the PR');
+    });
+
+    test('each structured severity stamps its canonical line', function() {
+        var mod = loadPostPRReviewComments();
+        var calls = [];
+        var scm = stampScm(calls);
+        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, severity: 'BLOCKING', body: 'broken' }, 'PROJ-1', null);
+        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, severity: 'SUGGESTION', body: 'rename' }, 'PROJ-1', null);
+        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, severity: 'important', body: 'debt' }, 'PROJ-1', null);
+
+        assert.ok(calls[0].text.indexOf('\uD83D\uDEA8 severity: BLOCKING \u2014\nbroken') === 0);
+        assert.ok(calls[1].text.indexOf('\uD83D\uDCA1 severity: SUGGESTION \u2014\nrename') === 0);
+        assert.ok(calls[2].text.indexOf('\u26A0\uFE0F severity: IMPORTANT \u2014\ndebt') === 0,
+            'severity casing normalizes');
+    });
+
+    test('no (or unrecognized) severity → the body posts verbatim, no stamp', function() {
+        var mod = loadPostPRReviewComments();
+        var calls = [];
+        var scm = stampScm(calls);
+        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, body: 'plain note' }, 'PROJ-1', null);
+        mod.postInlineComment(scm, 9, { path: 'src/a.js', line: 2, severity: 'NIT', body: 'nit prose' }, 'PROJ-1', null);
+
+        assert.equal(calls.length, 2, 'both comment bodies post (the stamp never blocks a post)');
+        assert.equal(calls[0].text, 'plain note');
+        assert.equal(calls[1].text, 'nit prose',
+            'the NIT enum lands in part 2 — unknown severities stamp nothing');
+    });
+
+    test('an existing leading canonical line is replaced, not duplicated (idempotent stamp)', function() {
+        var mod = loadPostPRReviewComments();
+        var calls = [];
+        mod.postInlineComment(stampScm(calls), 9, {
+            path: 'src/a.js', line: 2, severity: 'BLOCKING',
+            body: '\uD83D\uDCA1 severity: SUGGESTION \u2014\nprose that lied about severity'
+        }, 'PROJ-1', null);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].text,
+            '\uD83D\uDEA8 severity: BLOCKING \u2014\nprose that lied about severity',
+            'exactly one canonical line — the machine one, from the JSON severity');
+    });
+
+    test('the fallback PR comment carries the stamp too (line not in diff)', function() {
+        var mod = loadPostPRReviewComments();
+        var calls = [];
+        var scm = stampScm(calls);
+        scm.getPrDiff = function() { return ''; };
+        mod.postInlineComment(scm, 9, {
+            path: 'src/gone.js', line: 42, severity: 'BLOCKING', body: 'broken'
+        }, 'PROJ-1', null);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].fallback, true);
+        assert.ok(calls[0].text.indexOf('\uD83D\uDEA8 severity: BLOCKING \u2014\nbroken') !== -1);
+    });
+
+    test('the registry claim is NOT stamped (findings keep the reviewer text)', function() {
+        var mod = loadPostPRReviewComments();
+        var findings = mod.findingsFromReviewData({
+            inlineComments: [{ path: 'src/a.js', line: 2, severity: 'IMPORTANT', body: 'debt here' }]
+        }, 'PROJ-1', null);
+        assert.equal(findings.length, 1);
+        assert.equal(findings[0].claim, 'debt here',
+            'the severity stamp is a posting-path concern only');
+    });
+});
+
+suite('postPRReviewComments — census cross-check (gh-1350)', function() {
+    function reviewData(severity, counts) {
+        return {
+            recommendation: 'APPROVE',
+            inlineComments: severity ? [{ path: 'src/a.js', line: 2, severity: severity, body: 'x' }] : [],
+            issueCounts: counts || { blocking: 0, important: 0, suggestions: 0 }
+        };
+    }
+
+    test('AC2: posted inline BLOCKING + issueCounts.blocking == 0 overrides to REQUEST_CHANGES', function() {
+        var mod = loadPostPRReviewComments();
+        var out = mod.censusCrossCheckOverride(reviewData('BLOCKING'), 'APPROVE',
+            mod.normalizeIssueCounts(reviewData('BLOCKING')));
+        assert.equal(out.overridden, true);
+        assert.equal(out.recommendation, 'REQUEST_CHANGES');
+    });
+
+    test('blocking census already counts the thread → no override', function() {
+        var mod = loadPostPRReviewComments();
+        var out = mod.censusCrossCheckOverride(reviewData('BLOCKING'), 'APPROVE',
+            mod.normalizeIssueCounts({ issueCounts: { blocking: 1 } }));
+        assert.equal(out.overridden, false);
+        assert.equal(out.recommendation, 'APPROVE');
+    });
+
+    test('lowercase severities count; non-blocking severities never override', function() {
+        var mod = loadPostPRReviewComments();
+        assert.equal(mod.censusCrossCheckOverride(reviewData('blocking'), 'APPROVE',
+            mod.normalizeIssueCounts(reviewData('blocking'))).overridden, true);
+        assert.equal(mod.censusCrossCheckOverride(reviewData('IMPORTANT'), 'APPROVE',
+            mod.normalizeIssueCounts(reviewData('IMPORTANT'))).overridden, false);
+        assert.equal(mod.censusCrossCheckOverride(reviewData('SUGGESTION'), 'APPROVE',
+            mod.normalizeIssueCounts(reviewData('SUGGESTION'))).overridden, false);
+    });
+
+    test('several inline comments: one BLOCKING among many overrides (multi-item case)', function() {
+        var mod = loadPostPRReviewComments();
+        var data = {
+            recommendation: 'APPROVE',
+            inlineComments: [
+                { path: 'src/a.js', line: 1, severity: 'SUGGESTION', body: 'a' },
+                { path: 'src/b.js', line: 2, severity: 'IMPORTANT', body: 'b' },
+                { path: 'src/c.js', line: 3, severity: 'BLOCKING', body: 'c' }
+            ],
+            issueCounts: { blocking: 0, important: 0, suggestions: 0 }
+        };
+        var out = mod.censusCrossCheckOverride(data, 'APPROVE', mod.normalizeIssueCounts(data));
+        assert.equal(out.overridden, true);
+        assert.equal(out.recommendation, 'REQUEST_CHANGES');
+    });
+
+    test('no inline comments / empty severities / malformed data → no override', function() {
+        var mod = loadPostPRReviewComments();
+        assert.equal(mod.censusCrossCheckOverride(reviewData(null), 'APPROVE',
+            mod.normalizeIssueCounts(reviewData(null))).overridden, false);
+        assert.equal(mod.censusCrossCheckOverride(
+            { recommendation: 'APPROVE', inlineComments: [{ path: 'a', line: 1 }] }, 'APPROVE',
+            { blocking: 0, important: 0, suggestions: 0 }).overridden, false);
+        assert.equal(mod.censusCrossCheckOverride(null, 'APPROVE',
+            mod.normalizeIssueCounts({})).overridden, false);
+    });
+
+    test('a non-approving verdict is left alone (nothing to override)', function() {
+        var mod = loadPostPRReviewComments();
+        var out = mod.censusCrossCheckOverride(reviewData('BLOCKING'), 'REQUEST_CHANGES',
+            mod.normalizeIssueCounts(reviewData('BLOCKING')));
+        assert.equal(out.overridden, false);
+        assert.equal(out.recommendation, 'REQUEST_CHANGES');
+    });
+
+    test('the override warning is loud and names both sides of the mismatch', function() {
+        var mod = loadPostPRReviewComments();
+        var warning = mod.buildCensusCrossCheckWarning(
+            mod.normalizeIssueCounts(reviewData('BLOCKING')));
+        assert.contains(warning, 'BLOCKING');
+        assert.contains(warning, 'blocking=0');
+        assert.contains(warning, 'REQUEST_CHANGES');
+    });
+});
+
+suite('postPRReviewComments — census normalization + nit plumbing (gh-1350)', function() {
+    test('AC4: {"suggestion": 2} and {"suggestions": 2} normalize to the identical census', function() {
+        var mod = loadPostPRReviewComments();
+        var singular = mod.normalizeIssueCounts({ issueCounts: { suggestion: 2 } });
+        var plural = mod.normalizeIssueCounts({ issueCounts: { suggestions: 2 } });
+        assert.deepEqual(singular, plural);
+        assert.deepEqual(singular, { blocking: 0, important: 0, suggestions: 2, nits: 0, digest: 0 });
+    });
+
+    test('the plural spelling wins when both spellings are present', function() {
+        var mod = loadPostPRReviewComments();
+        assert.deepEqual(mod.normalizeIssueCounts({ issueCounts: { suggestion: 2, suggestions: 5 } }),
+            { blocking: 0, important: 0, suggestions: 5, nits: 0, digest: 0 });
+    });
+
+    test('nits and digest ride the census; missing counts default to zero', function() {
+        var mod = loadPostPRReviewComments();
+        assert.deepEqual(mod.normalizeIssueCounts({ issueCounts: { nits: 3, digest: 7 } }),
+            { blocking: 0, important: 0, suggestions: 0, nits: 3, digest: 7 });
+        assert.deepEqual(mod.normalizeIssueCounts({}),
+            { blocking: 0, important: 0, suggestions: 0, nits: 0, digest: 0 });
+        assert.deepEqual(mod.normalizeIssueCounts(null),
+            { blocking: 0, important: 0, suggestions: 0, nits: 0, digest: 0 });
+        assert.deepEqual(mod.normalizeIssueCounts({ issueCounts: null }),
+            { blocking: 0, important: 0, suggestions: 0, nits: 0, digest: 0 });
+    });
+
+    test('string counts normalize through Number()', function() {
+        var mod = loadPostPRReviewComments();
+        assert.deepEqual(mod.normalizeIssueCounts({ issueCounts: { blocking: '2', suggestion: '1' } }),
+            { blocking: 2, important: 0, suggestions: 1, nits: 0, digest: 0 });
+    });
+
+    test('hasAnyOpenIssue: the singular spelling counts, nits/digest do NOT open issues (no flip)', function() {
+        var mod = loadPostPRReviewComments();
+        assert.equal(mod.hasAnyOpenIssue({ blocking: 0, important: 0, suggestions: 0 }), false);
+        assert.equal(mod.hasAnyOpenIssue({ blocking: 0, important: 0, suggestion: 1 }), true,
+            'the singular spelling is the same census');
+        assert.equal(mod.hasAnyOpenIssue({ nits: 5 }), false,
+            'nits open issues from part 2 (the NIT enum), not here');
+        assert.equal(mod.hasAnyOpenIssue({ digest: 5 }), false);
+        assert.equal(mod.hasAnyOpenIssue({}), false);
+        assert.equal(mod.hasAnyOpenIssue(null), false);
     });
 });

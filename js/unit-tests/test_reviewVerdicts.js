@@ -514,7 +514,10 @@ suite('reviewVerdicts — post-APPROVE thread resolution (gh-828)', function () 
     test('threadSeverity maps the machine marker convention', function () {
         assert.equal(rv.threadSeverity('🚨 BLOCKING: broken behavior'), 'blocking');
         assert.equal(rv.threadSeverity('🚨 **BLOCKING** — null deref'), 'blocking');
-        assert.equal(rv.threadSeverity('some text mentioning BLOCKING hard'), 'blocking');
+        // gh-1350: the word alone is prose now — blocking needs the emoji
+        // AND the word (updated pin; the explicit severity: X form keeps
+        // its word authority below).
+        assert.equal(rv.threadSeverity('some text mentioning BLOCKING hard'), 'none');
         assert.equal(rv.threadSeverity('{"path":"a.js","severity":"BLOCKING"}'), 'blocking');
         assert.equal(rv.threadSeverity('⚠️ IMPORTANT: maintainability debt'), 'important');
         assert.equal(rv.threadSeverity('💡 SUGGESTION: import order'), 'suggestion');
@@ -533,10 +536,10 @@ suite('reviewVerdicts — post-APPROVE thread resolution (gh-828)', function () 
         assert.equal(rv.threadSeverity('⚠️ IMPORTANT: this is non-blocking, but consider renaming'), 'important');
         assert.equal(rv.threadSeverity('this is non-blocking, but consider renaming'), 'none');
         assert.equal(rv.threadSeverity('unblocking the queue now'), 'none');
-        // regression pins: the word form still matches at a real boundary
-        assert.equal(rv.threadSeverity('some text mentioning BLOCKING hard'), 'blocking');
+        // regression pins: gh-1350 tightened blocking to emoji AND word —
+        // the bare word form is prose now, the emoji+word pair still holds.
         assert.equal(rv.threadSeverity('🚨 **BLOCKING** — null deref'), 'blocking');
-        assert.equal(rv.threadSeverity('BLOCKING: data loss'), 'blocking');
+        assert.equal(rv.threadSeverity('BLOCKING: data loss'), 'none');
     });
 
     // ── the selection gate (AC1) ────────────────────────────────────────────
@@ -896,5 +899,193 @@ suite('reviewVerdicts — shared marker plumbing (gh-1329 rework, thread 11)', f
         });
         assert.equal(records[0].payload.v, 'broken', 'the unparseable timestamp sinks to the front');
         assert.equal(records[1].payload.v, 'later');
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// gh-1350 (epic gh-1328 step 1/4) — review-marker integrity:
+//   - the canonical machine severity lines (machine-stamped markers built
+//     from the structured JSON severity, never the comment file's prose);
+//   - threadSeverity ordering: an explicit `severity: X` word dominates
+//     emoji presence; blocking requires the 🚨 emoji AND the BLOCKING word;
+//   - nit census plumbing: nits/digest ride the verdict-record schema and
+//     the census reads.
+// Emoji written as escapes (module convention — ASCII-safe source).
+// ═════════════════════════════════════════════════════════════════════════
+
+suite('reviewVerdicts — machine severity lines (gh-1350)', function () {
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
+
+    test('machineSeverityLine builds the canonical line per structured severity', function () {
+        assert.equal(rv.machineSeverityLine('BLOCKING'),
+            '\uD83D\uDEA8 severity: BLOCKING \u2014');
+        assert.equal(rv.machineSeverityLine('IMPORTANT'),
+            '\u26A0\uFE0F severity: IMPORTANT \u2014');
+        assert.equal(rv.machineSeverityLine('SUGGESTION'),
+            '\uD83D\uDCA1 severity: SUGGESTION \u2014');
+    });
+
+    test('machineSeverityLine normalizes case and rejects unknown severities', function () {
+        assert.equal(rv.machineSeverityLine('important'),
+            '\u26A0\uFE0F severity: IMPORTANT \u2014');
+        assert.equal(rv.machineSeverityLine(' blocking '),
+            '\uD83D\uDEA8 severity: BLOCKING \u2014');
+        assert.equal(rv.machineSeverityLine('NIT'), null,
+            'the NIT enum lands in part 2 — unrecognized severities stamp nothing');
+        assert.equal(rv.machineSeverityLine(''), null);
+        assert.equal(rv.machineSeverityLine(null), null);
+        assert.equal(rv.machineSeverityLine(undefined), null);
+    });
+
+    test('stripLeadingSeverityLine removes one leading canonical severity line', function () {
+        assert.equal(rv.stripLeadingSeverityLine('\uD83D\uDEA8 severity: BLOCKING \u2014\nreal prose'),
+            'real prose');
+        assert.equal(rv.stripLeadingSeverityLine('\u26A0\uFE0F severity: IMPORTANT \u2014\n\npara'),
+            'para', 'a following blank line collapses too');
+        assert.equal(rv.stripLeadingSeverityLine('\uD83D\uDCA1 severity: SUGGESTION \u2014'),
+            '', 'a bare canonical line strips to empty');
+        assert.equal(rv.stripLeadingSeverityLine('\uD83D\uDEA8 severity: NONE \u2014\nprose'),
+            'prose', 'the corrupted severity: NONE prose line strips the same way');
+    });
+
+    test('stripLeadingSeverityLine keeps non-canonical prose untouched', function () {
+        var prose = '\uD83D\uDEA8 **BLOCKING: SQL injection**\nfix it';
+        assert.equal(rv.stripLeadingSeverityLine(prose), prose,
+            'the bold prose form is data — only the canonical line strips');
+        assert.equal(rv.stripLeadingSeverityLine('mid \uD83D\uDEA8 severity: BLOCKING \u2014 text'),
+            'mid \uD83D\uDEA8 severity: BLOCKING \u2014 text',
+            'a canonical-looking line after other text is prose, not a leading stamp');
+        assert.equal(rv.stripLeadingSeverityLine(''), '');
+        assert.equal(rv.stripLeadingSeverityLine(null), '');
+    });
+});
+
+suite('reviewVerdicts — threadSeverity ordering (gh-1350)', function () {
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
+
+    test('an explicit severity: X word dominates emoji presence', function () {
+        assert.equal(rv.threadSeverity('\uD83D\uDEA8 severity: NONE \u2014'),
+            'none', 'the corruption class (PR #1319 thread 1): emoji says blocking, word says none — word wins');
+        assert.equal(rv.threadSeverity('\u26A0\uFE0F severity: BLOCKING \u2014'),
+            'blocking', 'the word BLOCKING dominates the ⚠️ emoji');
+        assert.equal(rv.threadSeverity('\uD83D\uDEA8 severity: IMPORTANT \u2014'),
+            'important');
+        assert.equal(rv.threadSeverity('\uD83D\uDCA1 severity: SUGGESTION \u2014'),
+            'suggestion');
+        assert.equal(rv.threadSeverity('severity: important'),
+            'important', 'the explicit word is case-insensitive');
+    });
+
+    test('the first explicit severity marker wins (machine-stamped line is posted first)', function () {
+        var stamped = '\u26A0\uFE0F severity: IMPORTANT \u2014\n' +
+            '\uD83D\uDEA8 severity: NONE \u2014\nthe corrupted agent prose';
+        assert.equal(rv.threadSeverity(stamped), 'important',
+            'the machine-stamped line precedes the corrupted prose — it decides');
+        var inverted = '\uD83D\uDEA8 severity: NONE \u2014\n' +
+            '\u26A0\uFE0F severity: IMPORTANT \u2014';
+        assert.equal(rv.threadSeverity(inverted), 'none',
+            'first marker wins — the tiebreak is positional, deterministic');
+    });
+
+    test('the corruption replay (gh-1350 AC1): stamped IMPORTANT body classifies important', function () {
+        var posted = '\u26A0\uFE0F severity: IMPORTANT \u2014\n' +
+            '\uD83D\uDEA8 severity: NONE \u2014\nthis is not really a problem';
+        assert.equal(rv.threadSeverity(posted), 'important');
+    });
+
+    test('blocking classification needs the emoji AND the word (gh-1350 AC3 boundary)', function () {
+        assert.equal(rv.threadSeverity('\uD83D\uDEA8 BLOCKING: broken behavior'), 'blocking');
+        assert.equal(rv.threadSeverity('\uD83D\uDEA8 **BLOCKING** \u2014 null deref'), 'blocking');
+        assert.equal(rv.threadSeverity('non-blocking cleanup'), 'none',
+            'boundary discipline: "non-blocking" never matches the BLOCKING word');
+        assert.equal(rv.threadSeverity('\uD83D\uDEA8 severity: NONE \u2014 non-blocking cleanup'), 'none');
+    });
+
+    test('emoji alone or word alone no longer classify blocking (updated pins)', function () {
+        assert.equal(rv.threadSeverity('\uD83D\uDEA8 just the alarm emoji'), 'none',
+            'a bare 🚨 without the BLOCKING word is not a blocking stamp');
+        assert.equal(rv.threadSeverity('some text mentioning BLOCKING hard'), 'none',
+            'gh-1350: the word alone is prose — blocking needs the emoji too');
+        assert.equal(rv.threadSeverity('BLOCKING: data loss'), 'none',
+            'same tightening for the word-first form');
+        assert.equal(rv.threadSeverity('{"path":"a.js","severity":"BLOCKING"}'), 'blocking',
+            'the explicit severity: X form keeps its word authority');
+    });
+
+    test('the non-blocking prose pins survive the reordering (gh-828 regression)', function () {
+        assert.equal(rv.threadSeverity('\uD83D\uDCA1 SUGGESTION: this is non-blocking, but rename'), 'suggestion');
+        assert.equal(rv.threadSeverity('\u26A0\uFE0F IMPORTANT: this is non-blocking, but consider renaming'), 'important');
+        assert.equal(rv.threadSeverity('this is non-blocking, but consider renaming'), 'none');
+        assert.equal(rv.threadSeverity('unblocking the queue now'), 'none');
+        assert.equal(rv.threadSeverity('\u26A0\uFE0F IMPORTANT: maintainability debt'), 'important');
+        assert.equal(rv.threadSeverity('\uD83D\uDCA1 SUGGESTION: import order'), 'suggestion');
+        assert.equal(rv.threadSeverity('plain prose with no marker'), 'none');
+        assert.equal(rv.threadSeverity(''), 'none');
+        assert.equal(rv.threadSeverity(null), 'none');
+    });
+});
+
+suite('reviewVerdicts — nit census plumbing (gh-1350)', function () {
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function record(over) {
+        var rec = { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 0,
+                    at: '2026-11-04T00:00:00.000Z', source: 'pr_review.json' };
+        for (var k in over) rec[k] = over[k];
+        return rec;
+    }
+
+    test('buildVerdictComment carries nits and digest in the marker payload', function () {
+        var body = rv.buildVerdictComment(record({ nits: 2, digest: 5 }));
+        assert.contains(body, '"nits":2');
+        assert.contains(body, '"digest":5');
+    });
+
+    test('verdict records normalize nits/digest with zero defaults (round-trip)', function () {
+        var withCounts = rv.extractVerdictRecord(rv.MARKER_PREFIX + JSON.stringify(
+            { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 1,
+              nits: 3, digest: 7, at: '2026-11-04T00:00:00.000Z' }) + rv.MARKER_SUFFIX);
+        assert.deepEqual([withCounts.nits, withCounts.digest], [3, 7]);
+        assert.equal(withCounts.nits, 3);
+        assert.equal(withCounts.digest, 7);
+
+        var bare = rv.extractVerdictRecord(rv.MARKER_PREFIX + JSON.stringify(
+            { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 1,
+              at: '2026-11-04T00:00:00.000Z' }) + rv.MARKER_SUFFIX);
+        assert.deepEqual([bare.nits, bare.digest], [0, 0],
+            'pre-gh-1350 markers parse with zero nit census');
+    });
+
+    test('reconcileDecision: APPROVE winner with nits > 0 keeps the rework arm (census exception)', function () {
+        var decision = rv.reconcileDecision([record({ nits: 2 })], HEAD,
+            { prHasRework: true, issueHasRework: true, prHasApproved: false });
+        assert.equal(decision, null,
+            'nit threads are open machine-owned conversations — the strip is withheld');
+    });
+
+    test('reconcileDecision: digest alone does NOT keep the arm (not an open-thread census)', function () {
+        var decision = rv.reconcileDecision([record({ digest: 5 })], HEAD,
+            { prHasRework: true, issueHasRework: true, prHasApproved: false });
+        assert.ok(decision, 'the strip fires');
+        assert.equal(decision.loserLabel, 'agent:rework');
+    });
+
+    test('armReworkDecision: APPROVE + nits > 0 arms rework (gate parity with suggestions)', function () {
+        var decision = rv.armReworkDecision([record({ nits: 2 })], HEAD);
+        assert.equal(decision.arm, true);
+        assert.equal(decision.reason, 'nits-threads');
+    });
+
+    test('armReworkDecision: digest alone stays approve-verdict (no arm)', function () {
+        var decision = rv.armReworkDecision([record({ digest: 5 })], HEAD);
+        assert.equal(decision.arm, false);
+        assert.equal(decision.reason, 'approve-verdict');
+    });
+
+    test('the zero-nit APPROVE behavior is unchanged (no behavior flip)', function () {
+        assert.equal(rv.armReworkDecision([record({})], HEAD).arm, false);
+        assert.equal(rv.reconcileDecision([record({})], HEAD,
+            { prHasRework: true, issueHasRework: true, prHasApproved: false }).loserLabel, 'agent:rework');
     });
 });
