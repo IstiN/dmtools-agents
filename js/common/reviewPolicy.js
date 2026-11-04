@@ -225,14 +225,8 @@ function validateSeverityEntry(tier, raw) {
     return { round: raw.round, fix: fix };
 }
 
-/**
- * Validates + normalizes a RAW reviewPolicy value (whatever stood in
- * projectConfig.reviewPolicy or jobParams.reviewPolicy). Unknown tiers,
- * bad enums, unknown preset/bounds keys and non-object shapes are hard
- * ReviewPolicyValidationErrors; a partial config rides the default preset
- * table for everything it does not name.
- */
-function validateReviewPolicy(raw, source) {
+/** Shape gate: the policy must be a plain object with known keys only. */
+function validatePolicyShape(raw) {
     if (!isPlainObject(raw)) {
         throw policyError('reviewPolicy must be an object { preset, severities, bounds, identity }, got: ' + JSON.stringify(raw));
     }
@@ -241,12 +235,24 @@ function validateReviewPolicy(raw, source) {
         throw policyError('reviewPolicy has unknown key(s): ' + unknown.join(', ') +
             ' — known keys: preset, severities, bounds, identity');
     }
+}
+
+/** The preset name of a shaped policy — an absent/null preset rides `default`. */
+function resolvePresetOf(raw) {
     var preset = hasKey(raw, 'preset') && raw.preset !== undefined && raw.preset !== null
         ? raw.preset : 'default';
     if (PRESETS.indexOf(preset) === -1) {
         throw policyError('reviewPolicy.preset has an invalid value: ' + JSON.stringify(preset) +
             ' — expected one of ' + PRESETS.join(' | '));
     }
+    return preset;
+}
+
+/**
+ * The severity table: the preset's tier table first, then the raw
+ * severities block overrides only the tiers it names.
+ */
+function severityTableFor(preset, rawSeverities) {
     var severities = {};
     var table = PRESET_TABLES[preset];
     for (var t = 0; t < TIERS.length; t++) {
@@ -255,40 +261,56 @@ function validateReviewPolicy(raw, source) {
             fix: table[TIERS[t]].fix
         };
     }
-    if (raw.severities !== undefined && raw.severities !== null) {
-        if (!isPlainObject(raw.severities)) {
-            throw policyError('reviewPolicy.severities must be an object keyed by tier (' + TIERS.join(', ') + ')');
-        }
-        var unknownTiers = unknownKeysOf(raw.severities, CENSUS_KEY_BY_TIER);
-        if (unknownTiers.length > 0) {
-            throw policyError('reviewPolicy.severities has unknown tier(s): ' + unknownTiers.join(', ') +
-                ' — known tiers: ' + TIERS.join(', '));
-        }
-        for (var tier in raw.severities) {
-            if (hasKey(raw.severities, tier)) severities[tier] = validateSeverityEntry(tier, raw.severities[tier]);
-        }
+    if (rawSeverities === undefined || rawSeverities === null) return severities;
+    if (!isPlainObject(rawSeverities)) {
+        throw policyError('reviewPolicy.severities must be an object keyed by tier (' + TIERS.join(', ') + ')');
     }
+    var unknownTiers = unknownKeysOf(rawSeverities, CENSUS_KEY_BY_TIER);
+    if (unknownTiers.length > 0) {
+        throw policyError('reviewPolicy.severities has unknown tier(s): ' + unknownTiers.join(', ') +
+            ' — known tiers: ' + TIERS.join(', '));
+    }
+    for (var tier in rawSeverities) {
+        if (hasKey(rawSeverities, tier)) severities[tier] = validateSeverityEntry(tier, rawSeverities[tier]);
+    }
+    return severities;
+}
+
+/** The bounds block: the epic defaults first, then validated overrides. */
+function boundsOrDefault(raw) {
     var bounds = {};
     for (var b in DEFAULT_BOUNDS) {
         if (hasKey(DEFAULT_BOUNDS, b)) bounds[b] = DEFAULT_BOUNDS[b];
     }
-    if (raw.bounds !== undefined && raw.bounds !== null) {
-        if (!isPlainObject(raw.bounds)) {
-            throw policyError('reviewPolicy.bounds must be an object');
-        }
-        var rawBounds = validateBounds(raw.bounds);
-        for (var bk in rawBounds) {
-            if (hasKey(rawBounds, bk)) bounds[bk] = rawBounds[bk];
-        }
+    if (raw.bounds === undefined || raw.bounds === null) return bounds;
+    if (!isPlainObject(raw.bounds)) {
+        throw policyError('reviewPolicy.bounds must be an object');
     }
+    var rawBounds = validateBounds(raw.bounds);
+    for (var bk in rawBounds) {
+        if (hasKey(rawBounds, bk)) bounds[bk] = rawBounds[bk];
+    }
+    return bounds;
+}
+
+/**
+ * Validates + normalizes a RAW reviewPolicy value (whatever stood in
+ * projectConfig.reviewPolicy or jobParams.reviewPolicy). Unknown tiers,
+ * bad enums, unknown preset/bounds keys and non-object shapes are hard
+ * ReviewPolicyValidationErrors; a partial config rides the default preset
+ * table for everything it does not name.
+ */
+function validateReviewPolicy(raw, source) {
+    validatePolicyShape(raw);
+    var preset = resolvePresetOf(raw);
     if (raw.identity !== undefined && raw.identity !== null && !isPlainObject(raw.identity)) {
         throw policyError('reviewPolicy.identity must be an object (gh-1332 knobs)');
     }
     return {
         preset: preset,
         source: source || 'built-in default',
-        severities: severities,
-        bounds: bounds,
+        severities: severityTableFor(preset, raw.severities),
+        bounds: boundsOrDefault(raw),
         identity: raw.identity || {}
     };
 }
