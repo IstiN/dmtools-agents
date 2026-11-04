@@ -1996,5 +1996,16 @@
       "cacheRead": 19771008,
       "model": "glm-5.3-flash"
     }
+  ],
+  "issue-1334": [
+    {
+      "leg": "dev",
+      "at": "2026-11-04T03:57:22Z",
+      "prompt": 153989,
+      "completion": 67786,
+      "total": 221775,
+      "cacheRead": 13288832,
+      "model": "glm-5.3-flash"
+    }
   ]
 }
