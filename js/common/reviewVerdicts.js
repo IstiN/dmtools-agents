@@ -90,6 +90,10 @@ function buildVerdictComment(record, provider) {
         blocking: censusCount(record.blocking),
         important: censusCount(record.important),
         suggestions: censusCount(record.suggestions),
+        // gh-1350 nit census plumbing: nits/digest ride the marker so later
+        // steps (gh-1333, policy config) compute from the record alone.
+        nits: censusCount(record.nits),
+        digest: censusCount(record.digest),
         at: record.at || new Date().toISOString(),
         source: record.source || 'pr_review.json'
     };
@@ -159,6 +163,8 @@ function verdictRecordFromPayload(parsed) {
         blocking: censusCount(parsed.blocking),
         important: censusCount(parsed.important),
         suggestions: censusCount(parsed.suggestions),
+        nits: censusCount(parsed.nits),
+        digest: censusCount(parsed.digest),
         at: String(parsed.at || ''),
         source: String(parsed.source || 'unknown')
     };
@@ -449,26 +455,38 @@ function buildReconciliationComment(effective, loserLabel, headSha) {
  *     fail-open red keeps the arm, killing the strip/re-add yo-yo).
  * When checksRed stands, the rework arm is CI-corroborated: the tick keeps
  * it and lets the CI path own the leg. Same for the record's OWN census
- * (rework round 2, extended round 3): an APPROVE record reporting
- * blocking > 0 — or, since round 3, suggestions > 0 — is the evidence
- * AC3's census exceptions arm on — rework-unresolved-threads legitimately
- * placed that arm BECAUSE of the census, so the arm is evidence-driven
- * even on a green head (stripping it would cost a tick of dispatch delay
- * plus a ⚖️ comment claiming "suggestions do not justify a rework arm"
- * while the record itself says the threads are open; the arm rule re-adds
- * next tick — a self-healing yo-yo). A REQUEST_CHANGES/BLOCK
- * winner always strips pr_approved — red CI never legitimizes the
- * approval.
+ * (rework round 2, extended round 3, extended gh-1350): an APPROVE record
+ * reporting blocking > 0 — or, since round 3, suggestions > 0 — is the
+ * evidence AC3's census exceptions arm on — rework-unresolved-threads
+ * legitimately placed that arm BECAUSE of the census, so the arm is
+ * evidence-driven even on a green head (stripping it would cost a tick of
+ * dispatch delay plus a ⚖️ comment claiming "suggestions do not justify a
+ * rework arm" while the record itself says the threads are open; the arm
+ * rule re-adds next tick — a self-healing yo-yo). gh-1350 adds the nit
+ * census to the same read (nit threads are open machine-owned
+ * conversations exactly like suggestions); `digest` rides the record but
+ * is NOT an open-thread census — it never keeps the arm. A
+ * REQUEST_CHANGES/BLOCK winner always strips pr_approved — red CI never
+ * legitimizes the approval.
  */
+// The record's own census keeps the rework arm (gh-807 rework rounds 2-3,
+// extended gh-1350): open threads the machine owns — blocking, suggestions
+// and, since gh-1350, nits — are the evidence AC3's census exceptions arm
+// on. `digest` is NOT an open-thread census: it rides the record but never
+// keeps the arm.
+function recordCensusKepsArm(record) {
+    return censusCount(record.blocking) > 0 ||
+        censusCount(record.suggestions) > 0 ||
+        censusCount(record.nits) > 0;
+}
+
 function reconcileDecision(records, headSha, state) {
     var effective = latestVerdictForHead(records, headSha);
     if (!effective) return null;
     var loser = resolveLoserLabel(effective.record.verdict);
     var st = state || {};
     if (loser === LABEL_REWORK &&
-        (st.checksRed ||
-         censusCount(effective.record.blocking) > 0 ||
-         censusCount(effective.record.suggestions) > 0)) return null;
+        (st.checksRed || recordCensusKepsArm(effective.record))) return null;
     var removeFromPr = loser === LABEL_REWORK ? !!st.prHasRework : !!st.prHasApproved;
     var removeFromIssue = loser === LABEL_REWORK ? !!st.issueHasRework : false;
     if (!removeFromPr && !removeFromIssue) return null;
@@ -512,6 +530,14 @@ function armReworkDecision(records, headSha) {
         if (suggestions > 0) {
             return { arm: true, reason: 'suggestion-threads', effective: effective };
         }
+        // gh-1350 nit plumbing: the NIT severity enum itself lands in part 2,
+        // but the gate reads the census NOW so the arming side and the strip
+        // side (reconcileDecision) never disagree on what an open thread is —
+        // the arming/rework asymmetry was the original gh-807 pathology.
+        var nits = censusCount(rec.nits);
+        if (nits > 0) {
+            return { arm: true, reason: 'nits-threads', effective: effective };
+        }
         return { arm: false, reason: 'approve-verdict', effective: effective };
     }
     return { arm: true, reason: 'changes-requested', effective: effective };
@@ -543,24 +569,109 @@ function armReworkDecision(records, headSha) {
 // APPROVE+blocking=0 head that thread is owned by nobody (the rework arm
 // is withheld, the resolution leg skips it) and the conversation gate
 // strands the PR — a per-thread recurrence of the stall this block fixes.
-var SEVERITY_BLOCKING_RE = /(\uD83D\uDEA8)|((?:^|[^\w-])BLOCKING\b)/i;
+//
+// gh-1350 (epic gh-1328 step 1/4) splits the blocking form: classification
+// needs the 🚨 emoji AND the boundary-disciplined BLOCKING word TOGETHER —
+// the machine-stamped lines always carry both, so honest threads keep their
+// class while the corruption class (`🚨 severity: none` — an emoji standing
+// alone against its own explicit severity word) stops classifying blocking.
+var SEVERITY_BLOCKING_EMOJI_RE = /\uD83D\uDEA8/;
+var SEVERITY_BLOCKING_WORD_RE = /(?:^|[^\w-])BLOCKING\b/i;
 var SEVERITY_IMPORTANT_RE = /(\u26A0)|(\bIMPORTANT\b)/i;
 var SEVERITY_SUGGESTION_RE = /(\uD83D\uDCA1)|(\bSUGGESTION\b)/i;
 
+// gh-1350: the canonical machine severity lines. The posting path stamps
+// them from the structured JSON `inlineComment.severity` field — the
+// comment file's own severity prose is NEVER the source (the PR #1319
+// thread 1 corruption: the prose said `🚨 severity: none`). The em dash
+// terminates the line; the agent's prose starts below it.
+var MACHINE_SEVERITY_LINES = {
+    BLOCKING: '\uD83D\uDEA8 severity: BLOCKING \u2014',
+    IMPORTANT: '\u26A0\uFE0F severity: IMPORTANT \u2014',
+    SUGGESTION: '\uD83D\uDCA1 severity: SUGGESTION \u2014'
+};
+
+// The strip matcher — anchored at the body head, tolerant of the em-dash
+// suffix and surrounding whitespace (a prose-authored variant may drop the
+// dash or vary spacing).
+var MACHINE_SEVERITY_LINE_HEAD_RE =
+    /^\s*(?:\uD83D\uDEA8|\u26A0\uFE0F?|\uD83D\uDCA1)\s*severity:\s*(?:BLOCKING|IMPORTANT|SUGGESTION|NONE)\s*(?:\u2014|-)?\s*/i;
+
+// gh-1350: the explicit `severity: X` word form — the machine-stamped
+// marker's structured field (or the corrupted prose copy of it). The word
+// admits NONE because the corruption class IS a severity word ('none'):
+// it must be recognized to dominate the emoji it rides on. The optional
+// quotes around key and value admit the JSON field form
+// (`"severity":"BLOCKING"` — a structured finding echoed verbatim into a
+// thread body).
+var EXPLICIT_SEVERITY_RE = /(?:^|[^\w-])severity"?\s*:\s*"?\s*(BLOCKING|IMPORTANT|SUGGESTION|NONE)(?![\w-])/i;
+
 /**
- * Per-thread severity classification (pure — gh-828 L1): maps a machine
- * review thread's body to 'blocking' | 'important' | 'suggestion' | 'none'
- * via the marker convention. Only 'blocking' gates resolution — IMPORTANT
- * and SUGGESTION findings are exactly the non-blocking class an APPROVE
- * verdict legitimately leaves open (allowApproveWithSuggestions); 'none'
- * (a machine thread without a recognizable marker) is treated as
- * non-blocking too: the verdict record's census is the authority on
- * blocking, the marker is the per-thread cross-check.
+ * The canonical severity line for one structured severity value, or null
+ * when the value carries no machine stamp (absent, or unrecognized — the
+ * NIT enum lands in gh-1350 part 2). Case-normalizing: the JSON field may
+ * arrive lowercased.
+ */
+function machineSeverityLine(severity) {
+    var key = String(severity || '').trim().toUpperCase();
+    return MACHINE_SEVERITY_LINES[key] || null;
+}
+
+/**
+ * Strips ONE leading canonical severity line from a comment body — the
+ * posting path re-stamps from the structured field, so a prose-authored
+ * (or previously machine-stamped) leading line never duplicates or
+ * contradicts the machine stamp. Only the exact canonical head-of-body form
+ * strips: a canonical-looking string after other text is reviewer prose
+ * (data, not protocol) and stays untouched.
+ */
+function stripLeadingSeverityLine(text) {
+    return String(text || '').replace(MACHINE_SEVERITY_LINE_HEAD_RE, '');
+}
+
+/**
+ * The first explicit `severity: X` word in the text, normalized to its
+ * classification ('blocking' | 'important' | 'suggestion' | 'none'), or
+ * null when no explicit word is present. First-match-wins: the
+ * machine-stamped line is posted FIRST, so it outranks any corrupted
+ * severity prose further down the body.
+ */
+function explicitSeverityWord(text) {
+    var m = EXPLICIT_SEVERITY_RE.exec(String(text || ''));
+    if (!m) return null;
+    var word = m[1].toUpperCase();
+    if (word === 'NONE') return 'none';
+    return word.toLowerCase();
+}
+
+/**
+ * Per-thread severity classification (pure — gh-828 L1, ordering gh-1350):
+ * maps a machine review thread's body to
+ * 'blocking' | 'important' | 'suggestion' | 'none'.
+ *
+ * Ordering (gh-1350):
+ *   1. An explicit `severity: X` word dominates emoji presence — the word
+ *      classifies, even against the emoji it rides on (`🚨 severity: none`
+ *      is 'none', `⚠️ severity: BLOCKING` is 'blocking').
+ *   2. Without an explicit word, blocking needs the 🚨 emoji AND the
+ *      boundary-disciplined BLOCKING word together (emoji alone is an
+ *      alarm, word alone is prose).
+ *   3. IMPORTANT / SUGGESTION keep the gh-828 emoji-or-word mapping.
+ *
+ * Only 'blocking' gates resolution — IMPORTANT and SUGGESTION findings are
+ * exactly the non-blocking class an APPROVE verdict legitimately leaves
+ * open (allowApproveWithSuggestions); 'none' (a machine thread without a
+ * recognizable marker) is treated as non-blocking too: the verdict record's
+ * census is the authority on blocking, the marker is the per-thread
+ * cross-check.
  */
 function threadSeverity(body) {
+    // No empty-string guard: the fall-through chain classifies ''/'none' —
+    // and the branch would only inflate the CC ratchet (gh-1350 review).
     var text = String(body || '');
-    if (!text) return 'none';
-    if (SEVERITY_BLOCKING_RE.test(text)) return 'blocking';
+    var explicit = explicitSeverityWord(text);
+    if (explicit) return explicit;
+    if (SEVERITY_BLOCKING_EMOJI_RE.test(text) && SEVERITY_BLOCKING_WORD_RE.test(text)) return 'blocking';
     if (SEVERITY_IMPORTANT_RE.test(text)) return 'important';
     if (SEVERITY_SUGGESTION_RE.test(text)) return 'suggestion';
     return 'none';
@@ -690,6 +801,7 @@ if (typeof module !== 'undefined' && module.exports) {
         markerRecordComparator: markerRecordComparator,
         markerSafe: markerSafe,
         markerSafeReplacer: markerSafeReplacer,
+        censusCount: censusCount,
         parseMarkerComments: parseMarkerComments,
         fnv1a: fnv1a,
         hex8: hex8,
@@ -705,6 +817,8 @@ if (typeof module !== 'undefined' && module.exports) {
         reconcileDecision: reconcileDecision,
         armReworkDecision: armReworkDecision,
         threadSeverity: threadSeverity,
+        machineSeverityLine: machineSeverityLine,
+        stripLeadingSeverityLine: stripLeadingSeverityLine,
         selectResolvableThreads: selectResolvableThreads,
         buildThreadAckReply: buildThreadAckReply,
         DEFAULT_RESOLVE_THREADS_CAP: DEFAULT_RESOLVE_THREADS_CAP

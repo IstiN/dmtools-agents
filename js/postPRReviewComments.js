@@ -698,12 +698,29 @@ function resolveInlineComment(inlineComment, ticketKey, workingDir) {
     return resolvedFromBody;
 }
 
+/**
+ * gh-1350 machine-stamped severity (epic gh-1328 step 1/4): the posted
+ * thread's severity prefix is built from the STRUCTURED JSON field
+ * (`inlineComment.severity`) — the canonical `🚨 severity: BLOCKING —` /
+ * `⚠️ severity: IMPORTANT —` / `💡 severity: SUGGESTION —` line first, the
+ * agent's prose below it. The comment file's own severity prose is never
+ * the source: a body opening `🚨 severity: none` under a JSON severity
+ * IMPORTANT posts `⚠️ severity: IMPORTANT` (the PR #1319 thread 1
+ * corruption class dies here). No (or unrecognized — the NIT enum lands in
+ * part 2) severity stamps nothing and the body posts verbatim.
+ */
+function machineStampedInlineText(inlineComment, commentText) {
+    var stamped = reviewVerdicts.machineSeverityLine(inlineComment && inlineComment.severity);
+    if (!stamped) return commentText;
+    return stamped + '\n' + reviewVerdicts.stripLeadingSeverityLine(commentText);
+}
+
 function postInlineComment(scm, pullRequestId, inlineComment, ticketKey, workingDir) {
     // Accept both spec formats:
     //   old spec: { file, comment: "path/to/file.md" }
     //   agent output: { path, body: "inline text" }
     var filePath = inlineTargetOf(inlineComment);
-    var commentText = resolveInlineComment(inlineComment, ticketKey, workingDir);
+    var commentText = machineStampedInlineText(inlineComment, resolveInlineComment(inlineComment, ticketKey, workingDir));
 
     try {
         return postResolvedInlineComment(scm, pullRequestId, inlineComment, filePath, commentText, ticketKey, workingDir);
@@ -1026,6 +1043,8 @@ function stampVerdictRecord(scm, prNumber, headSha, isApproved, recommendation, 
         blocking: issueCounts.blocking,
         important: issueCounts.important,
         suggestions: issueCounts.suggestions,
+        nits: issueCounts.nits,
+        digest: issueCounts.digest,
         source: 'pr_review.json'
     }, provider);
     if (!body) {
@@ -1234,8 +1253,9 @@ function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl) 
             comment += m.panel(null, '⚠️ ' + m.bold('CHANGES REQUESTED') + ' - Issues found, ticket returned to In Rework', 'bgColor=#FFF7E6|borderColor=#FF991F') + '\n\n';
         }
 
-        // Add issue summary
-        const issueCounts = reviewData.issueCounts || { blocking: 0, important: 0, suggestions: 0 };
+        // Add issue summary (gh-1350: the normalized census — singular
+        // `suggestion` spellings render, missing counts stay 0)
+        const issueCounts = normalizeIssueCounts(reviewData);
         comment += m.h(3, 'Issue Summary') + '\n';
         comment += '* 🚨 Blocking Issues: ' + m.bold(String(issueCounts.blocking)) + '\n';
         comment += '* ⚠️ Important Issues: ' + m.bold(String(issueCounts.important)) + '\n';
@@ -1346,8 +1366,26 @@ function normalizeRecommendation(reviewData) {
     return (reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES').replace(/^APPROVED$/, 'APPROVE');
 }
 
+// gh-1350 census normalization: the agent sometimes emits the singular
+// `suggestion` spelling — both spellings are the same census (the plural
+// wins when both are present). `nits` and `digest` ride the normalized
+// shape from here on (the NIT severity enum itself lands in part 2 — this
+// is the census plumbing only). Counts normalize through the verdict
+// module's censusCount (Number() || 0).
+function suggestionsCensusOf(counts) {
+    if (counts.suggestions === undefined || counts.suggestions === null) return counts.suggestion;
+    return counts.suggestions;
+}
+
 function normalizeIssueCounts(reviewData) {
-    return reviewData.issueCounts || { blocking: 0, important: 0, suggestions: 0 };
+    var counts = (reviewData && reviewData.issueCounts) || {};
+    return {
+        blocking: reviewVerdicts.censusCount(counts.blocking),
+        important: reviewVerdicts.censusCount(counts.important),
+        suggestions: reviewVerdicts.censusCount(suggestionsCensusOf(counts)),
+        nits: reviewVerdicts.censusCount(counts.nits),
+        digest: reviewVerdicts.censusCount(counts.digest)
+    };
 }
 
 function positiveCount(value) {
@@ -1355,9 +1393,62 @@ function positiveCount(value) {
 }
 
 function hasAnyOpenIssue(issueCounts) {
-    return positiveCount(issueCounts.blocking) ||
-        positiveCount(issueCounts.important) ||
-        positiveCount(issueCounts.suggestions);
+    var counts = issueCounts || {};
+    // gh-1350: the singular `suggestion` spelling is the same census.
+    // nits/digest deliberately do NOT open issues yet — the NIT enum and
+    // the policy config land in parts 2-4 (no behavior flip in this step).
+    return positiveCount(counts.blocking) ||
+        positiveCount(counts.important) ||
+        positiveCount(counts.suggestions) ||
+        positiveCount(counts.suggestion);
+}
+
+// ── gh-1350 census cross-check (review_verdict_rules.md enforcement) ────────
+//
+// The rules promise: "The machine also cross-checks the counter against
+// your inline comments ... before honoring a blocking-0 approval." Nothing
+// enforced it — an agent could post a 🚨 BLOCKING thread while reporting
+// `issueCounts.blocking: 0` and the approval flowed through. The posted
+// severity IS the structured JSON field (machine-stamped since this step),
+// so the cross-check reads `inlineComments[].severity` only — free-form
+// comment prose is never the protocol (same doctrine as the verdict
+// records).
+
+function severityIsBlocking(severity) {
+    return String(severity || '').trim().toUpperCase() === 'BLOCKING';
+}
+
+function postedBlockingSeverity(reviewData) {
+    var inline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
+    for (var i = 0; i < inline.length; i++) {
+        if (severityIsBlocking((inline[i] || {}).severity)) return true;
+    }
+    return false;
+}
+
+function unchangedVerdict(recommendation) {
+    return { recommendation: recommendation, overridden: false };
+}
+
+/**
+ * The census cross-check (pure): any posted inline severity BLOCKING with
+ * `issueCounts.blocking == 0` overrides an approving verdict to
+ * REQUEST_CHANGES. A census that already counts the thread, a
+ * non-approving verdict, and reviews without posted BLOCKING severities
+ * pass through unchanged.
+ */
+function censusCrossCheckOverride(reviewData, recommendation, issueCounts) {
+    if (!postedBlockingSeverity(reviewData)) return unchangedVerdict(recommendation);
+    if (reviewVerdicts.censusCount(issueCounts && issueCounts.blocking) > 0) return unchangedVerdict(recommendation);
+    if (recommendation !== 'APPROVE') return unchangedVerdict(recommendation);
+    return { recommendation: 'REQUEST_CHANGES', overridden: true };
+}
+
+function buildCensusCrossCheckWarning(issueCounts) {
+    return '🚨 Census cross-check (gh-1350): a posted inline comment carries severity BLOCKING ' +
+        'but issueCounts.blocking=' + orZero(issueCounts && issueCounts.blocking) +
+        ' — overriding the verdict to REQUEST_CHANGES. Keep issueCounts accurate: ' +
+        'it is the machine source of truth, not prose.';
 }
 
 function hasAllowApproveWithSuggestions(customParams) {
@@ -2338,6 +2429,16 @@ function action(params) {
 
         var recommendation = normalizeRecommendation(reviewData);
         var issueCounts = normalizeIssueCounts(reviewData);
+
+        // gh-1350 census cross-check (review_verdict_rules.md enforcement):
+        // a posted inline BLOCKING severity with an empty blocking census
+        // cannot ride an approval — the verdict flips to REQUEST_CHANGES.
+        var censusCrossCheck = censusCrossCheckOverride(reviewData, recommendation, issueCounts);
+        recommendation = censusCrossCheck.recommendation;
+        if (censusCrossCheck.overridden) {
+            console.warn(buildCensusCrossCheckWarning(issueCounts));
+        }
+
         var hasOpenIssues = hasAnyOpenIssue(issueCounts);
         var allowApproveWithSuggestions = hasAllowApproveWithSuggestions(ctx.customParams);
         var forceApproveDueToThreadLimit = probeThreadLimitOverride(
@@ -2419,6 +2520,9 @@ if (typeof module !== 'undefined' && module.exports) {
         normalizeRecommendation,
         normalizeIssueCounts,
         hasAnyOpenIssue,
+        censusCrossCheckOverride,
+        buildCensusCrossCheckWarning,
+        machineStampedInlineText,
         hasAllowApproveWithSuggestions,
         decideApproval,
         isApprovalOverridden,
