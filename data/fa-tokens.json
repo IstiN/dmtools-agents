@@ -2017,6 +2017,15 @@
       "total": 732080,
       "cacheRead": 12154816,
       "model": "glm-5.3-flash"
+    },
+    {
+      "leg": "review",
+      "at": "2026-11-04T04:59:58Z",
+      "prompt": 307961,
+      "completion": 38253,
+      "total": 346214,
+      "cacheRead": 4886720,
+      "model": "glm-5.3-flash"
     }
   ]
 }
