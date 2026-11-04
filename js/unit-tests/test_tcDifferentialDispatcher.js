@@ -761,12 +761,20 @@ suite('tcDifferentialDispatcher: gh-1331 alternation suppression', function() {
         var cmds = run.shell.calls.map(function(c) { return c.command; });
         assert.contains(cmds.join('\n'), 'pytest testing/tests/TS-8/test.py');
         // …but the earned bounce is suppressed: the bug is NOT moved
-        assert.equal(run.result.action, 'maintained');
+        assert.equal(run.result.action, 'suppressed');
         assert.deepEqual(run.jira.moves, [], 'no unbounded ping-pong — the second trade never re-bounces');
-        // the suppression routes as maintenance with a named reason
-        assert.deepEqual(run.result.maintainedTestCases, ['TS-8']);
+        // the suppression has its OWN route bucket — it is NOT a maintained
+        // (red-on-old) finding, the report must not claim the rerun failed
+        assert.deepEqual(run.result.suppressedTestCases, ['TS-8']);
+        assert.deepEqual(run.result.maintainedTestCases, []);
+        // the fresh pair conflict is visible in the payload (gh-1331 review)
+        assert.deepEqual(run.result.conflicts, ['TS-7|TS-8']);
         var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
         assert.contains(body, 'suppressed-contradictory-pair');
+        assert.contains(body, 'loop-stop anchor owns it');
+        // a suppressed bounce is the GREEN-on-old case — the maintained
+        // section's "it fails there too" claim must NOT render (gh-1331 review)
+        assert.notContains(body, 'fails there too');
         // ONE async escalation for the pair, with both pinned behaviors
         var escalations = run.jira.comments.map(function(c) { return c.comment; })
             .filter(function(b) { return b.indexOf('gh-1331') !== -1 && b.indexOf('contradictory-or-flaky') !== -1; });
@@ -775,6 +783,32 @@ suite('tcDifferentialDispatcher: gh-1331 alternation suppression', function() {
         assert.contains(escalations[0], 'TS-8');
         // the pair record persists for the next lap
         assert.equal(run.latestRegistry.pairs['TS-7|TS-8'].state, 'contradictory-or-flaky');
+    });
+
+    test('AC: a bounce-cap escalation stays an escalation under an open pair conflict (mirrors the automation leg)', function() {
+        // the trading pair history PLUS a TS-7 registry already at the cap:
+        // the dispatcher verdict for TS-7 is ESCALATE, not bounce.
+        var r = tcRunRegistry.emptyRegistry();
+        r = tcRunRegistry.recordGreen(r, 'TS-7', { sha: 'facade12345', envFingerprint: 'env-1', role: 'regression-guard', at: '2026-01-01T00:00:00.000Z' });
+        r = tcRunRegistry.recordGreen(r, 'TS-8', { sha: 'facade12345', envFingerprint: 'env-1', role: 'regression-guard', at: '2026-01-01T00:00:00.000Z' });
+        r = tcRunRegistry.recordFailure(r, 'TS-7', { sha: 'cafed00dbee', at: '2026-01-02T00:00:00.000Z', verdict: 'bounce', role: 'regression-guard' });
+        r = tcRunRegistry.recordFailure(r, 'TS-7', { sha: 'cafed00dbee', at: '2026-01-02T00:00:01.000Z', verdict: 'bounce', role: 'regression-guard' });
+        r = tcRunRegistry.recordGreen(r, 'TS-8', { sha: 'cafed00dbee', envFingerprint: 'env-1', role: 'regression-guard', at: '2026-01-03T00:00:00.000Z' });
+        r = tcRunRegistry.recordFailure(r, 'TS-8', { sha: 'befcafe01', at: '2026-01-04T00:00:00.000Z', verdict: 'bounce', role: 'regression-guard' });
+        var comments = [{ body: tcRunRegistry.buildRegistryMarker(r), user: { login: 'ai-teammate' } }];
+        comments.push(Object.assign({}, ALLOWED_AUTHOR, {
+            body: ledgerMarkerWith([parkedFinding('TS-7', { sha: 'cafed00dbee' })])
+        }));
+        var run = runActionWithComments(fakeShell({}), comments);
+
+        assert.equal(run.result.action, 'escalated', 'the cap escalation is not converted into a suppression');
+        assert.deepEqual(run.result.escalatedTestCases, ['TS-7']);
+        assert.deepEqual(run.result.suppressedTestCases, [], 'no suppression — the escalation passes through ungated');
+        assert.deepEqual(run.result.conflicts, [], 'the escalation lap mirrors the automation leg — no pair marking there');
+        assert.deepEqual(run.jira.moves, [], 'an escalation never moves the bug');
+        var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
+        assert.contains(body, 'Bounce cap reached');
+        assert.notContains(body, 'suppressed-contradictory-pair');
     });
 
     test('without a trade history the dispatcher bounce is untouched', function() {

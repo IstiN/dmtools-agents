@@ -990,12 +990,12 @@ function guardFailedResult(extra) {
 }
 
 /** The file_read mock for triageModule: the result JSON + linked TC list. */
-function triageFileReader(resultEntries, linkedTestCases) {
+function triageFileReader(resultEntries, linkedTestCases, overall) {
     return function(fpath) {
         if (fpath.path === 'outputs/story_test_automation_result.json') {
             return JSON.stringify({
                 storyKey: 'BUG-150',
-                overall: 'failed',
+                overall: overall || 'failed',
                 summary: 'guard red',
                 results: resultEntries
             });
@@ -1030,7 +1030,8 @@ function triageModule(opts) {
     var module = loadPostStoryTestAutomationResults({
         file_read: triageFileReader(
             opts.resultEntries || [opts.resultEntry || guardFailedResult()],
-            opts.linkedTestCases || []),
+            opts.linkedTestCases || [],
+            opts.overall),
         cli_execute_command: opts.cli || function(o) {
             if (o.command === 'git branch --show-current') return 'test/BUG-150';
             if (o.command === 'git rev-parse HEAD') return 'sha-new';
@@ -1475,6 +1476,10 @@ var gh1331Registry = loadModule('js/common/tcRunRegistry.js', makeRequire({
 var gh1331Ledger = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
     './reviewVerdicts.js': gh1331ReviewVerdicts
 }));
+var gh1331Alternation = loadModule('js/common/tcAlternation.js', makeRequire({
+    './tcRunRegistry.js': gh1331Registry,
+    './tcMaintenanceLedger.js': gh1331Ledger
+}));
 
 function gh1331At(n) {
     return '2026-01-0' + n + 'T00:00:00.000Z';
@@ -1775,5 +1780,75 @@ suite('postStoryTestAutomationResults: gh-1331 alternation — the flip suppress
         assert.deepEqual(result.failedTestCases, ['TS-152']);
         assert.ok(t.statusMoves.some(function(m) { return m.key === 'BUG-150' && m.statusName === 'Ready For Development'; }));
         assert.deepEqual(gh1331PostedRegistry(t).pairs, {}, 'no pair record survives the stable green');
+    });
+});
+
+// ── gh-1331 rework: the all-green resolution lap still books its greens ──────
+
+/** A quiet cli for the green laps: the build sha is the only answer needed
+ *  (no branch → publishBranchAndPr falls through without PR work). */
+function gh1331GreenCli(opts) {
+    return function(o) {
+        if (o.command === 'git rev-parse HEAD') return opts.buildSha;
+        return '';
+    };
+}
+
+/**
+ * A trading history WITH the pair marked: lap1 green/green on sha-green,
+ * lap2 TS-152 red (earned bounce, anchor sha-green) + TS-153 green, then the
+ * pair record. The canonical resolution lap that follows is ALL-GREEN.
+ */
+function gh1331MarkedTradingPair() {
+    var r = gh1331Registry.emptyRegistry();
+    r = gh1331GreenBoth(r, gh1331At(1));
+    r = gh1331Lap(r, 2, 'TS-152', 'TS-153', 'sha-new');
+    var marked = gh1331Alternation.recordConflicts(
+        r, gh1331Alternation.scanAlternations(r), gh1331At(3), function() { return null; });
+    return marked.registry;
+}
+
+suite('postStoryTestAutomationResults: gh-1331 rework — the all-green resolution lap books its greens', function() {
+
+    test('AC: an all-green bug lap reconciles a marked pair and posts the registry marker', function() {
+        var t = gh1331Triage({
+            comments: [gh1331Comment(gh1331Registry.buildRegistryMarker(gh1331MarkedTradingPair()))],
+            buildSha: 'sha-fix',
+            overall: 'passed',
+            cli: gh1331GreenCli({ buildSha: 'sha-fix' }),
+            resultEntries: [gh1331PassedEntry('TS-152'), gh1331PassedEntry('TS-153')]
+        });
+        var result = t.run();
+        assert.equal(result.success, true);
+        var posted = gh1331PostedRegistry(t);
+        assert.ok(posted, 'the all-green lap posts the registry marker — the resolution must be persisted');
+        assert.equal(posted.pairs['TS-152|TS-153'], undefined, 'the pair record is reconciled — normal triage re-enables');
+        assert.equal(posted.tcs['TS-152'].lastGreenSha, 'sha-fix', 'the resolution greens are recorded');
+        assert.ok(posted.tcs['TS-152'].runs.some(function(run) { return run.sha === 'sha-fix' && run.s === 'green'; }),
+            'the run window carries the resolution lap');
+    });
+
+    test('AC: after the all-green resolution the next red earns its bounce (no stale suppression)', function() {
+        var resolution = gh1331Triage({
+            comments: [gh1331Comment(gh1331Registry.buildRegistryMarker(gh1331MarkedTradingPair()))],
+            buildSha: 'sha-fix',
+            overall: 'passed',
+            cli: gh1331GreenCli({ buildSha: 'sha-fix' }),
+            resultEntries: [gh1331PassedEntry('TS-152'), gh1331PassedEntry('TS-153')]
+        });
+        resolution.run();
+        var posted = gh1331PostedRegistry(resolution);
+        assert.ok(posted, 'the resolution lap posts the registry marker');
+        // the NEXT lap reads the resolution state back from the marker
+        var t = gh1331Triage({
+            comments: [gh1331Comment(gh1331Registry.buildRegistryMarker(posted))],
+            buildSha: 'sha-next',
+            resultEntries: [gh1331PassedEntry('TS-153'), gh1331FailedEntry('TS-152')]
+        });
+        var result = t.run();
+        assert.equal(result.status, 'failed', 'a fresh regression after the resolution earns its bounce');
+        assert.deepEqual(result.failedTestCases, ['TS-152']);
+        assert.ok(t.statusMoves.some(function(m) { return m.key === 'BUG-150' && m.statusName === 'Ready For Development'; }),
+            'no stale contradictory-pair suppression — the bug returns to development');
     });
 });
