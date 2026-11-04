@@ -1047,23 +1047,48 @@ function stampVerdictRecord(scm, prNumber, headSha, isApproved, recommendation, 
 // re-introduce their identity instead of minting duplicate threads.
 
 /**
+ * The registry claim is the REVIEWER's claim text. The gh-1053/gh-1334
+ * demotion appends its confirm-note and provenance marker after a
+ * '\n---\n' separator — machine annotation, not reviewer prose. Kept in
+ * the claim it would dilute cross-round similarity (a cited re-raise of a
+ * demoted finding could fall below the candidate bar — the amnesia loop
+ * gh-1334 closes), so the machine-appended tail is stripped here.
+ *
+ * The cut is at the tail's exact head (reviewSpecClaims.DEMOTION_NOTE_HEAD,
+ * joined by the '\n' separator downgradeBody uses) — never at the generic
+ * '\n---\n' separator: a reviewer-authored claim that legitimately contains
+ * a markdown horizontal rule would lose everything after the rule, and
+ * cross-round similarity would run on truncated text.
+ */
+var DEMOTION_TAIL_SEPARATOR = '\n' + reviewSpecClaims.DEMOTION_NOTE_HEAD;
+
+function registryClaimOf(claim) {
+    var text = String(claim || '');
+    var cut = text.indexOf(DEMOTION_TAIL_SEPARATOR);
+    return cut === -1 ? text : text.substring(0, cut);
+}
+
+/**
  * The round's findings in registry input shape: file/claim/severity/line
  * from inlineComments, with the claim resolved through the same path the
  * poster uses (inline body or the referenced comment file). Findings without
  * a usable claim are skipped — an identity needs an assertable defect.
+ * gh-1334: a demoted entry carries its provenance onto the finding so the
+ * registry identity records it (re-elevation + escalation packets).
  */
 function findingsFromReviewData(reviewData, ticketKey, workingDir) {
     var inline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
     var findings = [];
     inline.forEach(function(inlineComment) {
         var file = inlineTargetOf(inlineComment);
-        var claim = resolveInlineComment(inlineComment, ticketKey, workingDir);
+        var claim = registryClaimOf(resolveInlineComment(inlineComment, ticketKey, workingDir));
         if (!file || !claim || !String(claim).trim()) return;
         findings.push({
             file: file,
             claim: String(claim),
             severity: inlineComment.severity,
-            line: inlineComment.line
+            line: inlineComment.line,
+            demotion: inlineComment.demotion || null
         });
     });
     return findings;
@@ -1520,6 +1545,38 @@ function readFolderPRInfo(inputFolder) {
     }
 }
 
+// The ticket-context files the spec-claim verification matches against
+// (gh-1334) — the ticket text the review run already has in input/.
+var TICKET_CLAIM_FILES = ['ticket.md', 'request.md'];
+
+function readInputFileOrNull(path) {
+    try {
+        var content = file_read({ path: path });
+        return (content && String(content).trim()) ? String(content) : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * gh-1334: the ticket text an uncited spec claim is verified against — the
+ * first non-empty ticket.md/request.md along the input-folder candidate
+ * chain (the runtime-passed folder, the Java-derived name, the legacy
+ * input/<ticketKey>). Null when the run has no ticket text: verification
+ * degrades to inconclusive and the demotion behaves exactly as before
+ * (never demote harder than today).
+ */
+function readTicketClaimSource(inputFolderPath, ticketKey) {
+    var folders = ticketKeyShapes.inputFolderCandidates(inputFolderPath, ticketKey);
+    for (var f = 0; f < TICKET_CLAIM_FILES.length; f++) {
+        for (var i = 0; i < folders.length; i++) {
+            var text = readInputFileOrNull(folders[i] + '/' + TICKET_CLAIM_FILES[f]);
+            if (text) return { file: TICKET_CLAIM_FILES[f], text: text };
+        }
+    }
+    return null;
+}
+
 // First pr_info.md along the folder chain: the folder the runtime passed, the Java runtime's
 // input/<inputFolderNameFor(key)>, then the legacy input/<ticketKey> (Dart and older runtimes).
 function readPRInfoMarkdown(inputFolderPath, ticketKey) {
@@ -1630,16 +1687,27 @@ function readOrResumeReviewData(ticketKey, workingDir) {
  * gh-1053: downgrade BLOCKING findings whose core claim is an uncited
  * external-spec assertion BEFORE anything derives verdicts, census, or
  * posted bodies from the review data (see js/common/reviewSpecClaims.js).
+ * gh-1334: the demotion path first verifies the claim against the ticket
+ * text the review run already has (input/<folder>/ticket.md, falling back
+ * to request.md along the input-folder candidate chain) — a verifiably
+ * present requirement keeps BLOCKING force with the citation auto-appended;
+ * every remaining demotion stamps the provenance marker.
  * File-referenced comment bodies are rewritten via writeFile so the posted
  * thread no longer carries the 🚨 marker; every downgrade is logged.
  */
-function applySpecClaimDowngrades(reviewData, ticketKey, workingDir) {
+function applySpecClaimDowngrades(reviewData, ticketKey, workingDir, inputFolderPath) {
     try {
+        var ticketSource = readTicketClaimSource(inputFolderPath, ticketKey);
+        var opts = ticketSource ? { ticketText: ticketSource.text, ticketFile: ticketSource.file } : {};
         var result = reviewSpecClaims.sanitizeReviewData(reviewData, function (path) {
             return readMarkdownFile(path, ticketKey, workingDir);
-        });
+        }, opts);
         result.rewrites.forEach(function (rw) {
             writeFile(rw.path, rw.content);
+        });
+        result.citations.forEach(function (citation) {
+            console.log('✅ gh-1334 spec-claim verified against the ticket: ' + citation.path +
+                ' kept BLOCKING, citation auto-appended (' + citation.citation + ')');
         });
         result.notes.forEach(function (note) {
             console.warn('⚠️ gh-1053 spec-claim guard:', note);
@@ -1647,7 +1715,7 @@ function applySpecClaimDowngrades(reviewData, ticketKey, workingDir) {
         return result;
     } catch (e) {
         console.warn('⚠️ gh-1053 spec-claim guard failed (continuing un-sanitized):', e.message || e);
-        return { downgrades: 0, notes: [], rewrites: [] };
+        return { downgrades: 0, notes: [], rewrites: [], demotions: [], citations: [] };
     }
 }
 
@@ -2251,7 +2319,10 @@ function action(params) {
 
         // gh-1053: uncited external-spec BLOCKING claims are downgraded to
         // non-blocking questions before they can drive the verdict/census.
-        applySpecClaimDowngrades(reviewData, ctx.ticketKey, ctx.workingDir);
+        // gh-1334: an uncited claim is first verified against the ticket
+        // text (input/<folder>/ticket.md | request.md) — a verifiably true
+        // claim keeps BLOCKING force with the citation auto-appended.
+        applySpecClaimDowngrades(reviewData, ctx.ticketKey, ctx.workingDir, params.inputFolderPath);
 
         console.log('Review recommendation:', reviewData.recommendation);
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
@@ -2377,6 +2448,7 @@ if (typeof module !== 'undefined' && module.exports) {
         getGitHubRepoInfo,
         searchMissingPRNumber,
         ticketKeyOfParams,
-        applySpecClaimDowngrades
+        applySpecClaimDowngrades,
+        readTicketClaimSource
     };
 }

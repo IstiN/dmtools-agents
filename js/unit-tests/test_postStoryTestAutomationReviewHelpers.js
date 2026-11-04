@@ -11,6 +11,17 @@ function loadReviewHelpers() {
     );
 }
 
+// reviewSpecClaims requires ./findingRegistry.js (gh-1334) — resolve it the
+// same way the shared loaders in test_postPRReviewComments.js do.
+function loadSpecClaimsWithRegistry() {
+    return loadModule('js/common/reviewSpecClaims.js', makeRequire({
+        './findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': reviewVerdictsReal()
+        }))
+    }), {});
+}
+
 function loadPrReviewComments() {
     var commentMarkupModule = loadModule('js/common/commentMarkup.js',
         makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
@@ -31,7 +42,7 @@ function loadPrReviewComments() {
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
-        './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
+        './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js', makeRequire({}), {}),
     }), {});
 }

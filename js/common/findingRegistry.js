@@ -408,11 +408,25 @@ function reanchorLine(item, finding) {
     if (line) item.lastLine = line;
 }
 
+// gh-1334: the spec-claim guard stamps demotions ({reason, claimMatchedTicket}).
+// The first demotion provenance sticks — the identity is known demoted-from-
+// BLOCKING from then on, so later rounds re-elevate it WITH a citation
+// instead of treating it as news.
+function recordDemotionProvenance(item, finding, round) {
+    if (!finding || !finding.demotion || item.demotion) return;
+    item.demotion = {
+        reason: String(finding.demotion.reason || 'missing-citation'),
+        claimMatchedTicket: String(finding.demotion.claimMatchedTicket || 'inconclusive')
+    };
+    item.history.push(historyEntry(round, 'demotion-recorded'));
+}
+
 // Merges a re-raised/confirmed finding into an open identity: severity can
 // only escalate (invariant 2), a later-round re-raise of an open identity is
 // the re-introduced transition.
 function mergeIntoItem(item, finding, round, at, note) {
     var via = note || 're-raise';
+    recordDemotionProvenance(item, finding, round);
     escalateSeverity(item, finding, round);
     if (round > (item.raisedRound || 0) && item.status === STATUS_OPEN) {
         item.status = STATUS_REINTRODUCED;
@@ -442,6 +456,10 @@ function createIdentity(registry, finding, round, at) {
         fixHunk: null,
         withdrawReason: null,
         resolvedAt: null,
+        demotion: (finding && finding.demotion) ? {
+            reason: String(finding.demotion.reason || 'missing-citation'),
+            claimMatchedTicket: String(finding.demotion.claimMatchedTicket || 'inconclusive')
+        } : null,
         history: [historyEntry(round, 'raised')]
     };
     registry.items.push(item);
@@ -553,6 +571,10 @@ function queueCandidate(reg, f, ranked, round, at) {
         reg.pending.push({
             file: fileOf(f), claim: claim, severity: severityClassOf(f.severity),
             line: lineOf(f), similarity: r.similarity, proposedFor: r.item.n,
+            demotion: (f && f.demotion) ? {
+                reason: String(f.demotion.reason || 'missing-citation'),
+                claimMatchedTicket: String(f.demotion.claimMatchedTicket || 'inconclusive')
+            } : null,
             round: round, at: at
         });
     });
@@ -819,6 +841,25 @@ function blockingWithdrawals(items) {
     });
 }
 
+// gh-1334: OPEN identities carrying demotion provenance — the owner sees the
+// re-elevation path alongside the per-round new-identity counts. Resolved
+// identities (fixed/withdrawn) are excluded: "(gh-1334; a cited re-raise
+// re-elevates it)" is an instruction that no longer applies to a resolved
+// item, and this is the same open-status space buildFindingsInjection
+// renders its demotion guidance from — the two renders agree.
+function demotionRecords(items) {
+    return items.filter(function(i) {
+        return !!i.demotion && isOpenStatus(i.status);
+    }).map(function(i) {
+        return {
+            n: i.n, id: i.id, file: i.file, severity: i.severity, claim: i.claim,
+            reason: i.demotion.reason || 'missing-citation',
+            claimMatchedTicket: i.demotion.claimMatchedTicket || 'inconclusive',
+            status: i.status
+        };
+    });
+}
+
 function buildEscalationPacket(registry) {
     var rounds = arrayOrEmpty(registry && registry.rounds);
     var items = arrayOrEmpty(registry && registry.items);
@@ -826,7 +867,8 @@ function buildEscalationPacket(registry) {
         rounds: rounds.map(function(r) {
             return { round: r.round, newIdentities: r.newIdentities || 0 };
         }),
-        blockingWithdrawals: blockingWithdrawals(items)
+        blockingWithdrawals: blockingWithdrawals(items),
+        demotions: demotionRecords(items)
     };
 }
 
@@ -844,6 +886,11 @@ function buildEscalationPacketComment(registry) {
         lines.push('\uD83D\uDEA8 F' + w.n + ' (' + w.severity + ') ' + w.file +
             ' \u2014 withdrawn: "' + reviewVerdicts.markerSafe(w.reason) + '" (no fixing hunk cited)');
     });
+    packet.demotions.forEach(function(d) {
+        lines.push('\u26A0\uFE0F F' + d.n + ' (' + d.file + ') demoted from BLOCKING \u2014 ' +
+            d.reason + ', claimMatchedTicket: ' + d.claimMatchedTicket +
+            ' (gh-1334; a cited re-raise re-elevates it)');
+    });
     return lines.join('\n');
 }
 
@@ -855,52 +902,87 @@ function buildEscalationPacketComment(registry) {
  * confirmation, and the structured answer contract. Null when there is
  * nothing open and nothing pending — a resolved registry injects nothing.
  */
+/** The protocol header of the injection (what the reviewer must do per row). */
+function injectionHeaderLines() {
+    return [
+        '## Previously raised findings (review-round registry)',
+        '',
+        'These defects were raised on earlier review rounds of this PR. For each finding below: ' +
+            'verify fixed (cite the fixing hunk), withdraw (reason required), or mark re-introduced. ' +
+            'New claims need new evidence — a claim already on this list is answered, not re-raised.',
+        '',
+        '| id | status | severity | file | claim |',
+        '|----|--------|----------|------|-------|'
+    ];
+}
+
+/** One markdown table row per open identity (stable F-labels). */
+function findingTableRows(items) {
+    return items.map(function(i) {
+        return '| F' + i.n + ' | ' + i.status + ' | ' + i.severity + ' | ' + i.file + ' | ' + i.claim + ' |';
+    });
+}
+
+// gh-1334: re-elevation guidance under the table — one block per demoted
+// identity; the reviewer closes the gh-1332 amnesia loop by re-raising WITH
+// a citation and confirming "same as F<n>" (merges only escalate).
+function demotionGuidanceLines(items) {
+    var lines = [];
+    items.forEach(function(i) {
+        if (!i.demotion) return;
+        lines.push('');
+        lines.push('- F' + i.n + ' was demoted from BLOCKING (' + (i.demotion.reason || 'missing-citation') +
+            ', claimMatchedTicket: ' + (i.demotion.claimMatchedTicket || 'inconclusive') + '). If your new finding ' +
+            'is this same defect, locate the requirement in the ticket and cite it (e.g. `ticket.md:3`), then confirm ' +
+            '"same as F' + i.n + '" \u2014 a confirmed merge re-elevates the identity to BLOCKING (merges only escalate).');
+    });
+    return lines;
+}
+
+/** One line per pending candidate awaiting one-word confirmation. */
+function pendingCandidateLines(pending) {
+    return pending.map(function(c) {
+        return '- Round ' + c.round + ' finding "' + c.claim + '" (' + c.file +
+            (c.line ? ':' + c.line : '') + ') is possibly same as F' + c.proposedFor +
+            ' \u2014 confirm ("same as F' + c.proposedFor + '") or mark it "new".';
+    });
+}
+
+/** The structured findingReview answer contract the next round must follow. */
+function findingAnswerContractLines() {
+    return [
+        '',
+        '### How to answer',
+        '',
+        'Add a `findingReview` block to `outputs/pr_review.json` (alongside `inlineComments`):',
+        '',
+        '```json',
+        '{"findingReview": {',
+        '  "dispositions": [',
+        '    {"n": 1, "status": "fixed", "hunk": "<file:lines \\u2014 the fixing hunk>"},',
+        '    {"n": 2, "status": "withdrawn", "reason": "<why this is not a defect>"},',
+        '    {"n": 3, "status": "re-introduced"}',
+        '  ],',
+        '  "confirmations": [',
+        '    {"proposedFor": 1, "same": true}',
+        '  ]',
+        '}}',
+        '```',
+        '',
+        'Unconfirmed candidates become new identities (the merge bias is confirm-only); ' +
+            'a genuinely new finding on a resolved item is expected to be raised again with new evidence.'
+    ];
+}
+
 function buildFindingsInjection(registry) {
     var open = openItems(registry);
     var pending = (registry && Array.isArray(registry.pending)) ? registry.pending : [];
     if (!open.length && !pending.length) return null;
-    var lines = [];
-    lines.push('## Previously raised findings (review-round registry)');
-    lines.push('');
-    lines.push('These defects were raised on earlier review rounds of this PR. For each finding below: ' +
-        'verify fixed (cite the fixing hunk), withdraw (reason required), or mark re-introduced. ' +
-        'New claims need new evidence — a claim already on this list is answered, not re-raised.');
-    lines.push('');
-    lines.push('| id | status | severity | file | claim |');
-    lines.push('|----|--------|----------|------|-------|');
-    open.forEach(function(i) {
-        lines.push('| F' + i.n + ' | ' + i.status + ' | ' + i.severity + ' | ' + i.file + ' | ' + i.claim + ' |');
-    });
+    var lines = [].concat(injectionHeaderLines(), findingTableRows(open), demotionGuidanceLines(open));
     if (pending.length) {
-        lines.push('');
-        lines.push('### Candidates pending confirmation');
-        pending.forEach(function(c) {
-            lines.push('- Round ' + c.round + ' finding "' + c.claim + '" (' + c.file +
-                (c.line ? ':' + c.line : '') + ') is possibly same as F' + c.proposedFor +
-                ' \u2014 confirm ("same as F' + c.proposedFor + '") or mark it "new".');
-        });
+        lines = lines.concat(['', '### Candidates pending confirmation'], pendingCandidateLines(pending));
     }
-    lines.push('');
-    lines.push('### How to answer');
-    lines.push('');
-    lines.push('Add a `findingReview` block to `outputs/pr_review.json` (alongside `inlineComments`):');
-    lines.push('');
-    lines.push('```json');
-    lines.push('{"findingReview": {');
-    lines.push('  "dispositions": [');
-    lines.push('    {"n": 1, "status": "fixed", "hunk": "<file:lines \\u2014 the fixing hunk>"},');
-    lines.push('    {"n": 2, "status": "withdrawn", "reason": "<why this is not a defect>"},');
-    lines.push('    {"n": 3, "status": "re-introduced"}');
-    lines.push('  ],');
-    lines.push('  "confirmations": [');
-    lines.push('    {"proposedFor": 1, "same": true}');
-    lines.push('  ]');
-    lines.push('}}');
-    lines.push('```');
-    lines.push('');
-    lines.push('Unconfirmed candidates become new identities (the merge bias is confirm-only); ' +
-        'a genuinely new finding on a resolved item is expected to be raised again with new evidence.');
-    return lines.join('\n');
+    return lines.concat(findingAnswerContractLines()).join('\n');
 }
 
 if (typeof module !== 'undefined' && module.exports) {

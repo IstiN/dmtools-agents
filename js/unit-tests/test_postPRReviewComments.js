@@ -165,6 +165,20 @@ function prReviewOutputFiles(fileReadMock) {
 }
 
 /**
+ * Shared loader for js/common/reviewSpecClaims.js — the module now requires
+ * ./findingRegistry.js (gh-1334 claim normalization in the registry's own
+ * style), so every map entry resolves that collaborator the same way.
+ */
+function loadSpecClaimsWithRegistry() {
+    return loadModule('js/common/reviewSpecClaims.js', makeRequire({
+        './findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewVerdicts.js': reviewVerdictsReal()
+        }))
+    }), {});
+}
+
+/**
  * Shared require map for loading js/postPRReviewComments.js in tests — the
  * real module wiring with every common/* collaborator resolved, including
  * the gh-1053 reviewSpecClaims mapping (previously duplicated inline in
@@ -189,7 +203,7 @@ function prReviewRequireMap(overrides) {
             './machineAuthor.js': machineAuthorReal(),
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
         }), {}),
-        './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
+        './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
     };
     return Object.assign(map, overrides || {});
@@ -486,7 +500,7 @@ suite('postPRReviewComments', function() {
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
                     './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
-                    './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
+                    './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
                 mergedMocks
@@ -740,7 +754,7 @@ suite('postPRReviewComments', function() {
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
                     './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
-                    './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
+                    './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
                 formalMocks
@@ -1053,7 +1067,7 @@ suite('postPRReviewComments', function() {
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
-            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
+            './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
                 {
@@ -1436,7 +1450,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
-            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
+            './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
         merged
@@ -2136,7 +2150,7 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
                 './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
                     makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
             }), {}),
-            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
+            './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }), {});
 
@@ -2227,7 +2241,7 @@ function gh926ResumeRequire(opts) {
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
-        './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
+        './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
     });
 }
@@ -2563,7 +2577,7 @@ function loadForPrSearch(foundPr) {
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
-            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {}),
+            './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
         {
@@ -3130,5 +3144,171 @@ suite('postPRReviewComments — gh-1332 finding-identity registry', function() {
                 });
             assert.equal(outcome, null);
         });
+    });
+});
+
+suite('postPRReviewComments — gh-1334 ticket-grounded spec-claim verification wiring', function () {
+    var TICKET_MD = [
+        '# Login service requirements',
+        '',
+        'Invalid login attempts must return HTTP 401 with a structured error body.',
+        ''
+    ].join('\n');
+
+    function trueClaimReview() {
+        return {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/auth.js', line: 12, severity: 'BLOCKING',
+                  body: '🚨 BLOCKING: According to the ticket, invalid login must return 401.' }
+            ]
+        };
+    }
+
+    // Serves only the exact paths in the map; everything else misses like file_read.
+    function mapFileRead(fileMap) {
+        return function (args) {
+            var p = args && (args.path || args);
+            if (fileMap[p] !== undefined) return fileMap[p];
+            if (p && p.indexOf('.dmtools/config') !== -1) return null;
+            return null;
+        };
+    }
+
+    function loadWithModuleFileRead(fileMap, writes) {
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: mapFileRead(fileMap) });
+        return loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles
+            })),
+            {
+                file_read: mapFileRead(fileMap),
+                file_write: function (opts) { writes.push(opts); }
+            }
+        );
+    }
+
+    test('applySpecClaimDowngrades reads input/<folder>/ticket.md and keeps a verified claim BLOCKING', function () {
+        var writes = [];
+        var mod = loadWithModuleFileRead({ 'input/TICKET-1/ticket.md': TICKET_MD }, writes);
+        var review = trueClaimReview();
+        var result = mod.applySpecClaimDowngrades(review, 'TICKET-1', null, 'input/TICKET-1');
+        assert.equal(result.downgrades, 0, 'no demotion — requirement verifiably in the ticket');
+        assert.equal(result.citations.length, 1);
+        assert.equal(result.citations[0].citation, 'ticket.md:3');
+        assert.equal(review.inlineComments[0].severity, 'BLOCKING');
+        assert.ok(review.inlineComments[0].body.indexOf('ticket.md:3') !== -1, 'citation auto-appended');
+        assert.equal(review.issueCounts.blocking, 1, 'census untouched');
+        assert.equal(review.recommendation, 'REQUEST_CHANGES');
+    });
+
+    test('falls back to request.md when the folder holds no ticket.md', function () {
+        var writes = [];
+        var mod = loadWithModuleFileRead({ 'input/TICKET-1/request.md': TICKET_MD }, writes);
+        var result = mod.applySpecClaimDowngrades(trueClaimReview(), 'TICKET-1', null, 'input/TICKET-1');
+        assert.equal(result.downgrades, 0);
+        assert.equal(result.citations[0].citation, 'request.md:3');
+    });
+
+    test('no ticket text anywhere → today\'s demotion + inconclusive provenance', function () {
+        var writes = [];
+        var mod = loadWithModuleFileRead({}, writes);
+        var review = trueClaimReview();
+        var result = mod.applySpecClaimDowngrades(review, 'TICKET-1', null, 'input/TICKET-1');
+        assert.equal(result.downgrades, 1, 'ticket unavailable → demote as today');
+        assert.equal(result.demotions[0].claimMatchedTicket, 'inconclusive');
+        assert.ok(review.inlineComments[0].body.indexOf('dmtools:demoted-from-BLOCKING') !== -1);
+        assert.ok(review.inlineComments[0].demotion);
+    });
+
+    test('ticket.md is searched across the input-folder candidate chain', function () {
+        var writes = [];
+        // GitHub composite key: input/gh-5 is the Java-runtime folder name.
+        var mod = loadWithModuleFileRead({ 'input/gh-5/ticket.md': TICKET_MD }, writes);
+        var review = trueClaimReview();
+        var result = mod.applySpecClaimDowngrades(review, 'acme/widgets#5', null, null);
+        assert.equal(result.downgrades, 0);
+        assert.equal(result.citations[0].citation, 'ticket.md:3');
+    });
+
+    test('demotion provenance rides from the sanitized entry into the registry findings', function () {
+        var mod = loadWithModuleFileRead({}, []);
+        var reviewData = {
+            recommendation: 'APPROVE',
+            inlineComments: [
+                { path: 'src/env.js', line: 1, severity: 'IMPORTANT',
+                  demotion: { reason: 'missing-citation', claimMatchedTicket: 'no' },
+                  body: '🚨 BLOCKING: According to the ticket, audit logs must be kept for 7 years.\n' +
+                        '---\n⚠️ **Severity demoted: unverified external-spec claim (gh-1053)** — please confirm.\n' +
+                        '<!-- dmtools:demoted-from-BLOCKING {"reason":"missing-citation","claimMatchedTicket":"no"} -->'
+                }
+            ]
+        };
+        var findings = mod.findingsFromReviewData(reviewData, 'TICKET-1', null);
+        assert.equal(findings.length, 1);
+        assert.deepEqual(findings[0].demotion, { reason: 'missing-citation', claimMatchedTicket: 'no' },
+            'the registry item records the provenance');
+        assert.ok(findings[0].claim.indexOf('dmtools:demoted-from-BLOCKING') === -1,
+            'the machine marker is not part of the registry claim');
+        assert.ok(findings[0].claim.indexOf('Severity demoted') === -1,
+            'the machine confirm-note is not part of the registry claim');
+        assert.ok(findings[0].claim.indexOf('audit logs must be kept') !== -1,
+            'the reviewer\'s own claim text is preserved');
+    });
+
+    test('a clean claim keeps its full text as the registry claim', function () {
+        var mod = loadWithModuleFileRead({}, []);
+        var reviewData = {
+            recommendation: 'REQUEST_CHANGES',
+            inlineComments: [
+                { path: 'src/a.js', line: 2, severity: 'BLOCKING', body: 'null deref on empty input.' }
+            ]
+        };
+        var findings = mod.findingsFromReviewData(reviewData, 'TICKET-1', null);
+        assert.equal(findings[0].claim, 'null deref on empty input.');
+        assert.equal(findings[0].demotion, null);
+    });
+
+    test('a reviewer claim with a markdown horizontal rule keeps its full text (gh-1334 rework)', function () {
+        var mod = loadWithModuleFileRead({}, []);
+        var body = 'null deref on empty input.\n' +
+            '---\n' +
+            'Same defect hits the batch path for empty arrays.';
+        var reviewData = {
+            recommendation: 'REQUEST_CHANGES',
+            inlineComments: [
+                { path: 'src/a.js', line: 2, severity: 'BLOCKING', body: body }
+            ]
+        };
+        var findings = mod.findingsFromReviewData(reviewData, 'TICKET-1', null);
+        assert.equal(findings[0].claim, body,
+            'a reviewer-authored rule is prose — nothing after it is truncated');
+        assert.equal(findings[0].claim.indexOf('batch path for empty arrays') !== -1, true,
+            'the paragraph after the rule stays in the registry identity');
+    });
+
+    test('the machine demotion tail is cut exactly — prose before it stays intact (gh-1334 rework)', function () {
+        var mod = loadWithModuleFileRead({}, []);
+        var claim = 'According to the ticket, audit logs must be kept for 7 years.';
+        var reviewData = {
+            recommendation: 'APPROVE',
+            inlineComments: [
+                { path: 'src/env.js', line: 1, severity: 'IMPORTANT',
+                  demotion: { reason: 'missing-citation', claimMatchedTicket: 'no' },
+                  body: claim + '\n' +
+                        '---\n' +
+                        '\u26A0\uFE0F **Severity demoted: unverified external-spec claim (gh-1053)** \u2014 please confirm.\n' +
+                        '<!-- dmtools:demoted-from-BLOCKING {"reason":"missing-citation","claimMatchedTicket":"no"} -->'
+                }
+            ]
+        };
+        var findings = mod.findingsFromReviewData(reviewData, 'TICKET-1', null);
+        assert.equal(findings[0].claim, claim,
+            'the registry claim is exactly the reviewer text — no separator, no note, no marker');
+        assert.deepEqual(findings[0].demotion, { reason: 'missing-citation', claimMatchedTicket: 'no' });
     });
 });
