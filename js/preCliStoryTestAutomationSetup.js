@@ -16,6 +16,10 @@ var gh = require('./common/githubHelpers.js');
 const { STATUSES, resolveStatuses } = require('./config.js');
 var trackersModule = require('./common/trackers.js');
 var tcRoleStamp = require('./common/tcRoleStamp.js');
+// gh-1351 (hoisted, never lazy — the gh-823 pack-require rule): the review
+// policy config — resolved once here so a malformed config fails the leg at
+// start, and the resolved table is stamped into the rework run context.
+var reviewPolicyModule = require('./common/reviewPolicy.js');
 
 // Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
 // common/pullRequest.js once — this delegate keeps every local call site.
@@ -411,6 +415,11 @@ function resolveSetupContext(params) {
     var config = configLoader.loadProjectConfig(params.jobParams || params);
     var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     var customParams = (params.jobParams || params).customParams || {};
+    var tracker = trackersModule.createTracker(projectConfig, customParams);
+    // gh-1351: hard validation at leg start — a malformed reviewPolicy throws
+    // a ReviewPolicyValidationError HERE, before any side effect.
+    var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(
+        projectConfig, params.jobParams || params);
     return {
         actualParams: actualParams,
         folder: folder,
@@ -419,10 +428,30 @@ function resolveSetupContext(params) {
         projectConfig: projectConfig,
         testCaseType: testCaseTypeOf(projectConfig),
         customParams: customParams,
-        tracker: trackersModule.createTracker(projectConfig, customParams),
+        reviewPolicy: reviewPolicy,
+        tracker: tracker,
         statuses: resolveStatuses(customParams),
         testFilesPath: customParams.testFilesGlob || 'testing/'
     };
+}
+
+/**
+ * gh-1351: stamp the resolved reviewPolicy into the rework run context
+ * (`review_policy.md`) — the rework agent answers threads under the same
+ * policy the machine enforced when the review ran. Non-fatal: a lost file
+ * degrades to the pre-gh-1351 behavior.
+ */
+function stepWriteReviewPolicyContext(ctx) {
+    try {
+        file_write({
+            path: 'input/' + ctx.storyKey + '/review_policy.md',
+            content: reviewPolicyModule.policyInputContextMarkdown(ctx.reviewPolicy)
+        });
+        console.log('✅ Review policy stamped into the run context (review_policy.md, preset ' +
+            ctx.reviewPolicy.preset + ')');
+    } catch (e) {
+        console.warn('review_policy.md stamp failed (non-fatal):', e.message || e);
+    }
 }
 
 /** Step 1: fetch the linked Test Cases and write the input context files. */
@@ -480,6 +509,9 @@ function action(params) {
         var ctx = resolveSetupContext(params);
 
         console.log('=== Story test automation setup for:', ctx.storyKey, '===');
+
+        // gh-1351: stamp the resolved reviewPolicy into the rework run context.
+        stepWriteReviewPolicyContext(ctx);
 
         var testCases = stepFetchLinkedTestCases(ctx);
         stepCheckoutTestBranch(ctx);
