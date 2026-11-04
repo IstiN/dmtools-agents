@@ -451,9 +451,7 @@ function isDryRunParams(params) {
     if (!params) return false;
     if (params.dryRun === true || params.dryRun === 'true') return true;
     var jp = params.jobParams || {};
-    if (jp.dryRun === true || jp.dryRun === 'true') return true;
-    var cp = jp.customParams || params.customParams || {};
-    return cp.dryRun === true || cp.dryRun === 'true';
+    return jp.dryRun === true || jp.dryRun === 'true';
 }
 
 if (typeof module !== 'undefined' && module.exports) {

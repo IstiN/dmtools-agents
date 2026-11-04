@@ -165,7 +165,7 @@ function action(params) {
         if (runChainedAction(customParams.chainedPreCliJSAction, params) === false) {
             return false;
         }
-        if ((actualParams && (actualParams.dryRun === true || actualParams.dryRun === 'true')) || (customParams && (customParams.dryRun === true || customParams.dryRun === 'true'))) {
+        if ((params && (params.dryRun === true || params.dryRun === 'true')) || (actualParams && (actualParams.dryRun === true || actualParams.dryRun === 'true'))) {
             console.log('[dryRun] preCliSnapshotSetup: skipping snapshot branch checkout and codegraph sync');
             return true;
         }
