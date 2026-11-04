@@ -1086,11 +1086,16 @@ suite('reviewVerdicts — nit census plumbing (gh-1350)', function () {
             'pre-gh-1350 markers parse with zero nit census');
     });
 
-    test('reconcileDecision: APPROVE winner with nits > 0 keeps the rework arm (census exception)', function () {
+    test('reconcileDecision: APPROVE winner with nits > 0 does NOT keep the rework arm (gh-1352 flip)', function () {
+        // gh-1352 (epic §4 scope 4) reverses the gh-1350 decision: nits
+        // must not hold labels the way suggestions do — the polish lap owns
+        // polish-tier census, so the strip fires on a nit-only census.
         var decision = rv.reconcileDecision([record({ nits: 2 })], HEAD,
             { prHasRework: true, issueHasRework: true, prHasApproved: false });
-        assert.equal(decision, null,
-            'nit threads are open machine-owned conversations — the strip is withheld');
+        assert.ok(decision,
+            'nits are polish-lap work now — the strip is not withheld by them');
+        assert.equal(decision.loserLabel, 'agent:rework');
+        assert.contains(decision.comment, 'nits never hold labels');
     });
 
     test('reconcileDecision: digest alone does NOT keep the arm (not an open-thread census)', function () {
