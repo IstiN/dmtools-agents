@@ -28,6 +28,12 @@ Then map to the verdict (the machine recomputes it from the census —
 | Any ⚠️ IMPORTANT (no 🚨) | `REQUEST_CHANGES` (gates approval — policy default) |
 | Only 💡 / 🪶 remain | `APPROVE` — the cycle converges |
 
+**Downgrade protocol (gh-1351):** when the rework lap downgraded a specific ⚠️ to 💡 **with a
+written justification in the census** (the thread reply states why the finding is not
+maintainability debt), classify that finding 💡 in this round's census — the false-⚠️ review
+converges to APPROVE without a code change. Without the written justification, keep ⚠️: a silent
+downgrade does not exist, and the machine recomputes the verdict from the census you post.
+
 `APPROVE` with remaining 💡/🪶 findings is the expected terminal state
 (the resolved policy's `allowApproveWithSuggestions` derives from the
 tier table — SUGGESTION rounds polish, NIT rounds none): post every

@@ -553,23 +553,24 @@ function contractThreads(ids) {
 
 suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-799 AC1)', function() {
 
-    test('CI-red armer fixture: threads + failures fetched → only review_state.md is added', function() {
+    test('CI-red armer fixture: threads + failures fetched → review_state.md + review_policy.md added', function() {
         var h = makeContractHarness();
         var written = h.mod.ensureInputContextContract('input/PROJ-123', null, 7,
             contractThreads(['PRRT_a', 'PRRT_b']), [{ name: 'build', conclusion: 'failure' }]);
 
-        assert.deepEqual(written, ['review_state.md'],
-            'the two fetched halves are already written by writePRContext/detectFailedChecks — no double write');
+        assert.deepEqual(written, ['review_state.md', 'review_policy.md'],
+            'the two fetched halves are already written by writePRContext/detectFailedChecks — no double write; ' +
+            'gh-1351: the policy stamp refreshes every leg like review_state.md');
         assert.ok(h.files['input/PROJ-123/review_state.md'], 'review_state.md always written');
     });
 
-    test('manual-dispatch fixture: zero threads, zero failures → non-empty placeholders for all three', function() {
+    test('manual-dispatch fixture: zero threads, zero failures → non-empty placeholders for all four', function() {
         var h = makeContractHarness();
         var written = h.mod.ensureInputContextContract('input/PROJ-123', null, 7, {}, []);
 
         written.sort();
-        assert.deepEqual(written, ['ci_failures.md', 'pr_discussions_raw.json', 'review_state.md'],
-            'an armer that skips a file is a regression — the trio is pinned');
+        assert.deepEqual(written, ['ci_failures.md', 'pr_discussions_raw.json', 'review_policy.md', 'review_state.md'],
+            'an armer that skips a file is a regression — the trio + gh-1351 policy stamp is pinned');
 
         var raw = JSON.parse(h.files['input/PROJ-123/pr_discussions_raw.json']);
         assert.ok(raw && Array.isArray(raw.threads) && raw.threads.length === 0,

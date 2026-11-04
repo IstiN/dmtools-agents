@@ -919,3 +919,50 @@ suite('preCliStoryTestAutomationSetup: stamped role fields in linked_test_cases.
         assert.contains(written['input/BUG-1/linked_test_cases.md'], 'Verifies: BUG-1');
     });
 });
+
+suite('preCliStoryTestAutomationSetup — gh-1351 reviewPolicy: hard validation + review_policy.md stamp', function() {
+
+    function policyLoaderHarness(configLoaderFileRead, extraMocks) {
+        var written = [];
+        var mocks = Object.assign({
+            configLoaderFileRead: configLoaderFileRead,
+            file_write: function(args) { written.push({ path: args.path, content: args.content }); },
+            jira_search_by_jql: function() { return []; },
+            cli_execute_command: function() { return ''; }
+        }, extraMocks || {});
+        var module = loadPreCliStoryTestAutomationSetupWithConfigRead(mocks);
+        return { module: module, written: written };
+    }
+
+    test('a valid project policy is stamped as review_policy.md in the rework input folder', function() {
+        var h = policyLoaderHarness(function(p) {
+            if (p === '.dmtools/config.js') return 'module.exports = { reviewPolicy: { preset: "investigation" } };';
+            return null;
+        });
+        var result = h.module.action({ inputFolderPath: 'input/TS-210', jobParams: { customParams: {} } });
+        assert.notEqual(result.success, false, 'a valid policy never fails the leg');
+        var stamp = h.written.filter(function(w) { return w.path === 'input/TS-210/review_policy.md'; });
+        assert.equal(stamp.length, 1, 'exactly one review_policy.md write, got: ' + JSON.stringify(h.written.map(function(w) { return w.path; })));
+        assert.contains(stamp[0].content, 'investigation');
+    });
+
+    test('missing config stamps the built-in default silently', function() {
+        var h = policyLoaderHarness(null);
+        h.module.action({ inputFolderPath: 'input/TS-210', jobParams: { customParams: {} } });
+        var stamp = h.written.filter(function(w) { return w.path === 'input/TS-210/review_policy.md'; });
+        assert.equal(stamp.length, 1);
+        assert.contains(stamp[0].content, 'built-in default');
+    });
+
+    test('malformed project reviewPolicy fails the leg at start with the validation message', function() {
+        var h = policyLoaderHarness(function(p) {
+            if (p === '.dmtools/config.js') {
+                return 'module.exports = { reviewPolicy: { severities: { HUH: { round: "rework", fix: "mandatory" } } } };';
+            }
+            return null;
+        });
+        var result = h.module.action({ inputFolderPath: 'input/TS-210', jobParams: { customParams: {} } });
+        assert.equal(result.success, false, 'the leg fails before any side effect');
+        assert.contains(String(result.error), 'HUH', 'the unknown tier is named');
+    });
+});

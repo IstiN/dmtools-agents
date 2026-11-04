@@ -4,12 +4,12 @@
 
 ```mermaid
 flowchart TD
-    START([PR ready for review]) --> READ["1. Read input context:<br/>instruction.md, ticket.md, pr_info.md,<br/>pr_diff.txt, pr_files.txt, ci_failures.md,<br/>ci_failures_full.log, pr_discussions.md,<br/>pr_discussions_raw.json"]
+    START([PR ready for review]) --> READ["1. Read input context:<br/>instruction.md, ticket.md, review_policy.md, pr_info.md,<br/>pr_diff.txt, pr_files.txt, ci_failures.md,<br/>ci_failures_full.log, pr_discussions.md,<br/>pr_discussions_raw.json"]
     READ --> DIFF["2. Run diff checklist on pr_diff.txt"]
     DIFF --> FILES["3. Read full content of every changed file"]
     FILES --> CODEGRAPH["4. Use CodeGraph:<br/>callers/callees of changed symbols,<br/>search for sensitive patterns,<br/>impact analysis"]
     CODEGRAPH --> DIMS["5. Evaluate review dimensions:<br/>Security · Architecture/OOP · Code quality<br/>Test coverage · Duplication · Backward compatibility"]
-    DIMS --> SEVERITY["6. Classify each finding:<br/>BLOCKING / IMPORTANT / SUGGESTION"]
+    DIMS --> SEVERITY["6. Classify each finding:<br/>BLOCKING / IMPORTANT / SUGGESTION / NIT<br/>(severity census gates approval per review_policy.md)"]
     SEVERITY --> EXHAUST["7. Exhaustive pass:<br/>re-read changed files,<br/>surface ALL remaining issues"]
     EXHAUST --> OUTPUT["8. Write outputs:<br/>pr_review.json · pr_review_general.md · pr_review_comments/*.md"]
     OUTPUT --> END([End])
@@ -28,7 +28,8 @@ flowchart TD
         P5_FULL["5️⃣ input/TICKET/ci_failures_full.log — full CI logs"]
         P6["6️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
         P7["7️⃣ input/TICKET/pr_findings.md — previously raised findings (when present)"]
-        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7
+        P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol (gh-1351)"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8
     end
 
     subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
@@ -108,9 +109,29 @@ Classify every finding before writing outputs:
 
 - **BLOCKING** — merge would cause a bug, security issue, data loss, or CI break. Must be fixed.
 - **IMPORTANT** — real maintainability or correctness issue. Strongly prefer fixing before merge.
-- **SUGGESTION** — optional improvement, style, or future polish. Does not block merge.
+- **SUGGESTION** — optional improvement to the documented/behavioral surface (missing docs, unclear contract, better API shape). Does not block merge.
+- **NIT** — changes nothing behavioral and nothing documented: style, formatting, naming micro-preferences. Never blocks merge, never triggers a lap.
 
 When in doubt, start one level higher; downgrade only after confirming the risk is negligible.
+
+### Density control — post top-K, digest the overflow (gh-1351)
+
+`review_policy.md` in the input folder carries the resolved policy and its density cap
+(`allowed = clamp(round(2 + 3*sqrt(additions/200)), 2, 8)` — 20→3 · 50→4 · 200→5 · 800→8):
+
+- The cap applies to 💡 SUGGESTION / 🪶 NIT threads only — 🚨/⚠️ findings are **never capped** and always post as threads.
+- Rank your 💡/🪶 findings by value and post only the top-K as inline threads.
+- The overflow becomes a **ranked digest list** in the general comment (one line each: `path:line — finding`).
+- The census counts posted threads + digest lines (`issueCounts.suggestions`/`nits` count posts, `digest` counts the overflow lines).
+- The machine audits the posted thread count against the cap (warn only — it never fails the leg).
+
+### Downgrade protocol — honor a justified ⚠️→💡 from rework (gh-1351)
+
+A rework lap may downgrade a specific ⚠️ IMPORTANT finding to 💡 SUGGESTION **only with a written
+justification in the census** (its thread reply and response summary). When the justification is
+present, classify the finding 💡 in this round's census — a false-⚠️ review converges to APPROVE
+without a code change. A silent downgrade does not exist: without the written justification, keep
+⚠️ IMPORTANT and the cycle repeats.
 
 ### External-spec evidence rule
 
