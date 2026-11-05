@@ -1,0 +1,217 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-05T01:44:34.502Z",
+  "ticketKey": "gh-1352",
+  "headSha": "83e1966a10b628f63380fa99f845ffcd1fc27674",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:98a64708c06dd6ef",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:27ab9f6c6206a298",
+      "size": 30673
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:7a716990663169aa",
+      "size": 9382
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:11c42c546d6331e7",
+      "size": 5243
+    },
+    "request.md": {
+      "hash": "fnv1a64:8ab6350faeb8c8d4",
+      "size": 13990
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:c43b48f9595f4874",
+      "size": 1065
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:bc834c70c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:45f8a586ddadc2ce",
+      "size": 14175
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:8ab6350faeb8c8d4",
+      "size": 13990
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6z4pwg",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/smProvider.js:1037",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: the review debt ledger silently loses findings on multi-deferral ticks (data loss)**\n\n`postPrComment` writes through GitHub but never invalidates the memoized comment read, while `prCommentList` reads through `_ghFetchPrComments`, which is **memoized per tick** under the `prVerdicts` io-cache kind (`smProvider.js:688-708`). The house invalidate-after-mutation primitive `ioCacheDrop(owner, repo, kind, id)` exists exactly for this (`smProvider.js:92`, used by `smAgent.js:6965` for the label/free-mutex case) — this new write skips it.\n\nThe failure chain, in `deferThreadToLedger` (`js/machineSmAgent.js:354-374`), which runs **per thread** inside one `resolveSuggestionThreads` tick:\n\n1. Thread 1: `prCommentList()` → fetch + memo. `latestDebtLedger` → base ledger `L0`. Append finding 1 → post marker `M1 = L0 + f1`.\n2. Thread 2: `prCommentList()` → returns the **stale memo** (captured before `M1` was posted). `latestDebtLedger` → `L0` again. Append finding 2 → post marker `M2 = L0 + f2` — `f1` is gone.\n3. The marker family is last-write-wins: after the tick, `latestDebtLedger` returns `M2` — every earlier `defered` finding has silently vanished from the ledger.\n\nThis is the AC1 replay shape (4 machine suggestion threads → 4 deferrals in one tick): the durable ledger ends holding **1 finding, not 4**. The digest under-reports, the batched-sweep trigger (≥10 open) under-fires, and deferred debt disappears — violating the module's own invariant (\"append-only evidence is never rewritten… nothing discarded\", `reviewDebtLedger.js:10-12`). The tests don't catch it because their providers don't share the memo: `test_machineSmAgent.js` `providerWith` returns a **fixed** array from `prCommentList` (posts never accumulate), and the dry-run's `scriptedProvider` pushes posts into the **live** `state.comments` — so the acceptance evidence masks the bug instead of reproducing it.\n\nFix (one line, doctrine-matched):\n\n```js\npostPrComment: function (prNumber, body) {\n    var out = github_create_comment({\n        workspace: owner, repository: repo,\n        pullRequestId: String(prNumber), text: body\n    });\n    ioCacheDrop(owner, repo, 'prVerdicts', String(prNumber)); // invalidate-after-mutation\n    return out;\n}\n```\n\nAlternative: carry the running ledger in memory across the deferral loop instead of re-reading per thread. Please also add a regression test whose `prCommentList` serves the **memoized pre-tick snapshot** (not live state) with ≥2 deferrals, asserting the final marker contains both findings."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z4pzJ",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_polishLap.js:166",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: this test's name documents a reset behavior that is neither implemented nor tested**\n\nThe test is named *\"a rework lap between polish laps resets the budget (not consecutive polish)\"*, but its body tests **same-head dedup** (two entries for `HEAD_A` → not exhausted for `HEAD_B`). A reset does not exist anywhere: `instabilityBudgetExhausted` (`js/common/polishLap.js:118-131`) counts **distinct heads over the PR's lifetime** and never resets — there is no interleave detection (the marker payload carries no `kind`; the in-test comment even admits \"the interleave … is exercised by the dedup path instead\").\n\nDivergence from the documented contract — the module header (`polishLap.js:22-24`) promises *\"2 consecutive polish laps on consecutive heads exhaust the instability budget\"*, i.e. a **consecutive** bound, and the test name promises the corresponding reset. The implementation is a **lifetime cap**: after any 2 polish laps on 2 distinct heads — even with a real rework lap (or weeks of human work) in between — polish is permanently off for that PR and every later suggestion-only round falls to triage.\n\nThe direction is fail-safe (triage still resolves the threads, nothing wedges), so this is not blocking — but in this repo docs + tests are the contract surface, and a test whose name asserts behavior the code does not have will mislead the next maintainer precisely when they tune the budget.\n\nResolve one way:\n\n1. **Implement the documented semantics**: record the lap kind in the marker payload (`kind: 'polish'`) and treat a non-polish dispatch between two polish laps as breaking consecutiveness (resetting the budget); then make this test actually construct that interleave, or\n2. **Document the lifetime cap**: reword the `polishLap.js` header (\"at most `INSTABILITY_BUDGET` distinct heads per PR, lifetime — never resets\") and rename this test to what it pins (\"duplicate head entries collapse — one lap per head\"), which its own assertion message already says."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z4p2m",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/reviewDebtLedger.js:5",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the doc line names the disposition tag with the other spelling (`deferred` vs the canonical `defered`)**\n\nThis header says threads are tagged `deferred: #ledger` (two r's). The machine-parsed literal this module's deferrals actually close with is **`defered`** (one r) — `reviewDispositions.js` `TAGS = ['fixed', 'wontfix', 'duplicate', 'defered']`, canonicalized deliberately per the test pin in `test_reviewDispositions.js:70` (\"the epic spells it defered (one r)\"), and the ack the executor posts renders `defered: <id>`.\n\nThe earlier review asked to rename the code literal to `deferred`; the author instead pinned one-r as canonical (a fair call I'm not re-litigating). The residual wart is **inside this new file**: a maintainer grepping the producer doc (`deferred:`) finds this line but not the parser, and grepping the code literal (`defered:`) misses the doc — exactly the cross-ledger tag-grep failure mode the previous round warned about, now between a file's docs and its own tag.\n\nFix: change this line to `tagging 'defered: <ledger-id>'` (one r, matching `TAGS`), or add \"(spelled `defered` — see reviewDispositions.TAGS)\" so both spellings resolve to the same place.\n\nAlso: the tag carries the **ledger finding id**, not a `#ledger` reference — `<id>` is the accurate shape (`buildThreadAckReply` → `tagLine` → `defered: 9f2c01ab`)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z4p59",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/smProvider.js:1029",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the comment misdescribes the gitlab twin — the fail-closed property comes from the primitives being absent, not from no-op implementations**\n\nThe comment says: *\"gitlab twin: note primitives yet — prCommentList returns [] and postPrComment warns + no-ops, so the triage path fails closed on deferral\"*. That's not what the code does. The gitlab provider (`smProvider.js:1253+`) defines **neither** `prCommentList` nor `postPrComment` — and that absence is what makes `ledgerAvailableOn(provider)` (`machineSmAgent.js:346-349`) return false, so mandatory-fix tiers skip as `needsFixOrDefer`.\n\nThe distinction matters: if someone later \"completes\" the gitlab twin exactly as this comment describes — `prCommentList: () => []`, `postPrComment` as a warn + no-op — then `ledgerAvailableOn` returns **true**, the ledger append \"succeeds\" into a comment that was never persisted, the id stamp scan still finds the in-memory finding, and the thread resolves with `defered: <id>` pointing at a ledger that exists nowhere. Silent fail-open deferral — the exact drop this design bans — introduced by faithfully implementing this comment.\n\nFix the comment to state the actual mechanism, e.g.:\n\n```\n// gitlab twin: defines NEITHER primitive — ledgerAvailableOn() is false,\n// so the triage path fails closed on deferral (mandatory-fix tiers skip\n// as needsFixOrDefer, never close without their ledger finding). Do not\n// stub these as no-ops: a no-op post would fail the gate OPEN.\n```"
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z4p9E",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/reviewVerdicts.js:857",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: duplicate `latestVerdictForHead` export key**\n\nThis added line duplicates the existing `latestVerdictForHead: latestVerdictForHead,` entry already present ~4 lines above (pre-existing on `main`). Duplicate identical keys are runtime-harmless (the later one wins; same value), but they're diff noise and a future edit to one of the two entries will silently be shadowed by the other.\n\nDrop the added line — the pre-existing export already covers the new `polishGateDecision` caller."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:bc3d1944",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: the review debt ledger silently loses findings on multi-deferral ticks (data loss)**\n\n`postPrComment` writes through GitHub but never invalidates the memoized comment read, while `prCommentList` reads through `_ghFetchPrComments`, which is **memoized per tick** under the `prVerdicts` io-cache kind (`smProvider.js:688-708`). The house invalidate-after-mutation primitive `ioCacheDrop(owner, repo, kind, id)` exists exactly for this (`smProvider.js:92`, used by `smAgent.js:6965` for the label/free-mutex case) — this new write skips it.\n\nThe failure chain, in `deferThreadToLedger` (`js/machineSmAgent.js:354-374`), which runs **per thread** inside one `resolveSuggestionThreads` tick:\n\n1. Thread 1: `prCommentList()` → fetch + memo. `latestDebtLedger` → base ledger `L0`. Append finding 1 → post marker `M1 = L0 + f1`.\n2. Thread 2: `prCommentList()` → returns the **stale memo** (captured before `M1` was posted). `latestDebtLedger` → `L0` again. Append finding 2 → post marker `M2 = L0 + f2` — `f1` is gone.\n3. The marker family is last-write-wins: after the tick, `latestDebtLedger` returns `M2` — every earlier `defered` finding has silently vanished from the ledger.\n\nThis is the AC1 replay shape (4 machine suggestion threads → 4 deferrals in one tick): the durable ledger ends holding **1 finding, not 4**. The digest under-reports, the batched-sweep trigger (≥10 open) under-fires, and deferred debt disappears — violating the module's own invariant (\"append-only evidence is never rewritten… nothing discarded\", `reviewDebtLedger.js:10-12`). The tests don't catch it because their providers don't share the memo: `test_machineSmAgent.js` `providerWith` returns a **fixed** array from `prCommentList` (posts never accumulate), and the dry-run's `scriptedProvider` pushes posts into the **live** `state.comments` — so the acceptance evidence masks the bug instead of reproducing it.\n\nFix (one line, doctrine-matched):\n\n```js\npostPrComment: function (prNumber, body) {\n    var out = github_create_comment({\n        workspace: owner, repository: repo,\n        pullRequestId: String(prNumber), text: body\n    });\n    ioCacheDrop(owner, repo, 'prVerdicts', String(prNumber)); // invalidate-after-mutation\n    return out;\n}\n```\n\nAlternative: carry the running ledger in memory across the deferral loop instead of re-reading per thread. Please also add a regression test whose `prCommentList` serves the **memoized pre-tick snapshot** (not live state) with ≥2 deferrals, asserting the final marker contains both findings."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:acb05b73",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: this test's name documents a reset behavior that is neither implemented nor tested**\n\nThe test is named *\"a rework lap between polish laps resets the budget (not consecutive polish)\"*, but its body tests **same-head dedup** (two entries for `HEAD_A` → not exhausted for `HEAD_B`). A reset does not exist anywhere: `instabilityBudgetExhausted` (`js/common/polishLap.js:118-131`) counts **distinct heads over the PR's lifetime** and never resets — there is no interleave detection (the marker payload carries no `kind`; the in-test comment even admits \"the interleave … is exercised by the dedup path instead\").\n\nDivergence from the documented contract — the module header (`polishLap.js:22-24`) promises *\"2 consecutive polish laps on consecutive heads exhaust the instability budget\"*, i.e. a **consecutive** bound, and the test name promises the corresponding reset. The implementation is a **lifetime cap**: after any 2 polish laps on 2 distinct heads — even with a real rework lap (or weeks of human work) in between — polish is permanently off for that PR and every later suggestion-only round falls to triage.\n\nThe direction is fail-safe (triage still resolves the threads, nothing wedges), so this is not blocking — but in this repo docs + tests are the contract surface, and a test whose name asserts behavior the code does not have will mislead the next maintainer precisely when they tune the budget.\n\nResolve one way:\n\n1. **Implement the documented semantics**: record the lap kind in the marker payload (`kind: 'polish'`) and treat a non-polish dispatch between two polish laps as breaking consecutiveness (resetting the budget); then make this test actually construct that interleave, or\n2. **Document the lifetime cap**: reword the `polishLap.js` header (\"at most `INSTABILITY_BUDGET` distinct heads per PR, lifetime — never resets\") and rename this test to what it pins (\"duplicate head entries collapse — one lap per head\"), which its own assertion message already says."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:99eed03a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the doc line names the disposition tag with the other spelling (`deferred` vs the canonical `defered`)**\n\nThis header says threads are tagged `deferred: #ledger` (two r's). The machine-parsed literal this module's deferrals actually close with is **`defered`** (one r) — `reviewDispositions.js` `TAGS = ['fixed', 'wontfix', 'duplicate', 'defered']`, canonicalized deliberately per the test pin in `test_reviewDispositions.js:70` (\"the epic spells it defered (one r)\"), and the ack the executor posts renders `defered: <id>`.\n\nThe earlier review asked to rename the code literal to `deferred`; the author instead pinned one-r as canonical (a fair call I'm not re-litigating). The residual wart is **inside this new file**: a maintainer grepping the producer doc (`deferred:`) finds this line but not the parser, and grepping the code literal (`defered:`) misses the doc — exactly the cross-ledger tag-grep failure mode the previous round warned about, now between a file's docs and its own tag.\n\nFix: change this line to `tagging 'defered: <ledger-id>'` (one r, matching `TAGS`), or add \"(spelled `defered` — see reviewDispositions.TAGS)\" so both spellings resolve to the same place.\n\nAlso: the tag carries the **ledger finding id**, not a `#ledger` reference — `<id>` is the accurate shape (`buildThreadAckReply` → `tagLine` → `defered: 9f2c01ab`)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:a0aa1768",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the comment misdescribes the gitlab twin — the fail-closed property comes from the primitives being absent, not from no-op implementations**\n\nThe comment says: *\"gitlab twin: note primitives yet — prCommentList returns [] and postPrComment warns + no-ops, so the triage path fails closed on deferral\"*. That's not what the code does. The gitlab provider (`smProvider.js:1253+`) defines **neither** `prCommentList` nor `postPrComment` — and that absence is what makes `ledgerAvailableOn(provider)` (`machineSmAgent.js:346-349`) return false, so mandatory-fix tiers skip as `needsFixOrDefer`.\n\nThe distinction matters: if someone later \"completes\" the gitlab twin exactly as this comment describes — `prCommentList: () => []`, `postPrComment` as a warn + no-op — then `ledgerAvailableOn` returns **true**, the ledger append \"succeeds\" into a comment that was never persisted, the id stamp scan still finds the in-memory finding, and the thread resolves with `defered: <id>` pointing at a ledger that exists nowhere. Silent fail-open deferral — the exact drop this design bans — introduced by faithfully implementing this comment.\n\nFix the comment to state the actual mechanism, e.g.:\n\n```\n// gitlab twin: defines NEITHER primitive — ledgerAvailableOn() is false,\n// so the triage path fails closed on deferral (mandatory-fix tiers skip\n// as needsFixOrDefer, never close without their ledger finding). Do not\n// stub these as no-ops: a no-op post would fail the gate OPEN.\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:ae290407",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: duplicate `latestVerdictForHead` export key**\n\nThis added line duplicates the existing `latestVerdictForHead: latestVerdictForHead,` entry already present ~4 lines above (pre-existing on `main`). Duplicate identical keys are runtime-harmless (the later one wins; same value), but they're diff noise and a future edit to one of the two entries will silently be shadowed by the other.\n\nDrop the added line — the pre-existing export already covers the new `polishGateDecision` caller."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:6bcd5f61",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 1c0c0b80abaeae5bc8e32d5a22004921608f54f7 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:2d726926",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 97dbf5b3960c512f52b8eac721f51f92578f4eb7 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:ajaxspace:2026-11-05:98718974",
+      "kind": "comment",
+      "author": "ajaxspace",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Pre-merge spec review (vs #1352 + epic #1328 §5):\n\n**All five scope points verified in the diff** ✅\n1. Polish lap — `polishLap.js`: bounded (single commit, ≤ 6 threads, once per head), polish-tier-only, dispatched on approved BLOCKED heads.\n2. Instability budget — `instabilityBudgetExhausted(laps, headSha)`: 2 consecutive polish laps on consecutive heads exhaust polishing → triage-resolve + digest. Cross-head bound as specced, with tests.\n3. Triage beyond BLOCKED — dispatch on approved heads, machine-owned threads via the gh-728 machineAuthor parse, policy gate decides closable tiers, `wontfix`/defer dispositions machine-stamped, evidence never rewritten.\n4. Ledger reuse — `ledgerCore.js` extraction with the shared batched-sweep trigger (open ≥ 10 OR oldest ≥ 30 days → ONE sweep leg); `reviewDebtLedger.js` as a second consumer alongside the TC-side singleton. Exactly the §5-G economics.\n5. `reconcileDecision` — open nits stay (\"the polish lap owns them — nits never hold labels\"); nit census removed from the AC3 exception list.\nPlus the dry-run evidence runner (`scripts/dry-run-disposition-loop.js`, in-memory scripted provider, non-production banner).\n\n**One must-fix finding (small, mechanical):**\n\nThe review-side disposition tag literal is spelled **`defered`** (reviewDispositions.js `tag: 'defered'`, the summary line `', defered ' + out.defered`, and the test assertion) while the TC-side maintenance-ledger tag is spelled **`deferred`** (`deferred: #ledger` — this PR's own docs reference it). Two spellings for the same concept in one codebase means tag-greps and any future cross-ledger matching will silently miss one side. Please rename the review-side literal to `deferred` (code + tests + marker text) — the rework round for docs-freshness is a natural vehicle.\n\n**Blocking check:** `docs-freshness` FAILURE — the `instructions/pr_rework/general_guidelines.md` change needs the generated docs refreshed (`docs/agents/generated/*`), otherwise the PR stays BLOCKED and unmergeable.\n\nBoth are small; everything else is approve-quality."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:da9edb65",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1361\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:a619c77b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: Scope (disposition loop: opportunistic pickup, triage beyond BLOCKED, bounded polish lap, review ledger) is faithfully implemented and well-tested, but one blocking bug must be fixed before merge.\n\n**Key Issues**:\n- 🚨 **BLOCKING** — `js/common/smProvider.js:1037`: `postPrComment` never invalidates the memoized `prVerdicts` comment cache (`ioCacheDrop`), so `deferThreadToLedger`'s per-thread read→append→post loop rebuilds each marker from the stale pre-tick base; the last marker wins and every earlier `defered` finding silently vanishes from the ledger (AC1's 4-deferral tick leaves 1 finding). Data loss; the dry-run masks it (its scripted provider accumulates comments live; production serves a memoized snapshot).\n- ⚠️ **IMPORTANT** — `js/unit-tests/test_polishLap.js:166`: the test named \"a rework lap … resets the budget\" tests same-head dedup instead; no reset exists — `instabilityBudgetExhausted` is a lifetime distinct-head cap, not the documented consecutive-head bound (`polishLap.js:22-24`). Fail-safe direction, but docs/tests assert semantics the code doesn't implement.\n- 💡 `js/common/reviewDebtLedger.js:5` — doc line spells the tag `defered` while the canonical machine-parsed literal is `defered` (`reviewDispositions.js` TAGS); tag-greps miss one side.\n- 💡 `js/common/smProvider.js:1029` — comment misdescribes the gitlab twin (primitives are absent, which is what fails closed; a literal no-op implementation would fail deferral OPEN).\n- 🪶 `js/common/reviewVerdicts.js:857` — duplicate `latestVerdictForHead` export key (pre-existing entry at :853).\n- Digest: `machineSmAgent.js:521` logs `issue.number` instead of normalized `issueNo` · `machineSmAgent.js:478-489` duplicated counter shape + dead `duplicate` counter · 29 added lines carry trailing whitespace.\n\n**Verified fixed from the previous round**: docs-freshness — generators re-run on this head, `git diff --exit-code -- docs/agents/generated snapshots` clean. Suite green (8557 passed; the single local failure is this sandbox's `FA_SESSION_ROOT` leak, reproducing identically on `origin/main`). Dry-run replays exit 0.\n\n**Next Steps**:\n1. Add `ioCacheDrop(owner, repo, 'prVerdicts', String(prNumber))` to `postPrComment` (or carry the running ledger across the deferral loop) + a regression test serving a memoized snapshot with ≥2 deferrals.\n2. Implement the budget reset (lap `kind` in the marker + interleave detection) or reword the header/test to the lifetime-cap semantics.\n3. Apply the two suggestion-level doc corrections and drop the duplicated export key."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    }
+  ]
+}
