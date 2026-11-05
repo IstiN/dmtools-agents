@@ -128,17 +128,7 @@ function appendFinding(prev, input, normalize, refreshKeys) {
  * Unknown ids are ignored — the ledger is append-only evidence.
  */
 function resolveFindings(prev, ids, via) {
-    var at = new Date().toISOString();
-    var l = deepCopyLedger(prev);
-    l.at = at;
-    (ids || []).forEach(function (id) {
-        var f = findById(l, id);
-        if (!f) return;
-        f.status = 'resolved';
-        f.resolvedAt = at;
-        f.resolvedVia = via || null;
-    });
-    return l;
+    return applyResolve(prev, ids, via, null);
 }
 
 /**
@@ -147,6 +137,12 @@ function resolveFindings(prev, ids, via) {
  * the re-validation produced — visible, never silent.
  */
 function dropFindings(prev, ids, via, noteOf) {
+    return applyResolve(prev, ids, via, typeof noteOf === 'function' ? noteOf : function () { return noteOf || null; });
+}
+
+// The shared resolve pipeline (gh-1352 dedup): copy, stamp, resolve each
+// known id; `noteOf(f)` optionally attaches the drop receipt.
+function applyResolve(prev, ids, via, noteOf) {
     var at = new Date().toISOString();
     var l = deepCopyLedger(prev);
     l.at = at;
@@ -156,9 +152,27 @@ function dropFindings(prev, ids, via, noteOf) {
         f.status = 'resolved';
         f.resolvedAt = at;
         f.resolvedVia = via || null;
-        f.dropNote = typeof noteOf === 'function' ? (noteOf(f) || null) : (noteOf || null);
+        if (noteOf) f.dropNote = noteOf(f);
     });
     return l;
+}
+
+// The canonical marker payload shape (the single copy — the TC face and
+// the review-debt face both parse through it; gh-1352 duplication gate).
+function ledgerFromPayload(parsed) {
+    if (!parsed || !Array.isArray(parsed.findings)) return null;
+    return {
+        v: parseInt(parsed.v, 10) || 1,
+        at: String(parsed.at || ''),
+        findings: parsed.findings
+    };
+}
+
+// The marker-record adapter shared by both faces' parseMarkerComments
+// closures ({ledger, at} — the shared parser stamps atMs from `at`).
+function ledgerRecordOf(parsed) {
+    var l = ledgerFromPayload(parsed);
+    return l ? { ledger: l, at: l.at } : null;
 }
 
 function openFindings(l) {
@@ -249,6 +263,10 @@ if (typeof module !== 'undefined' && module.exports) {
         openFindings: openFindings,
         staleFindings: staleFindings,
         sweepDecision: sweepDecision,
-        oldestOpenAtMs: oldestOpenAtMs
+        oldestOpenAtMs: oldestOpenAtMs,
+        // the canonical marker payload shape — both ledger faces parse
+        // through this single guard (gh-1352 duplication gate).
+        ledgerFromPayload: ledgerFromPayload,
+        ledgerRecordOf: ledgerRecordOf
     };
 }

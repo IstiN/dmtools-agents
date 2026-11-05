@@ -144,12 +144,8 @@ function buildDebtMarker(l) {
 }
 
 function ledgerFromPayload(parsed) {
-    if (!parsed || !Array.isArray(parsed.findings)) return null;
-    return {
-        v: parseInt(parsed.v, 10) || LEDGER_VERSION,
-        at: String(parsed.at || ''),
-        findings: parsed.findings
-    };
+    // the canonical shape guard lives in the ledger core (gh-1352 dedup)
+    return ledgerCore.ledgerFromPayload(parsed);
 }
 
 /**
@@ -158,10 +154,7 @@ function ledgerFromPayload(parsed) {
  */
 function parseDebtComments(comments, opts) {
     return reviewVerdicts.parseMarkerComments(comments, opts, MARKER_PREFIX, MARKER_SUFFIX,
-        function (parsed) {
-            var l = ledgerFromPayload(parsed);
-            return l ? { ledger: l, at: l.at } : null;
-        }, true);
+        ledgerCore.ledgerRecordOf, true);
 }
 
 function latestDebtLedger(comments, opts) {
