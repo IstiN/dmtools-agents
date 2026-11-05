@@ -301,18 +301,15 @@ var PARK_EVIDENCE_MAX_LINES = 10;
 var PARK_MARKDOWN_METACHAR = /[\\`*_{}\[\]()#+\-.!|>~]/g;
 
 function parkEscapedText(text) {
-    var out = String(text == null ? '' : text).replace(PARK_MARKDOWN_METACHAR, '\\$&');
-    if (String(text).indexOf('Credential') !== -1) {
-        console.log('DBG codes IN :', String(text).split('').map(function (c) { var n = c.charCodeAt(0); return n > 126 ? '<' + n + '>' : c; }).join(''));
-        console.log('DBG codes OUT:', out.split('').map(function (c) { var n = c.charCodeAt(0); return n > 126 ? '<' + n + '>' : c; }).join(''));
+    var inp = String(text == null ? '' : text);
+    var out = inp.replace(PARK_MARKDOWN_METACHAR, '\\$&');
+    console.log('IX:', inp.indexOf('Credential'), inp.length, JSON.stringify(out));
+    if (inp.indexOf('Credential') !== -1) {
+        throw new Error('MARKER-BOTH-RAN');
     }
     return out;
 }
 
-// A evidence line consisting ONLY of backticks would close the fenced
-// block early (a CommonMark closing fence is a bare backtick-run line).
-// A zero-width space breaks the run while staying visually identical —
-// the markerSafe trick applied to fences.
 function fenceSafeEvidenceLine(line) {
     return /^`+$/.test(line) ? line.charAt(0) + '\u200b' + line.slice(1) : line;
 }
