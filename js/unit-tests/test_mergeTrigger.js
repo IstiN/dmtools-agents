@@ -158,30 +158,14 @@ function fixtureMergePr(opts, calls, m) {
     return JSON.stringify({ merged: true });
 }
 
-function backstopBridgeMocks(opts, calls) {
-    // gh-1353 merge-backstop bridge tools: the threads read serves
-    // opts.threadsByNumber (PR number → reviewThread nodes) — empty by
-    // default (clean replay, merges as today); noThreads removes the
-    // primitive entirely (capability miss). Named builder keeps fixture()
-    // complexity at its gh-1081 value (CRAP ratchet).
-    return {
-        github_get_pr_review_threads: opts.noThreads ? undefined : function (a) {
-            calls.threads.push(a);
-            return JSON.stringify({ data: { repository: { pullRequest:
-                { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
-        },
-        github_get_pr_comments: function (a) {
-            return JSON.stringify(opts.prCommentsByNumber && opts.prCommentsByNumber[a.pullRequestId] || []);
-        },
-        github_create_issue: function (a) {
-            calls.debtIssues.push(a);
-            if (opts.createIssueThrows) throw new Error(opts.createIssueThrows);
-            return JSON.stringify({ number: 500 + calls.debtIssues.length, title: a.title });
-        },
-        github_resolve_pr_thread: function (a) { calls.threadResolves.push(a); return '{}'; },
-        github_reply_to_pr_thread: function (a) { calls.threadReplies.push(a); return '{}'; }
-    };
-}
+// gh-1370 rework: the merge-backstop bridge mocks live in ONE shared
+// fixture (_fixtures/backstopBridgeMocks.js) — they were duplicated
+// byte-for-byte across this file and test_mergeBot.js and had to be
+// extended in both copies (the parallel-edit cost the fixture ends).
+// No search-mock argument here: the labeledIssues mock below already
+// serves github_search_issues for this suite.
+var backstopBridgeMocks = loadModule('js/unit-tests/_fixtures/backstopBridgeMocks.js',
+    makeRequire({}, {}), {}).backstopBridgeMocks;
 
 function fixture(opts) {
     opts = opts || {};
@@ -216,7 +200,7 @@ function fixture(opts) {
     // which keeps typeof-GH_REPO paths exactly where they were.
     mods.GH_REPO = opts.ghRepo;
     var mod = loadMergeTrigger(mods);
-    return { mod: mod, calls: calls };
+    return { mod: mod, calls: calls, opts: opts };
 }
 
 function run(fx, jobParams) {
@@ -995,7 +979,7 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.merges.length, 1, 'the squash-merge still happens');
     });
 
-    test('clean replay: no unresolved >=⚠️ machine threads → no digest, merge as today', function () {
+    test('gh-1370: a lone SUGGESTION machine thread → wontfix ack-resolved, no digest, merge proceeds', function () {
         var fx = fixture({
             labeledIssues: [5],
             prs: [CLEAN_PR],
@@ -1006,9 +990,55 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         });
         var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
         assert.equal(result.merged, 1);
-        assert.equal(fx.calls.debtIssues.length, 0, 'no digest issue');
-        assert.equal(fx.calls.threadResolves.length, 0, 'nothing resolved');
+        assert.equal(fx.calls.debtIssues.length, 0, 'no digest issue — below the gating threshold');
+        assert.equal(fx.calls.threadResolves.length, 1, 'the open machine thread resolves (terminal)');
+        assert.contains(fx.calls.threadReplies[0].text, 'wontfix:',
+            'the ack carries the machine-parsed wontfix disposition');
         assert.equal(fx.calls.merges.length, 1);
+    });
+
+    test('gh-1370 AC1 funnel replay: 4 SUGGESTION + 2 NIT → all six ack-resolved, no digest, merge proceeds', function () {
+        var threads = [
+            ghThread('PRT_S1', '💡 severity: SUGGESTION — a', { line: 1 }),
+            ghThread('PRT_S2', '💡 severity: SUGGESTION — b', { line: 2 }),
+            ghThread('PRT_S3', '💡 severity: SUGGESTION — c', { line: 3 }),
+            ghThread('PRT_S4', '💡 severity: SUGGESTION — d', { line: 4 }),
+            ghThread('PRT_N1', '🪶 severity: NIT — e', { line: 5 }),
+            ghThread('PRT_N2', '🪶 severity: NIT — f', { line: 6 })
+        ];
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            threadsByNumber: { 12: threads }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.success, true);
+        assert.equal(result.merged, 1, 'zero open machine threads → merge proceeds');
+        assert.equal(result.failed, 0);
+        assert.equal(fx.calls.debtIssues.length, 0, 'no digest for below-threshold threads');
+        assert.equal(fx.calls.threadResolves.length, 6, 'all six reach terminal resolution');
+        assert.equal(fx.calls.threadReplies.length, 6, 'each resolution carries its machine ack');
+        assert.contains(fx.calls.threadReplies[0].text, 'wontfix:');
+        assert.equal(fx.calls.merges.length, 1);
+    });
+
+    test('gh-1370 AC2 funnel replay: a nit resolution failure → merge held, the sweep fails the job (escalation); the retry merges', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            threadsByNumber: { 12: [ghThread('PRT_N1', '🪶 severity: NIT — a nit', { line: 5 })] },
+            resolveFailIds: ['PRT_N1']
+        });
+        var err = null;
+        try { run(fx, { repo: 'a/b', machineAuthor: BOT }); } catch (e) { err = e; }
+        assert.ok(err, 'failed=1 → the JSRunner job failure is the escalation surface');
+        assert.contains(err.message, 'failed=1');
+        assert.equal(fx.calls.merges.length, 0, 'no merge with an open machine thread');
+        fx.opts.resolveFailIds = []; // the transient API fault clears
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.merged, 1, 'the retry (next tick) converges');
+        assert.equal(fx.calls.threadResolves.length, 1);
+        assert.contains(fx.calls.threadReplies[0].text, 'wontfix:');
     });
 
     test('human-thread replay: humans listed open (human) in the digest, never resolved', function () {

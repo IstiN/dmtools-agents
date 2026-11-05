@@ -27,14 +27,20 @@
  *   2. each counted thread resolves with the canonical machine-parsed tag
  *      `defered: #<digest-issue>` (reviewDispositions.TAGS — the epic's
  *      deferral spelling; the tag round-trips parseDispositionTag);
- *   3. the merge proceeds. Human-authored threads are never resolved
- *      (gh-744) and never digested as resolved — they are listed in the
- *      digest as `open (human)` and the merge follows the current branch
+ *   3. the merge proceeds — but ONLY when every machine-owned thread
+ *      reached terminal resolution (gh-1370): machine threads BELOW the
+ *      threshold resolve WITHOUT a fix (the `wontfix` ack path — no
+ *      digest, no ledger entry), and ANY failed resolution holds the
+ *      merge. Human-authored threads are never resolved (gh-744) and
+ *      never digested as resolved — they are listed in the digest as
+ *      `open (human)` and the merge follows the current branch
  *      -protection state (the epic's final owner action, not this part).
  *
- * The backstop is a RECORD, not a gate — it never blocks a merge on the
- * threads themselves ("never silently merge with open >=⚠️ machine threads
- * and no digest; never block the merge on them either"):
+ * gh-1370 (owner directive 2026-11-05) tightens gh-1353's "never block
+ * the merge" semantics: the backstop is now a GATE on machine-owned
+ * threads — a PR must not merge while ANY machine-owned review thread is
+ * open ("merging with open machine threads is a policy violation, not an
+ * accepted outcome"):
  *
  *   - a threads/comments READ that throws throws through (fail-closed
  *     read — blindness was the #1319 pathology: a broken read must never
@@ -44,8 +50,11 @@
  *   - a digest-FILING failure throws through (the caller defers the merge —
  *     the "never silently merge without a digest" invariant owns it);
  *   - per-thread resolve/ack failures are counted, never thrown, never
- *     abort the rest (gh-828 round 3: resolve FIRST, ack only on success);
- *     a resolve-failed thread stays open but digested;
+ *     abort the rest of the loop (gh-828 round 3: resolve FIRST, ack only
+ *     on success) — the GATE throws AFTER the loop, so every thread
+ *     attempts on every tick: a failure HOLDS that merge (the caller
+ *     defers it — the retry), and a repeat failure keeps failing the
+ *     merge funnel job (the escalation surface);
  *   - the PR-side ledger stamp is soft (the digest issue body carries the
  *     same ledger payload); the search-probe primitive is optional (a
  *     missing one degrades ONE-per-PR dedup across replays — logged).
@@ -84,9 +93,8 @@ var configLoader = require('../configLoader.js');
    github_create_comment, github_search_issues, github_create_issue,
    github_resolve_pr_thread, github_reply_to_pr_thread */
 
-// The backstop threshold (epic §4: "severity >= IMPORTANT" / ">=⚠️") —
-// an invariant, not a knob: BLOCKING and IMPORTANT count, everything
-// below is the triage path's business.
+// The digest threshold (gh-1353): BLOCKING and IMPORTANT digest+defer;
+// everything below resolves without a fix on the gh-1370 ack path.
 var MIN_SEVERITY_CLASS = 'IMPORTANT';
 
 // The one-line summary cap of a digest row (the ledger claim keeps its own
@@ -144,7 +152,8 @@ function severityClassOfThread(body) {
         String(reviewVerdicts.threadSeverity(body)).toUpperCase());
 }
 
-// The backstop threshold (invariant): BLOCKING and IMPORTANT count.
+// The backstop digest threshold (gh-1353 invariant): BLOCKING and
+// IMPORTANT digest+defer; below it the gh-1370 ack path resolves.
 function severityAtLeastImportant(severityClass) {
     return findingRegistry.severityRank(severityClass) >=
         findingRegistry.severityRank(MIN_SEVERITY_CLASS);
@@ -164,17 +173,27 @@ function digestRowOf(row, severityClass) {
 }
 
 /**
- * The counter (epic §4): walks unresolved review threads and splits
- * machine-owned >=IMPORTANT threads (counted — digested + resolved) from
- * everything else. Human-authored open threads (any severity) land in
- * `human` — never resolved, listed `open (human)`. Machine threads below
- * ⚠️ stay the triage path's business (belowSeverity). A counted thread
- * without a resolve id is still counted (it digests) but flagged
- * (noThreadId — the resolve loop skips it). An empty allowlist counts
- * nothing (gh-744 fail closed).
+ * The classifier (gh-1353 + gh-1370): walks unresolved review threads and
+ * splits machine-owned open threads into the digest path (>=IMPORTANT —
+ * digested + resolved `defered:`) from the ack path (SUGGESTION / NIT —
+ * resolved WITHOUT a fix, no digest, no ledger). Human-authored open
+ * threads (any severity) land in `human` — never resolved, listed
+ * `open (human)`. A thread without a resolve id is flagged (noThreadId —
+ * the resolve loops skip it and the gate holds the merge: terminal
+ * resolution is impossible). An empty allowlist counts nothing (gh-744
+ * fail closed).
+ *
+ * Deliberate fallthrough (gh-1370 rework): a machine-owned thread whose
+ * body carries no recognizable severity marker classifies as 'none'
+ * (reviewVerdicts.threadSeverity) → severityClassOf's 'SUGGESTION'
+ * fallback and rides the ack path. Intended, not a misclassification:
+ * holding the merge on an unresolvable classification would never
+ * converge, so the public `wontfix` ack is the only terminal outcome for
+ * such a thread (a later audit reading the digest/ack trail sees WHY a
+ * marker-less thread closed as `wontfix`).
  */
 function classifyThreads(threads, logins) {
-    var out = { counted: [], human: [],
+    var out = { counted: [], ackThreads: [], human: [],
         counts: { total: 0, resolved: 0, machine: 0, belowSeverity: 0, noThreadId: 0 } };
     (Array.isArray(threads) ? threads : []).forEach(function (row) {
         var t = row || {};
@@ -186,7 +205,12 @@ function classifyThreads(threads, logins) {
             return;
         }
         out.counts.machine++;
-        if (!severityAtLeastImportant(severityClass)) { out.counts.belowSeverity++; return; }
+        if (!severityAtLeastImportant(severityClass)) {
+            out.counts.belowSeverity++;
+            out.ackThreads.push(digestRowOf(t, severityClass));
+            if (!t.threadId) out.counts.noThreadId++;
+            return;
+        }
         out.counted.push(digestRowOf(t, severityClass));
         if (!t.threadId) out.counts.noThreadId++;
     });
@@ -296,8 +320,8 @@ function digestHeadline(count, prNumber) {
     return '🧵 Merge backstop (gh-1353) — ' + count + ' unresolved machine-owned review thread' +
         (count === 1 ? '' : 's') + ' with severity >= IMPORTANT (⚠️/🚨) open on PR #' + prNumber +
         ' at merge time. This issue is the gh-1328 §4 backstop record: each thread below was' +
-        ' resolved with a `defered` tag pointing here, and the merge proceeded — the backstop' +
-        ' is a record, not a gate.';
+        ' resolved with a `defered` tag pointing here before the merge proceeded (gh-1370:' +
+        ' every machine-owned thread must reach terminal resolution before merge).';
 }
 
 var DIGEST_FOOTER = 'Deferred findings are identity-deduped in the review debt ledger above' +
@@ -349,6 +373,26 @@ function deferredAck(digestNumber) {
         ' merge time; the finding lives in digest #' + digestNumber + ' and the review debt' +
         ' ledger (the batched sweep owns the fix).\n' +
         reviewDispositions.tagLine({ tag: 'defered', value: '#' + digestNumber }) + '\n';
+}
+
+// ── the gh-1370 below-threshold ack (nits resolve-without-fix) ───────────────
+
+// The machine-parsed value of the below-threshold wontfix tag — stable so
+// replays and audits parse the same disposition every time.
+var BELOW_GATE_ACK_VALUE = 'below gating threshold — epic invariant (gh-1370)';
+
+/**
+ * The ack reply posted into a resolved below-threshold (SUGGESTION / NIT)
+ * machine thread: resolved WITHOUT a fix — resolution is mandatory,
+ * fixing is not. The tag line is the canonical machine-parsed disposition
+ * `wontfix: <value>` (reviewDispositions.TAGS; parseDispositionTag
+ * round-trips it).
+ */
+function belowThresholdAck() {
+    return '🤖 merge backstop (gh-1370) — machine-owned below-gating-threshold review thread' +
+        ' resolved WITHOUT a fix at merge time: resolution is mandatory, fixing is not (the' +
+        ' epic invariant needs the thread terminal; the fix stays the triage path\'s business).\n' +
+        reviewDispositions.tagLine({ tag: 'wontfix', value: BELOW_GATE_ACK_VALUE }) + '\n';
 }
 
 // ── the one-digest-per-PR probe ──────────────────────────────────────────────
@@ -502,6 +546,7 @@ function emptyOutcome(prNumber) {
         prNumber: prNumber,
         skipped: null,
         counted: [],
+        ackThreads: [],
         human: [],
         counts: null,
         digest: null,
@@ -511,6 +556,9 @@ function emptyOutcome(prNumber) {
         resolved: 0,
         resolveFailures: 0,
         ackFailures: 0,
+        ackResolved: 0,
+        ackResolveFailures: 0,
+        ackReplyFailures: 0,
         ledgerFindings: 0,
         ledgerStampPosted: false
     };
@@ -623,34 +671,93 @@ function fileDigest(t, comments, owner, name, input, out, ledger) {
 }
 
 // Resolve FIRST, ack only on success (gh-828 round 3). Per-thread failures
-// are counted and never abort the rest; the digest records everyone.
+// are counted, never thrown, never abort the rest; the digest records
+// everyone. The gate below holds the merge on any failure (gh-1370).
+
+/**
+ * ONE machine-thread resolution attempt (gh-828 round 3: resolve FIRST,
+ * ack only on success). Returns the failure stage, or null on full
+ * success: 'noId' (no resolvable id / no resolve primitive), 'resolve'
+ * (the resolve call threw), 'ack' (no reply primitive / the ack reply
+ * threw). The caller books the stage on its OWN counters — the digest
+ * path (>=IMPORTANT) and the ack path (below threshold) count different
+ * fields. Shared by both loops so the resolution discipline lives once.
+ */
+function resolveOneMachineThread(t, prNumber, thread, ackText) {
+    if (!thread.threadId || typeof t.resolveThread !== 'function') return 'noId';
+    try {
+        t.resolveThread(prNumber, thread);
+    } catch (eResolve) {
+        return 'resolve';
+    }
+    if (typeof t.replyToThread !== 'function') return 'ack';
+    try {
+        t.replyToThread(prNumber, thread, ackText);
+    } catch (eAck) {
+        return 'ack';
+    }
+    return null;
+}
+
+// 'resolve'-stage failures book on the resolve counter, an 'ack'-stage
+// failure books on the ack counter, null (full success) books the resolve.
+function bookResolutionStage(stage, out, resolveKey, ackKey, resolvedKey) {
+    if (stage === 'resolve' || stage === 'noId') out[resolveKey]++;
+    else if (stage === 'ack') out[ackKey]++;
+    else out[resolvedKey]++;
+}
+
 function resolveCountedThreads(t, prNumber, counted, digestNumber, out) {
     (Array.isArray(counted) ? counted : []).forEach(function (thread) {
-        if (!thread.threadId || typeof t.resolveThread !== 'function') {
-            out.resolveFailures++;
-            return;
-        }
-        try {
-            t.resolveThread(prNumber, thread);
-            out.resolved++;
-        } catch (eResolve) {
-            out.resolveFailures++;
-            return;
-        }
-        if (typeof t.replyToThread !== 'function') { out.ackFailures++; return; }
-        try {
-            t.replyToThread(prNumber, thread, deferredAck(digestNumber));
-        } catch (eAck) {
-            out.ackFailures++;
-        }
+        bookResolutionStage(
+            resolveOneMachineThread(t, prNumber, thread, deferredAck(digestNumber)),
+            out, 'resolveFailures', 'ackFailures', 'resolved');
     });
 }
 
+// The gh-1370 ack loop: below-threshold (SUGGESTION / NIT) machine threads
+// resolve WITHOUT a fix — no digest, no ledger entry — each closed with
+// the machine-parsed `wontfix` ack tag. Same discipline as the counted
+// loop (gh-828 round 3); failures are counted and the gate holds the
+// merge on any of them.
+function resolveAckThreads(t, prNumber, ackThreads, out) {
+    (Array.isArray(ackThreads) ? ackThreads : []).forEach(function (thread) {
+        bookResolutionStage(
+            resolveOneMachineThread(t, prNumber, thread, belowThresholdAck()),
+            out, 'ackResolveFailures', 'ackReplyFailures', 'ackResolved');
+    });
+}
+
+// The gh-1370 gate: the merge proceeds ONLY when every machine-owned
+// thread reached terminal resolution this run (or was already resolved).
+// Any failure leaves an open machine thread — throwing here holds THAT
+// merge; the caller defers it to the next tick (the retry), and a repeat
+// failure keeps failing the merge funnel job (the escalation surface).
+// The loops never abort on a per-thread failure — every thread attempts
+// on every tick (maximum progress per replay).
+function requireZeroOpenMachineThreads(out) {
+    var failed = out.resolveFailures + out.ackFailures +
+        out.ackResolveFailures + out.ackReplyFailures;
+    if (failed > 0) {
+        throw new Error('mergeBackstop: ' + failed +
+            ' machine-owned review thread(s) failed terminal resolution' +
+            ' (>=IMPORTANT resolve failures ' + out.resolveFailures +
+            ', ack failures ' + out.ackFailures +
+            '; below-threshold resolve failures ' + out.ackResolveFailures +
+            ', ack-reply failures ' + out.ackReplyFailures + ')' +
+            ' — merge HELD (gh-1370: merging with open machine threads is a policy violation);' +
+            ' the next tick retries');
+    }
+    return out;
+}
+
 /**
- * The backstop for one PR about to merge. Returns the outcome; throws only
- * on record-keeping failures (a broken threads/comments read, a digest
- * filing failure) — the caller defers THAT merge to the next tick and the
- * queue keeps moving. A clean count returns immediately (merge as today).
+ * The backstop for one PR about to merge. Returns the outcome; throws on
+ * record-keeping failures (a broken threads/comments read, a digest
+ * filing failure) AND on resolution failures (gh-1370 — any resolve/ack
+ * failure leaves an open machine thread): the caller defers THAT merge to
+ * the next tick and the queue keeps moving. A clean resolution returns
+ * immediately (zero open machine threads — merge proceeds).
  *
  * io: the raw bridge primitives (or mocks) — see githubTools.
  * input: { prNumber, prTitle, headSha, logins, owner?, name?, nowIso? }.
@@ -668,9 +775,16 @@ function runBackstop(io, owner, name, input) {
     var rows = threadRowsOf(t.listThreads(inp.prNumber));
     var cls = classifyThreads(rows, inp.logins);
     out.counted = cls.counted;
+    out.ackThreads = cls.ackThreads;
     out.human = cls.human;
     out.counts = cls.counts;
-    if (!cls.counted.length) return out; // clean replay — merge as today
+    if (!cls.counted.length) {
+        // gh-1370: below-threshold machine threads still resolve (the
+        // wontfix ack path — no digest, no ledger), and the merge may
+        // proceed ONLY on zero open machine threads.
+        resolveAckThreads(t, inp.prNumber, cls.ackThreads, out);
+        return requireZeroOpenMachineThreads(out);
+    }
     // ONE comments read per counted run (gh-1371): the payload is shared by
     // the ledger append (its base) and the digest (its review-run
     // reference). Fail-closed: a broken read defers the merge to the next
@@ -689,7 +803,8 @@ function runBackstop(io, owner, name, input) {
     fileDigest(t, comments, owner, name, inp, out, ledger);
     stampLedger(t, inp.prNumber, ledger, out);
     resolveCountedThreads(t, inp.prNumber, cls.counted, out.digest, out);
-    return out;
+    resolveAckThreads(t, inp.prNumber, cls.ackThreads, out);
+    return requireZeroOpenMachineThreads(out);
 }
 
 // ── the merge-path wiring (shared by mergeTrigger + sm/mergeBot) ─────────────
@@ -731,12 +846,14 @@ function headShaOf(pr) {
 
 /**
  * The one-call wiring for a merge path about to squash-merge an approved
- * green PR (gh-1353): builds the input from the PR payload + jobParams,
- * runs the backstop and says the outcome lines verbatim. Throws only on
- * record-keeping failures (a broken threads/comments read, a digest
- * filing failure) — the CALLER defers THAT merge (never merges
- * undigested); per-thread resolve/ack failures never throw (the digest
- * records everyone).
+ * green PR (gh-1353; gh-1370 tightened it): builds the input from the PR
+ * payload + jobParams, runs the backstop and says the outcome lines
+ * verbatim. Throws on record-keeping failures (a broken threads/comments
+ * read, a digest filing failure) AND on resolution failures (a resolve/
+ * ack API error, a partial resolution) — the CALLER defers THAT merge
+ * (never merges with an open machine thread); per-thread resolve/ack
+ * failures never abort the loop (the digest records everyone, the gate
+ * throws after it).
  *
  *   bridges — the io bag (githubBridgeIo() in production; test mocks).
  *   job     — the caller's jobParams (machineAuthor allowlist lives there).
@@ -758,31 +875,65 @@ function runBackstopForPr(bridges, owner, name, job, prNumber, pr, say) {
 
 /**
  * One observable line per replay shape — the callers say() these verbatim.
+ * The failure shapes never render here (runBackstop throws on them — the
+ * error message carries the held-merge explanation); these lines are the
+ * success shapes.
  */
+
+// The suggestion/nit ack stats fragment shared by the counted and ack-only
+// lines (extracted to keep the line builders under the CRAP ratchet).
+function ackStatsLine(out) {
+    return 'suggestion/nit machine thread(s) ack-resolved without a fix (wontfix) ' +
+        (out.ackResolved || 0) + ', resolve failures ' + (out.ackResolveFailures || 0) +
+        ', ack-reply failures ' + (out.ackReplyFailures || 0);
+}
+
+// No ack activity at all — the pure gh-1353 shapes (a true clean replay or
+// a >=IMPORTANT-only replay with nothing below the threshold).
+function ackIdle(out) {
+    return !out.ackResolved && !out.ackResolveFailures && !out.ackReplyFailures;
+}
+
+// The digest-path line (counted threads present).
+function countedOutcomeLine(out) {
+    return '🧵 merge backstop on PR #' + out.prNumber + ': ' + out.counted.length +
+        ' machine-owned >=IMPORTANT thread(s) deferred to ' +
+        (out.digestReused ? 'existing digest' : 'digest') + ' #' + out.digest +
+        ' — resolved ' + out.resolved + ', resolve failures ' + out.resolveFailures +
+        ', ack failures ' + out.ackFailures + '; ' +
+        (ackIdle(out) ? '' : ackStatsLine(out) + '; ') + out.human.length +
+        ' open human thread(s) listed open (human)' +
+        (out.digestDuplicate ? (' (duplicate digest #' + out.digestDuplicate +
+            ' abandoned — a concurrent merge funnel filed first)') : '') +
+        (out.digestProbeUnavailable ? ' (digest probe unavailable — dedup degraded)' : '');
+}
+
+// The no-digest lines: the pure ack replay (gh-1370) or the true clean
+// replay (gh-1353, unchanged wording).
+function cleanOutcomeLine(out) {
+    if (ackIdle(out)) {
+        return '🧵 merge backstop on PR #' + out.prNumber + ': no unresolved machine-owned >=IMPORTANT threads' +
+            ' (' + out.human.length + ' open human thread(s) stay per gh-744) — merge as today';
+    }
+    return '🧵 merge backstop on PR #' + out.prNumber + ': ' + ackStatsLine(out) +
+        '; zero open machine-owned threads remain (' + out.human.length +
+        ' open human thread(s) stay per gh-744) — merge proceeds';
+}
+
 function outcomeLines(out) {
     if (!out) return [];
     if (out.skipped) {
         return ['⏭️ merge backstop skipped on PR #' + out.prNumber + ' (' + out.skipped + ')'];
     }
-    if (!out.counted.length) {
-        return ['🧵 merge backstop on PR #' + out.prNumber + ': no unresolved machine-owned >=IMPORTANT threads' +
-            ' (' + out.human.length + ' open human thread(s) stay per gh-744) — merge as today'];
-    }
-    return ['🧵 merge backstop on PR #' + out.prNumber + ': ' + out.counted.length +
-        ' machine-owned >=IMPORTANT thread(s) deferred to ' +
-        (out.digestReused ? 'existing digest' : 'digest') + ' #' + out.digest +
-        ' — resolved ' + out.resolved + ', resolve failures ' + out.resolveFailures +
-        ', ack failures ' + out.ackFailures + '; ' + out.human.length +
-        ' open human thread(s) listed open (human)' +
-        (out.digestDuplicate ? (' (duplicate digest #' + out.digestDuplicate +
-            ' abandoned — a concurrent merge funnel filed first)') : '') +
-        (out.digestProbeUnavailable ? ' (digest probe unavailable — dedup degraded)' : '')];
+    if (!out.counted.length) return [cleanOutcomeLine(out)];
+    return [countedOutcomeLine(out)];
 }
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         MIN_SEVERITY_CLASS: MIN_SEVERITY_CLASS,
         SUMMARY_MAX: SUMMARY_MAX,
+        BELOW_GATE_ACK_VALUE: BELOW_GATE_ACK_VALUE,
         machineLoginsOf: machineLoginsOf,
         threadRowsOf: threadRowsOf,
         classifyThreads: classifyThreads,
@@ -790,12 +941,15 @@ if (typeof module !== 'undefined' && module.exports) {
         appendCountedToLedger: appendCountedToLedger,
         buildDigestIssue: buildDigestIssue,
         deferredAck: deferredAck,
+        belowThresholdAck: belowThresholdAck,
         buildDebtSearchQuery: buildDebtSearchQuery,
         findExistingDigest: findExistingDigest,
         digestNumberOf: digestNumberOf,
         githubTools: githubTools,
         githubBridgeIo: githubBridgeIo,
         headShaOf: headShaOf,
+        resolveAckThreads: resolveAckThreads,
+        requireZeroOpenMachineThreads: requireZeroOpenMachineThreads,
         runBackstop: runBackstop,
         runBackstopForPr: runBackstopForPr,
         outcomeLines: outcomeLines

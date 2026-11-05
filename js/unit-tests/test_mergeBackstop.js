@@ -1,15 +1,18 @@
 /* Unit tests for js/common/mergeBackstop.js — the merge backstop (gh-1353,
- * epic gh-1328 §4-merge backstop, part 4/4).
+ * epic gh-1328 §4-merge backstop, part 4/4; gh-1370 tightened it).
  *
  * Before a squash-merge of a pr_approved + green PR the backstop counts
  * unresolved MACHINE-OWNED review threads with severity >= IMPORTANT
  * (>=⚠️; 🚨 included). Any count > 0 files ONE digest issue per PR
  * (title `[debt] <PR title>`; the body carries the review-debt-ledger
  * machine marker so the ledger's identity dedup holds), then resolves each
- * counted thread with the canonical `defered: #<digest-issue>` tag, and the
- * merge proceeds. Human-authored threads are never resolved — they are
- * listed in the digest as `open (human)`. The backstop is a record, not a
- * gate: it never blocks a merge on the threads themselves.
+ * counted thread with the canonical `defered: #<digest-issue>` tag.
+ * gh-1370 (owner directive): EVERY machine-owned review thread must reach
+ * terminal resolution before the merge — SUGGESTION/NIT threads resolve
+ * WITHOUT a fix (the machine-parsed `wontfix` ack tag), and a failed
+ * resolution HOLDS the merge (retry next tick; escalation if it keeps
+ * failing). Human-authored threads are never resolved — they are listed
+ * in the digest as `open (human)`.
  */
 /* global suite, test, assert, loadModule, makeRequire */
 
@@ -553,12 +556,15 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
             'filing precedes resolving');
     });
 
-    test('AC1b ledger dedup on a repeated finding: a second run over the same identity refreshes', function () {
+    test('AC1b ledger dedup across a HELD retry: the identity refreshes, one digest survives', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: twoMachineImportantThreads(), resolveFailIds: ['PRT_1'] });
-        var out1 = run(m, f);
-        assert.equal(out1.resolved, 1, 'only PRT_2 resolved');
-        assert.equal(out1.resolveFailures, 1, 'the failure is counted, never thrown');
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'gh-1370: the unresolved thread HOLDS the merge');
+        assert.equal(f.rec.issues.length, 1, 'the digest filed before the resolve loop');
+        assert.equal(f.rec.resolves.length, 1, 'per-thread isolation: the healthy thread still resolved');
+        f.fixture.resolveFailIds = []; // the transient API fault clears
         var out2 = run(m, f, defaultInput({ nowIso: '2026-11-06T12:00:00.000Z' }));
         assert.equal(out2.digestReused, true,
             'the digest from the first run exists and is reused, not re-filed');
@@ -569,7 +575,7 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.equal(refreshed.occurrences, 2, 'the repeated finding refreshed its entry');
     });
 
-    test('AC2 clean replay: no unresolved >=⚠️ machine threads -> no digest, nothing resolved', function () {
+    test('AC2 clean replay: no >=⚠️ machine threads → no digest; the open SUGGESTION resolves with an ack (gh-1370)', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: [
             ghThread({ id: 'PRT_1', comments: { nodes: [{ databaseId: 9001,
@@ -580,7 +586,8 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.equal(out.counted.length, 0);
         assert.equal(out.digest, null);
         assert.equal(f.rec.issues.length, 0, 'no digest issue');
-        assert.equal(f.rec.resolves.length, 0, 'no resolves');
+        assert.equal(f.rec.resolves.length, 1, 'the open machine thread resolves (gh-1370 ack path)');
+        assert.equal(out.ackResolved, 1);
         assert.equal(f.rec.posts.length, 0, 'no ledger stamp');
         assert.equal(f.rec.order.indexOf('issue'), -1);
     });
@@ -660,23 +667,28 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.equal(f.rec.issues.length, 0);
     });
 
-    test('a resolve failure is per-thread: the rest resolve, the failed one stays open', function () {
+    test('gh-1370: a resolve failure is per-thread (the rest still resolve) and HOLDS the merge', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: twoMachineImportantThreads(), resolveFailIds: ['PRT_1'] });
-        var out = run(m, f);
-        assert.equal(out.resolved, 1);
-        assert.equal(out.resolveFailures, 1);
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'an unresolved machine thread never merges');
+        assert.contains(threw.message, 'merge HELD');
+        assert.contains(threw.message, 'policy violation');
+        assert.equal(f.rec.resolves.length, 1, 'per-thread isolation: the healthy thread resolved');
         assert.equal(f.rec.replies.length, 1, 'no ack behind a failed resolve (gh-828 round 3)');
-        assert.equal(out.digest, 501, 'the digest still files and the merge may proceed');
+        assert.equal(f.rec.issues.length, 1, 'the digest still files and records everyone');
     });
 
-    test('an ack failure after a successful resolve is counted, never fatal', function () {
+    test('gh-1370: an ack failure after a successful resolve HOLDS the merge (the ack tag is part of the resolution)', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: twoMachineImportantThreads() });
         f.io.replyToThread = function (a) { f.rec.replies.push(a); throw new Error('boom'); };
-        var out = run(m, f);
-        assert.equal(out.resolved, 2);
-        assert.equal(out.ackFailures, 2);
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'the resolution step failed (no machine ack tag landed) — do NOT merge');
+        assert.contains(threw.message, 'ack failures 2');
+        assert.equal(f.rec.resolves.length, 2, 'the resolves landed — the retry reads them terminal');
     });
 
     test('a ledger-stamp failure is soft: the digest still carries the marker', function () {
@@ -700,6 +712,185 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.contains(m.outcomeLines(cleanOut)[0], 'no unresolved machine-owned');
         var skipOut = run(m, ioFixture({ noThreads: true }));
         assert.contains(m.outcomeLines(skipOut)[0], 'skipped');
+    });
+});
+
+// ── gh-1370: every machine-owned thread reaches terminal resolution ──────────
+
+suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)', function () {
+    function belowThread(id, body, line) {
+        return ghThread({ id: id, line: line, comments: { nodes: [{
+            databaseId: 8000 + line, author: { login: MACHINE + '[bot]' }, body: body }] } });
+    }
+    // The gh-1368 census that triggered the policy: 4 SUGGESTION + 2 NIT
+    // machine threads left open through the merge.
+    function sixBelowThresholdThreads() {
+        return [
+            belowThread('PRT_S1', suggestionBody('extract this helper'), 11),
+            belowThread('PRT_S2', suggestionBody('narrow the visibility'), 22),
+            belowThread('PRT_S3', suggestionBody('rename for clarity'), 33),
+            belowThread('PRT_S4', suggestionBody('split the long method'), 44),
+            belowThread('PRT_N1', nitBody('typo in the doc comment'), 55),
+            belowThread('PRT_N2', nitBody('stale link in the comment'), 66)
+        ];
+    }
+
+    test('AC1 replay: 4 SUGGESTION + 2 NIT machine threads → all six resolved (wontfix acks), zero open machine threads, merge proceeds', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: sixBelowThresholdThreads() });
+        var out = run(m, f); // must NOT throw — zero open machine threads after resolution
+        assert.equal(out.counted.length, 0, 'nothing >= IMPORTANT — the digest path never runs');
+        assert.equal(out.ackThreads.length, 6, 'all six land in the ack bucket');
+        assert.equal(out.ackResolved, 6, 'all six reach terminal resolution');
+        assert.equal(f.rec.resolves.length, 6, 'zero open machine threads at merge time');
+        assert.equal(f.rec.replies.length, 6, 'each resolution carries its machine ack tag');
+        assert.equal(f.rec.issues.length, 0, 'nits resolve WITHOUT fixing AND without a digest issue');
+        assert.equal(f.rec.posts.length, 0, 'no ledger stamp — the debt ledger is not the nit path');
+        assert.equal(out.resolveFailures + out.ackResolveFailures + out.ackReplyFailures, 0);
+        var ids = f.rec.resolves.map(function (r) { return r.threadId; }).sort().join(',');
+        assert.equal(ids, 'PRT_N1,PRT_N2,PRT_S1,PRT_S2,PRT_S3,PRT_S4',
+            'each thread resolved by its own id (a 6-item census, no single-item shortcut)');
+    });
+
+    test('the ack tag round-trips the part-3 parser: wontfix: below gating threshold — epic invariant', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('a nit'), 5)] });
+        run(m, f);
+        assert.deepEqual(reviewDispositionsMod().parseDispositionTag(f.rec.replies[0].text),
+            { tag: 'wontfix', value: 'below gating threshold — epic invariant (gh-1370)' },
+            'the machine ack tag is the canonical reviewDispositions disposition');
+        assert.equal(f.rec.replies[0].inReplyToId, '8005', 'the ack rides the root comment');
+    });
+
+    test('classify: below-threshold machine threads carry their ids; an id-less one counts noThreadId', function () {
+        var m = mergeBackstopMod();
+        var cls = m.classifyThreads([
+            { threadId: 'S1', resolved: false, author: MACHINE, body: suggestionBody(), path: 'a.js', line: 1 },
+            { threadId: null, resolved: false, author: MACHINE, body: nitBody(), path: 'a.js', line: 2 }
+        ], ALLOW);
+        assert.equal(cls.ackThreads.length, 2, 'both land in the ack bucket');
+        assert.equal(cls.ackThreads[0].threadId, 'S1');
+        assert.equal(cls.ackThreads[1].threadId, null);
+        assert.equal(cls.counts.belowSeverity, 2);
+        assert.equal(cls.counts.noThreadId, 1, 'an id-less machine thread can never resolve — flagged');
+    });
+
+    test('AC2 replay: a nit resolution call failing → merge HELD; the retry converges', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: sixBelowThresholdThreads(), resolveFailIds: ['PRT_S3'] });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'a partial resolution holds the merge');
+        assert.contains(threw.message, 'below-threshold resolve failures 1');
+        assert.contains(threw.message, 'policy violation');
+        assert.equal(f.rec.resolves.length, 5, 'the loop never aborts — every other thread attempted');
+        assert.equal(f.rec.replies.length, 5, 'acks only behind successful resolves');
+        assert.equal(f.rec.issues.length, 0, 'no digest — the failure is on the ack path');
+        f.fixture.resolveFailIds = []; // the transient API fault clears
+        var out2 = run(m, f);
+        assert.equal(out2.ackResolved, 6, 'the retry resolves all six');
+        assert.equal(f.rec.resolves.length, 11, '5 + 6 across the two ticks');
+    });
+
+    test('AC2: an ack-reply failure holds the merge; the retry reads the thread resolved (clean replay)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('a nit'), 5)] });
+        var replies = 0;
+        f.io.replyToThread = function (a) {
+            replies++;
+            f.rec.replies.push(a);
+            if (replies === 1) throw new Error('boom');
+            return '{}';
+        };
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'the resolution step (resolve + machine ack tag) failed — do NOT merge');
+        assert.contains(threw.message, 'ack-reply failures 1');
+        f.fixture.threads[0].isResolved = true; // the resolve DID land — GitHub state moved on
+        var out2 = run(m, f);
+        assert.equal(out2.ackResolved, 0);
+        assert.equal(out2.counts.resolved, 1, 'the previous resolve is terminal — no re-ack');
+        assert.contains(m.outcomeLines(out2)[0], 'no unresolved machine-owned');
+    });
+
+    test('AC3 no-regression replay: one >=IMPORTANT + nits → digest+defered for the IMPORTANT, wontfix acks for the nits', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [
+            ghThread({ id: 'PRT_1', line: 42 }),
+            belowThread('PRT_S1', suggestionBody('extract'), 11),
+            belowThread('PRT_N1', nitBody('typo'), 22)
+        ] });
+        var out = run(m, f);
+        assert.equal(out.counted.length, 1, 'the IMPORTANT thread rides the digest path');
+        assert.equal(out.digest, 501);
+        assert.equal(out.resolved, 1);
+        assert.equal(out.ackResolved, 2, 'the two below-threshold threads ack-resolved');
+        assert.equal(f.rec.issues.length, 1, 'ONE digest for the >=IMPORTANT thread');
+        assert.contains(f.rec.replies[0].text, 'defered: #501',
+            'the >=IMPORTANT thread keeps its canonical defered tag');
+        var wontfixReplies = f.rec.replies.filter(function (r) {
+            var p = reviewDispositionsMod().parseDispositionTag(r.text);
+            return p && p.tag === 'wontfix';
+        });
+        assert.equal(wontfixReplies.length, 2, 'the nits ride the wontfix ack path');
+    });
+
+    test('an id-less below-threshold machine thread can never resolve — the merge is HELD', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread(null, nitBody('a nit'), 5)] });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'no resolve id — terminal resolution is impossible — hold');
+        assert.equal(f.rec.resolves.length, 0);
+    });
+
+    test('a missing resolveThread primitive with open nits holds the merge (cannot reach terminal resolution)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('a nit'), 5)] });
+        delete f.io.resolveThread;
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw,
+            'a deployment defect holds the merge and keeps failing the funnel job (the escalation surface)');
+    });
+
+    test('outcome line of the ack-only replay says what happened', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: sixBelowThresholdThreads() });
+        var line = m.outcomeLines(run(m, f))[0];
+        assert.contains(line, '#42');
+        assert.contains(line, 'ack-resolved');
+        assert.contains(line, 'wontfix');
+        assert.contains(line, 'zero open machine-owned threads');
+    });
+
+    test('the counted line of a >=IMPORTANT-only replay carries no idle ack-stats fragment (gh-1370 rework)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [ghThread({ id: 'PRT_1', line: 42 })] });
+        var out = run(m, f);
+        assert.equal(out.counted.length, 1, 'the digest path ran');
+        assert.equal(out.ackThreads.length, 0, 'nothing below the threshold rode the ack path');
+        var line = m.outcomeLines(out)[0];
+        assert.contains(line, '#501');
+        assert.notContains(line, 'ack-resolved without a fix',
+            'a replay with zero ack activity must not embed the idle suggestion/nit fragment');
+        assert.notContains(line, 'wontfix',
+            'cleanOutcomeLine keeps the pure gh-1353 wording when ackIdle — countedOutcomeLine matches it');
+    });
+
+    test('a marker-less machine thread (severity none) rides the ack path — the documented fallthrough (gh-1370 rework)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_U1', 'plain prose, no marker', 7)] });
+        var out = run(m, f); // must NOT throw — the ack path is the only terminal outcome for an unmarkable thread
+        assert.equal(out.counts.machine, 1);
+        assert.equal(out.ackThreads.length, 1, 'a marker-less machine thread lands on the ack path');
+        assert.equal(out.ackThreads[0].severity, 'SUGGESTION',
+            "threadSeverity 'none' → severityClassOf fallback 'SUGGESTION' (findingRegistry)");
+        assert.equal(out.ackResolved, 1,
+            'auto-acked: holding the merge on an unresolvable classification would never converge');
+        assert.contains(f.rec.replies[0].text, 'wontfix:',
+            'the ack carries the machine-parsed wontfix disposition');
+        assert.equal(f.rec.issues.length, 0, 'no digest — below the gating threshold');
     });
 });
 

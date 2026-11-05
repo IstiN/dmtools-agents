@@ -37,9 +37,12 @@
 // (mergeBot's copy was byte-identical to mergeTrigger.js's).
 var mcpParse = require('../common/mcpParse.js');
 
-// gh-1353: the merge backstop (epic gh-1328 §4) rides every squash-merge —
-// ONE digest issue + `defered` resolutions for open machine-owned
-// >=IMPORTANT threads before the merge proceeds. A record, not a gate.
+// gh-1353: the merge backstop rides every squash-merge — and since gh-1370
+// it is a GATE on machine-owned threads: ONE digest issue + `defered`
+// resolutions for open machine-owned >=IMPORTANT threads, `wontfix`
+// ack-resolutions for the below-threshold ones, and a failed resolution
+// HOLDS the merge (merging with an open machine thread is a policy
+// violation; the next tick retries).
 var mergeBackstop = require('../common/mergeBackstop.js');
 
 // Thin wrapper keeps every call site unchanged.
@@ -576,12 +579,15 @@ function latchValidated(owner, name, pr, say) {
 
 /**
  * Squash-merge attempt for an approved head (gh-1040 extraction):
- * gh-1353 merge backstop FIRST (ONE digest issue + `defered` resolutions
- * for open machine-owned >=IMPORTANT review threads — a record, not a
- * gate), then merges through squashMerge (one transparent retry) and logs
- * the caller's merged line on success or the verbatim refusal on failure.
- * A record-keeping failure (broken read, digest-filing) defers the merge
- * — said aloud, acted 0, the queue keeps moving (never merges undigested).
+ * gh-1353 merge backstop FIRST — since gh-1370 it GATES the merge on
+ * machine-owned threads: >=IMPORTANT threads ride the digest (`defered:`
+ * resolutions), SUGGESTION/NIT threads resolve WITHOUT a fix (`wontfix`
+ * ack tags), human threads stay untouched (branch protection owns them).
+ * Then merges through squashMerge (one transparent retry) and logs the
+ * caller's merged line on success or the verbatim refusal on failure. A
+ * record-keeping OR resolution failure defers the merge — said aloud,
+ * acted 0, the queue keeps moving; the retry is the next tick, and a
+ * repeat failure keeps saying the deferral (the escalation surface).
  * Returns the acted credit (1 or 0).
  */
 function mergeApprovedHead(run, pr, mergedLine) {
@@ -590,7 +596,7 @@ function mergeApprovedHead(run, pr, mergedLine) {
             run.owner, run.name, run.job, pr.number, pr, run.say);
     } catch (eBackstop) {
         run.say('❌ pr-' + pr.number + ' merge backstop failed — merge deferred' +
-            ' (never merges undigested): ' + (eBackstop.message || eBackstop));
+            ' (gh-1370: every machine-owned thread must resolve first): ' + (eBackstop.message || eBackstop));
         return 0;
     }
     var m = squashMerge(run.owner, run.name, pr.number);
