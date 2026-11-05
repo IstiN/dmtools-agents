@@ -572,7 +572,21 @@ suite('legFailureReport.renderReport — missing phase degrades to omission (gh-
 
 });
 
+var _lfrCanRunBash_ = typeof cli_execute_command === 'function';
+if (_lfrCanRunBash_) {
+    try {
+        cli_execute_command({ command: 'bash -c "echo __lfr_probe__"' });
+    } catch (e) {
+        _lfrCanRunBash_ = false; // bash not whitelisted in this dmtools env
+    }
+}
+
 suite('legFailureReport — transport script self-test (gh-1363 rework)', function () {
+
+    if (!_lfrCanRunBash_) {
+        console.log('  ⏭️  skipped — bash not executable here');
+        return;
+    }
 
     test('bash scripts/report-leg-failure.sh --self-test passes — the advertised verification is real', function () {
         var out = cli_execute_command({ command: 'bash scripts/report-leg-failure.sh --self-test' }) || '';
