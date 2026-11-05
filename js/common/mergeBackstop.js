@@ -182,6 +182,15 @@ function digestRowOf(row, severityClass) {
  * the resolve loops skip it and the gate holds the merge: terminal
  * resolution is impossible). An empty allowlist counts nothing (gh-744
  * fail closed).
+ *
+ * Deliberate fallthrough (gh-1370 rework): a machine-owned thread whose
+ * body carries no recognizable severity marker classifies as 'none'
+ * (reviewVerdicts.threadSeverity) → severityClassOf's 'SUGGESTION'
+ * fallback and rides the ack path. Intended, not a misclassification:
+ * holding the merge on an unresolvable classification would never
+ * converge, so the public `wontfix` ack is the only terminal outcome for
+ * such a thread (a later audit reading the digest/ack trail sees WHY a
+ * marker-less thread closed as `wontfix`).
  */
 function classifyThreads(threads, logins) {
     var out = { counted: [], ackThreads: [], human: [],
@@ -891,7 +900,8 @@ function countedOutcomeLine(out) {
         ' machine-owned >=IMPORTANT thread(s) deferred to ' +
         (out.digestReused ? 'existing digest' : 'digest') + ' #' + out.digest +
         ' — resolved ' + out.resolved + ', resolve failures ' + out.resolveFailures +
-        ', ack failures ' + out.ackFailures + '; ' + ackStatsLine(out) + '; ' + out.human.length +
+        ', ack failures ' + out.ackFailures + '; ' +
+        (ackIdle(out) ? '' : ackStatsLine(out) + '; ') + out.human.length +
         ' open human thread(s) listed open (human)' +
         (out.digestDuplicate ? (' (duplicate digest #' + out.digestDuplicate +
             ' abandoned — a concurrent merge funnel filed first)') : '') +

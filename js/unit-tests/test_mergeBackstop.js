@@ -863,6 +863,35 @@ suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)'
         assert.contains(line, 'wontfix');
         assert.contains(line, 'zero open machine-owned threads');
     });
+
+    test('the counted line of a >=IMPORTANT-only replay carries no idle ack-stats fragment (gh-1370 rework)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [ghThread({ id: 'PRT_1', line: 42 })] });
+        var out = run(m, f);
+        assert.equal(out.counted.length, 1, 'the digest path ran');
+        assert.equal(out.ackThreads.length, 0, 'nothing below the threshold rode the ack path');
+        var line = m.outcomeLines(out)[0];
+        assert.contains(line, '#501');
+        assert.notContains(line, 'ack-resolved without a fix',
+            'a replay with zero ack activity must not embed the idle suggestion/nit fragment');
+        assert.notContains(line, 'wontfix',
+            'cleanOutcomeLine keeps the pure gh-1353 wording when ackIdle — countedOutcomeLine matches it');
+    });
+
+    test('a marker-less machine thread (severity none) rides the ack path — the documented fallthrough (gh-1370 rework)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_U1', 'plain prose, no marker', 7)] });
+        var out = run(m, f); // must NOT throw — the ack path is the only terminal outcome for an unmarkable thread
+        assert.equal(out.counts.machine, 1);
+        assert.equal(out.ackThreads.length, 1, 'a marker-less machine thread lands on the ack path');
+        assert.equal(out.ackThreads[0].severity, 'SUGGESTION',
+            "threadSeverity 'none' → severityClassOf fallback 'SUGGESTION' (findingRegistry)");
+        assert.equal(out.ackResolved, 1,
+            'auto-acked: holding the merge on an unresolvable classification would never converge');
+        assert.contains(f.rec.replies[0].text, 'wontfix:',
+            'the ack carries the machine-parsed wontfix disposition');
+        assert.equal(f.rec.issues.length, 0, 'no digest — below the gating threshold');
+    });
 });
 
 // ── the merge-path wiring (runBackstopForPr + githubBridgeIo) ────────────────
