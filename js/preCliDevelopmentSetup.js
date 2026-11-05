@@ -238,33 +238,38 @@ function establishFeatureBranch(config, customParams, ticket) {
     });
 }
 
-/**
- * Pipeline-owned runtime artifacts that ARE tracked in the repo but get
- * rewritten by every leg — a stale local modification of one of them aborts
- * `git checkout` with "local changes would be overwritten" and the whole
- * leg dies at branch setup (gh-1358: four consecutive dev-leg failures on
- * #1352). Best-effort reset + untrack before any branch switch; both steps
- * are non-fatal (warn and continue — the checkout reports any real conflict
- * that remains). Once gh-1358 untracks the marker on master and the branch
- * aligns with it, both calls become no-ops.
- */
+// gh-1358: pipeline-owned runtime artifacts that ARE tracked in the repo but
+// get rewritten by every leg — a stale local modification of one of them
+// aborts `git checkout` with "local changes would be overwritten" and the
+// whole leg dies at branch setup (four consecutive dev-leg failures on
+// #1352). The helpers below run best-effort before every branch switch:
+// non-fatal (warn and continue — the checkout reports any real conflict that
+// remains). Once gh-1358 untracks the marker on master and a branch aligns
+// with it, both are no-ops.
 var PIPELINE_RUNTIME_ARTIFACTS = ['.dmtools-target-workingdir'];
 
+/** Best-effort: reset a stale local modification of one runtime artifact. */
+function resetRuntimeArtifact(artifact) {
+    try {
+        runCmd({ command: 'git checkout -- ' + artifact });
+    } catch (resetErr) {
+        console.warn('Could not reset runtime artifact', artifact + ':', resetErr);
+    }
+}
+
+/** Best-effort: stop tracking one runtime artifact on the current branch. */
+function untrackRuntimeArtifact(artifact) {
+    try {
+        runCmd({ command: 'git rm --cached --ignore-unmatch ' + artifact });
+    } catch (rmErr) {
+        console.warn('Could not untrack runtime artifact', artifact + ':', rmErr);
+    }
+}
+
+/** Reset + untrack every known runtime artifact before a branch switch. */
 function discardRuntimeArtifactModifications() {
-    PIPELINE_RUNTIME_ARTIFACTS.forEach(function (artifact) {
-        try {
-            runCmd({ command: 'git checkout -- ' + artifact });
-        } catch (resetErr) {
-            console.warn('Could not reset runtime artifact', artifact + ':',
-                resetErr && resetErr.message ? resetErr.message : resetErr);
-        }
-        try {
-            runCmd({ command: 'git rm --cached --ignore-unmatch ' + artifact });
-        } catch (rmErr) {
-            console.warn('Could not untrack runtime artifact', artifact + ':',
-                rmErr && rmErr.message ? rmErr.message : rmErr);
-        }
-    });
+    PIPELINE_RUNTIME_ARTIFACTS.forEach(resetRuntimeArtifact);
+    PIPELINE_RUNTIME_ARTIFACTS.forEach(untrackRuntimeArtifact);
 }
 
 /** Local dev branch: checkout, then align with the base branch. */
