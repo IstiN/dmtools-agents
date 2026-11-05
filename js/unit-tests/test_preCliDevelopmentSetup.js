@@ -2318,21 +2318,12 @@ function gh1364SetupCommandsOk() {
 }
 
 // Full action() gauntlet with a recorded github_create_commit_status. Every
-// default lives in the Object.assign maps (no `||` — the CRAP gate measures
-// test files too).
-function loadForGh1364(bag, opts) {
-    opts = Object.assign({
-        config: null,
-        cliThrowFor: {},
-        cliResponses: {},
-        statusThrows: null,
-        env: null,
-        configLoadThrows: null,
-        setupCommands: null,
-        extraGlobals: {}
-    }, opts || {});
-    var setupCommands = opts.setupCommands || gh1364SetupCommandsOk();
-    var globals = Object.assign({
+// default lives in the Object.assign maps (no `||` in the builders' hot paths —
+// the CRAP gate measures test files too, so each builder below stays small and
+// fully covered: gh1364Globals (mock globals), gh1364RequireMap (module map),
+// loadForGh1364 (the thin composition; gh-1364 rework split for the ratchet).
+function gh1364Globals(bag, opts) {
+    var globals = {
         cli_execute_command: function (commandOpts) {
             var command = commandOpts && commandOpts.command;
             bag.cliCalls.push(command);
@@ -2354,40 +2345,59 @@ function loadForGh1364(bag, opts) {
         },
         github_add_labels: function () {},
         github_remove_label: function () {}
-    }, opts.extraGlobals);
+    };
     if (opts.env) globals.java = opts.env;
+    return globals;
+}
+
+function gh1364RequireMap(trackers, opts) {
+    return makeRequire({
+        'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        'gitStaging.js': loadModule('js/common/gitStaging.js'),
+        './configLoader.js': {
+            loadProjectConfig: function () {
+                if (opts.configLoadThrows) throw new Error(opts.configLoadThrows);
+                return opts.config || gh1364Config();
+            },
+            paramsForConfigLoad: function (p) { return p; },
+            resolveBranchName: function (cfg, ticket, role) { return 'ai/' + ticket.key; },
+            resolvePRTargetBranch: function () { return 'main'; },
+            loadHookFn: function () { return null; }
+        },
+        './common/pullRequest.js': PR_HELPER_REAL,
+        './config.js': NOOP_CONFIG_JS,
+        './fetchQuestionsToInput.js': { action: function () {} },
+        './fetchLinkedTestsToInput.js': { action: function () {} },
+        './fetchParentContextToInput.js': { action: function () {} },
+        './restoreFromReleases.js': { action: function () {} },
+        './common/setupCommands.js': opts.setupCommands || gh1364SetupCommandsOk(),
+        './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+        './common/commentMarkup.js': devCommentMarkupModule,
+        './common/legFailureReport.js': legFailureReportModule,
+        './common/legStartSignal.js': legStartSignalReal,
+        './common/trackers.js': trackers
+    });
+}
+
+function loadForGh1364(bag, opts) {
+    opts = Object.assign({
+        config: null,
+        cliThrowFor: {},
+        cliResponses: {},
+        statusThrows: null,
+        env: null,
+        configLoadThrows: null,
+        setupCommands: null,
+        extraGlobals: {}
+    }, opts || {});
+    var globals = gh1364Globals(bag, opts);
     var trackers = loadModule('js/common/trackers.js', makeRequire({
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
     }), globals);
     return loadModule(
         'js/preCliDevelopmentSetup.js',
-        makeRequire({
-            'branchSetup.js': loadModule('js/common/branchSetup.js'),
-            'gitStaging.js': loadModule('js/common/gitStaging.js'),
-            './configLoader.js': {
-                loadProjectConfig: function () {
-                    if (opts.configLoadThrows) throw new Error(opts.configLoadThrows);
-                    return opts.config || gh1364Config();
-                },
-                paramsForConfigLoad: function (p) { return p; },
-                resolveBranchName: function (cfg, ticket, role) { return 'ai/' + ticket.key; },
-                resolvePRTargetBranch: function () { return 'main'; },
-                loadHookFn: function () { return null; }
-            },
-            './common/pullRequest.js': PR_HELPER_REAL,
-            './config.js': NOOP_CONFIG_JS,
-            './fetchQuestionsToInput.js': { action: function () {} },
-            './fetchLinkedTestsToInput.js': { action: function () {} },
-            './fetchParentContextToInput.js': { action: function () {} },
-            './restoreFromReleases.js': { action: function () {} },
-            './common/setupCommands.js': setupCommands,
-            './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
-            './common/commentMarkup.js': devCommentMarkupModule,
-            './common/legFailureReport.js': legFailureReportModule,
-            './common/legStartSignal.js': legStartSignalReal,
-            './common/trackers.js': trackers
-        }),
+        gh1364RequireMap(trackers, opts),
         globals
     );
 }
@@ -2495,6 +2505,89 @@ suite('preCliDevelopmentSetup.action — leg-start ok signal (gh-1364)', functio
         assert.equal(threw, null);
         assert.equal(bag.statuses.length, 0, 'no sha → no status');
         assert.equal(mod.currentLegStartLine(), 'leg-start: ok (branch ai/gh-1364)');
+    });
+
+    test('mixed path: pre-flight state collection fails → the fresh rev-parse fallback still feeds the status', function () {
+        var bag = makeGh1364Bag();
+        var mod = loadForGh1364(bag, { cliThrowFor: { 'git status --porcelain': 'fatal: not a git repository' } });
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function () { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var threw = runGh1364Action(mod);
+        } finally {
+            console.warn = originalWarn;
+        }
+
+        assert.equal(threw, null, 'a failed pre-flight collection never fails the leg');
+        assert.ok(warnings.join('\n').indexOf('pre-flight state collection failed') !== -1,
+            'the pre-flight capture failed best-effort: ' + JSON.stringify(warnings));
+        assert.equal(bag.statuses.length, 1, 'no remembered SHA → the fresh probe still resolves one');
+        assert.equal(bag.statuses[0].sha, GH1364_SHA, 'the fallback SHA is the same head the leg ran on');
+    });
+
+    test('remembered head is not a SHA (garbage rev-parse) → the fresh probe still feeds the status', function () {
+        var bag = makeGh1364Bag();
+        var revParseCalls = 0;
+        var mod = loadForGh1364(bag, { extraGlobals: {
+            cli_execute_command: function (commandOpts) {
+                var command = commandOpts && commandOpts.command;
+                bag.cliCalls.push(command);
+                if (command === 'git rev-parse HEAD') {
+                    revParseCalls++;
+                    // the pre-flight capture answers garbage; the later probe
+                    // (post-checkout head) answers the real SHA — the
+                    // remembered-invalid → fresh-succeeds mixed path.
+                    return revParseCalls === 1 ? 'detached-garbage\n' : GH1364_SHA + '\n';
+                }
+                if (Object.prototype.hasOwnProperty.call(GH1364_PROBES, command)) return GH1364_PROBES[command];
+                return '';
+            }
+        } });
+
+        var threw = runGh1364Action(mod);
+
+        assert.equal(threw, null);
+        assert.ok(revParseCalls >= 2, 'both the pre-flight capture and the fallback probe ran, got ' + revParseCalls);
+        assert.equal(bag.statuses.length, 1, 'an invalid remembered SHA falls through to the fresh probe');
+        assert.equal(bag.statuses[0].sha, GH1364_SHA, 'the fresh SHA the leg actually runs on');
+    });
+
+    test('both the remembered and the fresh head are garbage → no status, log line still emitted', function () {
+        var bag = makeGh1364Bag();
+        var mod = loadForGh1364(bag, { extraGlobals: {
+            cli_execute_command: function (commandOpts) {
+                var command = commandOpts && commandOpts.command;
+                bag.cliCalls.push(command);
+                if (command === 'git rev-parse HEAD') return 'detached-garbage\n';
+                if (Object.prototype.hasOwnProperty.call(GH1364_PROBES, command)) return GH1364_PROBES[command];
+                return '';
+            }
+        } });
+
+        var threw = runGh1364Action(mod);
+
+        assert.equal(threw, null);
+        assert.equal(bag.statuses.length, 0, 'a non-SHA head never feeds the commit status');
+        assert.equal(mod.currentLegStartLine(), 'leg-start: ok (branch ai/gh-1364)');
+    });
+
+    test('direct call with no config: skipped with a warning, never a throw (posting guard chain)', function () {
+        var bag = makeGh1364Bag();
+        var mod = loadForGh1364(bag);
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function () { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        var posted = null;
+        try {
+            posted = mod.postLegStartStatusBestEffort(null, {}, { ok: true, branchName: 'ai/gh-1364' });
+        } finally {
+            console.warn = originalWarn;
+        }
+        assert.equal(posted, null, 'no config → null');
+        assert.equal(bag.statuses.length, 0, 'no status call attempted');
+        assert.ok(warnings.join('\n').indexOf('no config') !== -1,
+            'the log-only warning is carried: ' + JSON.stringify(warnings));
     });
 
     test('CI env provides the run URL → it rides the status as target_url', function () {

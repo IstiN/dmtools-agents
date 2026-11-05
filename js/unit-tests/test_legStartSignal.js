@@ -86,6 +86,22 @@ suite('legStartSignal.classifySetupError — closed reason-class set (gh-1364 AC
             "SyntaxError: Unexpected token '}' while parsing .dmtools/config.js"), 'config');
     });
 
+    test('checkout: ref-race — the remote ref vanished between probe and checkout (gh-1364 review)', function () {
+        assert.equal(legStartSignal.classifySetupError(
+            "fatal: 'origin/dev/PROJ-1' is not a commit and a branch 'dev/PROJ-1' cannot be created from it"),
+            'checkout');
+    });
+
+    test('checkout: a bare is-not-a-commit message still names the ref problem', function () {
+        assert.equal(legStartSignal.classifySetupError(
+            "fatal: bad revision 'origin/dev/PROJ-1' is not a commit"), 'checkout');
+    });
+
+    test('checkout: cannot-be-created-from reset failure without the is-not-a-commit phrase', function () {
+        assert.equal(legStartSignal.classifySetupError(
+            "fatal: a branch 'dev/PROJ-1' cannot be created from 'origin/dev/PROJ-1'"), 'checkout');
+    });
+
     test('other: environment/setup-command failure outside the closed classes', function () {
         assert.equal(legStartSignal.classifySetupError(
             'Required setup command failed: npm ci — exit code 1'), 'other');
@@ -200,6 +216,88 @@ suite('legStartSignal.buildCommitStatusArgs — commit-status payload (gh-1364 A
         assert.ok(args.description.length <= legStartSignal.STATUS_DESCRIPTION_MAX,
             'capped, got ' + args.description.length);
         assert.equal(legStartSignal.STATUS_DESCRIPTION_MAX, 140);
+    });
+
+});
+
+suite('legStartSignal.isValidHeadSha — head-SHA validation (gh-1364 rework)', function () {
+
+    test('a 40-char lowercase hex SHA is valid', function () {
+        assert.equal(legStartSignal.isValidHeadSha('f3183be0925cf2b3fe399b50323fbc533ccf223a'), true);
+    });
+
+    test('a 7-char short SHA is valid (the abbreviated form)', function () {
+        assert.equal(legStartSignal.isValidHeadSha('f3183be'), true);
+    });
+
+    test('an uppercase hex SHA is valid', function () {
+        assert.equal(legStartSignal.isValidHeadSha('F3183BE0925CF2B3FE399B50323FBC533CCF223A'), true);
+    });
+
+    test('a 39-char hex token is inside the 7..40 band', function () {
+        assert.equal(legStartSignal.isValidHeadSha('f3183be0925cf2b3fe399b50323fbc533ccf22'), true);
+    });
+
+    test('a 6-char token is too short', function () {
+        assert.equal(legStartSignal.isValidHeadSha('f3183b'), false);
+    });
+
+    test('a 41-char token is too long', function () {
+        assert.equal(legStartSignal.isValidHeadSha('f3183be0925cf2b3fe399b50323fbc533ccf223aa'), false);
+    });
+
+    test('non-hex garbage is invalid', function () {
+        assert.equal(legStartSignal.isValidHeadSha('detached-head-ref'), false);
+        assert.equal(legStartSignal.isValidHeadSha('HEAD detached at f3183be'), false);
+    });
+
+    test('null, undefined and empty are invalid', function () {
+        assert.equal(legStartSignal.isValidHeadSha(null), false);
+        assert.equal(legStartSignal.isValidHeadSha(undefined), false);
+        assert.equal(legStartSignal.isValidHeadSha(''), false);
+    });
+
+});
+
+suite('legStartSignal.resolveLegStartStatusTarget — pure posting guard chain (gh-1364 rework)', function () {
+
+    test('no config → skip with the log-only warning', function () {
+        var target = legStartSignal.resolveLegStartStatusTarget(null, 'github');
+        assert.equal(target.skip, true);
+        assert.equal(target.warn, 'leg-start commit status skipped: no config (line stays log-only)');
+    });
+
+    test('non-github provider → silent skip (expected on a jira/ado leg, not noise)', function () {
+        var target = legStartSignal.resolveLegStartStatusTarget({ repository: { owner: 'acme', repo: 'widgets' } }, 'jira');
+        assert.equal(target.skip, true);
+        assert.equal(target.warn, undefined, 'no warning — a non-github tracker is the normal case');
+    });
+
+    test('github provider with no repository scope → skip with a warning', function () {
+        var target = legStartSignal.resolveLegStartStatusTarget({ tracker: { provider: 'github' } }, 'github');
+        assert.equal(target.skip, true);
+        assert.equal(target.warn, 'leg-start commit status skipped: no repository scope in config');
+    });
+
+    test('repository without owner → skip with a warning', function () {
+        var target = legStartSignal.resolveLegStartStatusTarget({ repository: { repo: 'widgets' } }, 'github');
+        assert.equal(target.skip, true);
+        assert.ok(target.warn, 'a warning is carried');
+    });
+
+    test('owner without repo → skip with a warning', function () {
+        var target = legStartSignal.resolveLegStartStatusTarget({ repository: { owner: 'acme' } }, 'github');
+        assert.equal(target.skip, true);
+        assert.ok(target.warn, 'a warning is carried');
+    });
+
+    test('github provider with a full repository scope → the posting target coordinates', function () {
+        var target = legStartSignal.resolveLegStartStatusTarget(
+            { repository: { owner: 'acme', repo: 'widgets' } }, 'github');
+        assert.equal(target.skip, undefined);
+        assert.equal(target.warn, undefined);
+        assert.equal(target.workspace, 'acme');
+        assert.equal(target.repository, 'widgets');
     });
 
 });

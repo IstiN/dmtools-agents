@@ -786,17 +786,16 @@ function markLegStartEmitted(line) {
 }
 
 /**
- * The head SHA the leg ran against: the pre-flight head captured before any
- * git operation mutated the workspace, else a fresh rev-parse (post-checkout
- * that is the dev branch tip — still the truest "where the leg runs"). Null
- * when neither resolves — the status then stays log-only.
+ * Fresh `git rev-parse HEAD` probe — the fallback when the pre-flight head is
+ * absent or not a SHA (post-checkout that is the dev branch tip — still the
+ * truest "where the leg runs"). Null when the probe fails or answers a
+ * non-SHA (gh-1364 rework: extracted so resolveLegStartHeadSha stays a thin
+ * remembered→fresh chain under the CRAP ratchet).
  */
-function resolveLegStartHeadSha() {
-    var remembered = currentPreflightHeadSha();
-    if (remembered && /^[0-9a-f]{7,40}$/i.test(remembered)) return remembered;
+function probeFreshHeadSha() {
     try {
         var sha = cleanCommandOutput(runCmd({ command: 'git rev-parse HEAD' }) || '').trim();
-        if (/^[0-9a-f]{7,40}$/i.test(sha)) return sha;
+        if (legStartSignal.isValidHeadSha(sha)) return sha;
     } catch (e) {
         console.warn('leg-start: head SHA not resolvable (commit status skipped):', e && e.message ? e.message : e);
     }
@@ -804,10 +803,23 @@ function resolveLegStartHeadSha() {
 }
 
 /**
- * Post the leg-start commit status — best-effort end to end: no config, a
- * non-github tracker (statuses are GitHub plumbing), no repository scope or
- * an unresolvable head skips the call; a throwing status API is warned, never
- * fatal. Returns the posted args, or null when skipped/failed.
+ * The head SHA the leg ran against: the pre-flight head captured before any
+ * git operation mutated the workspace, else a fresh rev-parse. Null when
+ * neither resolves — the status then stays log-only.
+ */
+function resolveLegStartHeadSha() {
+    var remembered = currentPreflightHeadSha();
+    if (legStartSignal.isValidHeadSha(remembered)) return remembered;
+    return probeFreshHeadSha();
+}
+
+/**
+ * Post the leg-start commit status — best-effort end to end. The skip guards
+ * (no config / non-github tracker / no repository scope) are the pure
+ * `resolveLegStartStatusTarget` chain in js/common/legStartSignal.js (gh-1364
+ * rework); here stays the small posting path: resolve the head, build the
+ * payload, post. An unresolvable head or a throwing status API is warned,
+ * never fatal. Returns the posted args, or null when skipped/failed.
  */
 function postLegStartStatusBestEffort(config, customParams, body) {
     try {
@@ -815,17 +827,17 @@ function postLegStartStatusBestEffort(config, customParams, body) {
             console.warn('leg-start commit status skipped: no config (line stays log-only)');
             return null;
         }
-        var tracker = trackersModule.createTracker(config, customParams || {});
-        if (tracker.provider() !== 'github') return null;
-        if (!(config.repository && config.repository.owner && config.repository.repo)) {
-            console.warn('leg-start commit status skipped: no repository scope in config');
+        var provider = trackersModule.createTracker(config, customParams || {}).provider();
+        var target = legStartSignal.resolveLegStartStatusTarget(config, provider);
+        if (target.skip) {
+            if (target.warn) console.warn(target.warn);
             return null;
         }
         var sha = resolveLegStartHeadSha();
         if (!sha) return null;
         var args = legStartSignal.buildCommitStatusArgs({
-            workspace: config.repository.owner,
-            repository: config.repository.repo,
+            workspace: target.workspace,
+            repository: target.repository,
             sha: sha,
             ok: body.ok === true,
             branchName: body.branchName,
@@ -1170,6 +1182,7 @@ if (typeof module !== 'undefined' && module.exports) {
         currentPreflightHeadSha,
         currentLegStartLine,
         resolveLegStartHeadSha,
+        probeFreshHeadSha,
         postLegStartStatusBestEffort,
         emitLegStartOk,
         emitLegStartFailed,

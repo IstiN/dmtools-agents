@@ -70,7 +70,9 @@ var CLASS_PATTERNS = {
         'rpc failed',
         'authentication failed',
         'connection closed by',
-        'repository not found'
+        'repository not found',
+        'is not a commit',
+        'cannot be created from'
     ],
     'config': [
         'customparams',
@@ -163,12 +165,48 @@ function buildCommitStatusArgs(parts) {
     return args;
 }
 
+/**
+ * Head-SHA shape guard for the leg-start commit status (gh-1364 rework): a
+ * full or abbreviated (7..40 chars) hex token — the forms `git rev-parse`
+ * answers. Null/absent/garbage is invalid, so the status stays log-only
+ * instead of posting against a made-up ref.
+ */
+function isValidHeadSha(sha) {
+    return /^[0-9a-f]{7,40}$/i.test(String(sha == null ? '' : sha));
+}
+
+/**
+ * The pure guard chain of the leg-start commit-status posting (gh-1364
+ * rework — extracted from postLegStartStatusBestEffort so the wiring keeps a
+ * small posting path). `provider` is the RESOLVED tracker provider name
+ * ('github' | 'jira' | 'ado' | …); building the tracker is IO and stays in
+ * the wiring. Returns:
+ *   { skip: true, warn: '…' } — posting skipped; `warn` is the reason only
+ *                               when the skip is unexpected noise (a
+ *                               non-github tracker is the normal case and
+ *                               stays silent)
+ *   { workspace, repository } — the posting coordinates from config
+ */
+function resolveLegStartStatusTarget(config, provider) {
+    if (!config) {
+        return { skip: true, warn: 'leg-start commit status skipped: no config (line stays log-only)' };
+    }
+    if (String(provider) !== 'github') return { skip: true };
+    var repository = config.repository || {};
+    if (!(repository.owner && repository.repo)) {
+        return { skip: true, warn: 'leg-start commit status skipped: no repository scope in config' };
+    }
+    return { workspace: repository.owner, repository: repository.repo };
+}
+
 module.exports = {
     classifySetupError: classifySetupError,
     firstErrorLine: firstErrorLine,
     okSummaryLine: okSummaryLine,
     failedSummaryLine: failedSummaryLine,
     buildCommitStatusArgs: buildCommitStatusArgs,
+    isValidHeadSha: isValidHeadSha,
+    resolveLegStartStatusTarget: resolveLegStartStatusTarget,
     REASON_CLASSES: REASON_CLASSES,
     STATUS_CONTEXT_OK: STATUS_CONTEXT_OK,
     STATUS_CONTEXT_FAILED: STATUS_CONTEXT_FAILED,
