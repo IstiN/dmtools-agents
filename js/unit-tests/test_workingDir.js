@@ -111,6 +111,7 @@ function loadPreCli(workingDir) {
         ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
         { file_read: fileReadMock }
     );
@@ -140,6 +141,7 @@ function loadPreCli(workingDir) {
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
             './common/trackers.js': trackersModuleReal
         }),
         modMocks
@@ -225,6 +227,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             makeRequire({ './config.js': configModule ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             { file_read: function(opts) {
                 var p = opts && (opts.path || opts);
@@ -262,6 +265,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             modMocks
         );
@@ -298,6 +302,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             makeRequire({ './config.js': configModule ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             { file_read: function(opts) {
                 var p = opts && (opts.path || opts);
@@ -335,6 +340,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             modMocks
         );
@@ -375,6 +381,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             makeRequire({ './config.js': configModule ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             { file_read: function(opts) {
                 var p = opts && (opts.path || opts);
@@ -412,6 +419,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             modMocks
         );
@@ -455,6 +463,7 @@ function loadPreCliTestAutomation(workingDir) {
         ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
         { file_read: fileReadMock }
     );
@@ -468,6 +477,7 @@ function loadPreCliTestAutomation(workingDir) {
         ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }, { './common/trackers.js': trackersWith(_m) })), _m); })({
             cli_execute_command: mockCli,
             file_read: fileReadMock,
@@ -535,6 +545,7 @@ suite('preCliTestAutomationSetup > workingDir', function() {
             makeRequire({ './config.js': configModule ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             { file_read: function(opts) {
                 try { return file_read(opts); } catch (e) { return null; }
@@ -549,6 +560,7 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                 'branchSetup.js': loadModule('js/common/branchSetup.js', null, _m),
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
@@ -593,6 +605,7 @@ suite('preCliTestAutomationSetup > workingDir', function() {
             makeRequire({ './config.js': configModule ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             { file_read: function(opts) {
                 try { return file_read(opts); } catch (e) { return null; }
@@ -608,6 +621,7 @@ suite('preCliTestAutomationSetup > workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
@@ -663,6 +677,7 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
         ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
         { file_read: fileReadMock }
     );
@@ -690,6 +705,7 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
         makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
         allMocks
     );
@@ -712,6 +728,7 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
             }), allMocks),
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
             './postTestAutomationResultsHelpers.js': loadModule(
                 'js/postTestAutomationResultsHelpers.js',
                 makeRequire({}),
@@ -817,6 +834,7 @@ function makeIsolatedConfigLoader(fileMap) {
     return loadModule('js/configLoader.js', makeRequire({ './config.js': configModule ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }), { file_read: configBlockingFileRead(fileMap) });
 }
 
