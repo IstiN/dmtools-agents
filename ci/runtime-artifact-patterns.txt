@@ -1,0 +1,19 @@
+# Runtime-artifact guard pattern list (gh-1365).
+#
+# Consumed by the quality workflow's runtime-artifact guard step:
+#
+#   git ls-files --ignored --cached --exclude-from=ci/runtime-artifact-patterns.txt
+#
+# Any tracked file matching one of these patterns fails the job — pipeline-owned
+# runtime artifacts must never be tracked (a modified tracked copy in a runner
+# workspace blocks every dev-leg checkout; an untracked+ignored copy is harmless
+# by construction).
+#
+# Grammar: one gitignore-style pattern per line — the same rules as .gitignore
+# (a pattern without a slash matches the file name at any level, a trailing
+# slash matches directories, '#' comment lines and blank lines are ignored).
+# Extend this file to guard new runtime artifact paths — no workflow edit needed.
+#
+# dmtools pipeline runtime state - never tracked (gh-1358)
+.dmtools-target-workingdir
+.fah/
