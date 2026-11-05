@@ -579,18 +579,38 @@ function currentPreflightLine() {
     return _preflightLine;
 }
 
-/** Best-effort env read: Java bridge first (dmtools), node harness fallback. */
-function readEnvVar(name) {
+/** Best-effort env read via the dmtools Java bridge; null when unavailable. */
+function readJavaEnv(name) {
     try {
         var v = java.lang.System.getenv(name);
         if (v !== null && v !== undefined) return String(v);
     } catch (e) { /* no java bridge — node harness / standalone */ }
+    return null;
+}
+
+/** Best-effort env read via the node harness `process` global; null when unavailable. */
+function readProcessEnv(name) {
     try {
         if (typeof process !== 'undefined' && process.env && process.env[name] !== undefined) {
             return String(process.env[name]);
         }
-    } catch (e2) { /* no process global */ }
+    } catch (e) { /* no process global */ }
     return null;
+}
+
+/** Best-effort env read: Java bridge first (dmtools), node harness fallback. */
+function readEnvVar(name) {
+    return readJavaEnv(name) || readProcessEnv(name);
+}
+
+/** Comment objects ({body}|{text} shapes, null entries tolerated) → body strings. */
+function commentBodies(comments) {
+    var bodies = [];
+    var list = comments || [];
+    for (var i = 0; i < list.length; i++) {
+        bodies.push((list[i] && (list[i].body || list[i].text)) || '');
+    }
+    return bodies;
 }
 
 /**
@@ -603,17 +623,15 @@ function readEnvVar(name) {
 function deriveSetupRepeatCount(tracker, ticketKey, stage, errorMessage) {
     try {
         if (!tracker.getComments) return null;
-        var comments = tracker.getComments(ticketKey) || [];
-        var bodies = [];
-        for (var i = 0; i < comments.length; i++) {
-            bodies.push((comments[i] && (comments[i].body || comments[i].text)) || '');
-        }
         var signature = legFailureReport.failureSignature({
             workflow: SETUP_FAILURE_WORKFLOW, step: stage, message: errorMessage
         });
         return {
             signature: signature,
-            repeatCount: legFailureReport.consecutiveRepeatCount(signature, legFailureReport.parseSignatureLines(bodies))
+            repeatCount: legFailureReport.consecutiveRepeatCount(
+                signature,
+                legFailureReport.parseSignatureLines(commentBodies(tracker.getComments(ticketKey)))
+            )
         };
     } catch (e) {
         console.warn('setup failure repeat-count derivation failed (non-fatal):', e && e.message ? e.message : e);
@@ -653,12 +671,45 @@ function buildSetupErrorComment(flavor, stage, errorMessage, context) {
             step: stage,
             runId: context.runId,
             runUrl: context.runUrl,
-            excerpt: context.excerpt != null ? context.excerpt : errorMessage,
+            // The legacy block above already posts the error text as `Error:`
+            // — a default excerpt equal to it would render the same bytes
+            // twice. Only a caller-provided excerpt DISTINCT from the error
+            // (e.g. a different log tail) earns its own section (gh-1363
+            // review).
+            excerpt: (context.excerpt != null && context.excerpt !== errorMessage) ? context.excerpt : null,
             repeatCount: context.repeatCount,
             signature: context.signature
         });
     }
     return comment;
+}
+
+/**
+ * Fill every missing context field the module can derive: the repeat
+ * signature (prior ticket comments), the leg-start pre-flight line and the
+ * CI run identity. Returns the (mutated) context — extraction keeps
+ * postSetupErrorComment a single try/post/warn (crap ratchet, gh-1363).
+ */
+function deriveEnrichmentContext(tracker, ticketKey, stage, errorMessage, context) {
+    var ctx = context || {};
+    if (!ctx.signature) {
+        var derived = deriveSetupRepeatCount(tracker, ticketKey, stage, errorMessage);
+        if (derived) {
+            ctx.signature = derived.signature;
+            ctx.repeatCount = derived.repeatCount;
+        }
+    }
+    if (!ctx.preflightLine && _preflightLine) ctx.preflightLine = _preflightLine;
+    if (!ctx.runUrl) {
+        ctx.runUrl = legFailureReport.runUrlFromEnv(readEnvVar);
+        ctx.runId = legFailureReport.runIdFromEnv(readEnvVar);
+    }
+    return ctx;
+}
+
+/** Any collected context item → the report renders enriched. */
+function isEnrichedContext(ctx) {
+    return !!(ctx.preflightLine || ctx.runUrl || ctx.runId || ctx.signature);
 }
 
 /**
@@ -677,27 +728,14 @@ function buildSetupErrorComment(flavor, stage, errorMessage, context) {
 function postSetupErrorComment(config, customParams, ticketKey, stage, errorMessage, context) {
     try {
         var tracker = trackersModule.createTracker(config, customParams || {});
-        var ctx = context || {};
-        if (!ctx.signature) {
-            var derived = deriveSetupRepeatCount(tracker, ticketKey, stage, errorMessage);
-            if (derived) {
-                ctx.signature = derived.signature;
-                ctx.repeatCount = derived.repeatCount;
-            }
-        }
-        if (!ctx.preflightLine && _preflightLine) ctx.preflightLine = _preflightLine;
-        if (!ctx.runUrl) {
-            ctx.runUrl = legFailureReport.runUrlFromEnv(readEnvVar);
-            ctx.runId = legFailureReport.runIdFromEnv(readEnvVar);
-        }
-        var enriched = !!(ctx.preflightLine || ctx.runUrl || ctx.runId || ctx.signature);
+        var ctx = deriveEnrichmentContext(tracker, ticketKey, stage, errorMessage, context);
         tracker.postComment(
             ticketKey,
             buildSetupErrorComment(
                 commentMarkup.forTicket(ticketKey, customParams),
                 stage,
                 errorMessage,
-                enriched ? ctx : undefined
+                isEnrichedContext(ctx) ? ctx : undefined
             )
         );
     } catch (commentError) {
@@ -888,6 +926,11 @@ function action(params) {
         // 1.4. Leg-start pre-flight line (gh-1363): captured BEFORE any git
         // operation mutates the workspace — the one thing a post-hoc analyzer
         // can never reconstruct. Best-effort, never fatal.
+        // The capture runs BEFORE checkoutBranch() (step 2) assigns _workingDir
+        // — resolve the configured target workspace first, or the git probes
+        // run in the agents repo and the report mislabels branch/head
+        // (gh-1363 review: wrong-workspace pre-flight line).
+        _workingDir = config.workingDir;
         collectPreflightStateStep();
 
         // 1.5. Assert the dev-leg transition labels (gh-716): agent:dev ON,
@@ -977,6 +1020,12 @@ if (typeof module !== 'undefined' && module.exports) {
         currentPreflightLine,
         deriveSetupRepeatCount,
         readEnvVar,
+        // gh-1363 rework: enrichment helpers extracted for the crap ratchet.
+        deriveEnrichmentContext,
+        isEnrichedContext,
+        commentBodies,
+        readJavaEnv,
+        readProcessEnv,
         // gh-1190: checkoutBranch seam helpers exported for direct unit testing.
         configureSetupAuthor,
         fetchDevBranchRefs,

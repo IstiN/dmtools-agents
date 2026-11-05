@@ -278,13 +278,15 @@ function renderRepeatSection(m, p) {
  * The enriched section block, rendered through a commentMarkup-style flavor
  * bag (m.bold/m.inline/m.code/m.link — commentMarkup.forTicket/forFlavor).
  * Absent optional fields are omitted — no empty section noise. Phase is the
- * only mandatory field (the failure site knows it; carry, don't infer).
+ * only mandatory field (the failure site knows it; carry, don't infer) —
+ * and even it degrades to omission when a caller forgets it: a literal
+ * "Phase: undefined" in the ticket would be worse than no line.
  */
 function renderReport(flavor, parts) {
     var p = parts || {};
     var m = flavor;
     return renderPreflightSection(m, p) +
-        m.bold('Phase:') + ' ' + p.phase + '\n' +
+        (p.phase == null ? '' : m.bold('Phase:') + ' ' + p.phase + '\n') +
         (p.step ? m.bold('Failing step:') + ' ' + p.step + '\n' : '') +
         renderRunSection(m, p) +
         renderExcerptSection(m, p) +

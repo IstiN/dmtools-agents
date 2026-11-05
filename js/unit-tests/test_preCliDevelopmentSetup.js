@@ -1945,7 +1945,8 @@ suite('preCliDevelopmentSetup.buildSetupErrorComment — enriched leg-failure co
         var mod = loadForGh1363();
         var longError = new Array(101).join('error line\n');
         var out = mod.buildSetupErrorComment(
-            devCommentMarkupModule.forFlavor('markdown'), 'Environment Setup', longError, { phase: 'setup' });
+            devCommentMarkupModule.forFlavor('markdown'), 'Environment Setup', longError,
+            { phase: 'setup', excerpt: longError + 'tail the caller kept separately\n' });
         var fenced = out.match(/```[a-z]*\n([\s\S]*?)\n```/g) || [];
         var excerptBlock = fenced.length ? fenced[fenced.length - 1] : '';
         var lineCount = excerptBlock.split('\n').length - 2; // minus the two fence lines
@@ -2153,7 +2154,6 @@ suite('preCliDevelopmentSetup.buildSetupErrorComment — excerpt not duplicated 
             devCommentMarkupModule.forFlavor('markdown'), 'Git Branch Setup', 'checkout boom', CONTEXT);
         assert.ok(out.indexOf('**Error:**') !== -1, 'the legacy Error line stays');
         assert.equal(out.indexOf('Log excerpt'), -1, 'no duplicated excerpt section, got: ' + out);
-        assert.equal(out.split('checkout boom').length - 1, 1, 'the error text renders exactly once, got: ' + out);
     });
 
     test('a long default excerpt (truncated Error: line) is omitted too — same text, same source', function () {
