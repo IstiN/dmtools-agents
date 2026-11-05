@@ -128,27 +128,88 @@ function ranOnHead(laps, headSha) {
 }
 
 /**
+ * A non-polish lap in the merged history — the reset evidence (the
+ * dmtools:rework-lap marker family, machine-stamped per rework leg close).
+ */
+function isReworkLap(l) {
+    return !!l && l.kind === 'rework';
+}
+
+// The entry's head as a string ('' for null/headless entries — garbage
+// entries never count).
+function lapHeadOf(l) {
+    return (l && l.head) ? String(l.head) : '';
+}
+
+// One run step: a polish lap on another head joins the run (dedup).
+function pushRunHead(l, head, run) {
+    var h = lapHeadOf(l);
+    if (h === '' || h === head) return;
+    pushNewHead(run, h);
+}
+
+function pushNewHead(run, h) {
+    if (run.indexOf(h) !== -1) return;
+    run.push(h);
+}
+
+/**
+ * The consecutive polish-lap run NEWEST FIRST: entries on the head being
+ * decided are skipped (once-per-head owns them), the walk STOPS at the
+ * first machine-stamped non-polish lap (the documented reset — nothing
+ * before it counts). Entries without a kind are polish laps (the
+ * polish-lap marker family only records polish laps).
+ */
+function consecutiveRunHeads(laps, headSha) {
+    var head = String(headSha || '');
+    var run = [];
+    var list = (laps || []);
+    for (var i = list.length - 1; i >= 0; i--) {
+        if (!stepBudgetWalk(list[i], head, run)) return run;
+    }
+    return run;
+}
+
+// One backward-walk step (true = keep walking, false = the run is over):
+// a rework lap ends the run; a polish lap contributes its head.
+function stepBudgetWalk(l, head, run) {
+    if (isReworkLap(l)) return false;
+    pushRunHead(l, head, run);
+    return true;
+}
+
+/**
  * The instability budget (gh-1352): true when the run of CONSECUTIVE
  * polish laps — newest backward, stopping at a machine-stamped non-polish
  * lap (the documented reset) — covers >= INSTABILITY_BUDGET DISTINCT
  * heads other than the head being decided (a fresh head is decided by
  * once-per-head). Duplicate entries for the same head collapse (one lap
- * per head). Entries without a kind are polish laps (the polish-lap
- * marker family only records polish laps).
+ * per head).
  */
 function instabilityBudgetExhausted(laps, headSha) {
-    var head = String(headSha || '');
-    var heads = {};
-    var list = (laps || []);
-    for (var i = list.length - 1; i >= 0; i--) {
-        var l = list[i];
-        if (!l || !l.head) continue;
-        if (String(l.head) === head) continue;
-        if (l.kind === 'rework') return false; // a non-polish lap between polish laps — the reset
-        heads[String(l.head)] = true;
-        if (Object.keys(heads).length >= INSTABILITY_BUDGET) return true;
-    }
-    return Object.keys(heads).length >= INSTABILITY_BUDGET;
+    return consecutiveRunHeads(laps, headSha).length >= INSTABILITY_BUDGET;
+}
+
+// One merged-history entry per family: polish entries carry the parsed
+// lap (resolvedThreadIds stay reachable), rework entries carry head+at.
+function polishLapEntryOf(l) {
+    return { head: String(l.head), at: String(l.at || ''), kind: 'polish', lap: l };
+}
+
+function reworkLapEntryOf(m) {
+    return { head: String(m.head), at: String(m.at || ''), kind: 'rework' };
+}
+
+// Timestamp order (payload order as the tiebreak) — parseMarkerComments
+// parity, applied across BOTH families.
+function byLapTimeAsc(a, b) {
+    return (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0);
+}
+
+function collectLapEntries(out, laps, entryOf) {
+    laps.forEach(function (l) {
+        if (lapHeadOf(l) !== '') out.push(entryOf(l));
+    });
 }
 
 /**
@@ -162,13 +223,9 @@ function instabilityBudgetExhausted(laps, headSha) {
  */
 function mergedLapHistory(polishLaps, reworkLaps) {
     var out = [];
-    (polishLaps || []).forEach(function (l) {
-        if (l && l.head) out.push({ head: String(l.head), at: String(l.at || ''), kind: 'polish', lap: l });
-    });
-    (reworkLaps || []).forEach(function (m) {
-        if (m && m.head) out.push({ head: String(m.head), at: String(m.at || ''), kind: 'rework' });
-    });
-    out.sort(function (a, b) { return (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0); });
+    collectLapEntries(out, polishLaps || [], polishLapEntryOf);
+    collectLapEntries(out, reworkLaps || [], reworkLapEntryOf);
+    out.sort(byLapTimeAsc);
     return out;
 }
 
