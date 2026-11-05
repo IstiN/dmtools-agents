@@ -530,7 +530,6 @@ suite('legFailureReport.runUrlFromEnv / runIdFromEnv — best-effort run identit
 suite('legFailureReport — factory-setup carry contract', function () {
 
     var PACKS = file_read({ path: 'ci/release_packs.mjs' }) || '';
-    var SCRIPT = file_read({ path: 'scripts/report-leg-failure.sh' }) || '';
 
     test('the notice transport script ships in the factory-setup asset', function () {
         assert.ok(PACKS.indexOf("'report-leg-failure.sh'") !== -1,
@@ -543,20 +542,11 @@ suite('legFailureReport — factory-setup carry contract', function () {
         assert.ok(PACKS.indexOf("'js/common/ticketKeyShapes.js'") !== -1, 'key-shape closure staged');
     });
 
-    test('the transport script collects the failed-step log excerpt with the 30-line cap', function () {
-        assert.ok(SCRIPT.indexOf('--log-failed') !== -1, 'gh run view --log-failed per the ticket');
-        assert.ok(SCRIPT.indexOf('tail -n 30') !== -1, 'hard cap 30');
-    });
-
-    test('the transport script renders through the shared builder — no second normalizer', function () {
-        assert.ok(SCRIPT.indexOf('legFailureReport.js') !== -1, 'requires the shipped builder');
-        assert.ok(SCRIPT.indexOf('buildFailureComment') !== -1, 'builds the report with it');
-    });
-
-    test('the transport script keeps the historical bare-link line for success (AC6)', function () {
-        assert.ok(SCRIPT.indexOf('🤖 AI Teammate run ') !== -1, 'bare-link line shape preserved');
-        assert.ok(SCRIPT.indexOf('--body-file -') !== -1, 'failure body posts via stdin file');
-    });
+    // The script's BEHAVIOR (excerpt cap, builder rendering, the AC6
+    // success byte-shape, the E2BIG payload rule, the fallback placeholder)
+    // is pinned end-to-end by the self-test suite and the node-harness
+    // scenario suite below — string greps over the script text assert
+    // nothing behavioral and were removed (gh-1363 review).
 
     test('the suite is wired into run_all.json', function () {
         var all = file_read({ path: 'js/unit-tests/run_all.json' }) || '';
@@ -695,10 +685,10 @@ if (HAS_NODE_SPAWN) suite('legFailureReport — transport script scenario e2e (n
         var jobs = JSON.stringify({ jobs: [
             { conclusion: 'failure', steps: [{ name: 'Build', conclusion: 'success' }, { name: 'Test', conclusion: 'failure' }] }
         ] });
-        var comments = JSON.stringify([
+        var comments = JSON.stringify({ comments: [
             { author: { login: 'bot' }, body: new Array(150001).join('x') },
             { author: { login: 'bot' }, body: 'earlier notice\nfailure-signature: ' + SIG }
-        ]);
+        ] });
         var commentsFile = e2epath.join(TMP, 'comments-big.json');
         e2efs.writeFileSync(commentsFile, comments);
         var jobsFile = e2epath.join(TMP, 'jobs.json');

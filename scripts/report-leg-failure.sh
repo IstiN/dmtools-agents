@@ -172,12 +172,14 @@ JOBS_EOF
     return 1
   fi
   jq -cn --arg sig "$sig" \
-    '[{author:{login:"bot"},body:"older notice\nfailure-signature: " + $sig}]' > "$tmp/comments.json"
+    '{comments: [{author: {login: "bot"}, body: ("older notice\nfailure-signature: " + $sig)}]}' \
+    > "$tmp/comments.json"
   # A >128 KiB comment history (MAX_ARG_STRLEN): pad comment first (older),
   # the matching signature line last — the E2BIG-rule fixture.
   node -e 'process.stdout.write("x".repeat(150000))' > "$tmp/pad.txt"
   jq -cn --arg sig "$sig" --rawfile pad "$tmp/pad.txt" \
-    '[{author:{login:"bot"},body:$pad},{author:{login:"bot"},body:("failure-signature: " + $sig)}]' \
+    '{comments: [{author: {login: "bot"}, body: $pad},
+                 {author: {login: "bot"}, body: ("failure-signature: " + $sig)}]}' \
     > "$tmp/comments-big.json"
 
   # 1 — success keeps the historical bare-link line, byte-exact (AC6).
@@ -331,7 +333,7 @@ PAYLOAD="$(jq -n \
   --arg workflow "${WORKFLOW_FILE:-ai-teammate.yml}" \
   --arg step "${STEP_NAME:-}" \
   --arg message "${STEP_NAME:-}
-$EXCERPT}" \
+$EXCERPT" \
   --arg phase "${PHASE:-ai-work}" \
   --arg runId "${GITHUB_RUN_ID:-}" \
   --arg runUrl "$RUN_URL" \
