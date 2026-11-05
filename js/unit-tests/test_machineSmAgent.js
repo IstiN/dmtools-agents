@@ -358,6 +358,75 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         assert.equal(bare.calls.resolves.length, 0);
     });
 
+    // The BLOCKING review replay (gh-1352 rework lap): the REAL provider
+    // drives the deferral loop — prCommentList memoizes per tick (kind
+    // prVerdicts), postPrComment is a mutation of that read stream. The
+    // skipped invalidate-after-mutation made deferral 2 re-read the stale
+    // pre-tick memo, rebuild its marker from the base ledger and win the
+    // last-write-wins race: the durable ledger held 1 finding, not 2.
+    test('gh-1352 BLOCKING replay: two deferrals in one tick BOTH land in the final ledger marker (memoized provider)', function () {
+        var comments = [
+            { user: { login: 'ai-teammate' }, body: '<!-- dmtools:review-verdict ' + JSON.stringify({
+                head: HEAD, verdict: 'APPROVE', blocking: 0, important: 1, suggestions: 2,
+                at: '2026-11-04T00:00:00.000Z', source: 'pr_review.json'
+            }) + ' -->' }
+        ];
+        var replies = [];
+        var resolves = [];
+        var smMod = loadModule('js/common/smProvider.js',
+            makeRequire({
+                './reviewVerdicts.js': rvReal(),
+                './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
+            }),
+            {
+                github_get_pr_comments: function () { return JSON.stringify(comments); },
+                github_create_comment: function (args) {
+                    comments.push({ user: { login: 'ai-teammate' }, body: args.text });
+                    return { id: String(comments.length) };
+                },
+                github_get_pr_review_threads: function () {
+                    return { data: { repository: { pullRequest: { reviewThreads: { nodes: [
+                        { id: 'RT_1', isResolved: false, path: 'a.js', line: 1,
+                          comments: { nodes: [{ databaseId: 101, author: { login: 'ai-teammate' },
+                                               body: '💡 SUGGESTION: polish one' }] } },
+                        { id: 'RT_2', isResolved: false, path: 'b.js', line: 2,
+                          comments: { nodes: [{ databaseId: 102, author: { login: 'ai-teammate' },
+                                               body: '💡 SUGGESTION: polish two' }] } }
+                    ] } } } } };
+                },
+                github_reply_to_pr_thread: function (args) { replies.push(args); return { ok: true }; },
+                github_resolve_pr_thread: function (args) { resolves.push(args); return { ok: true }; }
+            });
+        smMod._cache.entries = {}; // fresh per-tick cache holder
+        var provider = smMod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' }
+        });
+        var out = agent.resolveSuggestionThreads(provider, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 2, 'both threads resolve');
+        assert.equal(out.defered, 2, 'both deferrals stamp a finding id');
+        assert.equal(resolves.length, 2);
+        // The durable ledger is the LAST posted marker (the marker family is
+        // last-write-wins): it must carry BOTH findings, not just the newest.
+        var markers = comments.filter(function (c) {
+            return c.body.indexOf('dmtools:review-debt-ledger') !== -1;
+        });
+        assert.equal(markers.length, 2, 'one ledger marker per deferral');
+        var rdl = loadModule('js/common/reviewDebtLedger.js', makeRequire({
+            './reviewVerdicts.js': rvReal(),
+            './findingRegistry.js': loadModule('js/common/findingRegistry.js',
+                makeRequire({ './reviewVerdicts.js': rvReal() }), {}),
+            './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({}))
+        }), {});
+        var finalLedger = rdl.latestDebtLedger(markers, { authorLogins: ['ai-teammate'] });
+        assert.ok(finalLedger, 'the final marker parses as the live ledger');
+        assert.equal(finalLedger.findings.length, 2,
+            'the durable ledger holds BOTH deferrals — a stale memo dropped finding 1 before the fix');
+        assert.deepEqual(finalLedger.findings.map(function (f) { return f.originThread; }),
+            ['RT_1', 'RT_2'], 'both thread ids are pinned in the final ledger');
+    });
+
     test('gh-1352: a nit thread closes as wontfix (fix opportunistic — no ledger needed)', function () {
         var p = providerWith([
             { threadId: 'RT_N', rootCommentId: 200, resolved: false, author: 'ai-teammate',
