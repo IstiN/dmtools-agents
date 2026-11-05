@@ -2323,7 +2323,7 @@ function gh1364SetupCommandsOk() {
 // fully covered: gh1364Globals (mock globals), gh1364RequireMap (module map),
 // loadForGh1364 (the thin composition; gh-1364 rework split for the ratchet).
 function gh1364Globals(bag, opts) {
-    var globals = {
+    var globals = Object.assign({
         cli_execute_command: function (commandOpts) {
             var command = commandOpts && commandOpts.command;
             bag.cliCalls.push(command);
@@ -2345,7 +2345,7 @@ function gh1364Globals(bag, opts) {
         },
         github_add_labels: function () {},
         github_remove_label: function () {}
-    };
+    }, opts.extraGlobals);
     if (opts.env) globals.java = opts.env;
     return globals;
 }
