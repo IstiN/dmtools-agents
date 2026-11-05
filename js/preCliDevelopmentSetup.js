@@ -818,13 +818,19 @@ function resolveLegStartHeadSha() {
  * (no config / non-github tracker / no repository scope) are the pure
  * `resolveLegStartStatusTarget` chain in js/common/legStartSignal.js (gh-1364
  * rework); here stays the small posting path: resolve the head, build the
- * payload, post. A null config never reaches the tracker build — the helper
- * skips it first (createTracker's own fallback loader is throw-safe). An
- * unresolvable head or a throwing status API is warned, never fatal. Returns
- * the posted args, or null when skipped/failed.
+ * payload, post. The early `!config` guard runs BEFORE the tracker is built —
+ * a config-less skip costs no tracker construction and no config-discovery IO
+ * (the pure helper keeps its own `!config` branch for direct callers/tests;
+ * createTracker's fallback loader is throw-safe either way). An unresolvable
+ * head or a throwing status API is warned, never fatal. Returns the posted
+ * args, or null when skipped/failed.
  */
 function postLegStartStatusBestEffort(config, customParams, body) {
     try {
+        if (!config) {
+            console.warn('leg-start commit status skipped: no config (line stays log-only)');
+            return null;
+        }
         var target = legStartSignal.resolveLegStartStatusTarget(
             config, trackersModule.createTracker(config, customParams || {}).provider());
         if (target.skip) {

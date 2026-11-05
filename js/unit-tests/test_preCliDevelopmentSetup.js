@@ -2388,10 +2388,11 @@ function loadForGh1364(bag, opts) {
         env: null,
         configLoadThrows: null,
         setupCommands: null,
-        extraGlobals: {}
+        extraGlobals: {},
+        trackersModule: null
     }, opts || {});
     var globals = gh1364Globals(bag, opts);
-    var trackers = loadModule('js/common/trackers.js', makeRequire({
+    var trackers = opts.trackersModule || loadModule('js/common/trackers.js', makeRequire({
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
     }), globals);
@@ -2585,6 +2586,35 @@ suite('preCliDevelopmentSetup.action — leg-start ok signal (gh-1364)', functio
             console.warn = originalWarn;
         }
         assert.equal(posted, null, 'no config → null');
+        assert.equal(bag.statuses.length, 0, 'no status call attempted');
+        assert.ok(warnings.join('\n').indexOf('no config') !== -1,
+            'the log-only warning is carried: ' + JSON.stringify(warnings));
+    });
+
+    test('no config builds NO tracker — the guard gates the tracker construction, not just the skip', function () {
+        // gh-1364 re-review: call arguments evaluate before the call, so a naive
+        // `resolveLegStartStatusTarget(config, createTracker(config, ...).provider())`
+        // builds a tracker (a full config-discovery IO round) even when config is
+        // null. The early `!config` guard must run first — counted stub proves it.
+        var bag = makeGh1364Bag();
+        var trackerBuilds = 0;
+        var mod = loadForGh1364(bag, { trackersModule: {
+            createTracker: function () {
+                trackerBuilds++;
+                return { provider: function () { return 'github'; } };
+            }
+        } });
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function () { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        var posted = null;
+        try {
+            posted = mod.postLegStartStatusBestEffort(null, {}, { ok: true, branchName: 'ai/gh-1364' });
+        } finally {
+            console.warn = originalWarn;
+        }
+        assert.equal(posted, null);
+        assert.equal(trackerBuilds, 0, 'a null config must not reach createTracker — got ' + trackerBuilds + ' build(s)');
         assert.equal(bag.statuses.length, 0, 'no status call attempted');
         assert.ok(warnings.join('\n').indexOf('no config') !== -1,
             'the log-only warning is carried: ' + JSON.stringify(warnings));
