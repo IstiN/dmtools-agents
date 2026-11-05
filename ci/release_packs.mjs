@@ -112,8 +112,19 @@ const FACTORY_SETUP_SCRIPTS = [
   'persist-fa-memory.sh',
   'collect-fa-crash-log.sh',
   'fa-trace-watchdog.sh',
+  'report-leg-failure.sh',
   'run-teammate-local.sh',
   'run-sm-local.sh',
+];
+// gh-1363: the enriched leg-failure notice renders through the shipped pure
+// builder instead of a second bash normalizer — these files stage beside the
+// engine scripts in the factory-setup asset so report-leg-failure.sh can
+// require them (legFailureReport has zero requires; commentMarkup →
+// ticketKeyShapes closes the flavor bag).
+const FACTORY_SETUP_JS = [
+  'js/common/legFailureReport.js',
+  'js/common/commentMarkup.js',
+  'js/common/ticketKeyShapes.js',
 ];
 
 // gh-1248: one recursive file listing shared by the SHA256SUMS inventory,
@@ -147,7 +158,8 @@ function setupTouched() {
       f === 'ci/release_packs.mjs' ||
       // Engine-side and local-runner factory scripts ship in the factory-setup
       // asset too — a change to any of them must re-cut the asset.
-      FACTORY_SETUP_SCRIPTS.some((s) => f === `scripts/${s}`),
+      FACTORY_SETUP_SCRIPTS.some((s) => f === `scripts/${s}`) ||
+      FACTORY_SETUP_JS.some((f2) => f === f2),
   );
 }
 
@@ -168,6 +180,11 @@ function buildFactorySetup() {
       const dest = join(staging, 'scripts', engineScript);
       copyFileSync(join(ROOT, 'scripts', engineScript), dest);
       chmodSync(dest, 0o755);
+    }
+    // gh-1363: the leg-failure builder closure the notice script requires.
+    mkdirSync(join(staging, 'js', 'common'), { recursive: true });
+    for (const jsFile of FACTORY_SETUP_JS) {
+      copyFileSync(join(ROOT, jsFile), join(staging, jsFile));
     }
     for (const leg of FACTORY_SETUP_LEGS) {
       copyFileSync(join(ROOT, `${leg}.json`), join(staging, 'configs', `${leg}.json`));

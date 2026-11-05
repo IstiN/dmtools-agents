@@ -243,6 +243,7 @@
         "js/unit-tests/test_mergeObjects.js",
         "js/unit-tests/test_loseJson.js",
         "js/unit-tests/test_legRunVocab.js",
+        "js/unit-tests/test_legFailureReport.js",
         "js/unit-tests/test_publishParams.js"
       ]
     }
