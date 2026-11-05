@@ -409,28 +409,48 @@ function resolveLoserLabel(verdict) {
 /**
  * Human-readable reconciliation comment citing BOTH verdict sources (AC2).
  */
-function buildReconciliationComment(effective, loserLabel, headSha) {
+// The nit caveat on a rework-loser removal (gh-1352: open nits stay for
+// the polish lap — nits never hold labels).
+function nitNoteOf(newer, loserLabel) {
+    var nitCount = censusCount(newer.nits);
+    return (loserLabel === LABEL_REWORK && nitCount > 0)
+        ? ' (open nits stay: the polish lap owns them — gh-1352, nits never hold labels)'
+        : '';
+}
+
+// The removal tail: why the loser label is being dropped.
+function removalPhraseOf(loserLabel, nitNote) {
+    return loserLabel === LABEL_APPROVED
+        ? ' until re-review (approval-gated paths blocked, gh-807).'
+        : ' (suggestions do not justify a rework arm; the approval stands).' + nitNote;
+}
+
+// The comment headline(s): the conflict shape names both verdicts, the
+// plain shape names the effective one.
+function reconciliationHeadLines(effective, headSha) {
     var newer = effective.record;
-    var lines = [];
-    if (effective.conflict) {
-        var older = effective.conflict.older;
-        lines.push('⚖️ Verdict reconciliation (gh-807): two review verdicts on head `' + headSha + '` —');
-        lines.push('- ' + older.verdict + ' at ' + (older.at || 'unknown time') + ' (source: ' + older.source + ')');
-        lines.push('- ' + newer.verdict + ' at ' + (newer.at || 'unknown time') + ' (source: ' + newer.source + ')');
-        lines.push('');
-        lines.push('Newest wins: **' + newer.verdict + '** — removing `' + loserLabel + '`' +
-            (loserLabel === LABEL_APPROVED
-                ? ' until re-review (approval-gated paths blocked, gh-807).'
-                : ' (suggestions do not justify a rework arm; the approval stands).'));
-    } else {
-        lines.push('⚖️ Verdict reconciliation (gh-807): the effective review verdict on head `' + headSha +
-            '` is **' + newer.verdict + '** (at ' + (newer.at || 'unknown time') + ', source: ' + newer.source + ').');
-        lines.push('');
-        lines.push('Removing `' + loserLabel + '`' +
-            (loserLabel === LABEL_APPROVED
-                ? ' until re-review (approval-gated paths blocked, gh-807).'
-                : ' (suggestions do not justify a rework arm; the approval stands).'));
+    if (!effective.conflict) {
+        return ['⚖️ Verdict reconciliation (gh-807): the effective review verdict on head `' + headSha +
+            '` is **' + newer.verdict + '** (at ' + (newer.at || 'unknown time') + ', source: ' + newer.source + ').'];
     }
+    var older = effective.conflict.older;
+    return [
+        '⚖️ Verdict reconciliation (gh-807): two review verdicts on head `' + headSha + '` —',
+        '- ' + older.verdict + ' at ' + (older.at || 'unknown time') + ' (source: ' + older.source + ')',
+        '- ' + newer.verdict + ' at ' + (newer.at || 'unknown time') + ' (source: ' + newer.source + ')'
+    ];
+}
+
+// The newest-wins lead the conflict shape prefixes the removal with.
+function newestWinsLeadOf(effective) {
+    return effective.conflict ? 'Newest wins: **' + effective.record.verdict + '** — ' : '';
+}
+
+function buildReconciliationComment(effective, loserLabel, headSha) {
+    var lines = reconciliationHeadLines(effective, headSha);
+    lines.push('');
+    lines.push(newestWinsLeadOf(effective) + 'Removing `' + loserLabel + '`' +
+        removalPhraseOf(loserLabel, nitNoteOf(effective.record, loserLabel)));
     return lines.join('\n');
 }
 
@@ -470,15 +490,17 @@ function buildReconciliationComment(effective, loserLabel, headSha) {
  * legitimizes the approval.
  */
 // The record's own census keeps the rework arm (gh-807 rework rounds 2-3,
-// extended gh-1350): open threads the machine owns — blocking, suggestions
-// and, since gh-1350, nits — are the evidence AC3's census exceptions arm
-// on. `digest` is NOT an open-thread census: it rides the record but never
-// keeps the arm.
+// extended gh-1350): open threads the machine owns — blocking, important
+// and suggestions — are the evidence AC3's census exceptions arm on.
+// gh-1352 (epic §4 scope 4): NITS no longer hold labels — the polish lap
+// (a bounded single-commit leg, instability-budgeted) owns polish-tier
+// census, so a nit-only census is neither arm evidence nor strip evidence
+// here; `digest` is NOT an open-thread census: it rides the record but
+// never keeps the arm.
 function recordCensusKepsArm(record) {
     return censusCount(record.blocking) > 0 ||
         censusCount(record.important) > 0 ||
-        censusCount(record.suggestions) > 0 ||
-        censusCount(record.nits) > 0;
+        censusCount(record.suggestions) > 0;
 }
 
 function reconcileDecision(records, headSha, state) {

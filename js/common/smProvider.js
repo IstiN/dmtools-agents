@@ -1021,6 +1021,33 @@ function githubProvider(cfg) {
             return _ghResolveThread(owner, repo, prNumber, thread);
         },
 
+        // ── gh-1352 review debt ledger primitives (the triage deferral) ──
+        // The ledger is a machine-authored dmtools: marker family on the
+        // PR: read = the same comment fetch the verdict records use
+        // (memoized), write = github_create_comment (PRs are issues
+        // upstream — the trackers.js parity). gitlab twin: defines NEITHER
+        // primitive — ledgerAvailableOn() is false, so the triage path
+        // fails closed on deferral (mandatory-fix tiers skip as
+        // needsFixOrDefer, never close without their ledger finding). Do
+        // not stub these as no-ops: a no-op post would fail the gate OPEN.
+        prCommentList: function (prNumber) {
+            return _ghFetchPrComments(owner, repo, prNumber);
+        },
+
+        postPrComment: function (prNumber, body) {
+            var out = github_create_comment({
+                workspace: owner, repository: repo,
+                pullRequestId: String(prNumber), text: body
+            });
+            // Invalidate-after-mutation (gh-1352 review, the gh-957 house
+            // primitive): this write mutates the stream prCommentList
+            // memoizes — a same-tick re-read (the NEXT deferral's
+            // ledger base) must re-fetch, or the marker family's
+            // last-write-wins silently drops the earlier defered findings.
+            ioCacheDrop(owner, repo, 'prVerdicts', String(prNumber));
+            return out;
+        },
+
         activeMachineRuns: function (workflowFile) {
             return _ghActiveMachineRuns(workflowFile);
         },

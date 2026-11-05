@@ -7,14 +7,65 @@
  */
 /* global suite, test, assert, loadModule, makeRequire */
 
+// gh-1352: the disposition-loop modules (reviewPolicy, reviewDispositions,
+// reviewDebtLedger, polishLap) join the agent's require map — every
+// loadModule('js/machineSmAgent.js') site shares one map factory so the
+// gh-823 pack-require rule stays satisfied in every suite.
+function rvShared() {
+    if (!rvShared.mod) rvShared.mod = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': maShared() }), {});
+    return rvShared.mod;
+}
+
+function maShared() {
+    if (!maShared.mod) maShared.mod = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    return maShared.mod;
+}
+
+// The polish-lap module under test (marker round-trip in the loop suites).
+function plShared() {
+    if (!plShared.mod) plShared.mod = loadModule('js/common/polishLap.js',
+        makeRequire({
+            './reviewVerdicts.js': rvShared(),
+            './machineAuthor.js': maShared(),
+            './reviewPolicy.js': loadModule('js/common/reviewPolicy.js',
+                makeRequire({ './reviewVerdicts.js': rvShared() }), {})
+        }), {});
+    return plShared.mod;
+}
+
+function agentModuleMap(projectConfig, holder) {
+    var policy = loadModule('js/common/reviewPolicy.js',
+        makeRequire({ './reviewVerdicts.js': rvShared() }), {});
+    return {
+        './configLoader.js': { loadProjectConfig: function () { return projectConfig || {}; } },
+        './common/smProvider.js': { createSmProvider: function () { return holder ? holder.provider : {}; } },
+        './common/reviewVerdicts.js': rvShared(),
+        './common/machineAuthor.js': maShared(),
+        './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js',
+            makeRequire({ './machineAuthor.js': maShared(), './reviewVerdicts.js': rvShared() }), {}),
+        './common/reviewPolicy.js': policy,
+        './common/reviewDispositions.js': loadModule('js/common/reviewDispositions.js',
+            makeRequire({ './reviewVerdicts.js': rvShared(), './reviewPolicy.js': policy }), {}),
+        './common/reviewDebtLedger.js': loadModule('js/common/reviewDebtLedger.js',
+            makeRequire({
+                './reviewVerdicts.js': rvShared(),
+                './findingRegistry.js': loadModule('js/common/findingRegistry.js',
+                    makeRequire({ './reviewVerdicts.js': rvShared() }), {}),
+                './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({}))
+            }), {}),
+        './common/polishLap.js': loadModule('js/common/polishLap.js',
+            makeRequire({
+                './reviewVerdicts.js': rvShared(),
+                './machineAuthor.js': maShared(),
+                './reviewPolicy.js': policy
+            }), {})
+    };
+}
+
 suite('machineSm decision core', function () {
 
-    var agent = loadModule('js/machineSmAgent.js', makeRequire({
-        './configLoader.js': { loadProjectConfig: function () { return {}; } },
-        './common/smProvider.js': { createSmProvider: function () { return {}; } },
-        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
-        './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-    }), {
+    var agent = loadModule('js/machineSmAgent.js', makeRequire(agentModuleMap({}, null)), {
         cli_execute_command: function () { return '{}'; }
     });
 
@@ -163,15 +214,31 @@ suite('machineSm decision core', function () {
         assert.equal(acts[0].type, 'merge');
     });
 
-    test('approved + BLOCKED resolves suggestion threads in-tick (gh-828)', function () {
+    test('approved + BLOCKED runs the disposition loop in-tick (gh-828 -> gh-1352)', function () {
         // The unresolved-thread conversation gate: the rework arm is
         // withheld on APPROVE+blocking=0 (gh-807), so the machine must
         // resolve its own non-blocking threads or the PR strands BLOCKED.
+        // gh-1352: the leg is the disposition loop (polish lap when the
+        // census is polish-only, else triage with dispositions).
         var acts = agent.decideActions(
             st(['ai_developed', 'ai_pr_reviewed', 'pr_approved'],
                greenPr('BLOCKED', false)), {});
         assert.equal(acts.length, 1);
-        assert.equal(acts[0].type, 'resolveSuggestionThreads');
+        assert.equal(acts[0].type, 'dispositionLoop');
+        assert.equal(acts[0].allowPolish, true);
+    });
+
+    test('gh-1352: approved + CLEAN merges FIRST, then triages without a polish lap', function () {
+        // Merge parity owns a clean head; the disposition loop follows as
+        // post-merge hygiene and must never dispatch a polish lap there
+        // (a merged head cannot take the lap's commit).
+        var acts = agent.decideActions(
+            st(['ai_developed', 'ai_pr_reviewed', 'pr_approved'],
+               greenPr('CLEAN', true)), {});
+        assert.equal(acts.length, 2);
+        assert.equal(acts[0].type, 'merge');
+        assert.equal(acts[1].type, 'dispositionLoop');
+        assert.equal(acts[1].allowPolish, false);
     });
 
     test('approved + UNKNOWN merge state still skips', function () {
@@ -228,12 +295,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
     };
 
     // gh-823: every require of the agent must resolve in the map.
-    var agent = loadModule('js/machineSmAgent.js', makeRequire({
-        './configLoader.js': { loadProjectConfig: function () { return {}; } },
-        './common/smProvider.js': { createSmProvider: function () { return {}; } },
-        './common/reviewVerdicts.js': rvReal(),
-        './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-    }), {
+    var agent = loadModule('js/machineSmAgent.js', makeRequire(agentModuleMap({}, null)), {
         cli_execute_command: function () { return '{}'; }
     });
 
@@ -244,7 +306,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
     function providerWith(threads, opts) {
         opts = opts || {};
         return {
-            calls: { replies: [], resolves: [] },
+            calls: { replies: [], resolves: [], posts: [] },
             verdictRecords: function () { return [RECORD]; },
             reviewThreadList: function () { return threads; },
             replyToThread: function (pr, thread, text) {
@@ -252,6 +314,13 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
             },
             resolveThread: function (pr, thread) {
                 this.calls.resolves.push({ pr: pr, threadId: thread.threadId });
+            },
+            // gh-1352: the review debt ledger primitives (a reachable
+            // ledger) — suggestion threads (fix: mandatory under the
+            // default policy) defer INTO it instead of closing bare.
+            prCommentList: function () { return opts.prComments || []; },
+            postPrComment: function (pr, body) {
+                this.calls.posts.push({ pr: pr, body: body });
             }
         };
     }
@@ -260,15 +329,137 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
                  author: 'ai-teammate', body: '💡 SUGGESTION: polish ' + i };
     }
 
-    test('AC1 replay (#1457–#1470): 4 suggestion threads → 4 ack replies + 4 resolves in one tick', function () {
+    test('AC1 replay (#1457–#1470), gh-1352 semantics: 4 suggestion threads → 4 resolves with defered dispositions in one tick', function () {
         var p = providerWith([sug(1), sug(2), sug(3), sug(4)]);
         var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
             { machineLogins: ['ai-teammate'] });
         assert.equal(out.resolved, 4);
+        assert.equal(out.defered, 4, 'default policy: suggestion fix is mandatory — the threads defer to the review debt ledger');
         assert.equal(p.calls.replies.length, 4, 'one ack reply per resolved thread');
-        assert.contains(p.calls.replies[0].text, 'non-blocking suggestion');
-        assert.contains(p.calls.replies[0].text, 'resolved per APPROVE verdict');
+        assert.contains(p.calls.replies[0].text, 'triage closure (gh-1352)');
+        assert.contains(p.calls.replies[0].text, 'defered: ');
+        assert.contains(p.calls.replies[0].text, 'review debt ledger');
         assert.equal(p.calls.resolves.length, 4);
+        assert.equal(p.calls.posts.length, 4, 'one ledger marker+digest comment per deferral');
+        assert.contains(p.calls.posts[0].body, 'dmtools:review-debt-ledger');
+        assert.contains(p.calls.posts[0].body, 'batched');
+    });
+
+    test('gh-1352: WITHOUT ledger primitives the mandatory-fix tiers skip (needsFixOrDefer), never close unfixed', function () {
+        var bare = {
+            calls: { replies: [], resolves: [], posts: [] },
+            verdictRecords: function () { return [RECORD]; },
+            reviewThreadList: function () { return [sug(1)]; },
+            replyToThread: function (pr, thread, text) { this.calls.replies.push(text); },
+            resolveThread: function (pr, thread) { this.calls.resolves.push(thread.threadId); }
+        };
+        var out = agent.resolveSuggestionThreads(bare, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 0);
+        assert.equal(out.needsFixOrDefer, 1);
+        assert.equal(bare.calls.resolves.length, 0);
+    });
+
+    // The BLOCKING review replay (gh-1352 rework lap): the REAL provider
+    // drives the deferral loop — prCommentList memoizes per tick (kind
+    // prVerdicts), postPrComment is a mutation of that read stream. The
+    // skipped invalidate-after-mutation made deferral 2 re-read the stale
+    // pre-tick memo, rebuild its marker from the base ledger and win the
+    // last-write-wins race: the durable ledger held 1 finding, not 2.
+    test('gh-1352 BLOCKING replay: two deferrals in one tick BOTH land in the final ledger marker (memoized provider)', function () {
+        var comments = [
+            { user: { login: 'ai-teammate' }, body: '<!-- dmtools:review-verdict ' + JSON.stringify({
+                head: HEAD, verdict: 'APPROVE', blocking: 0, important: 1, suggestions: 2,
+                at: '2026-11-04T00:00:00.000Z', source: 'pr_review.json'
+            }) + ' -->' }
+        ];
+        var replies = [];
+        var resolves = [];
+        var smMod = loadModule('js/common/smProvider.js',
+            makeRequire({
+                './reviewVerdicts.js': rvReal(),
+                './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
+            }),
+            {
+                github_get_pr_comments: function () { return JSON.stringify(comments); },
+                github_create_comment: function (args) {
+                    comments.push({ user: { login: 'ai-teammate' }, body: args.text });
+                    return { id: String(comments.length) };
+                },
+                github_get_pr_review_threads: function () {
+                    return { data: { repository: { pullRequest: { reviewThreads: { nodes: [
+                        { id: 'RT_1', isResolved: false, path: 'a.js', line: 1,
+                          comments: { nodes: [{ databaseId: 101, author: { login: 'ai-teammate' },
+                                               body: '💡 SUGGESTION: polish one' }] } },
+                        { id: 'RT_2', isResolved: false, path: 'b.js', line: 2,
+                          comments: { nodes: [{ databaseId: 102, author: { login: 'ai-teammate' },
+                                               body: '💡 SUGGESTION: polish two' }] } }
+                    ] } } } } };
+                },
+                github_reply_to_pr_thread: function (args) { replies.push(args); return { ok: true }; },
+                github_resolve_pr_thread: function (args) { resolves.push(args); return { ok: true }; }
+            });
+        smMod._cache.entries = {}; // fresh per-tick cache holder
+        var provider = smMod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' }
+        });
+        var out = agent.resolveSuggestionThreads(provider, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 2, 'both threads resolve');
+        assert.equal(out.defered, 2, 'both deferrals stamp a finding id');
+        assert.equal(resolves.length, 2);
+        // The durable ledger is the LAST posted marker (the marker family is
+        // last-write-wins): it must carry BOTH findings, not just the newest.
+        var markers = comments.filter(function (c) {
+            return c.body.indexOf('dmtools:review-debt-ledger') !== -1;
+        });
+        assert.equal(markers.length, 2, 'one ledger marker per deferral');
+        var rdl = loadModule('js/common/reviewDebtLedger.js', makeRequire({
+            './reviewVerdicts.js': rvReal(),
+            './findingRegistry.js': loadModule('js/common/findingRegistry.js',
+                makeRequire({ './reviewVerdicts.js': rvReal() }), {}),
+            './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({}))
+        }), {});
+        var finalLedger = rdl.latestDebtLedger(markers, { authorLogins: ['ai-teammate'] });
+        assert.ok(finalLedger, 'the final marker parses as the live ledger');
+        assert.equal(finalLedger.findings.length, 2,
+            'the durable ledger holds BOTH deferrals — a stale memo dropped finding 1 before the fix');
+        assert.deepEqual(finalLedger.findings.map(function (f) { return f.originThread; }),
+            ['RT_1', 'RT_2'], 'both thread ids are pinned in the final ledger');
+    });
+
+    test('gh-1352: a nit thread closes as wontfix (fix opportunistic — no ledger needed)', function () {
+        var p = providerWith([
+            { threadId: 'RT_N', rootCommentId: 200, resolved: false, author: 'ai-teammate',
+              body: '🪶 NIT: tighten the wording' }]);
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 1);
+        assert.equal(out.wontfix, 1);
+        assert.contains(p.calls.replies[0].text, 'wontfix: ');
+        assert.equal(p.calls.posts.length, 0, 'no ledger write for a fix-optional tier');
+    });
+
+    test('gh-1352: a failed ledger append leaves the mandatory-fix thread open (fail closed)', function () {
+        var p = providerWith([sug(1)]);
+        p.postPrComment = function () { throw new Error('graphql down'); };
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 0);
+        assert.equal(out.needsFixOrDefer, 1);
+        assert.equal(p.calls.resolves.length, 0, 'the thread is never closed without its ledger finding');
+    });
+
+    test('gh-1352: an important (lap-gated) thread is not triage-closable at all', function () {
+        var p = providerWith([
+            { threadId: 'RT_I', rootCommentId: 300, resolved: false, author: 'ai-teammate',
+              body: '⚠️ IMPORTANT: validate the token' }]);
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 0);
+        assert.equal(out.needsFixOrDefer, 1);
+        assert.equal(p.calls.resolves.length, 0);
     });
 
     test('AC2: a blocking-marked thread is NOT resolved; the others are', function () {
@@ -330,7 +521,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         assert.equal(out.resolved, 0);
     });
 
-    test('a resolve failure does not abort the remaining threads', function () {
+    test('a resolve failure does not abort the remaining threads (gh-1352: defered path)', function () {
         var p = providerWith([sug(1), sug(2)]);
         p.resolveThread = function (pr, thread) {
             if (thread.threadId === 'RT_1') throw new Error('boom');
@@ -342,7 +533,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         assert.equal(p.calls.resolves.length, 1);
     });
 
-    test('a resolve failure leaves no ack behind (resolve-first idempotency, gh-828 review round 3)', function () {
+    test('a resolve failure leaves no ack behind (resolve-first idempotency; gh-1352 defered path)', function () {
         // The ack must be posted only AFTER a successful resolve: with
         // reply-first, a persistent resolve failure re-selects the thread
         // next tick and spams one duplicate ack per tick, unbounded.
@@ -359,7 +550,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         assert.equal(p.calls.resolves.length, 1);
     });
 
-    test('a failed ack reply after a successful resolve is logged, not fatal (gh-1185 branch coverage)', function () {
+    test('a failed ack reply after a successful resolve is logged, not fatal (gh-1185; gh-1352 defered path)', function () {
         // Resolve-first order: the resolve is counted even when the
         // cosmetic ack reply throws — the thread stays resolved and the
         // next tick's re-selection filters it out.
@@ -406,14 +597,10 @@ suite('machineSm cfg knobs — gh-828 review round 4 (override priority)', funct
         // The provider is created inside action() — the mock closes over a
         // holder each test fills with its recording provider.
         var holder = { provider: null };
-        var agent = loadModule('js/machineSmAgent.js', makeRequire({
-            './configLoader.js': { loadProjectConfig: function () { return projectConfig; } },
-            './common/smProvider.js': { createSmProvider: function () { return holder.provider; } },
-            './common/reviewVerdicts.js': rvReal(),
-            './common/machineAuthor.js': maReal()
-        }), {
-            cli_execute_command: function () { return '{}'; }
-        });
+        var agent = loadModule('js/machineSmAgent.js',
+            makeRequire(agentModuleMap(projectConfig, holder)), {
+                cli_execute_command: function () { return '{}'; }
+            });
         return { agent: agent, holder: holder };
     }
 
@@ -437,7 +624,12 @@ suite('machineSm cfg knobs — gh-828 review round 4 (override priority)', funct
             verdictRecords: function () { return [RECORD]; },
             reviewThreadList: function () { return threads; },
             replyToThread: function () {},
-            resolveThread: function (pr, thread) { resolved.push(thread.threadId); }
+            resolveThread: function (pr, thread) { resolved.push(thread.threadId); },
+            // gh-1352: the review debt ledger primitives — the deferral
+            // path (mandatory-fix tiers under the default policy) needs a
+            // reachable ledger, else the threads skip as needsFixOrDefer.
+            prCommentList: function () { return []; },
+            postPrComment: function () {}
         };
     }
 
@@ -498,14 +690,10 @@ suite('machineSm: merged slot-holder releases the concurrency slot (gh-952)', fu
 
     function loadAgent() {
         var holder = { provider: null };
-        var agent = loadModule('js/machineSmAgent.js', makeRequire({
-            './configLoader.js': { loadProjectConfig: function () { return {}; } },
-            './common/smProvider.js': { createSmProvider: function () { return holder.provider; } },
-            './common/reviewVerdicts.js': rvReal(),
-            './common/machineAuthor.js': maReal()
-        }), {
-            cli_execute_command: function () { return '{}'; }
-        });
+        var agent = loadModule('js/machineSmAgent.js',
+            makeRequire(agentModuleMap({}, holder)), {
+                cli_execute_command: function () { return '{}'; }
+            });
         return { agent: agent, holder: holder };
     }
 
@@ -585,12 +773,9 @@ suite('machineSm action branches (gh-980 characterization)', function () {
         var smProviderMock = opts.providerError
             ? { createSmProvider: function () { throw opts.providerError; } }
             : { createSmProvider: function () { return holder.provider; } };
-        var agent = loadModule('js/machineSmAgent.js', makeRequire({
-            './configLoader.js': { loadProjectConfig: function () { return projectConfig; } },
-            './common/smProvider.js': smProviderMock,
-            './common/reviewVerdicts.js': rvReal(),
-            './common/machineAuthor.js': maReal()
-        }), {
+        var map = agentModuleMap(projectConfig, holder);
+        if (opts.providerError) map['./common/smProvider.js'] = smProviderMock;
+        var agent = loadModule('js/machineSmAgent.js', makeRequire(map), {
             cli_execute_command: function () { return '{}'; }
         });
         return { agent: agent, holder: holder };
@@ -726,12 +911,7 @@ suite('machineSm pure helpers (gh-980)', function () {
         return maReal.mod;
     };
 
-    var agent = loadModule('js/machineSmAgent.js', makeRequire({
-        './configLoader.js': { loadProjectConfig: function () { return {}; } },
-        './common/smProvider.js': { createSmProvider: function () { return {}; } },
-        './common/reviewVerdicts.js': rvReal(),
-        './common/machineAuthor.js': maReal()
-    }), {
+    var agent = loadModule('js/machineSmAgent.js', makeRequire(agentModuleMap({}, null)), {
         cli_execute_command: function () { return '{}'; }
     });
 
@@ -813,12 +993,7 @@ suite('machineSm executeAction', function () {
     var EXEC_HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
 
     function loadExecAgent() {
-        return loadModule('js/machineSmAgent.js', makeRequire({
-            './configLoader.js': { loadProjectConfig: function () { return {}; } },
-            './common/smProvider.js': { createSmProvider: function () { return {}; } },
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
-            './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-        }), {
+        return loadModule('js/machineSmAgent.js', makeRequire(agentModuleMap({}, null)), {
             cli_execute_command: function () { return '{}'; }
         });
     }
@@ -886,7 +1061,9 @@ suite('machineSm executeAction', function () {
                 return [suggestionThread('RT_1'), suggestionThread('RT_2')];
             },
             resolveThread: function (n, t) { resolved.push(t.threadId); },
-            replyToThread: function (n, t, ack) { replies.push({ id: t.threadId, ack: ack }); }
+            replyToThread: function (n, t, ack) { replies.push({ id: t.threadId, ack: ack }); },
+            prCommentList: function () { return []; },
+            postPrComment: function () {}
         };
         var agent = loadExecAgent();
         var out = agent.executeAction(provider,
@@ -895,7 +1072,10 @@ suite('machineSm executeAction', function () {
         assert.equal(out.resolved, 2, 'both non-blocking machine threads resolved');
         assert.deepEqual(resolved, ['RT_1', 'RT_2']);
         assert.equal(replies.length, 2, 'an ack reply follows each resolve');
-        assert.ok(replies[0].ack.indexOf('gh-828') !== -1, 'the ack carries the gh-828 wording');
+        assert.ok(replies[0].ack.indexOf('triage closure (gh-1352)') !== -1,
+            'the ack carries the gh-1352 triage wording');
+        assert.ok(replies[0].ack.indexOf('defered: ') !== -1,
+            'default policy: suggestion fix is mandatory — the ack defers to the ledger');
     });
 
     test('resolveSuggestionThreads: a failing resolve skips the ack for that thread only', function () {
@@ -904,7 +1084,9 @@ suite('machineSm executeAction', function () {
             verdictRecords: function () { return [approveRecord()]; },
             reviewThreadList: function () { return [suggestionThread('RT_1'), suggestionThread('RT_2')]; },
             resolveThread: function (n, t) { if (t.threadId === 'RT_1') throw new Error('graphql down'); },
-            replyToThread: function (n, t, ack) { replies.push(t.threadId); }
+            replyToThread: function (n, t, ack) { replies.push(t.threadId); },
+            prCommentList: function () { return []; },
+            postPrComment: function () {}
         };
         var agent = loadExecAgent();
         var out = agent.executeAction(provider,
@@ -919,7 +1101,9 @@ suite('machineSm executeAction', function () {
             verdictRecords: function () { return [approveRecord()]; },
             reviewThreadList: function () { return [suggestionThread('RT_1')]; },
             resolveThread: function () {},
-            replyToThread: function () { throw new Error('reply down'); }
+            replyToThread: function () { throw new Error('reply down'); },
+            prCommentList: function () { return []; },
+            postPrComment: function () {}
         };
         var agent = loadExecAgent();
         var out = agent.executeAction(provider,
@@ -928,4 +1112,235 @@ suite('machineSm executeAction', function () {
         assert.equal(out.resolved, 1, 'the resolve is still credited when the ack fails');
     });
 
+});
+
+
+// -------------------------------------------------------------------------
+// gh-1352: the disposition loop — the polish gate + the triage hand-off
+// -------------------------------------------------------------------------
+
+suite('machineSm disposition loop (gh-1352)', function () {
+
+    var agent2 = loadModule('js/machineSmAgent.js', makeRequire(agentModuleMap({}, null)), {
+        cli_execute_command: function () { return '{}'; }
+    });
+
+    var HEAD2 = 'aaaabbbbccccddddeeeeffff0000111122223333';
+    var pl = plShared();
+    var APPROVE_POLISH_ONLY = { head: HEAD2, verdict: 'APPROVE', blocking: 0, important: 0,
+                                suggestions: 3, nits: 1, at: '2026-11-04T00:00:00.000Z',
+                                source: 'pr_review.json' };
+
+    function loopProvider(threads, opts) {
+        opts = opts || {};
+        return {
+            calls: { resolves: [], replies: [], posts: [], dispatches: [] },
+            verdictRecords: function () { return [opts.record || APPROVE_POLISH_ONLY]; },
+            reviewThreadList: function () { return threads; },
+            replyToThread: function (pr, t, text) { this.calls.replies.push(text); },
+            resolveThread: function (pr, t) { this.calls.resolves.push(t.threadId); },
+            prCommentList: function () { return opts.comments || []; },
+            postPrComment: function (pr, body) { this.calls.posts.push(body); },
+            dispatchLeg: function (issue, leg, reason, wf) {
+                this.calls.dispatches.push({ issue: issue, leg: leg, reason: reason, wf: wf });
+            }
+        };
+    }
+
+    function sugg(i) {
+        return { threadId: 'RT_' + i, rootCommentId: 100 + i, resolved: false,
+                 author: 'ai-teammate', body: '💡 SUGGESTION: polish ' + i };
+    }
+
+    test('polish-tier-only census on a fresh head dispatches the lap, stamps the marker and skips triage', function () {
+        var p = loopProvider([sugg(1), sugg(2), sugg(3)]);
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.equal(out.polished, true);
+        assert.equal(p.calls.dispatches.length, 1);
+        assert.equal(p.calls.dispatches[0].leg, 'polish');
+        assert.equal(p.calls.dispatches[0].wf, 'ai-teammate.yml');
+        // gh-1352 review: the provider primitive takes the issue NUMBER
+        // (executeAction dispatch parity) — an issue object would reach
+        // github_trigger_workflow as "[object Object]".
+        assert.equal(p.calls.dispatches[0].issue, 42, 'dispatchLeg carries the issue number');
+        // gh-1352 review: the dispatch stamps the per-head lap marker —
+        // the once-per-head + instability-budget memory. Without the
+        // marker post the bounds are dead code (the next tick re-laps).
+        assert.equal(p.calls.posts.length, 1, 'the lap marker is stamped at dispatch');
+        var laps = pl.parsePolishLapMarkers(
+            p.calls.posts.map(function (body) { return { body: body, user: { login: 'ai-teammate' } }; }),
+            { authorLogins: ['ai-teammate'] });
+        assert.equal(laps.length, 1);
+        assert.equal(laps[0].head, HEAD2, 'the marker names the head');
+        assert.deepEqual(laps[0].resolvedThreadIds, ['RT_1', 'RT_2', 'RT_3'],
+            'the lap plan thread ids ride the marker (fixed: evidence)');
+        assert.equal(p.calls.resolves.length, 0, 'the lap owns the threads — triage stays out this tick');
+    });
+
+    test('a failed lap-marker post stays home and falls open to triage (fail closed)', function () {
+        var p = loopProvider([sugg(1), sugg(2)]);
+        p.postPrComment = function () { throw new Error('403'); };
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished, 'no marker, no lap — an unstamped lap cannot honour once-per-head');
+        assert.equal(p.calls.dispatches.length, 0, 'the leg is never dispatched unstamped');
+        // the triage fallback still runs — but the broken comment primitive
+        // also kills deferral, so the mandatory-fix suggestion tiers stay
+        // open (needs-fix-or-defer), exactly the fail-closed doctrine.
+        assert.equal(p.calls.resolves.length, 0);
+    });
+
+    test('a non-string head sha cannot stamp a marker — the lap stays home, the threads triage (fail closed)', function () {
+        // crap4js coverage lap: pins the dispatchPolishLap !marker guard —
+        // a numeric head passes the gate (latestVerdictForHead String()-/
+        // prefix-matches) but buildPolishLapMarker rejects non-strings, so
+        // the unbuildable marker keeps the leg home and hands to triage.
+        var NUMERIC_HEAD = 7654321;
+        var p = loopProvider([sugg(1)], {
+            record: { head: '7654321abcdef0123456789', verdict: 'APPROVE', blocking: 0, important: 0,
+                      suggestions: 2, at: '2026-11-04T00:00:00.000Z', source: 'pr_review.json' }
+        });
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: NUMERIC_HEAD, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished, 'a head the marker builder rejects never dispatches unstamped');
+        assert.equal(p.calls.dispatches.length, 0, 'no dispatch without the once-per-head stamp');
+        assert.ok(p.calls.posts.every(function (body) { return body.indexOf('dmtools:polish-lap') === -1; }),
+            'no lap-marker comment is stamped (only the triage ledger marker may post)');
+        assert.equal(p.calls.resolves.length, 1, 'the threads fall open to triage with dispositions');
+    });
+
+    test('a provider without postPrComment never reaches the polish dispatch', function () {
+        var p = loopProvider([sugg(1)]);
+        delete p.postPrComment;
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished, 'the gate needs the marker primitive');
+        assert.equal(p.calls.dispatches.length, 0);
+        assert.equal(p.calls.resolves.length, 0,
+            'no marker primitive also means no deferral — the thread stays open (fail closed)');
+    });
+
+    test('the stamped marker is the once-per-head memory: a second tick on the same head triages', function () {
+        // Round 1: dispatch stamps the marker on the PR.
+        var p = loopProvider([sugg(1), sugg(2)]);
+        agent2.dispositionLoop(p, 42, { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.equal(p.calls.dispatches.length, 1);
+        // Round 2 (the lap ran, some threads remain open, head unchanged):
+        // the posted marker is now on the comment list — no second lap.
+        var p2 = loopProvider([sugg(2)], {
+            comments: p.calls.posts.map(function (body) {
+                return { body: body, user: { login: 'ai-teammate' } };
+            })
+        });
+        var out2 = agent2.dispositionLoop(p2, 42, { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out2.polished, 'once per head — the memory holds across ticks');
+        assert.equal(p2.calls.dispatches.length, 0);
+        assert.equal(p2.calls.resolves.length, 1);
+    });
+
+    test('once-per-head: a lap marker on this head hands the threads to triage instead', function () {
+        var lapComment = { body: '<!-- dmtools:polish-lap ' + JSON.stringify(
+            { head: HEAD2, lapThreads: 3, overflow: 0, at: '2026-11-04T01:00:00.000Z' }) + ' -->',
+            user: { login: 'ai-teammate' } };
+        var p = loopProvider([sugg(1)], { comments: [lapComment] });
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished);
+        assert.equal(p.calls.dispatches.length, 0, 'once per head — no second lap');
+        assert.equal(p.calls.resolves.length, 1, 'the threads triage with dispositions');
+        assert.equal(p.calls.posts.length, 1, 'the deferral lands in the debt ledger');
+    });
+
+    test('instability budget: laps on 2 distinct heads exhaust polishing — triage resolves the rest', function () {
+        function lap(head) {
+            return { body: '<!-- dmtools:polish-lap ' + JSON.stringify(
+                { head: head, lapThreads: 1, overflow: 0, at: '2026-11-04T01:00:00.000Z' }) + ' -->',
+                user: { login: 'ai-teammate' } };
+        }
+        var p = loopProvider([sugg(1), sugg(2)], { comments: [lap('head1'), lap('head2')] });
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished, 'the budget stops the polish cycle');
+        assert.equal(p.calls.dispatches.length, 0);
+        assert.equal(p.calls.resolves.length, 2);
+    });
+
+    test('a rework lap between polish laps resets the budget through the gate (the lap dispatches)', function () {
+        // The documented consecutive bound, wired: polishLap markers +
+        // dmtools:rework-lap markers parse from the SAME comment list and
+        // merge into one history — the rework lap between the two polish
+        // laps breaks consecutiveness, so a third head still dispatches.
+        var rlg = loadModule('js/common/reworkLoopGuard.js', makeRequire({
+            './machineAuthor.js': maShared(),
+            './reviewVerdicts.js': rvShared()
+        }), {});
+        var comments = [
+            { body: pl.buildPolishLapMarker('head1', { threads: 1, at: '2026-11-04T01:00:00.000Z' }),
+              user: { login: 'ai-teammate' } },
+            { body: rlg.buildLapMarker('rework-head', 1, 1, null, '2026-11-04T02:00:00.000Z'),
+              user: { login: 'ai-teammate' } },
+            { body: pl.buildPolishLapMarker('head2', { threads: 1, at: '2026-11-04T03:00:00.000Z' }),
+              user: { login: 'ai-teammate' } }
+        ];
+        var p = loopProvider([sugg(1)], { comments: comments });
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(out.polished, 'the rework lap between the polish laps resets the budget — the lap dispatches');
+        assert.equal(p.calls.dispatches.length, 1);
+        assert.equal(p.calls.dispatches[0].leg, 'polish');
+        assert.equal(p.calls.resolves.length, 0, 'the lap owns the threads this tick');
+    });
+
+    test('allowPolish:false (the post-merge hygiene pass) never dispatches a lap', function () {
+        var p = loopProvider([sugg(1)]);
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: false },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished);
+        assert.equal(p.calls.dispatches.length, 0);
+        assert.equal(p.calls.resolves.length, 1);
+    });
+
+    test('a non-polish census record hands the threads straight to triage', function () {
+        var p = loopProvider([sugg(1), { threadId: 'RT_I', rootCommentId: 9, resolved: false,
+                                         author: 'ai-teammate', body: '⚠️ IMPORTANT: validate' }],
+            { record: { head: HEAD2, verdict: 'APPROVE', blocking: 0, important: 2,
+                        suggestions: 1, at: '2026-11-04T00:00:00.000Z', source: 'pr_review.json' } });
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished, 'lap-gated census open — no lap');
+        assert.equal(p.calls.dispatches.length, 0);
+        assert.equal(p.calls.resolves.length, 1, 'the suggestion thread defers through triage');
+    });
+
+    test('no verdict records at all → the whole loop fails closed (nothing resolves)', function () {
+        var p = loopProvider([sugg(1)]);
+        p.verdictRecords = function () { return []; };
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished);
+        assert.equal(p.calls.dispatches.length, 0);
+        assert.equal(p.calls.resolves.length, 0, 'the verdict gate closes triage too');
+    });
+
+    test('resolveMachineSmConfig carries the resolved reviewPolicy (gh-1351 parity)', function () {
+        var cfg = agent2.resolveMachineSmConfig({}, { reviewPolicy: { preset: 'relaxed' } });
+        assert.equal(cfg.reviewPolicy.preset, 'relaxed');
+        var cfg2 = agent2.resolveMachineSmConfig({ reviewPolicy: '{\"preset\":\"investigation\"}' }, {});
+        assert.equal(cfg2.reviewPolicy.preset, 'investigation', 'jobParams JSON-string policy parses');
+        var cfg3 = agent2.resolveMachineSmConfig({}, {});
+        assert.ok(cfg3.reviewPolicy && cfg3.reviewPolicy.severities, 'the built-in default resolves');
+    });
 });

@@ -8,6 +8,11 @@
 // a separate coverage unit of complexity 1 (CRAP 2, far below the bar).
 var stubToolchainLine = function (t) { return t; };
 
+// gh-1352 scope 4a: the shared ledger core, loaded once at file scope — the
+// bugBookkeeping map and the per-test require maps reference it from nested
+// scopes.
+var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
+
 function loadTrackersDev(mocks) {
     return loadModule('js/common/trackers.js', makeRequire({
         '../config.js': configModule,
@@ -116,7 +121,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
 
     var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}));
     var reviewVerdictsModule = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorModule }));
-    var tcLedgerModule = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './reviewVerdicts.js': reviewVerdictsModule }));
+    var tcLedgerModule = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,  './reviewVerdicts.js': reviewVerdictsModule }));
     var requireMap = {
         './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
         './config.js': configModule,
@@ -179,7 +184,7 @@ var bugBookkeepingModule = loadModule('js/common/bugBookkeeping.js', makeRequire
             './machineAuthor.js': loadModule('js/common/machineAuthor.js')
         }))
     })),
-    './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+    './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
         './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
             './machineAuthor.js': loadModule('js/common/machineAuthor.js')
         }))
@@ -796,7 +801,7 @@ suite('developBugAndCreatePR', function() {
                 }),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
-                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
                     './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
                         './machineAuthor.js': loadModule('js/common/machineAuthor.js')
                     }))
@@ -978,7 +983,7 @@ function loadBugForMissingResponseResume(opts) {
             './common/outputFiles.js': realOutputFiles,
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
             './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
-            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
                 './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
                     './machineAuthor.js': loadModule('js/common/machineAuthor.js')
                 }))
@@ -1443,7 +1448,7 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
                 './common/trackers.js': loadTrackersDev(allMocks),
                 './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
-                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+                './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
                     './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
                         './machineAuthor.js': loadModule('js/common/machineAuthor.js')
                     }))

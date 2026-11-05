@@ -32,6 +32,11 @@
 'use strict';
 
 var reviewVerdicts = require('./reviewVerdicts.js');
+// gh-1352 scope 4: the ledger lifecycle (append/refresh/reopen/resolve),
+// the open-set filter and the batched-sweep trigger live in the shared
+// ledger core (the #1345/#1348 pattern extracted) — this module keeps its
+// identity scheme, finding builders, marker persistence and digest face.
+var ledgerCore = require('./ledgerCore.js');
 
 // The registry marker — one line, JSON payload, invisible in the rendered
 // ticket (same protocol family as the gh-807 verdict / gh-1332 registry markers).
@@ -67,25 +72,11 @@ function findingIdentity(tcKey, errorClass, testPath) {
 }
 
 // ── shape ────────────────────────────────────────────────────────────────────
+// (ledgerCore owns the lifecycle helpers — deepCopy/truncate/firstDefined/
+// findById/refresh/append/resolve/open — delegated below.)
 
 function emptyLedger() {
     return { v: LEDGER_VERSION, at: new Date().toISOString(), findings: [] };
-}
-
-function deepCopyLedger(l) {
-    return JSON.parse(JSON.stringify(l || emptyLedger()));
-}
-
-function truncate(text) {
-    var s = String(text || '');
-    return s.length > MAX_NOTE_LENGTH ? s.substring(0, MAX_NOTE_LENGTH) : s;
-}
-
-function firstDefined(obj, keys) {
-    for (var i = 0; i < keys.length; i++) {
-        if (obj[keys[i]] !== undefined && obj[keys[i]] !== null && obj[keys[i]] !== '') return obj[keys[i]];
-    }
-    return null;
 }
 
 // Free-form finding fields copied from the source payload. `sources` lists
@@ -151,29 +142,19 @@ function normalizeFinding(input, at) {
     return finding;
 }
 
-function findById(l, id) {
-    for (var i = 0; i < l.findings.length; i++) {
-        if (l.findings[i].id === id) return l.findings[i];
-    }
-    return null;
+function truncate(text) {
+    return ledgerCore.truncate(text, MAX_NOTE_LENGTH);
 }
 
-function refreshFinding(existing, incoming, at) {
-    existing.lastSeenAt = at;
-    existing.occurrences = (existing.occurrences || 1) + 1;
-    // Latest evidence wins — the ledger documents the most recent lap.
-    ['verdict', 'reason', 'sha', 'envFingerprint', 'lastGreenSha', 'lastGreenEnvFingerprint',
-     'failedDescriptionFile', 'failureSummary', 'note', 'claimedVerdict', 'evidence'].forEach(function(k) {
-        if (incoming[k] !== null && incoming[k] !== undefined) existing[k] = incoming[k];
-    });
-    if (existing.status === STATUS_RESOLVED) {
-        // A resolved finding that broke again: the sweep did not stick — reopen.
-        existing.status = STATUS_OPEN;
-        existing.resolvedAt = null;
-        existing.resolvedVia = null;
-    }
-    return existing;
+function firstDefined(obj, keys) {
+    return ledgerCore.firstDefined(obj, keys);
 }
+
+// The TC refresh keys (verdict + reason included) — a superset slice of the
+// core's default evidence list, so the TC ledger refreshes what IT documents.
+var TC_REFRESH_KEYS = ['verdict', 'reason', 'sha', 'envFingerprint', 'lastGreenSha',
+    'lastGreenEnvFingerprint', 'failedDescriptionFile', 'failureSummary', 'note',
+    'claimedVerdict', 'evidence'];
 
 /**
  * Appends a finding into a deep-copied ledger: identity match refreshes,
@@ -181,17 +162,7 @@ function refreshFinding(existing, incoming, at) {
  * the input).
  */
 function appendFinding(prev, input) {
-    var at = (input && input.at) || new Date().toISOString();
-    var l = deepCopyLedger(prev);
-    l.at = at;
-    var incoming = normalizeFinding(input, at);
-    var existing = findById(l, incoming.id);
-    if (existing) {
-        refreshFinding(existing, incoming, at);
-    } else {
-        l.findings.push(incoming);
-    }
-    return l;
+    return ledgerCore.appendFinding(prev, input, normalizeFinding, TC_REFRESH_KEYS);
 }
 
 /**
@@ -199,22 +170,11 @@ function appendFinding(prev, input) {
  * Unknown ids are ignored — the ledger is append-only evidence.
  */
 function resolveFindings(prev, ids, via) {
-    var at = new Date().toISOString();
-    var l = deepCopyLedger(prev);
-    l.at = at;
-    (ids || []).forEach(function(id) {
-        var f = findById(l, id);
-        if (!f) return;
-        f.status = STATUS_RESOLVED;
-        f.resolvedAt = at;
-        f.resolvedVia = via || null;
-    });
-    return l;
+    return ledgerCore.resolveFindings(prev, ids, via);
 }
 
 function openFindings(l) {
-    if (!l || !Array.isArray(l.findings)) return [];
-    return l.findings.filter(function(f) { return f.status === STATUS_OPEN; });
+    return ledgerCore.openFindings(l);
 }
 
 // The SM-routing label that anchors a parked differential request to the
@@ -347,12 +307,8 @@ function buildLedgerMarker(l) {
 }
 
 function ledgerFromPayload(parsed) {
-    if (!parsed || !Array.isArray(parsed.findings)) return null;
-    return {
-        v: parseInt(parsed.v, 10) || LEDGER_VERSION,
-        at: String(parsed.at || ''),
-        findings: parsed.findings
-    };
+    // the canonical shape guard lives in the ledger core (gh-1352 dedup)
+    return ledgerCore.ledgerFromPayload(parsed);
 }
 
 /**
@@ -365,10 +321,7 @@ function ledgerFromPayload(parsed) {
  */
 function parseLedgerComments(comments, opts) {
     return reviewVerdicts.parseMarkerComments(comments, opts, MARKER_PREFIX, MARKER_SUFFIX,
-        function(parsed) {
-            var l = ledgerFromPayload(parsed);
-            return l ? { ledger: l, at: l.at } : null;
-        }, true);
+        ledgerCore.ledgerRecordOf, true);
 }
 
 /**

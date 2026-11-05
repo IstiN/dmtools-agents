@@ -20,7 +20,8 @@ var reviewVerdicts = loadModule('js/common/reviewVerdicts.js', makeRequire({
 var registry = loadModule('js/common/tcRunRegistry.js', makeRequire({
     './reviewVerdicts.js': reviewVerdicts
 }));
-var tcLedger = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
+var tcLedger = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
     './reviewVerdicts.js': reviewVerdicts
 }));
 var alt = loadModule('js/common/tcAlternation.js', makeRequire({

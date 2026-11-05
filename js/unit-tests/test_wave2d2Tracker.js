@@ -300,15 +300,15 @@ suite('wave2d2 ado — postStoryTestAutomationResults', function() {
             './configLoader.js': cfgLoader, './config.js': configModule, './common/pullRequest.js': prHelper,
             './postStoryTestAutomationShared.js': sharedModule,
             './common/tcTriage.js': loadModule('js/common/tcTriage.js', makeRequire({}), rec.mocks),
-            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
+            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})),  './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
             './common/tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({ './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
             './common/tcAlternation.js': loadModule('js/common/tcAlternation.js', makeRequire({
                 './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({ './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
-                './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks)
+                './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})),  './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks)
             }), rec.mocks),
             './common/bugBookkeeping.js': loadModule('js/common/bugBookkeeping.js', makeRequire({
                 './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({ './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
-                './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
+                './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})),  './reviewVerdicts.js': w2ReviewVerdicts }), rec.mocks),
                 './machineAuthor.js': w2MachineAuthor
             }), rec.mocks),
             './common/machineAuthor.js': w2MachineAuthor,

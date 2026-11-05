@@ -1823,3 +1823,79 @@ suite('smProvider — gh-1221 createSmProvider characterization', function () {
         ], 'repository validation precedes the provider dispatch; unknown forges throw');
     });
 });
+
+// ── gh-1352 review debt ledger primitives (prCommentList/postPrComment) ────
+// The BLOCKING replay at the provider face: the deferral loop reads the
+// ledger through prCommentList — the SAME fetch the verdict records memoize
+// per tick (kind prVerdicts). postPrComment is a MUTATION of that read
+// stream: without invalidate-after-mutation (ioCacheDrop, the gh-957 house
+// primitive) every same-tick re-read serves the pre-post memo, the ledger
+// append rebuilds from the stale base, and the marker family's
+// last-write-wins silently drops every earlier defered finding.
+suite('smProvider — gh-1352 ledger primitives: postPrComment invalidates the prVerdicts memo', function () {
+
+    var MOD = 'js/common/smProvider.js';
+
+    // A live "server": github_get_pr_comments serializes the current list
+    // per fetch (the wire shape), posts append to it as machine-authored
+    // comments. The per-tick memo rides between the provider and the wire.
+    function loadLedgerProvider(comments, calls) {
+        var mod = loadModule(MOD,
+            makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}),
+            {
+                github_get_pr_comments: function () {
+                    calls.fetches++;
+                    return JSON.stringify(comments);
+                },
+                github_create_comment: function (args) {
+                    calls.posts.push(args.text);
+                    comments.push({ user: { login: 'ai-teammate' }, body: args.text });
+                    return { id: String(comments.length) };
+                }
+            });
+        mod._cache.entries = {}; // fresh per-tick holder (cache is module state)
+        return mod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' }
+        });
+    }
+
+    test('postPrComment invalidates the prVerdicts memo — a same-tick re-read observes the post', function () {
+        var calls = { fetches: 0, posts: [] };
+        var comments = [{ body: 'base ledger L0' }];
+        var p = loadLedgerProvider(comments, calls);
+        assert.equal(p.prCommentList(9).length, 1, 'first read fetches the pre-post list (and memoizes)');
+        p.postPrComment(9, 'ledger marker M1');
+        assert.equal(calls.fetches, 1, 'the post itself fetches nothing');
+        var again = p.prCommentList(9);
+        assert.equal(calls.fetches, 2, 'the write dropped the memo — the re-read re-fetches');
+        assert.equal(again.length, 2, 'the same-tick re-read observes the posted marker');
+        assert.contains(again[1].body, 'ledger marker M1');
+    });
+
+    test('reads still memoize — the drop rides the WRITE, never the read (no over-invalidation)', function () {
+        var calls = { fetches: 0, posts: [] };
+        var comments = [{ body: 'base ledger L0' }];
+        var p = loadLedgerProvider(comments, calls);
+        p.prCommentList(4);
+        p.prCommentList(4);
+        p.prCommentList(4);
+        assert.equal(calls.fetches, 1, 'read-read-read still rides the per-tick memo');
+        assert.equal(calls.posts.length, 0);
+    });
+
+    test('the memo re-arms after the drop: a post-poisoned read does not stick forever', function () {
+        // Fail-closed shape from the field: a read that raced a post must
+        // not serve its stale snapshot for the REST of the tick once a
+        // newer write landed — each write re-arms the next read.
+        var calls = { fetches: 0, posts: [] };
+        var comments = [];
+        var p = loadLedgerProvider(comments, calls);
+        assert.deepEqual(p.prCommentList(7), [], 'empty list memoized');
+        p.postPrComment(7, 'M1');
+        p.postPrComment(7, 'M2');
+        var now = p.prCommentList(7);
+        assert.equal(now.length, 2, 'both posts visible after the second write');
+        assert.equal(calls.fetches, 2, 'exactly one re-fetch after two writes');
+    });
+});

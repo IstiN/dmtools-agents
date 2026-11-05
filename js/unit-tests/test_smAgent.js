@@ -14,6 +14,11 @@
 // instead of re-declaring the envelope chain (a verbatim stub copy would
 // re-form the clone window this rework removed).
 var smProviderRealModCache = null;
+
+// gh-1352 scope 4a: the shared ledger core, loaded once at file scope — the
+// smLocalHelperRequireMap entries and the gh-1345 IT below reference it from
+// nested scopes.
+var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
 function smProviderRealForGh1249() {
     if (smProviderRealModCache) return smProviderRealModCache;
     smProviderRealModCache = loadModule('js/common/smProvider.js', makeRequire({
@@ -64,6 +69,7 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
             './common/autoStart.js': unreadable,
             './common/commentMarkup.js': unreadable,
             './common/tcRunRegistry.js': unreadable,
+            './common/ledgerCore.js': unreadable,
             './common/tcMaintenanceLedger.js': unreadable,
             './common/tcAlternation.js': unreadable,
             './common/tcTriage.js': unreadable,
@@ -100,14 +106,15 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
         './common/tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
             './reviewVerdicts.js': reviewVerdictsReal()
         }), {}),
-        './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+        './common/ledgerCore.js': LEDGERCORE,
+        './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
             './reviewVerdicts.js': reviewVerdictsReal()
         }), {}),
         './common/tcAlternation.js': loadModule('js/common/tcAlternation.js', makeRequire({
             './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
                 './reviewVerdicts.js': reviewVerdictsReal()
             }), {}),
-            './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+            './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
                 './reviewVerdicts.js': reviewVerdictsReal()
             }), {})
         }), {}),
@@ -116,7 +123,7 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
             './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
                 './reviewVerdicts.js': reviewVerdictsReal()
             }), {}),
-            './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+            './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
                 './reviewVerdicts.js': reviewVerdictsReal()
             }), {}),
             './machineAuthor.js': machineAuthorReal()
@@ -18274,7 +18281,7 @@ suite('smAgent: runLocalAction TC-maintenance helper layer (gh-1345)', function(
         var reviewVerdictsMod = loadModule('js/common/reviewVerdicts.js', makeRequire({
             './machineAuthor.js': machineAuthorMod
         }));
-        var tcLedgerMod = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+        var tcLedgerMod = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
             './reviewVerdicts.js': reviewVerdictsMod
         }));
         var parked = {
