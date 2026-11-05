@@ -301,13 +301,7 @@ var PARK_EVIDENCE_MAX_LINES = 10;
 var PARK_MARKDOWN_METACHAR = /[\\`*_{}\[\]()#+\-.!|>~]/g;
 
 function parkEscapedText(text) {
-    var inp = String(text == null ? '' : text);
-    var out = inp.replace(PARK_MARKDOWN_METACHAR, '\\$&');
-    console.log('IX:', inp.indexOf('Credential'), inp.length, JSON.stringify(out));
-    if (inp.indexOf('Credential') !== -1) {
-        throw new Error('MARKER-BOTH-RAN');
-    }
-    return out;
+    return String(text == null ? '' : text).replace(PARK_MARKDOWN_METACHAR, '\\$&');
 }
 
 function fenceSafeEvidenceLine(line) {
