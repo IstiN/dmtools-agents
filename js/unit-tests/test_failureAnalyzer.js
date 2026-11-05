@@ -332,6 +332,7 @@ suite('failureAnalyzer park diagnostic (gh-1366 AC3)', function () {
         assert.ok(body.indexOf('deterministic-infra') !== -1);
         assert.ok(body.indexOf('setup script pins a deleted registry mirror') !== -1, 'root cause named');
         assert.ok(body.indexOf('npm ERR! 404 not-found@1.0.0') !== -1, 'evidence quoted');
+        console.log('SEG:', JSON.stringify(body.split('\n')));
         assert.ok(body.indexOf('update \\[REDACTED:Credential\\-File\\] to the live registry') !== -1, 'suggested fix named (escaped rendering)');
         assert.ok(body.indexOf('sm:leg-blocked') !== -1, 'the resume gesture names the label');
     });

@@ -301,7 +301,10 @@ var PARK_EVIDENCE_MAX_LINES = 10;
 var PARK_MARKDOWN_METACHAR = /[\\`*_{}\[\]()#+\-.!|>~]/g;
 
 function parkEscapedText(text) {
-    return String(text == null ? '' : text).replace(PARK_MARKDOWN_METACHAR, '\\$&');
+    console.log('DBG regex:', String(PARK_MARKDOWN_METACHAR), '| test ]:', PARK_MARKDOWN_METACHAR.test(']'), '| test -:', PARK_MARKDOWN_METACHAR.test('-'), '| test [:', PARK_MARKDOWN_METACHAR.test('['));
+    var out = String(text == null ? '' : text).replace(PARK_MARKDOWN_METACHAR, '\\$&');
+    console.log('DBG out:', JSON.stringify(out));
+    return out;
 }
 
 // A evidence line consisting ONLY of backticks would close the fenced
