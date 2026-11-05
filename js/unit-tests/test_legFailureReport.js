@@ -564,3 +564,197 @@ suite('legFailureReport — factory-setup carry contract', function () {
     });
 
 });
+
+// ── gh-1363 rework: review-thread fixes ──────────────────────────────────────
+
+suite('legFailureReport.renderReport — missing phase degrades to omission (gh-1363 rework)', function () {
+
+    test('no phase → no Phase line, never the literal string "undefined"', function () {
+        var body = legFailureReport.renderReport(MARKDOWN, { step: 'Test' });
+        assert.equal(body.indexOf('Phase:'), -1, 'no Phase line without a phase, got: ' + body);
+        assert.equal(body.indexOf('undefined'), -1, 'never the literal undefined, got: ' + body);
+    });
+
+    test('a present phase still renders (regression guard)', function () {
+        var body = legFailureReport.renderReport(MARKDOWN, { phase: 'ai-work' });
+        assert.ok(body.indexOf('**Phase:** ai-work') !== -1, 'got: ' + body);
+    });
+
+});
+
+suite('legFailureReport — transport script self-test (gh-1363 rework)', function () {
+
+    test('bash scripts/report-leg-failure.sh --self-test passes — the advertised verification is real', function () {
+        var out = cli_execute_command({ command: 'bash scripts/report-leg-failure.sh --self-test' }) || '';
+        assert.ok(String(out).indexOf('report-leg-failure self-test: PASS') !== -1,
+            'self-test must pass; got:\n' + out);
+        assert.equal(String(out).indexOf('self-test: FAIL'), -1, 'got:\n' + out);
+    });
+
+});
+
+// Node-only scenario harness: spawns the transport script with a stub `gh` on
+// PATH (the dmtools GraalJS runner cannot pass env to cli_execute_command).
+// The self-test above carries the same scenarios into the GraalJS gate.
+var HAS_NODE_SPAWN = (function () {
+    try {
+        return typeof process !== 'undefined' &&
+            !!(process.versions && process.versions.node) &&
+            !!require('child_process');
+    } catch (e) { return false; }
+})();
+
+if (HAS_NODE_SPAWN) suite('legFailureReport — transport script scenario e2e (node harness, gh-1363 rework)', function () {
+
+    var spawnSync = require('child_process').spawnSync;
+    var e2efs = require('fs');
+    var e2eos = require('os');
+    var e2epath = require('path');
+
+    var REPO_ROOT = e2epath.resolve(__dirname, '..', '..');
+    var TMP = e2efs.mkdtempSync(e2epath.join(e2eos.tmpdir(), 'report-leg-failure-e2e-'));
+    var STUBS = e2epath.join(TMP, 'stubs');
+    e2efs.mkdirSync(STUBS, { recursive: true });
+
+    // gh test double: records posted bodies to $GH_STUB_RECORD (separated by
+    // --BOUNDARY--), serves canned payloads from the files $GH_STUB_JOBS /
+    // $GH_STUB_LOG / $GH_STUB_COMENTS point at (paths, never bytes — a big
+    // fixture must not travel env/argv either). jq filters are applied with
+    // the real jq, like gh does.
+    e2efs.writeFileSync(e2epath.join(STUBS, 'gh'), [
+        '#!/usr/bin/env bash',
+        'REC="${GH_STUB_RECORD:?GH_STUB_RECORD unset}"',
+        'printf \'%s\\n\' "== gh $*" >> "$REC.calls"',
+        'case "$1 $2" in',
+        '  "issue comment")',
+        '    if [ "$3" = "--body-file" ]; then cat >> "$REC"; else',
+        '      prev=""',
+        '      for a in "$@"; do',
+        '        if [ "$prev" = "--body" ]; then printf \'%s\' "$a" >> "$REC"; fi',
+        '        prev="$a"',
+        '      done',
+        '    fi',
+        '    printf \'\\n--BOUNDARY--\\n\' >> "$REC"',
+        '    exit 0 ;;',
+        '  "run view")',
+        '    case "$*" in',
+        '      *--log-failed*) [ -n "${GH_STUB_LOG:-}" ] && cat "$GH_STUB_LOG" ;;',
+        '      *)',
+        '        prev=""',
+        '        for a in "$@"; do',
+        '          if [ "$prev" = "--jq" ]; then [ -n "${GH_STUB_JOBS:-}" ] && jq -r "$a" < "$GH_STUB_JOBS" 2>/dev/null; fi',
+        '          prev="$a"',
+        '        done ;;',
+        '    esac',
+        '    exit 0 ;;',
+        '  "issue view")',
+        '    prev=""',
+        '    for a in "$@"; do',
+        '      if [ "$prev" = "--jq" ]; then [ -n "${GH_STUB_COMENTS:-}" ] && jq -c "$a" < "$GH_STUB_COMENTS" 2>/dev/null; fi',
+        '      prev="$a"',
+        '    done',
+        '    exit 0 ;;',
+        'esac',
+        'exit 0',
+        ''
+    ].join('\n'), { mode: 0o755 });
+
+    var SCRUBBED = ['OUTCOME', 'CI_RUN_URL', 'PHASE', 'PREFLIGHT_LINE', 'WORKFLOW_FILE',
+        'FACTORY_SETUP_ROOT', 'GITHUB_SERVER_URL', 'GITHUB_RUN_ID', 'NUMBER', 'GITHUB_REPOSITORY'];
+
+    /** Run the transport script with the stub PATH and per-scenario env (null → unset). */
+    function scenario(extraEnv) {
+        var rec = e2epath.join(TMP, 'record-' + Math.floor(Math.random() * 1e9));
+        var env = Object.assign({}, process.env);
+        SCRUBBED.concat(['GH_STUB_RECORD', 'GH_STUB_JOBS', 'GH_STUB_LOG', 'GH_STUB_COMENTS'])
+            .forEach(function (k) { delete env[k]; });
+        env.PATH = STUBS + e2epath.delimiter + (env.PATH || '');
+        env.GH_STUB_RECORD = rec;
+        Object.keys(extraEnv).forEach(function (k) {
+            if (extraEnv[k] === null) delete env[k];
+            else env[k] = extraEnv[k];
+        });
+        var res = spawnSync('bash', ['scripts/report-leg-failure.sh'], { cwd: REPO_ROOT, env: env, encoding: 'utf8' });
+        var bodies = [];
+        var calls = '';
+        try {
+            bodies = e2efs.readFileSync(rec, 'utf8').split('\n--BOUNDARY--\n').filter(function (b) { return b.length > 0; });
+            calls = e2efs.readFileSync(rec + '.calls', 'utf8');
+        } catch (e) { /* nothing posted */ }
+        return {
+            status: res.status,
+            output: String(res.stdout || '') + String(res.stderr || ''),
+            bodies: bodies,
+            calls: calls
+        };
+    }
+
+    test('failure with a >128 KiB comment history still renders the enriched report (E2BIG regression)', function () {
+        var SIG = legFailureReport.failureSignature({
+            workflow: 'ai-teammate.yml', step: 'Test', message: 'Test\nlog line A\nlog line B'
+        });
+        var jobs = JSON.stringify({ jobs: [
+            { conclusion: 'failure', steps: [{ name: 'Build', conclusion: 'success' }, { name: 'Test', conclusion: 'failure' }] }
+        ] });
+        var comments = JSON.stringify([
+            { author: { login: 'bot' }, body: new Array(150001).join('x') },
+            { author: { login: 'bot' }, body: 'earlier notice\nfailure-signature: ' + SIG }
+        ]);
+        var commentsFile = e2epath.join(TMP, 'comments-big.json');
+        e2efs.writeFileSync(commentsFile, comments);
+        var jobsFile = e2epath.join(TMP, 'jobs.json');
+        e2efs.writeFileSync(jobsFile, jobs);
+        var logFile = e2epath.join(TMP, 'log.txt');
+        e2efs.writeFileSync(logFile, 'log line A\nlog line B');
+        var run = scenario({
+            NUMBER: '12', GITHUB_REPOSITORY: 'acme/widgets', OUTCOME: 'failure',
+            GITHUB_SERVER_URL: 'https://github.com', GITHUB_RUN_ID: '4242', PHASE: 'ai-work',
+            GH_STUB_JOBS: jobsFile, GH_STUB_LOG: logFile, GH_STUB_COMENTS: commentsFile
+        });
+        assert.equal(run.status, 0, 'exit 0, got ' + run.status + ': ' + run.output);
+        assert.equal(run.bodies.length, 1, 'exactly one comment posted, got ' + run.bodies.length + ': ' + run.output);
+        var body = run.bodies[0];
+        assert.ok(body.indexOf('### 🤖 AI Teammate run failed') === 0, 'enriched heading first, got: ' + body);
+        assert.ok(body.indexOf('**Failing step:** Test') !== -1, 'step name carried, got: ' + body);
+        assert.ok(body.indexOf('**Phase:** ai-work') !== -1, 'phase carried');
+        assert.ok(body.indexOf('Log excerpt') !== -1, 'excerpt carried');
+        assert.ok(body.indexOf('identical failure #2 in a row') !== -1,
+            'repeat count survives the 150 KiB history — the payload never travels argv, got: ' + body);
+        assert.ok(body.indexOf('failure-signature: ai-teammate.yml | Test |') !== -1, 'signature line carried');
+    });
+
+    test('AC6: success keeps the historical bare-link line byte-shape', function () {
+        var run = scenario({
+            NUMBER: '12', GITHUB_REPOSITORY: 'acme/widgets', OUTCOME: 'success',
+            CI_RUN_URL: 'https://github.com/acme/widgets/actions/runs/42'
+        });
+        assert.equal(run.status, 0, 'exit 0, got: ' + run.output);
+        assert.equal(run.bodies.length, 1, 'exactly one comment posted, got: ' + run.output);
+        assert.equal(run.bodies[0],
+            '🤖 AI Teammate run success: https://github.com/acme/widgets/actions/runs/42',
+            'byte-exact historical line');
+    });
+
+    test('an UNSET outcome is a warning + skipped notice — never a fabricated success', function () {
+        var run = scenario({ NUMBER: '12', GITHUB_REPOSITORY: 'acme/widgets' });
+        assert.equal(run.status, 0, 'exit 0, got: ' + run.output);
+        assert.equal(run.bodies.length, 0, 'nothing posted, got: ' + JSON.stringify(run.bodies));
+        assert.ok(run.output.indexOf('::warning::report-leg-failure: OUTCOME unset') !== -1,
+            'the misconfiguration is visible, got: ' + run.output);
+    });
+
+    test('builder unavailable → the bare-link fallback keeps the <run-url-unavailable> placeholder', function () {
+        e2efs.mkdirSync(e2epath.join(TMP, 'no-kit'), { recursive: true });
+        var run = scenario({
+            NUMBER: '12', GITHUB_REPOSITORY: 'acme/widgets', OUTCOME: 'failure',
+            FACTORY_SETUP_ROOT: e2epath.join(TMP, 'no-kit')
+        });
+        assert.equal(run.status, 0, 'exit 0, got: ' + run.output);
+        assert.equal(run.bodies.length, 1, 'the notice itself is never lost, got: ' + run.output);
+        assert.equal(run.bodies[0], '🤖 AI Teammate run failure: <run-url-unavailable>',
+            'placeholder aligned with the node path, got: "' + run.bodies[0] + '"');
+    });
+
+    e2efs.rmSync(TMP, { recursive: true, force: true });
+
+});

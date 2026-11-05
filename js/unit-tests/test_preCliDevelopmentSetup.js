@@ -2061,3 +2061,217 @@ suite('preCliDevelopmentSetup.collectPreflightStateStep — leg-start state line
     });
 
 });
+
+// ── gh-1363 rework: review-thread fixes ──────────────────────────────────────
+
+suite('preCliDevelopmentSetup.action — pre-flight capture targets the configured workspace (gh-1363 rework)', function () {
+
+    var TARGET_DIR = '/tmp/gh-1363-target-repo';
+    var PREFLIGHT_RESPONSES = {
+        'git rev-parse --abbrev-ref HEAD': 'ai/gh-1363\n',
+        'git rev-parse HEAD': 'f3183be0925cf2b3fe399b50323fbc533ccf223a\n',
+        'git status --porcelain': ''
+    };
+
+    function workingDirConfigLoaderStub(workingDir) {
+        return {
+            loadProjectConfig: function () { return makeConfig({ workingDir: workingDir }); },
+            paramsForConfigLoad: function (p) { return p; },
+            resolveBranchName: function (cfg, ticket, role) { return role === 'development' ? 'ai/gh-12' : 'master'; },
+            resolvePRTargetBranch: function () { return 'master'; },
+            loadHookFn: function () { return null; }
+        };
+    }
+
+    function runActionCapturingPreflight(workingDir) {
+        var recorded = [];
+        var posted = [];
+        var tracker = {
+            provider: function () { return 'stub'; },
+            postComment: function (key, text) { posted.push({ key: key, text: text }); }
+        };
+        var mod = loadForGh1363({
+            cli_execute_command: function (opts) {
+                recorded.push(opts);
+                var command = opts && opts.command;
+                if (PREFLIGHT_RESPONSES.hasOwnProperty(command)) return PREFLIGHT_RESPONSES[command];
+                throw new Error('cli_execute_command failed: ' + command);
+            },
+            file_write: function () { }
+        }, tracker, workingDirConfigLoaderStub(workingDir));
+        var threw = false;
+        try {
+            mod.action({ inputFolderPath: 'input/gh-12', ticket: { key: 'gh-12', fields: { } } });
+        } catch (e) {
+            threw = true; // checkout fails beyond the probe set — the leg stops
+        }
+        return { recorded: recorded, posted: posted, threw: threw, mod: mod };
+    }
+
+    function preflightCallsOf(run) {
+        return run.recorded.filter(function (opts) {
+            return PREFLIGHT_RESPONSES.hasOwnProperty(opts && opts.command);
+        });
+    }
+
+    test('config.workingDir is resolved BEFORE the capture — the git probes run in the target workspace', function () {
+        var run = runActionCapturingPreflight(TARGET_DIR);
+        var preflightCalls = preflightCallsOf(run);
+        assert.ok(preflightCalls.length >= 3, 'all three pre-flight probes ran, got ' + preflightCalls.length);
+        preflightCalls.forEach(function (opts) {
+            assert.equal(opts.workingDirectory, TARGET_DIR,
+                'pre-flight probe "' + opts.command + '" must carry workingDirectory=' + TARGET_DIR);
+        });
+        assert.ok(run.threw, 'the leg still stops on the checkout failure');
+        assert.equal(run.posted.length, 1, 'the setup-error report is still posted');
+        assert.ok(run.posted[0].text.indexOf('git pre-flight: branch=ai/gh-1363') !== -1,
+            'the pre-flight line rides the report: ' + run.posted[0].text);
+    });
+
+    test('no workingDir — the probes carry no workingDirectory (no-workingDir behavior unchanged)', function () {
+        var run = runActionCapturingPreflight(null);
+        preflightCallsOf(run).forEach(function (opts) {
+            assert.equal(opts.workingDirectory, undefined,
+                'no-workingDir setups must not grow a workingDirectory');
+        });
+        assert.ok(run.threw, 'the leg still stops on the checkout failure');
+    });
+
+});
+
+suite('preCliDevelopmentSetup.buildSetupErrorComment — excerpt not duplicated (gh-1363 rework)', function () {
+
+    var CONTEXT = {
+        preflightLine: 'git pre-flight: branch=ai/gh-1 head=f3183be dirty=0 staged=0 paths=[]',
+        repeatCount: 2,
+        signature: 'preCliDevelopmentSetup | Git Branch Setup | checkout boom'
+    };
+
+    test('a default excerpt equal to the error is omitted — the Error: line already carries it', function () {
+        var mod = loadForGh1363();
+        var out = mod.buildSetupErrorComment(
+            devCommentMarkupModule.forFlavor('markdown'), 'Git Branch Setup', 'checkout boom', CONTEXT);
+        assert.ok(out.indexOf('**Error:**') !== -1, 'the legacy Error line stays');
+        assert.equal(out.indexOf('Log excerpt'), -1, 'no duplicated excerpt section, got: ' + out);
+        assert.equal(out.split('checkout boom').length - 1, 1, 'the error text renders exactly once, got: ' + out);
+    });
+
+    test('a long default excerpt (truncated Error: line) is omitted too — same text, same source', function () {
+        var mod = loadForGh1363();
+        var longError = new Array(101).join('maven failure line\n');
+        var out = mod.buildSetupErrorComment(
+            devCommentMarkupModule.forFlavor('markdown'), 'Environment Setup', longError, { phase: 'setup' });
+        assert.equal(out.indexOf('Log excerpt'), -1, 'no duplicated excerpt section for a default excerpt');
+    });
+
+    test('an explicit caller-provided excerpt DISTINCT from the error still renders', function () {
+        var mod = loadForGh1363();
+        var out = mod.buildSetupErrorComment(
+            devCommentMarkupModule.forFlavor('markdown'), 'Environment Setup', 'npm ci failed',
+            Object.assign({}, CONTEXT, { excerpt: 'npm ERR! missing peer dep\nnpm ERR! exit 1' }));
+        assert.ok(out.indexOf('Log excerpt') !== -1, 'explicit distinct excerpt renders');
+        assert.ok(out.indexOf('npm ERR! missing peer dep') !== -1);
+    });
+
+});
+
+suite('preCliDevelopmentSetup — gh-1363 rework: extracted enrichment helpers (crap split)', function () {
+
+    var SIG = 'preCliDevelopmentSetup | Git Branch Setup | boom';
+
+    function envJava(values) {
+        return { lang: { System: { getenv: function (name) {
+            return Object.prototype.hasOwnProperty.call(values, name) ? values[name] : null;
+        } } } };
+    }
+
+    test('commentBodies: body/text shapes, null entries and a null list', function () {
+        var mod = loadForGh1363();
+        assert.deepEqual(
+            mod.commentBodies([{ body: 'a' }, { text: 'b' }, null, { author: 'x' }]),
+            ['a', 'b', '', '']);
+        assert.deepEqual(mod.commentBodies(null), []);
+        assert.deepEqual(mod.commentBodies([]), []);
+    });
+
+    test('readJavaEnv: value, absent and a throwing bridge — all non-fatal', function () {
+        var mod = loadForGh1363({ java: envJava({ GH_TOKEN: 'tok' }) });
+        assert.equal(mod.readJavaEnv('GH_TOKEN'), 'tok');
+        assert.equal(mod.readJavaEnv('MISSING'), null);
+        var throwing = loadForGh1363({
+            java: { lang: { System: { getenv: function () { throw new Error('no bridge'); } } } }
+        });
+        assert.equal(throwing.readJavaEnv('ANY'), null);
+    });
+
+    test('readProcessEnv: present, absent, no-process-global and a throwing env access — all non-fatal', function () {
+        var mod = loadForGh1363({ process: { env: { FOO: 'bar' } } });
+        assert.equal(mod.readProcessEnv('FOO'), 'bar');
+        assert.equal(mod.readProcessEnv('NOPE'), null);
+        var noProcess = loadForGh1363({ process: undefined });
+        assert.equal(noProcess.readProcessEnv('FOO'), null);
+        var throwingHost = {};
+        Object.defineProperty(throwingHost, 'env', { get: function () { throw new Error('env boom'); } });
+        assert.equal(loadForGh1363({ process: throwingHost }).readProcessEnv('FOO'), null);
+    });
+
+    test('readEnvVar: the java bridge wins over the node process env', function () {
+        var both = loadForGh1363({
+            java: envJava({ BOTH: 'from-java' }),
+            process: { env: { BOTH: 'from-process' } }
+        });
+        assert.equal(both.readEnvVar('BOTH'), 'from-java');
+        var onlyProcess = loadForGh1363({
+            java: envJava({}),
+            process: { env: { BOTH: 'from-process' } }
+        });
+        assert.equal(onlyProcess.readEnvVar('BOTH'), 'from-process');
+        assert.equal(loadForGh1363({ java: envJava({}) }).readEnvVar('MISSING'), null);
+    });
+
+    test('deriveEnrichmentContext: fills signature+repeat, the leg-start line and the run identity', function () {
+        var tracker = {
+            getComments: function () {
+                return [{ author: 'm', body: 'note\nfailure-signature: ' + SIG }];
+            }
+        };
+        var mod = loadForGh1363({
+            java: envJava({ GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: 'acme/widgets', GITHUB_RUN_ID: '4242' }),
+            cli_execute_command: makeCliMock([], {
+                'git rev-parse --abbrev-ref HEAD': 'ai/gh-1363\n',
+                'git rev-parse HEAD': 'f3183be0925cf2b3fe399b50323fbc533ccf223a\n',
+                'git status --porcelain': ''
+            })
+        });
+        mod.collectPreflightStateStep();
+        var ctx = mod.deriveEnrichmentContext(tracker, 'gh-12', 'Git Branch Setup', 'boom', {});
+        assert.equal(ctx.signature, SIG);
+        assert.equal(ctx.repeatCount, 2, 'one prior identical failure → #2');
+        assert.ok(ctx.preflightLine.indexOf('git pre-flight: branch=ai/gh-1363') === 0,
+            'the collected leg-start line fills the context: ' + ctx.preflightLine);
+        assert.equal(ctx.runId, '4242');
+        assert.ok(ctx.runUrl.indexOf('/actions/runs/4242') !== -1);
+    });
+
+    test('deriveEnrichmentContext: caller-provided values win; a tracker without getComments yields no signature', function () {
+        var mod = loadForGh1363({ java: envJava({}) });
+        var provided = { preflightLine: 'given', runUrl: 'https://given', signature: 'given-sig', repeatCount: 5 };
+        var ctx = mod.deriveEnrichmentContext({ getComments: function () { return []; } }, 'gh-12', 'S', 'boom', provided);
+        assert.equal(ctx.preflightLine, 'given');
+        assert.equal(ctx.runUrl, 'https://given');
+        assert.equal(ctx.signature, 'given-sig');
+        assert.equal(ctx.repeatCount, 5);
+        var noComments = mod.deriveEnrichmentContext({}, 'gh-12', 'S', 'boom', {});
+        assert.equal(noComments.signature, undefined, 'no getComments → no derived signature');
+    });
+
+    test('isEnrichedContext: any collected item enriches; an empty context does not', function () {
+        var mod = loadForGh1363();
+        assert.equal(mod.isEnrichedContext({}), false);
+        assert.equal(mod.isEnrichedContext({ preflightLine: 'x' }), true);
+        assert.equal(mod.isEnrichedContext({ runUrl: 'x' }), true);
+        assert.equal(mod.isEnrichedContext({ runId: 'x' }), true);
+        assert.equal(mod.isEnrichedContext({ signature: 'x' }), true);
+    });
+
+});
