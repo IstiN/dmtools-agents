@@ -1023,6 +1023,8 @@ suite('mergeBackstop — gh-1371 round 2 rework (ratchet + race determinism)', f
             'the exclusion still wins over the tie-break (the post-create probe skips our own filing)');
         assert.equal(m.findExistingDigest({ items: [dup(505), dup(520)] }, 42, 505).reused, true,
             'the adopted digest keeps its shape (number, title, reused)');
+        assert.equal(m.findExistingDigest({ issues: [dup(520), dup(505)] }, 42).number, 505,
+            'the {issues} envelope shape is handled too (full branch cover of digestIssueList)');
     });
 
     test('thread 2: the race echo lands in the PR ledger stamp — the sweep can see the abandoned duplicate', function () {
