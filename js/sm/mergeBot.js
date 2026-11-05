@@ -507,11 +507,13 @@ function isLiveOpenPr(pr) {
 }
 
 /**
- * The head sha of a PR body, verbatim shapes (gh-1040 extraction): the
- * REST body carries head.sha, older bridges a bare head string.
+ * The head sha of a PR body (gh-1040 extraction): the ONE derivation is
+ * shared with the merge backstop since gh-1371 — mergeBackstop.headShaOf
+ * reads the GraphQL `headRefOid`, the REST `head.sha` AND the older bare
+ * head string; the bot's local copy was its narrower duplicate.
  */
 function headShaOf(pr) {
-    return pr.head && (pr.head.sha || pr.head);
+    return mergeBackstop.headShaOf(pr);
 }
 
 /**
