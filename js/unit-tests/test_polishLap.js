@@ -205,6 +205,17 @@ suite('polishLap — once per head + instability budget (cross-head bound)', fun
             'duplicate head entries collapse — one lap per head');
     });
 
+    test('garbage entries in the history never count (fail-safe walk)', function () {
+        // null/headless entries ride in the merged history harmlessly —
+        // they contribute no head and never break the consecutive run.
+        var laps = [null, { head: HEAD_A, at: '2026-11-04T01:00:00.000Z' }, {}, { head: '' }];
+        assert.equal(pl.instabilityBudgetExhausted(laps, HEAD_C), false,
+            'garbage entries contribute nothing — one real head is not the budget');
+        laps.push({ head: HEAD_B, at: '2026-11-04T02:00:00.000Z' });
+        assert.equal(pl.instabilityBudgetExhausted(laps, HEAD_C), true,
+            'the real polish laps behind the garbage still count');
+    });
+
     test('the reset rides the decision: after polish→rework→polish the third head still dispatches', function () {
         var laps = pl.mergedLapHistory(
             [
