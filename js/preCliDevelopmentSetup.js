@@ -21,6 +21,7 @@ var branchSetup = require('./common/branchSetup.js');
 var gitStaging = require('./common/gitStaging.js');
 var trackersModule = require('./common/trackers.js');
 var commentMarkup = require('./common/commentMarkup.js');
+var legFailureReport = require('./common/legFailureReport.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
@@ -538,23 +539,177 @@ function assertDevLegTransition(ticketKey, config, customParams) {
 // here could silently fail to post, leaving the ticket with no failure visibility).
 var truncateForComment = setupCommands.truncateSetupError;
 
+// ── gh-1363: leg-failure reports that carry context ──────────────────────────
+// The setup failure path shares the js/common/legFailureReport.js builder with
+// the workflow failure-notice step (scripts/report-leg-failure.sh): a failing
+// leg reports its phase (here: always 'setup'), the failing step (the setup
+// stage), a bounded excerpt, run id + link when the CI env provides them, the
+// canonical leg-start pre-flight line, and the repeat count against prior
+// failure-signature lines on the same ticket (an existing surface — no new
+// persistence; the signature normalization is the pure module's).
+
+// The workflow name this path signs its failures with — distinct from the
+// workflow-file signatures so a setup failure and a workflow-step failure of
+// the same ticket never collapse into one repeat count.
+var SETUP_FAILURE_WORKFLOW = 'preCliDevelopmentSetup';
+
+/** The pre-flight line captured at leg start (module state, like _workingDir). */
+var _preflightLine = null;
+
+/**
+ * gh-1363 leg-start signal: collect the canonical
+ * `git pre-flight: branch=… head=… dirty=… staged=… paths=[…]` line BEFORE the
+ * first git operation mutates the workspace — it is the one thing a post-hoc
+ * analyzer can never reconstruct. Best-effort: any git failure leaves the
+ * state unknown (the report simply omits the line), never fatal.
+ */
+function collectPreflightStateStep() {
+    try {
+        _preflightLine = legFailureReport.preflightLine(legFailureReport.collectPreflightState(runCommandStr));
+        if (_preflightLine) console.log(_preflightLine);
+        return _preflightLine;
+    } catch (e) {
+        console.warn('pre-flight state collection failed (non-fatal):', e && e.message ? e.message : e);
+        return null;
+    }
+}
+
+/** The remembered leg-start pre-flight line (null when never collected). */
+function currentPreflightLine() {
+    return _preflightLine;
+}
+
+/** Best-effort env read via the dmtools Java bridge; null when unavailable. */
+function readJavaEnv(name) {
+    try {
+        var v = java.lang.System.getenv(name);
+        if (v !== null && v !== undefined) return String(v);
+    } catch (e) { /* no java bridge — node harness / standalone */ }
+    return null;
+}
+
+/** Best-effort env read via the node harness `process` global; null when unavailable. */
+function readProcessEnv(name) {
+    try {
+        if (typeof process !== 'undefined' && process.env && process.env[name] !== undefined) {
+            return String(process.env[name]);
+        }
+    } catch (e) { /* no process global */ }
+    return null;
+}
+
+/** Best-effort env read: Java bridge first (dmtools), node harness fallback. */
+function readEnvVar(name) {
+    return readJavaEnv(name) || readProcessEnv(name);
+}
+
+/** Comment objects ({body}|{text} shapes, null entries tolerated) → body strings. */
+function commentBodies(comments) {
+    var bodies = [];
+    var list = comments || [];
+    for (var i = 0; i < list.length; i++) {
+        bodies.push((list[i] && (list[i].body || list[i].text)) || '');
+    }
+    return bodies;
+}
+
+/**
+ * Prior-failure repeat count for this ticket: machine-readable
+ * `failure-signature:` lines from the ticket's own comments (existing
+ * surface — no new persistence). Returns { signature, repeatCount } or null
+ * when the tracker cannot list comments (legacy stubs) or the read fails —
+ * the report then omits the repeat line instead of guessing.
+ */
+function deriveSetupRepeatCount(tracker, ticketKey, stage, errorMessage) {
+    try {
+        if (!tracker.getComments) return null;
+        var signature = legFailureReport.failureSignature({
+            workflow: SETUP_FAILURE_WORKFLOW, step: stage, message: errorMessage
+        });
+        return {
+            signature: signature,
+            repeatCount: legFailureReport.consecutiveRepeatCount(
+                signature,
+                legFailureReport.parseSignatureLines(commentBodies(tracker.getComments(ticketKey)))
+            )
+        };
+    } catch (e) {
+        console.warn('setup failure repeat-count derivation failed (non-fatal):', e && e.message ? e.message : e);
+        return null;
+    }
+}
+
 /**
  * Build the "Development Setup Error" comment in the flavor of the ticket's
  * tracker (gh-770). The template historically hard-coded Jira wiki markup
  * (h3., *bold*, {code}) and was posted via raw jira_post_comment; on a
  * GitHub-backed tracker that renders as raw text garbage.
  *
+ * gh-1363: an optional `context` enriches the comment into a full leg-failure
+ * report through the shared js/common/legFailureReport.js builder — phase
+ * (always 'setup' here), failing step (the stage), bounded excerpt (the error
+ * itself), run id + link, the leg-start pre-flight line, the repeat phrase
+ * and the machine-readable signature line. Without a context the output is
+ * byte-identical to the historical template.
+ *
  * @param {Object} flavor       - a commentMarkup flavor bag (forTicket/forFlavor)
  * @param {string} stage        - setup stage that failed (e.g. "Git Branch Setup")
  * @param {string} errorMessage - the failure detail (truncated to the shared bound)
+ * @param {Object} [context]    - { preflightLine, runId, runUrl, repeatCount, signature }
  * @returns {string} the rendered comment
  */
-function buildSetupErrorComment(flavor, stage, errorMessage) {
+function buildSetupErrorComment(flavor, stage, errorMessage, context) {
     var m = flavor;
-    return m.h(3, m.bold('Development Setup Error')) + '\n\n' +
+    var comment = m.h(3, m.bold('Development Setup Error')) + '\n\n' +
         m.bold('Stage:') + ' ' + stage + '\n' +
         m.bold('Error:') + ' ' + m.code(truncateForComment(errorMessage)) + '\n\n' +
         'Development was stopped before code generation because the target git branch could not be prepared.';
+    if (context) {
+        comment += '\n' + legFailureReport.renderReport(m, {
+            preflightLine: context.preflightLine,
+            phase: 'setup',
+            step: stage,
+            runId: context.runId,
+            runUrl: context.runUrl,
+            // The legacy block above already posts the error text as `Error:`
+            // — a default excerpt equal to it would render the same bytes
+            // twice. Only a caller-provided excerpt DISTINCT from the error
+            // (e.g. a different log tail) earns its own section (gh-1363
+            // review).
+            excerpt: (context.excerpt != null && context.excerpt !== errorMessage) ? context.excerpt : null,
+            repeatCount: context.repeatCount,
+            signature: context.signature
+        });
+    }
+    return comment;
+}
+
+/**
+ * Fill every missing context field the module can derive: the repeat
+ * signature (prior ticket comments), the leg-start pre-flight line and the
+ * CI run identity. Returns the (mutated) context — extraction keeps
+ * postSetupErrorComment a single try/post/warn (crap ratchet, gh-1363).
+ */
+function deriveEnrichmentContext(tracker, ticketKey, stage, errorMessage, context) {
+    var ctx = context || {};
+    if (!ctx.signature) {
+        var derived = deriveSetupRepeatCount(tracker, ticketKey, stage, errorMessage);
+        if (derived) {
+            ctx.signature = derived.signature;
+            ctx.repeatCount = derived.repeatCount;
+        }
+    }
+    if (!ctx.preflightLine && _preflightLine) ctx.preflightLine = _preflightLine;
+    if (!ctx.runUrl) {
+        ctx.runUrl = legFailureReport.runUrlFromEnv(readEnvVar);
+        ctx.runId = legFailureReport.runIdFromEnv(readEnvVar);
+    }
+    return ctx;
+}
+
+/** Any collected context item → the report renders enriched. */
+function isEnrichedContext(ctx) {
+    return !!(ctx.preflightLine || ctx.runUrl || ctx.runId || ctx.signature);
 }
 
 /**
@@ -562,13 +717,26 @@ function buildSetupErrorComment(flavor, stage, errorMessage) {
  * lands on Jira/ADO/GitHub alike, in the ticket's markup flavor. Best-effort:
  * a posting failure is warned, never fatal — the setup error itself is the
  * signal that stops the leg.
+ *
+ * gh-1363: the comment is enriched into a leg-failure report when context
+ * exists — the leg-start pre-flight line (collected by
+ * collectPreflightStateStep), the CI run identity (env), and the repeat
+ * count derived from prior failure-signature lines on the ticket. An
+ * enrichment-less call (nothing collected, legacy tracker stub) keeps the
+ * byte-identical historical comment.
  */
-function postSetupErrorComment(config, customParams, ticketKey, stage, errorMessage) {
+function postSetupErrorComment(config, customParams, ticketKey, stage, errorMessage, context) {
     try {
         var tracker = trackersModule.createTracker(config, customParams || {});
+        var ctx = deriveEnrichmentContext(tracker, ticketKey, stage, errorMessage, context);
         tracker.postComment(
             ticketKey,
-            buildSetupErrorComment(commentMarkup.forTicket(ticketKey, customParams), stage, errorMessage)
+            buildSetupErrorComment(
+                commentMarkup.forTicket(ticketKey, customParams),
+                stage,
+                errorMessage,
+                isEnrichedContext(ctx) ? ctx : undefined
+            )
         );
     } catch (commentError) {
         console.warn('Failed to post setup error comment:', commentError);
@@ -755,6 +923,16 @@ function action(params) {
         var folder = actualParams.inputFolderPath;
         var ticketKey = parseTicketKeyOf(folder);
 
+        // 1.4. Leg-start pre-flight line (gh-1363): captured BEFORE any git
+        // operation mutates the workspace — the one thing a post-hoc analyzer
+        // can never reconstruct. Best-effort, never fatal.
+        // The capture runs BEFORE checkoutBranch() (step 2) assigns _workingDir
+        // — resolve the configured target workspace first, or the git probes
+        // run in the agents repo and the report mislabels branch/head
+        // (gh-1363 review: wrong-workspace pre-flight line).
+        _workingDir = config.workingDir;
+        collectPreflightStateStep();
+
         // 1.5. Assert the dev-leg transition labels (gh-716): agent:dev ON,
         // stale agent:review / ai_developed cleared — so ANY dispatch path
         // (SM-armed or manual) shows the card on the factory board's
@@ -837,6 +1015,17 @@ if (typeof module !== 'undefined' && module.exports) {
         runSetupCommandsStep,
         runFetchLinkedTestsStep,
         runFetchParentContextStep,
+        // gh-1363: leg-failure report wiring — exported for direct unit testing.
+        collectPreflightStateStep,
+        currentPreflightLine,
+        deriveSetupRepeatCount,
+        readEnvVar,
+        // gh-1363 rework: enrichment helpers extracted for the crap ratchet.
+        deriveEnrichmentContext,
+        isEnrichedContext,
+        commentBodies,
+        readJavaEnv,
+        readProcessEnv,
         // gh-1190: checkoutBranch seam helpers exported for direct unit testing.
         configureSetupAuthor,
         fetchDevBranchRefs,

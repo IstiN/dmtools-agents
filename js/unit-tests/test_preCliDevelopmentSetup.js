@@ -20,6 +20,8 @@ var NOOP_CONFIG_JS = { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function()
 var devSetupCommandsReal = loadModule('js/common/setupCommands.js');
 var devCommentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+// gh-1363: the shared leg-failure report builder — pure, zero requires.
+var legFailureReportModule = loadModule('js/common/legFailureReport.js');
 
 // The real tracker factory (provider probing is pure config/env reads) so
 // action() tests exercise the actual github/jira provider gating.
@@ -49,6 +51,7 @@ function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
             './restoreFromReleases.js': NOOP_MODULE,
             './common/setupCommands.js': devSetupCommandsReal,
             './common/commentMarkup.js': devCommentMarkupModule,
+            './common/legFailureReport.js': legFailureReportModule,
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
             './common/trackers.js': trackersModuleReal
         }),
@@ -561,6 +564,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
                 },
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/commentMarkup.js': devCommentMarkupModule,
+                './common/legFailureReport.js': legFailureReportModule,
                 './common/trackers.js': extraMocks ? loadModule('js/common/trackers.js', makeRequire({
                     '../config.js': configModule,
                     './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
@@ -709,6 +713,7 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
                 './restoreFromReleases.js': NOOP_MODULE,
                 './common/setupCommands.js': devSetupCommandsReal,
                 './common/commentMarkup.js': devCommentMarkupModule,
+                './common/legFailureReport.js': legFailureReportModule,
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/trackers.js': {
                     createTracker: function () {
@@ -950,6 +955,7 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
                 './common/setupCommands.js': opts.setupCommands,
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/commentMarkup.js': devCommentMarkupModule,
+                './common/legFailureReport.js': legFailureReportModule,
                 './common/trackers.js': trackers
             }),
             Object.assign({
@@ -1175,6 +1181,7 @@ suite('preCliDevelopmentSetup — extracted helpers (gh-1042)', function() {
                 './restoreFromReleases.js': NOOP_MODULE,
                 './common/setupCommands.js': devSetupCommandsReal,
                 './common/commentMarkup.js': devCommentMarkupModule,
+                './common/legFailureReport.js': legFailureReportModule,
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/trackers.js': {
                     createTracker: function () {
@@ -1719,6 +1726,7 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
             },
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
             './common/commentMarkup.js': devCommentMarkupModule,
+            './common/legFailureReport.js': legFailureReportModule,
             './common/trackers.js': trackers
         });
     }
@@ -1830,6 +1838,7 @@ suite('preCliDevelopmentSetup.action — dryRun guard (gh-1356)', function() {
                 './restoreFromReleases.js': { action: function() { throw new Error('restoreFromReleases must not run in dryRun'); } },
                 './common/setupCommands.js': devSetupCommandsReal,
                 './common/commentMarkup.js': devCommentMarkupModule,
+                './common/legFailureReport.js': legFailureReportModule,
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function() { throw new Error('baseBranchMarker must not run in dryRun'); } },
                 './common/trackers.js': {
                     createTracker: function() {
@@ -1861,6 +1870,408 @@ suite('preCliDevelopmentSetup.action — dryRun guard (gh-1356)', function() {
         assert.equal(questionsFetched, 1, 'read-only context fetch (questions) still runs');
         assert.equal(linkedTestsFetched, 1, 'read-only context fetch (linked tests) still runs');
         assert.equal(parentContextFetched, 1, 'read-only context fetch (parent context) still runs');
+    });
+
+});
+
+// ── gh-1363: leg-failure reports that carry context ──────────────────────────
+// The setup failure path shares the js/common/legFailureReport.js builder:
+// a failing leg reports phase (setup), the failing step (the setup stage),
+// a bounded excerpt, run id + link when the CI env provides them, the
+// leg-start pre-flight line, and the repeat count against prior
+// failure-signature lines on the same ticket (existing surface — no new
+// persistence).
+
+var legFailureReportReal = loadModule('js/common/legFailureReport.js');
+
+function loadForGh1363(globals, trackerStub, configLoaderStub) {
+    return loadModule(
+        'js/preCliDevelopmentSetup.js',
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, globals || {}),
+            'gitStaging.js': loadModule('js/common/gitStaging.js'),
+            './configLoader.js': configLoaderStub || {
+                loadProjectConfig: function () { return makeConfig(); },
+                paramsForConfigLoad: function (p) { return p; }
+            },
+            './common/pullRequest.js': PR_HELPER_REAL,
+            './config.js': NOOP_CONFIG_JS,
+            './fetchQuestionsToInput.js': NOOP_MODULE,
+            './fetchLinkedTestsToInput.js': NOOP_MODULE,
+            './fetchParentContextToInput.js': NOOP_MODULE,
+            './restoreFromReleases.js': NOOP_MODULE,
+            './common/setupCommands.js': devSetupCommandsReal,
+            './common/commentMarkup.js': devCommentMarkupModule,
+            './common/legFailureReport.js': legFailureReportReal,
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+            './common/trackers.js': {
+                createTracker: function () { return trackerStub; }
+            }
+        }),
+        globals || {}
+    );
+}
+
+suite('preCliDevelopmentSetup.buildSetupErrorComment — enriched leg-failure context (gh-1363)', function () {
+
+    test('no context (legacy 3-arg call) → byte-identical historical comment', function () {
+        var mod = loadForGh1363();
+        var legacy = loadForComments();
+        var withCtxSupport = mod.buildSetupErrorComment(devCommentMarkupModule.forFlavor('markdown'), 'Git Branch Setup', 'boom');
+        var expected = legacy.buildSetupErrorComment(devCommentMarkupModule.forFlavor('markdown'), 'Git Branch Setup', 'boom');
+        assert.equal(withCtxSupport, expected);
+    });
+
+    test('context renders phase, step, pre-flight line, repeat and signature in the ticket flavor', function () {
+        var mod = loadForGh1363();
+        var out = mod.buildSetupErrorComment(
+            devCommentMarkupModule.forFlavor('markdown'), 'Git Branch Setup', 'checkout boom',
+            {
+                preflightLine: 'git pre-flight: branch=ai/gh-1 head=f3183be dirty=1 staged=0 paths=[x.js]',
+                runId: '17500000001',
+                runUrl: 'https://github.com/acme/widgets/actions/runs/17500000001',
+                repeatCount: 2,
+                signature: 'preCliDevelopmentSetup | Git Branch Setup | checkout boom'
+            });
+        assert.ok(out.indexOf('### **Development Setup Error**') === 0, 'legacy heading stays first');
+        assert.ok(out.indexOf('**Phase:** setup') !== -1, 'phase is always setup here: ' + out);
+        assert.ok(out.indexOf('**Failing step:** Git Branch Setup') !== -1);
+        assert.ok(out.indexOf('17500000001') !== -1);
+        assert.ok(out.indexOf('identical failure #2 in a row') !== -1);
+        assert.ok(out.indexOf('failure-signature: preCliDevelopmentSetup | Git Branch Setup |') !== -1);
+        assert.ok(out.indexOf('git pre-flight: branch=ai/gh-1') !== -1);
+    });
+
+    test('the excerpt section is hard-capped — a 100-line error renders ≤30 excerpt lines', function () {
+        var mod = loadForGh1363();
+        var longError = new Array(101).join('error line\n');
+        var out = mod.buildSetupErrorComment(
+            devCommentMarkupModule.forFlavor('markdown'), 'Environment Setup', longError,
+            { phase: 'setup', excerpt: longError + 'tail the caller kept separately\n' });
+        var fenced = out.match(/```[a-z]*\n([\s\S]*?)\n```/g) || [];
+        var excerptBlock = fenced.length ? fenced[fenced.length - 1] : '';
+        var lineCount = excerptBlock.split('\n').length - 2; // minus the two fence lines
+        assert.ok(lineCount <= 30, 'excerpt capped, got ' + lineCount);
+    });
+
+});
+
+suite('preCliDevelopmentSetup.postSetupErrorComment — repeat count from prior signatures (gh-1363)', function () {
+
+    var SIG_OF = function (stage, message) {
+        return legFailureReportReal.failureSignature({
+            workflow: 'preCliDevelopmentSetup', step: stage, message: message
+        });
+    };
+
+    test('one prior identical failure → second report says identical failure #2 in a row', function () {
+        var posted = [];
+        var tracker = {
+            provider: function () { return 'stub'; },
+            getComments: function () {
+                return [{ author: 'm', body: 'note\nfailure-signature: ' + SIG_OF('Git Branch Setup', 'boom') }];
+            },
+            postComment: function (key, text) { posted.push({ key: key, text: text }); }
+        };
+        var mod = loadForGh1363({}, tracker);
+        mod.postSetupErrorComment({}, {}, 'gh-12', 'Git Branch Setup', 'boom');
+        assert.equal(posted.length, 1);
+        assert.ok(posted[0].text.indexOf('identical failure #2 in a row') !== -1, 'got: ' + posted[0].text);
+    });
+
+    test('a prior DIFFERENT failure → first failure with this signature', function () {
+        var posted = [];
+        var tracker = {
+            provider: function () { return 'stub'; },
+            getComments: function () {
+                return [{ author: 'm', body: 'failure-signature: ' + SIG_OF('Environment Setup', 'npm ci exit 1') }];
+            },
+            postComment: function (key, text) { posted.push({ key: key, text: text }); }
+        };
+        var mod = loadForGh1363({}, tracker);
+        mod.postSetupErrorComment({}, {}, 'gh-12', 'Git Branch Setup', 'boom');
+        assert.ok(posted[0].text.indexOf('first failure with this signature') !== -1, 'got: ' + posted[0].text);
+    });
+
+    test('a tracker without getComments (legacy stub shape) still posts the legacy comment', function () {
+        var posted = [];
+        var tracker = {
+            provider: function () { return 'stub'; },
+            postComment: function (key, text) { posted.push({ key: key, text: text }); }
+        };
+        var mod = loadForGh1363({}, tracker);
+        mod.postSetupErrorComment({}, {}, 'PROJ-12', 'Git Branch Setup', 'boom');
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].text.indexOf('h3. *Development Setup Error*'), 0, 'byte-identical legacy body');
+        assert.equal(posted[0].text.indexOf('failure-signature:'), -1, 'no enrichment without any context');
+    });
+
+});
+
+suite('preCliDevelopmentSetup.collectPreflightStateStep — leg-start state line (gh-1363)', function () {
+
+    var CLI_RESPONSES = {
+        'git rev-parse --abbrev-ref HEAD': 'ai/gh-1363\n',
+        'git rev-parse HEAD': 'f3183be0925cf2b3fe399b50323fbc533ccf223a\n',
+        'git status --porcelain': ' M js/a.js\nM  js/b.js\n'
+    };
+
+    test('collects the canonical line and remembers it for the failure report', function () {
+        var calls = [];
+        var mod = loadForGh1363({ cli_execute_command: makeCliMock(calls, CLI_RESPONSES) });
+        var line = mod.collectPreflightStateStep();
+        assert.equal(line,
+            'git pre-flight: branch=ai/gh-1363 head=f3183be0925cf2b3fe399b50323fbc533ccf223a dirty=2 staged=1 paths=[js/a.js, js/b.js]');
+        assert.equal(mod.currentPreflightLine(), line, 'kept for the next setup-error report');
+    });
+
+    test('a git failure is non-fatal — null, and the leg keeps going', function () {
+        var mod = loadForGh1363({ cli_execute_command: function () { throw new Error('git missing'); } });
+        assert.equal(mod.collectPreflightStateStep(), null);
+        assert.equal(mod.currentPreflightLine(), null);
+    });
+
+    test('a failing checkout report carries the pre-flight line (wiring through the error path)', function () {
+        var posted = [];
+        var calls = [];
+        var tracker = {
+            provider: function () { return 'stub'; },
+            postComment: function (key, text) { posted.push({ key: key, text: text }); }
+        };
+        var mod = loadForGh1363({
+            cli_execute_command: function (opts) {
+                var command = opts && opts.command;
+                calls.push(command);
+                if (Object.prototype.hasOwnProperty.call(CLI_RESPONSES, command)) return CLI_RESPONSES[command];
+                throw new Error('cli_execute_command failed: ' + command);
+            }
+        }, tracker, makeConfigLoaderStub({ development: 'ai/gh-12' }, 'master', null, []));
+        mod.collectPreflightStateStep();
+        // every git command beyond the known probe set fails → checkout fails →
+        // the setup-error report posts enriched, then the error rethrows (leg stops)
+        var threw = false;
+        try {
+            mod.checkoutBranchOrReport(makeConfig(), {}, 'gh-12', {}, { ticket: { key: 'gh-12', fields: {} } });
+        } catch (e) {
+            threw = true;
+        }
+        assert.ok(threw, 'checkout failure must stop the leg');
+        assert.equal(posted.length, 1, 'setup error comment posted');
+        assert.ok(posted[0].text.indexOf('git pre-flight: branch=ai/gh-1363') !== -1,
+            'pre-flight line rides the report: ' + posted[0].text);
+        assert.ok(posted[0].text.indexOf('**Phase:** setup') !== -1, 'phase carried');
+    });
+
+});
+
+// ── gh-1363 rework: review-thread fixes ──────────────────────────────────────
+
+suite('preCliDevelopmentSetup.action — pre-flight capture targets the configured workspace (gh-1363 rework)', function () {
+
+    var TARGET_DIR = '/tmp/gh-1363-target-repo';
+    var PREFLIGHT_RESPONSES = {
+        'git rev-parse --abbrev-ref HEAD': 'ai/gh-1363\n',
+        'git rev-parse HEAD': 'f3183be0925cf2b3fe399b50323fbc533ccf223a\n',
+        'git status --porcelain': ''
+    };
+
+    function workingDirConfigLoaderStub(workingDir) {
+        return {
+            loadProjectConfig: function () { return makeConfig({ workingDir: workingDir }); },
+            paramsForConfigLoad: function (p) { return p; },
+            resolveBranchName: function (cfg, ticket, role) { return role === 'development' ? 'ai/gh-12' : 'master'; },
+            resolvePRTargetBranch: function () { return 'master'; },
+            loadHookFn: function () { return null; }
+        };
+    }
+
+    function runActionCapturingPreflight(workingDir) {
+        var recorded = [];
+        var posted = [];
+        var tracker = {
+            provider: function () { return 'stub'; },
+            postComment: function (key, text) { posted.push({ key: key, text: text }); }
+        };
+        var mod = loadForGh1363({
+            cli_execute_command: function (opts) {
+                recorded.push(opts);
+                var command = opts && opts.command;
+                if (PREFLIGHT_RESPONSES.hasOwnProperty(command)) return PREFLIGHT_RESPONSES[command];
+                throw new Error('cli_execute_command failed: ' + command);
+            },
+            file_write: function () { }
+        }, tracker, workingDirConfigLoaderStub(workingDir));
+        var threw = false;
+        try {
+            mod.action({ inputFolderPath: 'input/gh-12', ticket: { key: 'gh-12', fields: { } } });
+        } catch (e) {
+            threw = true; // checkout fails beyond the probe set — the leg stops
+        }
+        return { recorded: recorded, posted: posted, threw: threw, mod: mod };
+    }
+
+    function preflightCallsOf(run) {
+        return run.recorded.filter(function (opts) {
+            return PREFLIGHT_RESPONSES.hasOwnProperty(opts && opts.command);
+        });
+    }
+
+    test('config.workingDir is resolved BEFORE the capture — the git probes run in the target workspace', function () {
+        var run = runActionCapturingPreflight(TARGET_DIR);
+        var preflightCalls = preflightCallsOf(run);
+        assert.ok(preflightCalls.length >= 3, 'all three pre-flight probes ran, got ' + preflightCalls.length);
+        preflightCalls.forEach(function (opts) {
+            assert.equal(opts.workingDirectory, TARGET_DIR,
+                'pre-flight probe "' + opts.command + '" must carry workingDirectory=' + TARGET_DIR);
+        });
+        assert.ok(run.threw, 'the leg still stops on the checkout failure');
+        assert.equal(run.posted.length, 1, 'the setup-error report is still posted');
+        assert.ok(run.posted[0].text.indexOf('git pre-flight: branch=ai/gh-1363') !== -1,
+            'the pre-flight line rides the report: ' + run.posted[0].text);
+    });
+
+    test('no workingDir — the probes carry no workingDirectory (no-workingDir behavior unchanged)', function () {
+        var run = runActionCapturingPreflight(null);
+        preflightCallsOf(run).forEach(function (opts) {
+            assert.equal(opts.workingDirectory, undefined,
+                'no-workingDir setups must not grow a workingDirectory');
+        });
+        assert.ok(run.threw, 'the leg still stops on the checkout failure');
+    });
+
+});
+
+suite('preCliDevelopmentSetup.buildSetupErrorComment — excerpt not duplicated (gh-1363 rework)', function () {
+
+    var CONTEXT = {
+        preflightLine: 'git pre-flight: branch=ai/gh-1 head=f3183be dirty=0 staged=0 paths=[]',
+        repeatCount: 2,
+        signature: 'preCliDevelopmentSetup | Git Branch Setup | checkout boom'
+    };
+
+    test('a default excerpt equal to the error is omitted — the Error: line already carries it', function () {
+        var mod = loadForGh1363();
+        var out = mod.buildSetupErrorComment(
+            devCommentMarkupModule.forFlavor('markdown'), 'Git Branch Setup', 'checkout boom', CONTEXT);
+        assert.ok(out.indexOf('**Error:**') !== -1, 'the legacy Error line stays');
+        assert.equal(out.indexOf('Log excerpt'), -1, 'no duplicated excerpt section, got: ' + out);
+    });
+
+    test('a long default excerpt (truncated Error: line) is omitted too — same text, same source', function () {
+        var mod = loadForGh1363();
+        var longError = new Array(101).join('maven failure line\n');
+        var out = mod.buildSetupErrorComment(
+            devCommentMarkupModule.forFlavor('markdown'), 'Environment Setup', longError, { phase: 'setup' });
+        assert.equal(out.indexOf('Log excerpt'), -1, 'no duplicated excerpt section for a default excerpt');
+    });
+
+    test('an explicit caller-provided excerpt DISTINCT from the error still renders', function () {
+        var mod = loadForGh1363();
+        var out = mod.buildSetupErrorComment(
+            devCommentMarkupModule.forFlavor('markdown'), 'Environment Setup', 'npm ci failed',
+            Object.assign({}, CONTEXT, { excerpt: 'npm ERR! missing peer dep\nnpm ERR! exit 1' }));
+        assert.ok(out.indexOf('Log excerpt') !== -1, 'explicit distinct excerpt renders');
+        assert.ok(out.indexOf('npm ERR! missing peer dep') !== -1);
+    });
+
+});
+
+suite('preCliDevelopmentSetup — gh-1363 rework: extracted enrichment helpers (crap split)', function () {
+
+    var SIG = 'preCliDevelopmentSetup | Git Branch Setup | boom';
+
+    function envJava(values) {
+        return { lang: { System: { getenv: function (name) {
+            return Object.prototype.hasOwnProperty.call(values, name) ? values[name] : null;
+        } } } };
+    }
+
+    test('commentBodies: body/text shapes, null entries and a null list', function () {
+        var mod = loadForGh1363();
+        assert.deepEqual(
+            mod.commentBodies([{ body: 'a' }, { text: 'b' }, null, { author: 'x' }]),
+            ['a', 'b', '', '']);
+        assert.deepEqual(mod.commentBodies(null), []);
+        assert.deepEqual(mod.commentBodies([]), []);
+    });
+
+    test('readJavaEnv: value, absent and a throwing bridge — all non-fatal', function () {
+        var mod = loadForGh1363({ java: envJava({ GH_TOKEN: 'tok' }) });
+        assert.equal(mod.readJavaEnv('GH_TOKEN'), 'tok');
+        assert.equal(mod.readJavaEnv('MISSING'), null);
+        var throwing = loadForGh1363({
+            java: { lang: { System: { getenv: function () { throw new Error('no bridge'); } } } }
+        });
+        assert.equal(throwing.readJavaEnv('ANY'), null);
+    });
+
+    test('readProcessEnv: present, absent, no-process-global and a throwing env access — all non-fatal', function () {
+        var mod = loadForGh1363({ process: { env: { FOO: 'bar' } } });
+        assert.equal(mod.readProcessEnv('FOO'), 'bar');
+        assert.equal(mod.readProcessEnv('NOPE'), null);
+        var noProcess = loadForGh1363({ process: undefined });
+        assert.equal(noProcess.readProcessEnv('FOO'), null);
+        var throwingHost = {};
+        Object.defineProperty(throwingHost, 'env', { get: function () { throw new Error('env boom'); } });
+        assert.equal(loadForGh1363({ process: throwingHost }).readProcessEnv('FOO'), null);
+    });
+
+    test('readEnvVar: the java bridge wins over the node process env', function () {
+        var both = loadForGh1363({
+            java: envJava({ BOTH: 'from-java' }),
+            process: { env: { BOTH: 'from-process' } }
+        });
+        assert.equal(both.readEnvVar('BOTH'), 'from-java');
+        var onlyProcess = loadForGh1363({
+            java: envJava({}),
+            process: { env: { BOTH: 'from-process' } }
+        });
+        assert.equal(onlyProcess.readEnvVar('BOTH'), 'from-process');
+        assert.equal(loadForGh1363({ java: envJava({}) }).readEnvVar('MISSING'), null);
+    });
+
+    test('deriveEnrichmentContext: fills signature+repeat, the leg-start line and the run identity', function () {
+        var tracker = {
+            getComments: function () {
+                return [{ author: 'm', body: 'note\nfailure-signature: ' + SIG }];
+            }
+        };
+        var mod = loadForGh1363({
+            java: envJava({ GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: 'acme/widgets', GITHUB_RUN_ID: '4242' }),
+            cli_execute_command: makeCliMock([], {
+                'git rev-parse --abbrev-ref HEAD': 'ai/gh-1363\n',
+                'git rev-parse HEAD': 'f3183be0925cf2b3fe399b50323fbc533ccf223a\n',
+                'git status --porcelain': ''
+            })
+        });
+        mod.collectPreflightStateStep();
+        var ctx = mod.deriveEnrichmentContext(tracker, 'gh-12', 'Git Branch Setup', 'boom', {});
+        assert.equal(ctx.signature, SIG);
+        assert.equal(ctx.repeatCount, 2, 'one prior identical failure → #2');
+        assert.ok(ctx.preflightLine.indexOf('git pre-flight: branch=ai/gh-1363') === 0,
+            'the collected leg-start line fills the context: ' + ctx.preflightLine);
+        assert.equal(ctx.runId, '4242');
+        assert.ok(ctx.runUrl.indexOf('/actions/runs/4242') !== -1);
+    });
+
+    test('deriveEnrichmentContext: caller-provided values win; a tracker without getComments yields no signature', function () {
+        var mod = loadForGh1363({ java: envJava({}) });
+        var provided = { preflightLine: 'given', runUrl: 'https://given', signature: 'given-sig', repeatCount: 5 };
+        var ctx = mod.deriveEnrichmentContext({ getComments: function () { return []; } }, 'gh-12', 'S', 'boom', provided);
+        assert.equal(ctx.preflightLine, 'given');
+        assert.equal(ctx.runUrl, 'https://given');
+        assert.equal(ctx.signature, 'given-sig');
+        assert.equal(ctx.repeatCount, 5);
+        var noComments = mod.deriveEnrichmentContext({}, 'gh-12', 'S', 'boom', {});
+        assert.equal(noComments.signature, undefined, 'no getComments → no derived signature');
+    });
+
+    test('isEnrichedContext: any collected item enriches; an empty context does not', function () {
+        var mod = loadForGh1363();
+        assert.equal(mod.isEnrichedContext({}), false);
+        assert.equal(mod.isEnrichedContext({ preflightLine: 'x' }), true);
+        assert.equal(mod.isEnrichedContext({ runUrl: 'x' }), true);
+        assert.equal(mod.isEnrichedContext({ runId: 'x' }), true);
+        assert.equal(mod.isEnrichedContext({ signature: 'x' }), true);
     });
 
 });
