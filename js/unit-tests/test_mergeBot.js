@@ -155,6 +155,14 @@ function backstopBridgeMocks(opts, calls) {
     };
 }
 
+// gh-1371 round 2 (CI crap ratchet): the head shape of the fixture PR —
+// `bareHead` mimics the older bridge shape (a bare sha string instead of
+// the { sha } object). Extracted from fixture() to restore its baseline CC.
+function fixtureHead(opts) {
+    var sha = opts.headSha || 'deadbeef';
+    return opts.bareHead ? sha : { sha: sha };
+}
+
 function fixture(opts) {
     opts = opts || {};
     var calls = { merges: [], adds: [], removes: [], comments: [], cli: [],
@@ -171,7 +179,7 @@ function fixture(opts) {
         draft: opts.draft === true,
         mergeable: opts.mergeable !== undefined ? opts.mergeable : true,
         mergeable_state: opts.mergeableState || 'clean',
-        head: opts.bareHead ? (opts.headSha || 'deadbeef') : { sha: opts.headSha || 'deadbeef' },
+        head: fixtureHead(opts),
         statusCheckRollup: opts.statusCheckRollup || undefined,
         labels: (opts.labels || ['ai_validating']).map(function (n) {
             return { name: n };

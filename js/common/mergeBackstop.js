@@ -15,7 +15,15 @@
  *      refresh its entry instead of duplicating), plus per-thread severity,
  *      path:line, one-line summary, thread permalink and review-run
  *      reference. An already-open digest issue whose ledger marker carries
- *      this PR number is REUSED (one digest per PR survives replays);
+ *      this PR number is REUSED — the pick is deterministic (gh-1371
+ *      round 2: the LOWEST issue number among the marker-matching digests),
+ *      so replays converge on one digest even after a race. The race
+ *      itself is best-effort: a digest a concurrent merge funnel files
+ *      between our probe and our create is adopted post-create, OURS is
+ *      abandoned OPEN (out.digestDuplicate, echoed into the PR ledger
+ *      stamp for the part-3 sweep to retire) — "one digest per PR
+ *      survives replays" is the convergent invariant, not a hard
+ *      guarantee;
  *   2. each counted thread resolves with the canonical machine-parsed tag
  *      `defered: #<digest-issue>` (reviewDispositions.TAGS — the epic's
  *      deferral spelling; the tag round-trips parseDispositionTag);
