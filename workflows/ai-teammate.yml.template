@@ -73,7 +73,10 @@ on:
         description: 'Which leg to run'
         required: true
         type: choice
-        options: [dev, review, rework]
+        # gh-136: analyze — the AI failure-analyzer leg the machine SM
+        # dispatches when a same-signature failure streak crosses
+        # failureAnalysis.afterFailures (transient vs deterministic-infra).
+        options: [dev, review, rework, analyze]
       reason:
         description: 'Why this dispatch (audit trail, shown in logs)'
         required: false

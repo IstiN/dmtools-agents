@@ -1899,3 +1899,75 @@ suite('smProvider — gh-1352 ledger primitives: postPrComment invalidates the p
         assert.equal(calls.fetches, 2, 'exactly one re-fetch after two writes');
     });
 });
+
+// -------------------------------------------------------------------------
+// gh-136: the failure-analyzer's issue-comment primitives — the SM reads
+// the issue's comment history (streak + verdict markers) and posts the
+// ONE park diagnostic. Same memoize/invalidate discipline as the ledger
+// primitives above; plain issues ride github_get_pr_comments (PRs are
+// issues upstream) and github_create_comment's number: shape (the
+// close-issue precedent).
+// -------------------------------------------------------------------------
+
+suite('smProvider — gh-136 failure-analyzer issue-comment primitives', function () {
+
+    var MOD = 'js/common/smProvider.js';
+
+    function loadIssueProvider(comments, calls) {
+        var mod = loadModule(MOD,
+            makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}),
+            {
+                github_get_pr_comments: function (args) {
+                    calls.fetches.push(args);
+                    return JSON.stringify(comments);
+                },
+                github_create_comment: function (args) {
+                    calls.posts.push(args);
+                    comments.push({ user: { login: 'ai-teammate' }, body: args.body });
+                    return { id: 'c1' };
+                }
+            });
+        mod._cache.entries = {}; // fresh per-tick holder (cache is module state)
+        return mod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' }
+        });
+    }
+
+    test('issueComments reads the plain-issue discussion page, memoized per tick', function () {
+        var calls = { fetches: [], posts: [] };
+        var comments = [{ user: { login: 'ai-teammate' }, body: 'failure notice' }];
+        var p = loadIssueProvider(comments, calls);
+        var rows = p.issueComments(41);
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].body, 'failure notice');
+        p.issueComments(41);
+        p.issueComments(41);
+        assert.equal(calls.fetches.length, 1, 'the read rides the per-tick memo');
+        assert.equal(calls.fetches[0].pullRequestId, '41', 'plain issues ride the discussion-page tool');
+    });
+
+    test('postIssueComment posts on the issue and invalidates the memo', function () {
+        var calls = { fetches: [], posts: [] };
+        var comments = [];
+        var p = loadIssueProvider(comments, calls);
+        p.issueComments(41); // memoize the empty snapshot
+        p.postIssueComment(41, 'park diagnostic');
+        assert.equal(calls.posts.length, 1);
+        assert.equal(calls.posts[0].number, 41, 'the issue-comment tool takes the number');
+        assert.equal(calls.posts[0].body, 'park diagnostic');
+        var again = p.issueComments(41);
+        assert.equal(calls.fetches.length, 2, 'the write dropped the memo — the re-read re-fetches');
+        assert.equal(again.length, 1, 'the same-tick re-read observes the posted diagnostic');
+    });
+
+    test('memos of different issues do not collide', function () {
+        var calls = { fetches: [], posts: [] };
+        var comments = [];
+        var p = loadIssueProvider(comments, calls);
+        p.issueComments(41);
+        p.postIssueComment(42, 'other issue diagnostic');
+        p.issueComments(41);
+        assert.equal(calls.fetches.length, 1, 'issue 41\'s memo survives the issue-42 write (no re-fetch)');
+    });
+});

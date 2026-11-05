@@ -17,6 +17,32 @@ function rvShared() {
     return rvShared.mod;
 }
 
+// gh-136: the failure-analyzer module (the agent's require map member).
+function faShared() {
+    if (!faShared.mod) {
+        faShared.mod = loadModule('js/common/failureAnalyzer.js', makeRequire({
+            './legFailureReport.js': lfrModule(),
+            './reviewVerdicts.js': rvShared()
+        }), {});
+    }
+    return faShared.mod;
+}
+
+// gh-136: commentMarkup (the park diagnostic's flavor bag).
+function cmShared() {
+    if (!cmShared.mod) {
+        cmShared.mod = loadModule('js/common/commentMarkup.js', makeRequire({
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js', makeRequire({}), {})
+        }), {});
+    }
+    return cmShared.mod;
+}
+
+function lfrModule() {
+    if (!lfrModule.mod) lfrModule.mod = loadModule('js/common/legFailureReport.js', makeRequire({}), {});
+    return lfrModule.mod;
+}
+
 function maShared() {
     if (!maShared.mod) maShared.mod = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
     return maShared.mod;
@@ -59,7 +85,10 @@ function agentModuleMap(projectConfig, holder) {
                 './reviewVerdicts.js': rvShared(),
                 './machineAuthor.js': maShared(),
                 './reviewPolicy.js': policy
-            }), {})
+            }), {}),
+        './common/failureAnalyzer.js': faShared(),
+        './common/commentMarkup.js': cmShared(),
+        './common/mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}), {})
     };
 }
 
@@ -1342,5 +1371,359 @@ suite('machineSm disposition loop (gh-1352)', function () {
         assert.equal(cfg2.reviewPolicy.preset, 'investigation', 'jobParams JSON-string policy parses');
         var cfg3 = agent2.resolveMachineSmConfig({}, {});
         assert.ok(cfg3.reviewPolicy && cfg3.reviewPolicy.severities, 'the built-in default resolves');
+    });
+});
+
+// -------------------------------------------------------------------------
+// gh-136: the AI failure-analyzer leg — the scripted-provider replay of the
+// acceptance matrix (AC1–AC5). In-memory issue store, no external calls:
+// every tick drives agent.action() against a scripted provider and the
+// recorded dispatches/labels/comments ARE the assertions.
+// -------------------------------------------------------------------------
+
+var FA_MARKDOWN = {
+    h: function (level, text) {
+        var prefix = '';
+        for (var i = 0; i < level; i++) prefix += '#';
+        return prefix + ' ' + text;
+    },
+    bold: function (text) { return '**' + text + '**'; },
+    inline: function (text) { return '`' + text + '`'; },
+    code: function (text) { return '```\n' + text + '\n```'; },
+    link: function (text, url) { return '[' + text + '](' + url + ')'; }
+};
+
+// One gh-1363 failure notice on a machine issue: the machine-readable
+// signature line is the streak source the SM parses.
+function failureNotice(lfr, workflow, step, message, author) {
+    var sig = lfr.failureSignature({ workflow: workflow, step: step, message: message });
+    return {
+        user: { login: author || 'github-actions[bot]' },
+        body: lfr.buildFailureComment({ phase: 'setup', step: step, excerpt: message, signature: sig }, FA_MARKDOWN)
+    };
+}
+
+// One machine-authored analyzer verdict comment.
+function verdictNotice(fa, record, author) {
+    return {
+        user: { login: author || 'github-actions[bot]' },
+        body: fa.buildFailureVerdictComment(record)
+    };
+}
+
+// The in-memory forge: issues + comments + every machine write recorded.
+function scriptedProvider() {
+    var store = {
+        issues: {},      // number → { number, title, labels, assignees }
+        comments: {},    // number → [rows]
+        dispatches: [],  // [issue, leg, reason]
+        labels: [],      // [issue, label]
+        commentsPosted: [], // [issue, body]
+        prs: {}          // number → PR object (or absent → null)
+    };
+
+    return {
+        store: store,
+        addIssue: function (number, labels) {
+            store.issues[number] = { number: number, title: 'gh-' + number, labels: labels.slice(), assignees: ['ai-teammate'] };
+            store.comments[number] = [];
+            return store.issues[number];
+        },
+        addComments: function (number, rows) {
+            store.comments[number] = store.comments[number].concat(rows);
+        },
+        // A human removing the park label (the AC4 resume gesture).
+        removeLabel: function (number, label) {
+            var issue = store.issues[number];
+            var i = issue.labels.indexOf(label);
+            if (i !== -1) issue.labels.splice(i, 1);
+        },
+        activeMachineRuns: function () { return []; },
+        listMachineIssues: function (machineLabels, agentHandle, limit) {
+            store.listedWithLabels = machineLabels.slice();
+            var out = [];
+            Object.keys(store.issues).forEach(function (n) { out.push(store.issues[n]); });
+            return out.slice(0, limit || 50);
+        },
+        findPr: function (n) { return store.prs[n] || null; },
+        prStatus: function (n) { return store.prs[n]; },
+        issueComments: function (n) { return store.comments[n] || []; },
+        dispatchLeg: function (n, leg, reason, wf) {
+            store.dispatches.push([n, leg, reason, wf]);
+            return 'ok';
+        },
+        addIssueLabel: function (n, label) {
+            store.labels.push([n, label]);
+            store.issues[n].labels.push(label);
+            return 'ok';
+        },
+        postIssueComment: function (n, body) {
+            store.commentsPosted.push([n, body]);
+            store.comments[n].push({ user: { login: 'ai-teammate' }, body: body });
+            return 'ok';
+        }
+    };
+}
+
+function faJobParams(failureAnalysis) {
+    var p = {
+        repo: 'acme/widget',
+        scm: { provider: 'github' },
+        dryRun: false,
+        maxConcurrentRuns: 1,
+        workflowFile: 'ai-teammate.yml',
+        branchPrefix: 'ai/gh-',
+        agentHandle: 'ai-teammate',
+        machineAuthor: 'ai-teammate,github-actions[bot]'
+    };
+    if (failureAnalysis !== undefined) p.failureAnalysis = failureAnalysis;
+    return p;
+}
+
+// One full SM tick against the scripted provider; returns the provider so
+// the assertions read the recorded writes.
+function faTick(holder, jobParams, projectConfig) {
+    var agent = loadModule('js/machineSmAgent.js',
+        makeRequire(agentModuleMap(projectConfig || {}, holder)), {
+            cli_execute_command: function () { return '{}'; }
+        });
+    agent.action({ jobParams: jobParams });
+    return holder.provider;
+}
+
+// The legs dispatched for one issue across the whole tick history.
+function legsDispatched(provider, issueNumber) {
+    return provider.store.dispatches
+        .filter(function (d) { return d[0] === issueNumber; })
+        .map(function (d) { return d[1]; });
+}
+
+suite('machineSm failure analyzer — scripted replay (gh-136)', function () {
+
+    var LFR = lfrModule();
+    var FA = faShared();
+    var DEV_SIG = { workflow: 'ai-teammate.yml', step: 'Development Setup', message: 'npm ci failed' };
+
+    function devFailures(n, provider, count) {
+        for (var i = 0; i < count; i++) {
+            provider.addComments(n, [failureNotice(LFR, DEV_SIG.workflow, DEV_SIG.step, DEV_SIG.message)]);
+        }
+    }
+
+    test('AC1: below the threshold the blind retry is unchanged; the fourth failure dispatches the analyzer once', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(101, ['agent:dev']);
+        devFailures(101, holder.provider, 3);
+
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 101), ['dev'],
+            'three identical failures: blind retry unchanged, no analyzer dispatch');
+
+        devFailures(101, holder.provider, 1); // the fourth identical failure
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 101), ['dev', 'analyze'],
+            'the fourth dispatches the analyzer once');
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 101; }).length, 0,
+            'no park label below or at the crossing');
+    });
+
+    test('AC2: a transient verdict resumes retries without label/comment spam; the new streak re-triggers only after the threshold again', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(102, ['agent:dev']);
+        devFailures(102, holder.provider, 4);
+        holder.provider.addComments(102, [verdictNotice(FA, {
+            signature: LFR.failureSignature(DEV_SIG),
+            classification: 'transient',
+            confidence: 0.8,
+            suspected_root_cause: 'provider outage',
+            evidence: ['500 from upstream'],
+            suggested_fix: 'retry',
+            analyzedAtCount: 4
+        })]);
+
+        // 1st post-verdict failure (count 5 → effective 1) and a simulated
+        // success in between (a success posts nothing — the consumed
+        // prefix alone keeps the arithmetic honest).
+        devFailures(102, holder.provider, 1);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 102), ['dev'], 'retries continue after the transient verdict');
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 102; }).length, 0,
+            'no label on a transient verdict');
+        assert.equal(holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 102; }).length, 0,
+            'no comment spam on a transient verdict');
+
+        devFailures(102, holder.provider, 2); // count 7 → effective 3
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 102), ['dev', 'dev'],
+            'still below the threshold again — blind retry');
+
+        devFailures(102, holder.provider, 1); // count 8 → effective 4 — the NEW streak crosses
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 102), ['dev', 'dev', 'analyze'],
+            'a NEW identical streak re-triggers analysis only after the threshold again');
+    });
+
+    test('AC3: a deterministic verdict parks — label + exactly ONE diagnostic comment, no further re-dispatch', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(103, ['agent:dev']);
+        devFailures(103, holder.provider, 4);
+        holder.provider.addComments(103, [verdictNotice(FA, {
+            signature: LFR.failureSignature(DEV_SIG),
+            classification: 'deterministic-infra',
+            confidence: 0.9,
+            suspected_root_cause: 'setup pins a deleted registry mirror',
+            evidence: ['npm ERR! 404'],
+            suggested_fix: 'update .npmrc',
+            analyzedAtCount: 4
+        })]);
+
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        var parked = holder.provider.store.labels.filter(function (l) { return l[0] === 103 && l[1] === 'sm:leg-blocked'; });
+        assert.equal(parked.length, 1, 'the issue is labeled sm:leg-blocked');
+        var diags = holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 103; });
+        assert.equal(diags.length, 1, 'exactly ONE diagnostic comment');
+        assert.ok(diags[0][1].indexOf('npm ERR! 404') !== -1, 'the diagnostic quotes the evidence');
+        assert.ok(diags[0][1].indexOf('update .npmrc') !== -1, 'the diagnostic carries the suggested fix');
+        assert.deepEqual(legsDispatched(holder.provider, 103), [], 'the park tick dispatches nothing');
+
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.equal(holder.provider.store.dispatches.filter(function (d) { return d[0] === 103; }).length, 0,
+            'no further re-dispatch of a parked issue');
+        assert.equal(holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 103; }).length, 1,
+            'still exactly ONE diagnostic comment');
+    });
+
+    test('AC4: removing the park label resumes dispatch (and never re-posts the diagnostic)', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(104, ['agent:dev']);
+        devFailures(104, holder.provider, 4);
+        holder.provider.addComments(104, [verdictNotice(FA, {
+            signature: LFR.failureSignature(DEV_SIG),
+            classification: 'deterministic-infra',
+            analyzedAtCount: 4
+        })]);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 104; }).length, 1, 'parked');
+
+        holder.provider.removeLabel(104, 'sm:leg-blocked'); // the human gesture
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 104), ['dev'],
+            'dispatch resumes after the label is removed');
+        assert.equal(holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 104; }).length, 1,
+            'the diagnostic is NOT re-posted on resume');
+    });
+
+    test('AC5: a crashed analyzer leg keeps blind retries going — nothing parked, no analyzer retry storm', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(105, ['agent:dev']);
+        devFailures(105, holder.provider, 4);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 105), ['analyze'], 'the analyzer is dispatched at the crossing');
+
+        // The analyzer leg itself fails: its own failure notice carries a
+        // DIFFERENT signature (the analyze step) — and no verdict lands.
+        holder.provider.addComments(105, [failureNotice(LFR, 'ai-teammate.yml', 'Failure Analysis', 'cli crashed')]);
+        devFailures(105, holder.provider, 1);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 105), ['analyze', 'dev'],
+            'blind retry continues after the analyzer crash');
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 105; }).length, 0,
+            'nothing parked');
+        assert.equal(holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 105; }).length, 0,
+            'no diagnostic comment from a crashed analyzer');
+
+        // The analyzer crash broke the dev streak; the dev failures after
+        // the crash rebuild it from one. Three more make the REBUILT
+        // streak exactly four — the analyzer re-arms ONCE.
+        devFailures(105, holder.provider, 3);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 105), ['analyze', 'dev', 'analyze'],
+            'the rebuilt streak re-arms the analyzer once at the fresh crossing');
+
+        devFailures(105, holder.provider, 1);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 105), ['analyze', 'dev', 'analyze', 'dev'],
+            'past the fresh crossing the loop is blind again (no crash-retry storm)');
+    });
+
+    test('AC6: different-signature failures never merge into one streak', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(106, ['agent:dev']);
+        devFailures(106, holder.provider, 2);
+        holder.provider.addComments(106, [failureNotice(LFR, 'ai-teammate.yml', 'Rework Push', 'tests red')]);
+        devFailures(106, holder.provider, 1);
+
+        // Five Development-Setup failures in total, but never four in a
+        // row: the interleaved Rework Push failure keeps every run at 3.
+        for (var i = 0; i < 2; i++) {
+            faTick(holder, faJobParams({ afterFailures: 4 }));
+            holder.provider.addComments(106, [failureNotice(LFR, 'ai-teammate.yml', 'Development Setup', 'npm ci failed')]);
+        }
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        var legs = legsDispatched(holder.provider, 106);
+        assert.equal(legs.indexOf('analyze'), -1,
+            '5 same-signature failures in total never cross while a different signature keeps breaking the run');
+        assert.ok(legs.indexOf('dev') !== -1, 'blind retries throughout');
+    });
+
+    test('AC7: missing config disables the feature silently — blind retries forever, no analyze leg in play', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(107, ['agent:dev']);
+        devFailures(107, holder.provider, 6);
+
+        faTick(holder, faJobParams(undefined));
+        assert.deepEqual(legsDispatched(holder.provider, 107), ['dev'],
+            'no failureAnalysis block → today\'s behavior, byte for byte');
+        faTick(holder, faJobParams(undefined));
+        assert.deepEqual(legsDispatched(holder.provider, 107), ['dev', 'dev'],
+            'still blind at streak 7 — the counter alone never stops the loop');
+        assert.equal(holder.provider.store.listedWithLabels.indexOf('sm:leg-blocked'), -1,
+            'the park label is not even queried while disabled');
+    });
+
+    test('AC7: malformed config is a hard error at SM start', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(108, ['agent:dev']);
+        var agent = loadModule('js/machineSmAgent.js',
+            makeRequire(agentModuleMap({}, holder)), {
+                cli_execute_command: function () { return '{}'; }
+            });
+        assert.throws(function () {
+            agent.action({ jobParams: faJobParams({ afterFailures: 'four' }) });
+        }, /afterFailures must be a positive integer/);
+        assert.equal(holder.provider.store.dispatches.length, 0, 'the tick never ran');
+    });
+
+    test('the parked label joins the machine-issue query while the feature is enabled', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(109, ['agent:dev']);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.ok(holder.provider.store.listedWithLabels.indexOf('sm:leg-blocked') !== -1,
+            'parked issues stay listed so the skip reason stays observable');
+    });
+
+    test('a provider without the issue-comment primitive degrades to today\'s behavior (fail-safe)', function () {
+        var holder = { provider: scriptedProvider() };
+        delete holder.provider.issueComments; // the gitlab twin shape
+        holder.provider.addIssue(110, ['agent:dev']);
+        devFailures(110, holder.provider, 4);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 110), ['dev'],
+            'no issue-comment read → no streak → blind retry (never wedge the loop)');
+    });
+
+    test('resolveMachineSmConfig: the machineSm project override wins over jobParams for failureAnalysis', function () {
+        var agent = loadModule('js/machineSmAgent.js',
+            makeRequire(agentModuleMap({}, null)), {
+                cli_execute_command: function () { return '{}'; }
+            });
+        var cfg = agent.resolveMachineSmConfig(
+            { failureAnalysis: { afterFailures: 5, blockedLabel: 'job:label' } },
+            { machineSm: { failureAnalysis: { afterFailures: 3 } } });
+        assert.equal(cfg.failureAnalysis.afterFailures, 3, 'the override wins');
+        assert.equal(cfg.failureAnalysis.blockedLabel, 'job:label', 'jobParams fills knobs the override lacks');
+        var off = agent.resolveMachineSmConfig({}, {});
+        assert.equal(off.failureAnalysis.enabled, false, 'absent everywhere → disabled silently');
     });
 });
