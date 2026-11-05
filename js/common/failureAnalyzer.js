@@ -301,8 +301,9 @@ var PARK_EVIDENCE_MAX_LINES = 10;
 var PARK_MARKDOWN_METACHAR = /[\\`*_{}\[\]()#+\-.!|>~]/g;
 
 function parkEscapedText(text) {
-    console.log('DBG regex:', String(PARK_MARKDOWN_METACHAR), '| test ]:', PARK_MARKDOWN_METACHAR.test(']'), '| test -:', PARK_MARKDOWN_METACHAR.test('-'), '| test [:', PARK_MARKDOWN_METACHAR.test('['));
-    var out = String(text == null ? '' : text).replace(PARK_MARKDOWN_METACHAR, '\\$&');
+    var RE = '\\$&';
+    console.log('DBG repl:', JSON.stringify(RE), 'len', RE.length, '| src:', JSON.stringify(PARK_MARKDOWN_METACHAR.source));
+    var out = String(text == null ? '' : text).replace(PARK_MARKDOWN_METACHAR, RE);
     console.log('DBG out:', JSON.stringify(out));
     return out;
 }
