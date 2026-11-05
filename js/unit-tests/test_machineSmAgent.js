@@ -1419,6 +1419,8 @@ function scriptedProvider() {
         dispatches: [],  // [issue, leg, reason]
         labels: [],      // [issue, label]
         commentsPosted: [], // [issue, body]
+        commentFetches: [], // [issue] — the SM's issue-comment reads (I/O audit)
+        failNextLabelAdd: false, // scripted REST hiccup on the park label-add
         prs: {}          // number → PR object (or absent → null)
     };
 
@@ -1447,12 +1449,19 @@ function scriptedProvider() {
         },
         findPr: function (n) { return store.prs[n] || null; },
         prStatus: function (n) { return store.prs[n]; },
-        issueComments: function (n) { return store.comments[n] || []; },
+        issueComments: function (n) {
+            store.commentFetches.push(n);
+            return store.comments[n] || [];
+        },
         dispatchLeg: function (n, leg, reason, wf) {
             store.dispatches.push([n, leg, reason, wf]);
             return 'ok';
         },
         addIssueLabel: function (n, label) {
+            if (store.failNextLabelAdd) {
+                store.failNextLabelAdd = false;
+                throw new Error('label-add hiccup (scripted REST failure)');
+            }
             store.labels.push([n, label]);
             store.issues[n].labels.push(label);
             return 'ok';
@@ -1725,5 +1734,175 @@ suite('machineSm failure analyzer — scripted replay (gh-136)', function () {
         assert.equal(cfg.failureAnalysis.blockedLabel, 'job:label', 'jobParams fills knobs the override lacks');
         var off = agent.resolveMachineSmConfig({}, {});
         assert.equal(off.failureAnalysis.enabled, false, 'absent everywhere → disabled silently');
+    });
+
+    test('the disabled feature never reads the issue comments (no per-issue REST call per tick)', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(111, ['agent:dev']);
+        devFailures(111, holder.provider, 6);
+        faTick(holder, faJobParams(undefined));
+        assert.deepEqual(legsDispatched(holder.provider, 111), ['dev'], 'the loop stays blind');
+        assert.equal(holder.provider.store.commentFetches.filter(function (n) { return n === 111; }).length, 0,
+            'no issue-comment read while the feature is disabled — the byte-identical invariant covers I/O, not just decisions');
+        faTick(holder, faJobParams(undefined));
+        assert.equal(holder.provider.store.commentFetches.filter(function (n) { return n === 111; }).length, 0,
+            'still zero on the next tick');
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.ok(holder.provider.store.commentFetches.filter(function (n) { return n === 111; }).length > 0,
+            'an enabled config reads the comment history again');
+    });
+
+    test('a cleared park re-parks on a NEW episode with a different signature (label + exactly one new diagnostic)', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(112, ['agent:dev']);
+        devFailures(112, holder.provider, 4);
+        holder.provider.addComments(112, [verdictNotice(FA, {
+            signature: LFR.failureSignature(DEV_SIG),
+            classification: 'deterministic-infra',
+            analyzedAtCount: 4,
+            at: '2026-11-05T10:00:00.000Z'
+        })]);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 112 && l[1] === 'sm:leg-blocked'; }).length, 1,
+            'first episode parked');
+        assert.equal(holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 112; }).length, 1,
+            'exactly one diagnostic');
+
+        // The human resume gesture, then a brand-new failure mode that
+        // streaks to its OWN crossing.
+        holder.provider.removeLabel(112, 'sm:leg-blocked');
+        var NEW_SIG = { workflow: 'ai-teammate.yml', step: 'Rework Push', message: 'push rejected: protected branch' };
+        for (var i = 0; i < 4; i++) {
+            holder.provider.addComments(112, [failureNotice(LFR, NEW_SIG.workflow, NEW_SIG.step, NEW_SIG.message)]);
+        }
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 112), ['analyze'],
+            'the new streak crosses its own threshold — the analyzer is dispatched');
+
+        holder.provider.addComments(112, [verdictNotice(FA, {
+            signature: LFR.failureSignature(NEW_SIG),
+            classification: 'deterministic-infra',
+            analyzedAtCount: 4,
+            at: '2026-11-05T11:00:00.000Z'
+        })]);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 112 && l[1] === 'sm:leg-blocked'; }).length, 2,
+            'the NEW episode parks again — the first episode never suppresses it');
+        assert.equal(holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 112; }).length, 2,
+            'exactly ONE new diagnostic for the new episode (one per episode)');
+    });
+
+    test('a cleared park re-parks when the SAME-signature failure returns after a failed human fix', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(113, ['agent:dev']);
+        devFailures(113, holder.provider, 4);
+        holder.provider.addComments(113, [verdictNotice(FA, {
+            signature: LFR.failureSignature(DEV_SIG),
+            classification: 'deterministic-infra',
+            analyzedAtCount: 4,
+            at: '2026-11-05T10:00:00.000Z'
+        })]);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 113 && l[1] === 'sm:leg-blocked'; }).length, 1, 'parked');
+
+        holder.provider.removeLabel(113, 'sm:leg-blocked'); // the human gesture
+        // The human's fix failed: the same signature streaks on — counts
+        // 5..8, effective (8 − 4) = 4 → the analyzer re-arms ONCE.
+        devFailures(113, holder.provider, 4);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.deepEqual(legsDispatched(holder.provider, 113), ['dev', 'analyze'],
+            'the rebuilt streak re-arms the analyzer at the fresh crossing');
+
+        // A FRESH verdict for the same signature — a deeper analysis
+        // (analyzedAtCount 8, a NEWER analysis time than the first park).
+        holder.provider.addComments(113, [verdictNotice(FA, {
+            signature: LFR.failureSignature(DEV_SIG),
+            classification: 'deterministic-infra',
+            analyzedAtCount: 8,
+            at: '2026-11-05T11:00:00.000Z'
+        })]);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 113 && l[1] === 'sm:leg-blocked'; }).length, 2,
+            'the fresh episode parks — the stale diagnostic never suppresses a fresher verdict');
+        assert.equal(holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 113; }).length, 2,
+            'exactly one new diagnostic for the fresh episode');
+    });
+
+    test('a failed label-add re-enters the gate next tick — the park completes without a lying diagnostic', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(114, ['agent:dev']);
+        devFailures(114, holder.provider, 4);
+        holder.provider.addComments(114, [verdictNotice(FA, {
+            signature: LFR.failureSignature(DEV_SIG),
+            classification: 'deterministic-infra',
+            analyzedAtCount: 4,
+            at: '2026-11-05T10:00:00.000Z'
+        })]);
+        holder.provider.store.failNextLabelAdd = true; // the scripted REST hiccup
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 114 && l[1] === 'sm:leg-blocked'; }).length, 0,
+            'the label-add failed');
+        assert.equal(holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 114; }).length, 0,
+            'the label lands FIRST — no diagnostic can claim re-dispatch is stopped while it is not');
+
+        holder.provider.store.failNextLabelAdd = false;
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 114 && l[1] === 'sm:leg-blocked'; }).length, 1,
+            'the label-add is retried by the next tick');
+        assert.equal(holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 114; }).length, 1,
+            'exactly ONE diagnostic for the episode');
+    });
+
+    test('a forged park marker from a non-machine identity never suppresses the park', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(115, ['agent:dev']);
+        devFailures(115, holder.provider, 4);
+        holder.provider.addComments(115, [
+            // The marker format is public — a same-signature forged marker
+            // with a future `at` would cover every verdict, forever.
+            { user: { login: 'somehuman' }, body: '<!-- dmtools:failure-block {"signature":"' +
+                LFR.failureSignature(DEV_SIG) + '","at":"2099-01-01T00:00:00.000Z"} -->' },
+            verdictNotice(FA, {
+                signature: LFR.failureSignature(DEV_SIG),
+                classification: 'deterministic-infra',
+                analyzedAtCount: 4,
+                at: '2026-11-05T10:00:00.000Z'
+            })
+        ]);
+        faTick(holder, faJobParams({ afterFailures: 4 }));
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 115 && l[1] === 'sm:leg-blocked'; }).length, 1,
+            'the forged marker cannot hold the park gate — the machine parks');
+        assert.equal(holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 115; }).length, 1,
+            'the diagnostic posts');
+    });
+
+    test('the park reason omits an absent confidence (never the literal "confidence null")', function () {
+        var agent = loadModule('js/machineSmAgent.js',
+            makeRequire(agentModuleMap({}, null)), {
+                cli_execute_command: function () { return '{}'; }
+            });
+        var sig = LFR.failureSignature(DEV_SIG);
+        function state(confidence) {
+            return {
+                issue: { labels: [] },
+                failureAnalysis: {
+                    available: true,
+                    streakSignature: sig,
+                    streakCount: 4,
+                    verdicts: [{ signature: sig, classification: 'deterministic-infra',
+                        confidence: confidence, suspected_root_cause: 'boom',
+                        analyzedAtCount: 4, at: '2026-11-05T10:00:00.000Z' }],
+                    parkMarkers: []
+                }
+            };
+        }
+        var cfg = { failureAnalysis: { enabled: true, blockedLabel: 'sm:leg-blocked' } };
+        var without = agent.failureAnalysisGate(state(null), cfg);
+        assert.ok(without && without.type === 'park', 'the park fires');
+        assert.ok(without.reason.indexOf('confidence null') === -1,
+            'a missing confidence degrades to omission in the audit reason');
+        var withConfidence = agent.failureAnalysisGate(state(0.9), cfg);
+        assert.ok(withConfidence.reason.indexOf('(confidence 0.9)') !== -1,
+            'a present confidence still renders in the audit reason');
     });
 });

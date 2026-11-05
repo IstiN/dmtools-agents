@@ -281,15 +281,20 @@ function failureAnalysisGate(state, cfg) {
             'remove ' + faCfg.blockedLabel + ' (or re-assign the issue) to resume dispatch' };
     }
     var verdict = failureAnalyzerModule.latestVerdictForSignature(faState.verdicts, faState.streakSignature);
-    if (verdict && verdict.classification === 'deterministic-infra' && faState.parkCommentCount === 0) {
-        // The park applies ONCE per verdict episode: the diagnostic comment
-        // is the applied-park record. When it already exists and the label
-        // is gone, a HUMAN cleared the park (the landed-fix gesture, AC4) —
-        // the stale verdict must not re-park; the consumed streak discount
-        // keeps the loop on blind retries until a fresh streak crosses.
+    if (verdict && verdict.classification === 'deterministic-infra' &&
+        !failureAnalyzerModule.coveringParkMarker(faState.parkMarkers, verdict)) {
+        // The park applies ONCE per verdict EPISODE: the trusted park
+        // markers carry the parked signature + analysis time, so a marker
+        // covering THIS verdict means the machine already parked it. When
+        // the marker exists and the label is gone, a HUMAN cleared the
+        // park (the landed-fix gesture, AC4) — the stale verdict must not
+        // re-park. A NEW episode (a different signature, or a fresher
+        // verdict after a failed human fix) is never covered → parks with
+        // its own diagnostic; a label-add that failed last tick has NO
+        // marker at all → re-enters the gate (the label is retried).
         return { type: 'park', verdict: verdict,
-            postDiagnostic: true,
-            reason: 'deterministic-infra verdict (confidence ' + verdict.confidence + ') — parking: ' +
+            reason: 'deterministic-infra verdict' +
+                failureAnalyzerModule.confidenceSuffix(verdict.confidence) + ' — parking: ' +
                 String(verdict.suspected_root_cause || 'root cause not stated') };
     }
     return null;
@@ -398,26 +403,27 @@ var ACTION_EXECUTORS = {
     dispositionLoop: function (provider, action, issue, cfg) {
         return dispositionLoop(provider, issue, action, cfg);
     },
-    // gh-136: apply a deterministic-infra verdict — the ONE diagnostic
-    // comment (marker-counted idempotency) + the park label. The comment
-    // lands FIRST: a failed label-add after a posted comment re-enters
-    // the park decision next tick and the marker count keeps it at one.
+    // gh-1366: apply a deterministic-infra verdict — the park label (the
+    // latch that actually stops re-dispatch) + the ONE diagnostic comment.
     park: function (provider, action, issue, cfg) {
         return applyFailurePark(provider, issue, action, cfg);
     }
 };
 
-// gh-136 — the park executor. postDiagnostic is decided by the pure gate
-// (countParkComments === 0); the executor never re-counts (the decision
-// is computed once per tick against a consistent comment snapshot).
+// gh-1366 — the park executor. The gate fires only for an episode no
+// trusted marker covers, so every fired park posts its own diagnostic.
+// The LABEL lands FIRST: it is the latch that actually stops re-dispatch,
+// so a failed write degrades to the SAFE half-applied state (parked, no
+// diagnostic — the parked-skip tick log still names the park) instead of
+// a diagnostic claiming "re-dispatch is STOPPED" while retries continue.
+// A failed comment post leaves the verdict uncovered: when a human later
+// clears the label, the gate re-fires and the park re-applies complete.
 function applyFailurePark(provider, issue, action, cfg) {
     var faCfg = (cfg && cfg.failureAnalysis) || {};
     var label = faCfg.blockedLabel || failureAnalyzerModule.DEFAULT_BLOCKED_LABEL;
-    if (action.postDiagnostic) {
-        provider.postIssueComment(issue.number, failureAnalyzerModule.parkDiagnosticComment(
-            action.verdict, label, commentMarkupModule.forFlavor('markdown')));
-    }
-    return provider.addIssueLabel(issue.number, label);
+    provider.addIssueLabel(issue.number, label);
+    return provider.postIssueComment(issue.number, failureAnalyzerModule.parkDiagnosticComment(
+        action.verdict, label, commentMarkupModule.forFlavor('markdown')));
 }
 
 function executeAction(provider, action, issue, cfg) {
@@ -892,29 +898,44 @@ function filterLiveActiveIssues(provider, activeIssues, branchPrefix) {
     });
 }
 
-// gh-136: one issue's failure-analysis state, derived from its comment
-// history (the gh-1363 machine-readable signature lines + the analyzer
-// verdict markers). A provider without the issue-comment primitive (the
-// gitlab twin, bare test mocks) → null: every gate fails safe to today's
-// behavior. A READ failure is equally fail-safe — the loop is never
-// wedged by one leg's input.
+// gh-1366: the machine-issue query labels — the park label joins the query
+// only while the analyzer is enabled (parked issues stay listed so the
+// parked-skip reason stays observable in the tick log).
+function machineQueryLabelsOf(cfg) {
+    var machineLabels = ['agent:dev', 'agent:rework', 'agent:review',
+        'ai_developed', 'ai_pr_reviewed', 'pr_approved', 'needs-human'];
+    if (failureAnalysisEnabledOf(cfg)) {
+        machineLabels.push(cfg.failureAnalysis.blockedLabel);
+    }
+    return machineLabels;
+}
+
+// gh-1366: the pure derivation of one issue's failure-analysis state from
+// its comment history (the gh-1363 machine-readable signature lines + the
+// analyzer verdict markers + the trusted park markers).
+function failureAnalysisStateFrom(comments, machineLogins) {
+    var bodies = comments.map(function (c) {
+        return c && (c.body !== undefined ? c.body : c);
+    });
+    var streak = failureAnalyzerModule.failureStreak(bodies);
+    var authorOpts = { authorLogins: machineLogins || [] };
+    return {
+        available: true,
+        streakSignature: streak ? streak.signature : null,
+        streakCount: streak ? streak.count : 0,
+        verdicts: failureAnalyzerModule.parseFailureVerdicts(comments, authorOpts),
+        parkMarkers: failureAnalyzerModule.parkMarkersFrom(comments, authorOpts)
+    };
+}
+
+// gh-1366: one issue's failure-analysis state. A provider without the
+// issue-comment primitive (the gitlab twin, bare test mocks) → null: every
+// gate fails safe to today's behavior. A READ failure is equally fail-safe
+// — the loop is never wedged by one leg's input.
 function collectFailureAnalysisState(provider, issueNumber, machineLogins) {
     if (typeof provider.issueComments !== 'function') return null;
     try {
-        var comments = provider.issueComments(issueNumber) || [];
-        var bodies = comments.map(function (c) {
-            return c && (c.body !== undefined ? c.body : c);
-        });
-        var streak = failureAnalyzerModule.failureStreak(bodies);
-        return {
-            available: true,
-            streakSignature: streak ? streak.signature : null,
-            streakCount: streak ? streak.count : 0,
-            verdicts: failureAnalyzerModule.parseFailureVerdicts(comments, {
-                authorLogins: machineLogins || []
-            }),
-            parkCommentCount: failureAnalyzerModule.countParkComments(comments)
-        };
+        return failureAnalysisStateFrom(provider.issueComments(issueNumber) || [], machineLogins);
     } catch (eFa) {
         console.warn('  ⚠️ gh-' + issueNumber + ' failure-analysis read failed (fail-safe, blind retry): ' +
             (eFa.message || eFa));
@@ -964,9 +985,13 @@ function applyIssueAction(provider, issue, cfg, a) {
 function reconcileIssue(provider, issue, cfg, activeSet) {
     var counters = { acted: 0, dispatched: 0, skipped: 0, failures: 0 };
     var built = buildIssueState(provider, issue, cfg.branchPrefix, activeSet);
-    // gh-136: the analyzer verdicts are machine-identity-gated — the same
-    // resolved allowlist the review-verdict layer consumes.
-    built.state.failureAnalysis = collectFailureAnalysisState(provider, issue.number, cfg.machineLogins);
+    // gh-1366: the analyzer state rides ONLY while the feature is enabled
+    // — the disabled loop stays byte-identical today INCLUDING I/O: no
+    // issue-comment read per issue per tick for gates that can never fire
+    // (both gates bail on failureAnalysisEnabledOf first).
+    built.state.failureAnalysis = failureAnalysisEnabledOf(cfg)
+        ? collectFailureAnalysisState(provider, issue.number, cfg.machineLogins)
+        : null;
     var acts = decideActions(built.state, cfg);
     for (var i = 0; i < acts.length; i++) {
         var a = acts[i];
@@ -1022,13 +1047,7 @@ function action(params) {
     }
 
     // 2. Reconcile every machine-managed issue through the provider.
-    var machineLabels = ['agent:dev', 'agent:rework', 'agent:review',
-        'ai_developed', 'ai_pr_reviewed', 'pr_approved', 'needs-human'];
-    // gh-136: while the failure analyzer is enabled, parked issues stay
-    // listed so the parked-skip reason stays observable in the tick log.
-    if (cfg.failureAnalysis && cfg.failureAnalysis.enabled) {
-        machineLabels.push(cfg.failureAnalysis.blockedLabel);
-    }
+    var machineLabels = machineQueryLabelsOf(cfg);
     var issues = provider.listMachineIssues(machineLabels, cfg.agentHandle, cfg.issueLimit);
 
     var dispatched = 0, acted = 0, skipped = 0, failures = 0;

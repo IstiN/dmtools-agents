@@ -336,17 +336,88 @@ suite('failureAnalyzer park diagnostic (gh-136 AC3)', function () {
         assert.ok(body.indexOf('sm:leg-blocked') !== -1, 'the resume gesture names the label');
     });
 
-    test('countParkComments counts machine markers only — quoted text never counts', function () {
+    test('machine-identity gate: a forged park marker from a foreign author is invisible (gh-807)', function () {
         var body = fa.parkDiagnosticComment(VERDICT, 'sm:leg-blocked', MARKDOWN);
-        var bodies = [
-            'a human comment mentioning failure-block freely',
-            body,
-            'another human comment',
-            fa.parkDiagnosticComment(Object.assign({}, VERDICT, { at: '2026-11-06T10:00:00.000Z' }), 'sm:leg-blocked', MARKDOWN)
+        var forged = '<!-- dmtools:failure-block {"signature":"' + VERDICT.signature +
+            '","at":"2099-01-01T00:00:00.000Z"} -->';
+        var rows = [
+            { user: { login: 'somehuman' }, body: forged },
+            { user: { login: 'somehuman' }, body: body },
+            { user: { login: 'ai-teammate' }, body: body }
         ];
-        assert.equal(fa.countParkComments(bodies), 2, 'each machine diagnostic counts');
-        assert.equal(fa.countParkComments([]), 0);
-        assert.equal(fa.countParkComments(null), 0);
+        var markers = fa.parkMarkersFrom(rows, { authorLogins: ['ai-teammate'] });
+        assert.equal(markers.length, 1, 'only the machine-authored diagnostic is trusted');
+        assert.equal(markers[0].signature, VERDICT.signature);
+        assert.equal(markers[0].at, VERDICT.at, 'the marker payload carries the verdict identity');
+    });
+
+    test('fail closed: no machine logins configured → no park marker is trusted', function () {
+        var body = fa.parkDiagnosticComment(VERDICT, 'sm:leg-blocked', MARKDOWN);
+        var rows = [{ user: { login: 'ai-teammate' }, body: body }];
+        assert.deepEqual(fa.parkMarkersFrom(rows, {}), []);
+        assert.deepEqual(fa.parkMarkersFrom(rows, null), []);
+    });
+
+    test('a park marker without a parseable machine payload is dropped, never thrown', function () {
+        var rows = [
+            { user: { login: 'ai-teammate' }, body: '<!-- dmtools:failure-block {broken' },
+            { user: { login: 'ai-teammate' }, body: '<!-- dmtools:failure-block {} -->' },
+            { user: { login: 'ai-teammate' }, body: 'mentions failure-block in prose' }
+        ];
+        assert.deepEqual(fa.parkMarkersFrom(rows, { authorLogins: ['ai-teammate'] }), []);
+    });
+
+    test('coveringParkMarker: only a same-signature marker at or after the verdict covers it', function () {
+        var sig = 'wf | Setup | boom';
+        var other = 'wf | Rework Push | red';
+        var verdict = { signature: sig, at: '2026-11-05T12:00:00.000Z' };
+        function marker(signature, at) {
+            return { signature: signature, at: at, atMs: Date.parse(at) };
+        }
+        assert.ok(fa.coveringParkMarker([marker(sig, '2026-11-05T12:00:00.000Z')], verdict),
+            'the marker of THIS verdict covers it (the machine already parked this episode)');
+        assert.ok(fa.coveringParkMarker([marker(sig, '2026-11-05T14:00:00.000Z')], verdict),
+            'a later analysis of the same signature covers an older verdict');
+        assert.equal(fa.coveringParkMarker([marker(sig, '2026-11-05T10:00:00.000Z')], verdict), null,
+            'a marker from an OLDER analysis never covers a fresher verdict (the failed-human-fix re-park case)');
+        assert.equal(fa.coveringParkMarker([marker(other, '2026-11-06T10:00:00.000Z')], verdict), null,
+            "another signature's park never covers this episode (the new-episode re-park case)");
+        assert.equal(fa.coveringParkMarker([], verdict), null);
+        assert.equal(fa.coveringParkMarker(null, verdict), null);
+        assert.equal(fa.coveringParkMarker([marker(sig, '2026-11-05T12:00:00.000Z')], null), null);
+    });
+
+    test('an at-less verdict is covered by any same-signature marker; an at-less marker covers nothing', function () {
+        var sig = 'wf | Setup | boom';
+        var parseable = { signature: sig, at: '2026-11-05T12:00:00.000Z', atMs: Date.parse('2026-11-05T12:00:00.000Z') };
+        assert.ok(fa.coveringParkMarker([parseable], { signature: sig, at: null }),
+            'a verdict without a parseable at is maximally stale — any machine marker covers it');
+        assert.equal(fa.coveringParkMarker([{ signature: sig, at: null, atMs: NaN }],
+            { signature: sig, at: '2026-11-05T12:00:00.000Z' }), null,
+            'a marker without an at cannot prove it covers a later verdict');
+    });
+
+    test('AI free text renders escaped — markdown structure cannot be smuggled into the diagnostic', function () {
+        var hostile = fa.parkDiagnosticComment({
+            signature: VERDICT.signature,
+            classification: 'deterministic-infra',
+            suspected_root_cause: '# Heading\n[click me](https://evil.example) and `code`',
+            suggested_fix: 'run **rm -rf** / then > quote it',
+            evidence: []
+        }, 'sm:leg-blocked', MARKDOWN);
+        assert.ok(hostile.indexOf('# Heading') === -1, 'a heading cannot render');
+        assert.ok(hostile.indexOf('[click me](https://evil.example)') === -1, 'a link cannot render');
+        assert.ok(hostile.indexOf('\\[click me\\]\\(https://evil\\.example\\)') !== -1, 'the link survives escaped (verbatim on render)');
+        assert.ok(hostile.indexOf('\\*\\*rm \\-rf\\*\\*') !== -1, 'bold cannot render');
+        assert.ok(hostile.indexOf('\\`code\\`') !== -1, 'code spans cannot render');
+    });
+
+    test('evidence lines consisting only of backticks cannot close the fenced block', function () {
+        var body = fa.parkDiagnosticComment(Object.assign({}, VERDICT, {
+            evidence: ['normal log line', '```', 'npm ERR! 404']
+        }), 'sm:leg-blocked', MARKDOWN);
+        assert.equal(body.split('```').length - 1, 2,
+            'exactly one fenced block opens and closes — the hostile evidence line cannot break it');
     });
 
     test('the diagnostic degrades gracefully when verdict fields are absent', function () {

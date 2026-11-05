@@ -1,5 +1,5 @@
 /**
- * failureAnalyzer.js — gh-136, the AI failure-analyzer leg (pure half).
+ * failureAnalyzer.js — gh-1366, the AI failure-analyzer leg (pure half).
  *
  * The machine SM used to re-dispatch failed legs unconditionally. That is
  * correct for transient causes (network outages, runner glitches, API
@@ -56,7 +56,7 @@ var legFailureReport = require('./legFailureReport.js');
 // machine-validated structured AI output.
 var reviewVerdicts = require('./reviewVerdicts.js');
 
-// ── config (gh-136 AC7) ──────────────────────────────────────────────────
+// ── config (gh-1366 AC7) ──────────────────────────────────────────────────
 
 var DEFAULT_AFTER_FAILURES = 4;
 var DEFAULT_BLOCKED_LABEL = 'sm:leg-blocked';
@@ -69,6 +69,39 @@ function isPlainObject(value) {
 function isPositiveInt(value) {
     return typeof value === 'number' && isFinite(value) &&
         Math.floor(value) === value && value >= 1;
+}
+
+// Per-knob validators — each a small linear function; an explicit null
+// knob means unset (JSON-friendly) and takes the default.
+function afterFailuresOf(block) {
+    if (block.afterFailures === undefined || block.afterFailures === null) {
+        return DEFAULT_AFTER_FAILURES;
+    }
+    if (!isPositiveInt(block.afterFailures)) {
+        throw new Error('machineSm: failureAnalysis.afterFailures must be a positive integer, got: ' +
+            JSON.stringify(block.afterFailures));
+    }
+    return block.afterFailures;
+}
+
+function blockedLabelOf(block) {
+    if (block.blockedLabel === undefined || block.blockedLabel === null) {
+        return DEFAULT_BLOCKED_LABEL;
+    }
+    if (typeof block.blockedLabel !== 'string' || !block.blockedLabel.trim()) {
+        throw new Error('machineSm: failureAnalysis.blockedLabel must be a non-empty string, got: ' +
+            JSON.stringify(block.blockedLabel));
+    }
+    return block.blockedLabel.trim();
+}
+
+function backoffOf(block) {
+    if (block.backoff === undefined || block.backoff === null) return DEFAULT_BACKOFF;
+    if (typeof block.backoff !== 'number' || !isFinite(block.backoff) || block.backoff < 1) {
+        throw new Error('machineSm: failureAnalysis.backoff must be a number >= 1 (1 = off), got: ' +
+            JSON.stringify(block.backoff));
+    }
+    return block.backoff;
 }
 
 /**
@@ -86,34 +119,12 @@ function resolveFailureAnalysisConfig(block) {
         throw new Error('machineSm: failureAnalysis must be an object ' +
             '(missing config disables the feature silently; a malformed one is a hard error)');
     }
-    var cfg = {
+    return {
         enabled: true,
-        afterFailures: DEFAULT_AFTER_FAILURES,
-        blockedLabel: DEFAULT_BLOCKED_LABEL,
-        backoff: DEFAULT_BACKOFF
+        afterFailures: afterFailuresOf(block),
+        blockedLabel: blockedLabelOf(block),
+        backoff: backoffOf(block)
     };
-    if (block.afterFailures !== undefined && block.afterFailures !== null) {
-        if (!isPositiveInt(block.afterFailures)) {
-            throw new Error('machineSm: failureAnalysis.afterFailures must be a positive integer, got: ' +
-                JSON.stringify(block.afterFailures));
-        }
-        cfg.afterFailures = block.afterFailures;
-    }
-    if (block.blockedLabel !== undefined && block.blockedLabel !== null) {
-        if (typeof block.blockedLabel !== 'string' || !block.blockedLabel.trim()) {
-            throw new Error('machineSm: failureAnalysis.blockedLabel must be a non-empty string, got: ' +
-                JSON.stringify(block.blockedLabel));
-        }
-        cfg.blockedLabel = block.blockedLabel.trim();
-    }
-    if (block.backoff !== undefined && block.backoff !== null) {
-        if (typeof block.backoff !== 'number' || !isFinite(block.backoff) || block.backoff < 1) {
-            throw new Error('machineSm: failureAnalysis.backoff must be a number >= 1 (1 = off), got: ' +
-                JSON.stringify(block.backoff));
-        }
-        cfg.backoff = block.backoff;
-    }
-    return cfg;
 }
 
 // ── streak (reuses the issue-01 normalizer) ──────────────────────────────
@@ -140,7 +151,7 @@ function failureStreak(bodies) {
     };
 }
 
-// ── verdict consumption (gh-136 AC2) ─────────────────────────────────────
+// ── verdict consumption (gh-1366 AC2) ─────────────────────────────────────
 
 /**
  * How much of `signature`'s streak an analyzer verdict already consumed:
@@ -170,7 +181,7 @@ function effectiveStreakCount(streakCount, consumed) {
 
 /**
  * The analysis trigger — EXACTLY the threshold crossing. Strict equality
- * is the fail-safe (gh-136 AC5): when the analyzer leg crashes (no
+ * is the fail-safe (gh-1366 AC5): when the analyzer leg crashes (no
  * verdict → nothing consumed), the streak moves past the threshold,
  * analysisDue goes false, and blind retries continue — a broken analyzer
  * is never re-dispatched every tick and never stops retries.
@@ -187,9 +198,40 @@ var VERDICT_MARKER_SUFFIX = ' -->';
 var CLASSIFICATIONS = ['transient', 'deterministic-infra'];
 var ANALYZE_LEG = 'analyze';
 var VERDICT_SOURCE = 'failure-analyzer';
+var VERDICT_NOTE = '\uD83E\uDD16 Automated failure analysis. Please do not edit or reply.';
 // The park-diagnostic machine marker — the ONE-comment idempotency key.
 var PARK_MARKER_PREFIX = '<!-- dmtools:failure-block ';
 var PARK_MARKER_SUFFIX = ' -->';
+
+/** The postable shape: a string signature and an admitted classification. */
+function isPostableVerdictRecord(record) {
+    return !!record && !!record.signature && typeof record.signature === 'string' &&
+        CLASSIFICATIONS.indexOf(record.classification) !== -1;
+}
+
+function evidenceLinesOf(evidence) {
+    return Array.isArray(evidence)
+        ? evidence.map(function (line) { return String(line == null ? '' : line); })
+        : [];
+}
+
+/**
+ * The shared payload shaper — build and parse mirror ONE defaults ladder
+ * instead of two copies that can drift (the CRAP-lap extraction).
+ */
+function verdictPayloadOf(record) {
+    return {
+        signature: record.signature,
+        classification: record.classification,
+        confidence: typeof record.confidence === 'number' ? record.confidence : null,
+        suspected_root_cause: typeof record.suspected_root_cause === 'string' ? record.suspected_root_cause : '',
+        evidence: evidenceLinesOf(record.evidence),
+        suggested_fix: typeof record.suggested_fix === 'string' ? record.suggested_fix : '',
+        analyzedAtCount: isPositiveInt(record.analyzedAtCount) ? record.analyzedAtCount : null,
+        at: record.at || null,
+        source: record.source || VERDICT_SOURCE
+    };
+}
 
 /**
  * Builds the analyzer verdict comment body. record:
@@ -205,47 +247,18 @@ var PARK_MARKER_SUFFIX = ' -->';
  * never exist, same rule as the review verdicts.
  */
 function buildFailureVerdictComment(record) {
-    if (!record || !record.signature || typeof record.signature !== 'string') return null;
-    var classification = record.classification;
-    if (CLASSIFICATIONS.indexOf(classification) === -1) return null;
-    var evidence = Array.isArray(record.evidence)
-        ? record.evidence.map(function (line) { return String(line == null ? '' : line); })
-        : [];
-    var payload = {
-        signature: record.signature,
-        classification: classification,
-        confidence: typeof record.confidence === 'number' ? record.confidence : null,
-        suspected_root_cause: record.suspected_root_cause || '',
-        evidence: evidence,
-        suggested_fix: record.suggested_fix || '',
-        analyzedAtCount: isPositiveInt(record.analyzedAtCount) ? record.analyzedAtCount : null,
-        at: record.at || new Date().toISOString(),
-        source: record.source || VERDICT_SOURCE
-    };
-    var note = '\uD83E\uDD16 Automated failure analysis. Please do not edit or reply.';
+    if (!isPostableVerdictRecord(record)) return null;
+    var payload = verdictPayloadOf(record);
+    payload.at = payload.at || new Date().toISOString();
     return VERDICT_MARKER_PREFIX +
         JSON.stringify(payload, reviewVerdicts.markerSafeReplacer) +
-        VERDICT_MARKER_SUFFIX + '\n' + note;
+        VERDICT_MARKER_SUFFIX + '\n' + VERDICT_NOTE;
 }
 
 /** One marker payload → the verdict record, or null (strict admission). */
 function verdictFromPayload(parsed) {
-    if (!isPlainObject(parsed)) return null;
-    if (CLASSIFICATIONS.indexOf(parsed.classification) === -1) return null;
-    if (!parsed.signature || typeof parsed.signature !== 'string') return null;
-    return {
-        signature: parsed.signature,
-        classification: parsed.classification,
-        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : null,
-        suspected_root_cause: typeof parsed.suspected_root_cause === 'string' ? parsed.suspected_root_cause : '',
-        evidence: Array.isArray(parsed.evidence)
-            ? parsed.evidence.map(function (line) { return String(line == null ? '' : line); })
-            : [],
-        suggested_fix: typeof parsed.suggested_fix === 'string' ? parsed.suggested_fix : '',
-        analyzedAtCount: isPositiveInt(parsed.analyzedAtCount) ? parsed.analyzedAtCount : null,
-        at: parsed.at || null,
-        source: parsed.source || VERDICT_SOURCE
-    };
+    if (!isPostableVerdictRecord(parsed)) return null;
+    return verdictPayloadOf(parsed);
 }
 
 /**
@@ -277,60 +290,153 @@ function latestVerdictForSignature(verdicts, signature) {
     return latest;
 }
 
-// ── the park diagnostic (gh-136 AC3) ─────────────────────────────────────
+// ── the park diagnostic (gh-1366 AC3) ─────────────────────────────────────
 
 var PARK_EVIDENCE_MAX_LINES = 10;
+// Markdown-hostile metacharacters: AI-derived free text is DATA, not
+// protocol (the house rule). Every structural character is backslash-
+// escaped so headings, links, emphasis or code spans cannot be smuggled
+// into a machine-authored diagnostic; the rendered output stays verbatim
+// (escapes are invisible) and copy-paste stays byte-faithful.
+var PARK_MARKDOWN_METACHAR = /[\\`*_{}\[\]()#+\-.!|>~]/g;
+
+function parkEscapedText(text) {
+    return String(text == null ? '' : text).replace(PARK_MARKDOWN_METACHAR, '\\$&');
+}
+
+// A evidence line consisting ONLY of backticks would close the fenced
+// block early (a CommonMark closing fence is a bare backtick-run line).
+// A zero-width space breaks the run while staying visually identical —
+// the markerSafe trick applied to fences.
+function fenceSafeEvidenceLine(line) {
+    return /^`+$/.test(line) ? line.charAt(0) + '\u200b' + line.slice(1) : line;
+}
 
 /** Evidence tail for the diagnostic — bounded, machine-marker-safe. */
 function parkEvidenceBlock(evidence, m) {
     var lines = (Array.isArray(evidence) ? evidence : [])
         .map(function (line) { return String(line == null ? '' : line); })
         .filter(function (line) { return line.trim(); })
+        .map(fenceSafeEvidenceLine)
         .slice(-PARK_EVIDENCE_MAX_LINES);
     if (!lines.length) return '';
     return '\n' + m.bold('Evidence (last ' + lines.length + ' lines):') + '\n' +
         m.code(lines.join('\n')) + '\n';
 }
 
+/** The audit-reason confidence parenthetical — a missing confidence
+ *  degrades to omission (never the literal string "confidence null"). */
+function confidenceSuffix(confidence) {
+    return (typeof confidence === 'number') ? ' (confidence ' + confidence + ')' : '';
+}
+
+function parkMarkerLine(v) {
+    return PARK_MARKER_PREFIX +
+        JSON.stringify({ signature: v.signature || '', at: v.at || null }) +
+        PARK_MARKER_SUFFIX;
+}
+
+function parkHeadline(m) {
+    return m.h(3, '\uD83D\uDED1 AI failure analyzer — leg parked (deterministic infrastructure failure)');
+}
+
+function parkSummarySection(v, m) {
+    return 'The failure analyzer read ' + m.bold(String(v.analyzedAtCount || 'repeated') +
+        ' consecutive identical failure(s)') + ' and classified the cause as ' +
+        m.bold('deterministic-infra') + confidenceSuffix(v.confidence) +
+        ': re-dispatching would fail the same way again, ' +
+        'so re-dispatch is STOPPED for this issue.\n\n' +
+        m.bold('Failure signature:') + ' ' + m.inline(v.signature || 'unknown');
+}
+
+function parkOptionalSections(v, m) {
+    return (v.suspected_root_cause
+        ? m.bold('Suspected root cause:') + ' ' + parkEscapedText(v.suspected_root_cause) + '\n'
+        : '') +
+        parkEvidenceBlock(v.evidence, m) +
+        (v.suggested_fix
+            ? m.bold('Suggested fix:') + ' ' + parkEscapedText(v.suggested_fix) + '\n'
+            : '');
+}
+
+function parkResumeSection(label, m) {
+    return '\nRe-dispatch resumes when a human removes the ' + m.inline(label) +
+        ' label (or re-assigns the issue) — e.g. after applying the suggested fix.';
+}
+
 /**
- * The ONE park-diagnostic comment: root cause + evidence + suggested fix
- * + the resume gesture. The machine marker is the first line — the
- * SM's ONE-comment idempotency counts these markers, never text.
+ * The ONE park-diagnostic comment per episode: root cause + evidence +
+ * suggested fix + the resume gesture. The machine marker is the first
+ * line — the SM's episode idempotency keys on these markers, never text.
  * `m` is a commentMarkup-style flavor bag.
  */
 function parkDiagnosticComment(verdict, blockedLabel, m) {
     var v = verdict || {};
     var label = blockedLabel || DEFAULT_BLOCKED_LABEL;
-    var confidence = (typeof v.confidence === 'number')
-        ? ' (confidence ' + v.confidence + ')'
-        : '';
-    var body = PARK_MARKER_PREFIX +
-        JSON.stringify({ signature: v.signature || '', at: v.at || null }) +
-        PARK_MARKER_SUFFIX + '\n' +
-        m.h(3, '\uD83D\uDED1 AI failure analyzer — leg parked (deterministic infrastructure failure)') + '\n\n' +
-        'The failure analyzer read ' + m.bold(String(v.analyzedAtCount || 'repeated') +
-        ' consecutive identical failure(s)') + ' and classified the cause as ' +
-        m.bold('deterministic-infra') + confidence + ': re-dispatching would fail the same way again, ' +
-        'so re-dispatch is STOPPED for this issue.\n\n' +
-        m.bold('Failure signature:') + ' ' + m.inline(v.signature || 'unknown') + '\n' +
-        (v.suspected_root_cause ? m.bold('Suspected root cause:') + ' ' + v.suspected_root_cause + '\n' : '') +
-        parkEvidenceBlock(v.evidence, m) +
-        (v.suggested_fix ? m.bold('Suggested fix:') + ' ' + v.suggested_fix + '\n' : '') +
-        '\nRe-dispatch resumes when a human removes the ' + m.inline(label) +
-        ' label (or re-assigns the issue) — e.g. after applying the suggested fix.';
-    return body;
+    return parkMarkerLine(v) + '\n' +
+        parkHeadline(m) + '\n\n' +
+        parkSummarySection(v, m) + '\n' +
+        parkOptionalSections(v, m) +
+        parkResumeSection(label, m);
 }
 
-/** How many park diagnostics this issue already carries (marker-counted). */
-function countParkComments(comments) {
-    var list = Array.isArray(comments) ? comments : [];
-    var count = 0;
+// ── park markers: machine-gated, episode-scoped idempotency ──────────────
+
+/**
+ * One park-marker payload → the episode record: the parked signature and
+ * the analysis identity (`at` — the parked verdict's analysis time). The
+ * payload is written by parkDiagnosticComment; anything else is noise.
+ */
+function parkMarkerFromPayload(parsed) {
+    if (!isPlainObject(parsed)) return null;
+    if (!parsed.signature || typeof parsed.signature !== 'string') return null;
+    return {
+        signature: parsed.signature,
+        at: typeof parsed.at === 'string' ? parsed.at : null
+    };
+}
+
+/**
+ * ALL trusted park markers from a provider comment payload. Fail closed
+ * (the gh-807 rule, same discipline as the verdict markers): the marker
+ * format is public, so a forged one-line marker from any comment-capable
+ * identity must never influence the park gate — without a machine-identity
+ * allowlist NOTHING is trusted. Malformed payloads are dropped, never
+ * thrown. Returns records oldest-first (atMs stamped from `at`).
+ */
+function parkMarkersFrom(comments, opts) {
+    return reviewVerdicts.parseMarkerComments(comments, opts,
+        PARK_MARKER_PREFIX, PARK_MARKER_SUFFIX, parkMarkerFromPayload, true);
+}
+
+// The verdict's analysis identity in ms — an unparseable/absent `at`
+// sinks to -1 (the markerRecordComparator convention): maximally stale,
+// so any trusted machine marker of the signature covers it.
+function verdictAtMs(verdict) {
+    var t = Date.parse(verdict && verdict.at);
+    return isNaN(t) ? -1 : t;
+}
+
+/**
+ * Does this park marker cover the verdict — i.e. has the machine already
+ * parked THIS episode? Same signature AND the marker's analysis time at
+ * or after the verdict's: the marker was written in response to this
+ * verdict or a superseding analysis of the same streak. A marker from an
+ * OLDER analysis never covers a fresher verdict (the failed-human-fix
+ * re-park case), and another signature's marker never covers at all.
+ */
+function parkMarkerCoversVerdict(marker, verdict) {
+    if (!marker || !verdict || marker.signature !== verdict.signature) return false;
+    return !isNaN(marker.atMs) && marker.atMs >= verdictAtMs(verdict);
+}
+
+/** The first marker covering the verdict, or null (episode not parked). */
+function coveringParkMarker(markers, verdict) {
+    var list = Array.isArray(markers) ? markers : [];
     for (var i = 0; i < list.length; i++) {
-        var body = String((list[i] && (list[i].body || list[i])) || '');
-        var start = body.indexOf(PARK_MARKER_PREFIX);
-        if (start !== -1 && body.indexOf(PARK_MARKER_SUFFIX, start) !== -1) count++;
+        if (parkMarkerCoversVerdict(list[i], verdict)) return list[i];
     }
-    return count;
+    return null;
 }
 
 module.exports = {
@@ -352,5 +458,8 @@ module.exports = {
     parseFailureVerdicts: parseFailureVerdicts,
     latestVerdictForSignature: latestVerdictForSignature,
     parkDiagnosticComment: parkDiagnosticComment,
-    countParkComments: countParkComments
+    confidenceSuffix: confidenceSuffix,
+    parkMarkersFrom: parkMarkersFrom,
+    parkMarkerCoversVerdict: parkMarkerCoversVerdict,
+    coveringParkMarker: coveringParkMarker
 };
