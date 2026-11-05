@@ -16,6 +16,10 @@
 // ── module loading (every hoisted require mapped — gh-823) ──────────────────
 
 var _mods = {};
+function machineAuthorMod() {
+    if (!_mods.ma) _mods.ma = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    return _mods.ma;
+}
 function reviewVerdictsMod() {
     if (!_mods.rv) {
         _mods.rv = loadModule('js/common/reviewVerdicts.js', makeRequire({
@@ -23,10 +27,6 @@ function reviewVerdictsMod() {
         }), {});
     }
     return _mods.rv;
-}
-function machineAuthorMod() {
-    if (!_mods.ma) _mods.ma = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
-    return _mods.ma;
 }
 function findingRegistryMod() {
     if (!_mods.fr) {
@@ -81,8 +81,8 @@ function mcpParseMod() {
 }
 
 // The configLoader dependency is stubbed per scenario: machineLoginsOf reads
-// the per-repo machineAuthor knob through it (fail closed to jobParams only
-// when the load fails — the stub's job in most suites).
+// the per-repo machineAuthor knob through it (failing closed to jobParams
+// only when the load throws — the stub's job in most suites).
 function mergeBackstopMod(configLoaderStub) {
     return loadModule('js/common/mergeBackstop.js', makeRequire({
         './reviewVerdicts.js': reviewVerdictsMod(),
@@ -123,7 +123,6 @@ function ghThread(over) {
     return t;
 }
 
-function bodyOf(t) { return t.comments.nodes[0].body; }
 function importantBody(claim) {
     return '⚠️ severity: IMPORTANT — ' + (claim || 'nothing validates the merge state token');
 }
@@ -137,43 +136,67 @@ function nitBody(claim) {
     return '🪶 severity: NIT — ' + (claim || 'typo in the doc comment');
 }
 
-/** A scripted github bridge: every primitive recorded, payloads served. */
-function ioFixture(over) {
+/**
+ * A scripted github bridge: every primitive recorded (rec.order keeps the
+ * GLOBAL call order across primitives so the ticket's file-then-resolve
+ * order is assertable), payloads served, failures injectable per primitive.
+ * opts:
+ *   threads           — GraphQL reviewThread nodes served by getThreads
+ *   noThreads         — true = the threads primitive is ABSENT (capability miss)
+ *   threadsThrow      — the threads read throws (fail-closed read scenario)
+ *   commentsThrow     — the comments read throws (ledger-clobber scenario)
+ *   createIssueThrow  — the digest filing throws (record-keeping failure)
+ *   resolveFailIds    — thread ids whose resolve throws (per-thread failure)
+ *   existingIssues    — open [debt] issues the search probe returns
+ */
+function ioFixture(opts) {
     var f = {
-        threads: [],            // GraphQL reviewThread nodes
-        comments: [],           // PR comment rows [{body, user:{login}}]
-        existingIssues: [],     // open [debt] issues already filed
-        fail: {},               // primitive -> error message (the call throws)
-        threads: null,          // set true = the primitive is ABSENT (capability miss)
-        threadsThrow: null,     // set to a message = the threads read throws (fail-closed read)
+        threads: [],
+        noThreads: false,
+        threadsThrow: null,
         commentsThrow: null,
-        createIssueThrow: null
+        createIssueThrow: null,
+        resolveFailIds: [],
+        existingIssues: []
     };
-    for (var k in (over || {})) f[k] = over[k];
-    var rec = { gets: [], commentGets: [], posts: [], searches: [], issues: [], resolves: [], replies: [] };
+    for (var k in (opts || {})) f[k] = opts[k];
+    var rec = { order: [], issues: [], resolves: [], replies: [], posts: [], searches: [] };
+    function mark(kind) { rec.order.push(kind); }
     var io = {
-        getThreads: f.threadsPrimitive === true ? undefined : function (a) {
-            rec.gets.push(a);
+        getThreads: f.noThreads ? undefined : function () {
+            mark('threads');
             if (f.threadsThrow) throw new Error(f.threadsThrow);
-            return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: f.threads } } } } });
+            return JSON.stringify({ data: { repository: { pullRequest:
+                { reviewThreads: { nodes: f.threads } } } } });
         },
-        getComments: function (a) {
-            rec.commentGets.push(a);
+        getComments: function () {
+            mark('comments');
             if (f.commentsThrow) throw new Error(f.commentsThrow);
-            return JSON.stringify(f.comments);
+            return '[]';
         },
-        createComment: function (a) { rec.posts.push(a); return '{}'; },
-        searchIssues: function (a) {
-            rec.searches.push(a);
-            return JSON.stringify({ items: f.existingIssues });
-        },
+        createComment: function (a) { mark('post'); rec.posts.push(a); return '{}'; },
         createIssue: function (a) {
+            mark('issue');
             rec.issues.push(a);
             if (f.createIssueThrow) throw new Error(f.createIssueThrow);
             return JSON.stringify({ number: 500 + rec.issues.length, title: a.title });
         },
-        resolveThread: function (a) { rec.resolves.push(a); return '{}'; },
-        replyToThread: function (a) { rec.replies.push(a); return '{}'; }
+        searchIssues: function (a) {
+            mark('search');
+            rec.searches.push(a);
+            // reality: an issue created by an earlier run IS searchable
+            var items = f.existingIssues.concat(rec.issues.map(function (x, i) {
+                return { number: 500 + i + 1, title: x.title, body: x.body };
+            }));
+            return JSON.stringify({ items: items });
+        },
+        resolveThread: function (a) {
+            mark('resolve');
+            if (f.resolveFailIds.indexOf(String(a.threadId)) !== -1) throw new Error('422 ' + a.threadId);
+            rec.resolves.push(a);
+            return '{}';
+        },
+        replyToThread: function (a) { mark('reply'); rec.replies.push(a); return '{}'; }
     };
     return { io: io, rec: rec, fixture: f };
 }
@@ -186,7 +209,7 @@ function defaultInput(over) {
     var inp = {
         prNumber: 42,
         prTitle: 'Backstop replay PR',
-        headSha: 'deadbeefcafe',
+        headSha: 'deadbeefcafe0123456789abcdef',
         logins: ALLOW,
         nowIso: NOW
     };
@@ -205,9 +228,8 @@ function twoMachineImportantThreads() {
 }
 
 function ledgerMarkerOf(body) {
-    var m = reviewVerdictsMod().extractMarkerJson(body,
+    return reviewVerdictsMod().extractMarkerJson(body,
         reviewDebtLedgerMod().MARKER_PREFIX, reviewDebtLedgerMod().MARKER_SUFFIX);
-    return m;
 }
 
 // ── the counter (classifyThreads) ────────────────────────────────────────────
@@ -266,11 +288,11 @@ suite('mergeBackstop — classifyThreads (the counter)', function () {
         assert.equal(cls.counts.machine, 1);
     });
 
-    test('gh-1025: the App [bot] suffix matches the bare knob entry on both sides', function () {
+    test('gh-1025: the App [bot] suffix matches the bare knob entry; a different bot never matches', function () {
         var m = mergeBackstopMod();
-        var rows = [{ threadId: 'T1', resolved: false, author: MACHINE + '[bot]',
-                      body: importantBody(), path: 'a.js', line: 1 }];
-        assert.equal(m.classifyThreads(rows, ALLOW).counted.length, 1,
+        assert.equal(m.classifyThreads([{ threadId: 'T1', resolved: false,
+            author: MACHINE + '[bot]', body: importantBody(), path: 'a.js', line: 1 }],
+            ALLOW).counted.length, 1,
             'knob lists the bare login, the API reports the [bot] identity');
         assert.equal(m.classifyThreads([{ threadId: 'T2', resolved: false,
             author: 'someone-else[bot]', body: importantBody(), path: 'a.js', line: 2 }],
@@ -338,8 +360,7 @@ suite('mergeBackstop — buildDigestIssue', function () {
 
     test('title: `[debt] <PR title>`', function () {
         var d = digestParts();
-        var issue = d.mod.buildDigestIssue(d.parts);
-        assert.equal(issue.title, '[debt] Backstop replay PR');
+        assert.equal(d.mod.buildDigestIssue(d.parts).title, '[debt] Backstop replay PR');
     });
 
     test('body carries the review-debt-ledger machine marker with the counted findings', function () {
@@ -349,7 +370,7 @@ suite('mergeBackstop — buildDigestIssue', function () {
         assert.ok(marker, 'the body opens with the dmtools:review-debt-ledger marker');
         assert.equal(marker.findings.length, 2, 'both counted threads are ledger findings');
         assert.equal(marker.findings[0].originPr, 42);
-        assert.ok(marker.findings[0].id, 'the gh-1332 identity is stamped (part 3 dedup key)');
+        assert.ok(marker.findings[0].id, 'the gh-1332 identity is stamped (the part 3 dedup key)');
     });
 
     test('per-thread rows: severity, path:line, one-line summary, permalink, review run', function () {
@@ -363,10 +384,11 @@ suite('mergeBackstop — buildDigestIssue', function () {
         assert.contains(issue.body, '#discussion_r9002');
         assert.contains(issue.body, 'pr_review.json @ 2026-11-04T10:00:00Z — APPROVE on head deadbee');
         assert.contains(issue.body, 'nothing validates the merge state token', 'the one-line summary');
-        assert.notContains(issue.body, 'severity: IMPORTANT —', 'the severity line is stripped from the summary');
+        assert.contains(issue.body, '| nothing validates the merge state token |',
+            'the summary cell carries no leading severity line (the ledger claim keeps the raw evidence)');
     });
 
-    test('human threads are listed `open (human)` and never as deferred', function () {
+    test('human threads are listed `open (human)` and never as deferred findings', function () {
         var d = digestParts();
         var issue = d.mod.buildDigestIssue(d.parts);
         assert.contains(issue.body, 'open (human)');
@@ -378,11 +400,10 @@ suite('mergeBackstop — buildDigestIssue', function () {
 
     test('no human threads: the human section is omitted', function () {
         var d = digestParts({ human: [] });
-        var issue = d.mod.buildDigestIssue(d.parts);
-        assert.notContains(issue.body, 'open (human)');
+        assert.notContains(d.mod.buildDigestIssue(d.parts).body, 'open (human)');
     });
 
-    test('digest body is marker-safe: a `-->` in a claim cannot break the ledger marker', function () {
+    test('marker safety: a `-->` in a claim cannot break the ledger marker', function () {
         var m = mergeBackstopMod();
         var counted = m.classifyThreads([
             { threadId: 'PRT_1', rootCommentId: 9001, resolved: false, author: MACHINE,
@@ -398,16 +419,15 @@ suite('mergeBackstop — buildDigestIssue', function () {
         assert.ok(marker && marker.findings.length === 1, 'the marker still parses');
     });
 
-    test('ledger dedup: the same finding counted twice stays ONE ledger entry (occurrences 2)', function () {
+    test('ledger dedup: the same finding counted twice stays ONE entry (occurrences 2)', function () {
         var m = mergeBackstopMod();
         var ctx = { prNumber: 42, nowIso: NOW, owner: OWNER, name: NAME };
-        var counted = [
+        var l = m.appendCountedToLedger(null, [
             { threadId: 'A', rootCommentId: 1, severity: 'IMPORTANT', path: 'a.js', line: 1,
               claim: 'nothing validates the merge state token' },
             { threadId: 'B', rootCommentId: 2, severity: 'IMPORTANT', path: 'a.js', line: 9,
               claim: 'Nothing validates  the merge-state token!' }
-        ];
-        var l = m.appendCountedToLedger(null, counted, ctx);
+        ], ctx);
         assert.equal(l.findings.length, 1, 'the paraphrase is the same #1332 identity — deduped');
         assert.equal(l.findings[0].occurrences, 2);
         assert.equal(l.findings[0].originThread, 'B', 'the newest thread pointer wins');
@@ -434,25 +454,25 @@ suite('mergeBackstop — reviewRunRefOf, deferredAck, digest probe', function ()
     test('reviewRunRef reads the newest verdict record on the head', function () {
         var m = mergeBackstopMod();
         var marker = reviewVerdictsMod().MARKER_PREFIX + JSON.stringify({
-            head: 'deadbeefcafe', verdict: 'APPROVE', blocking: 0, important: 2,
+            head: 'deadbeefcafe0123456789abcdef', verdict: 'APPROVE', blocking: 0, important: 2,
             suggestions: 0, nits: 0, digest: 0, at: '2026-11-04T10:00:00Z', source: 'pr_review.json'
         }) + reviewVerdictsMod().MARKER_SUFFIX;
         var comments = [{ body: marker, user: { login: MACHINE } }];
         var ref = m.reviewRunRefOf(comments, 'deadbeefcafe0123456789abcdef', ALLOW);
         assert.contains(ref, 'pr_review.json');
         assert.contains(ref, 'APPROVE');
-        assert.contains(ref, 'deadbeef');
+        assert.contains(ref, 'deadbee');
     });
 
     test('no verdict record on the head: the reference degrades to unknown', function () {
         var m = mergeBackstopMod();
-        var ref = m.reviewRunRefOf([{ body: 'not a marker', user: { login: MACHINE } }], 'deadbeef', ALLOW);
+        var ref = m.reviewRunRefOf([{ body: 'not a marker', user: { login: MACHINE } }],
+            'deadbeefcafe0123456789abcdef', ALLOW);
         assert.contains(ref, 'unknown review run');
     });
 
     test('the ack carries the canonical machine-parsed defered tag (reviewDispositions.TAGS)', function () {
-        var m = mergeBackstopMod();
-        var ack = m.deferredAck(512);
+        var ack = mergeBackstopMod().deferredAck(512);
         assert.contains(ack, 'defered: #512');
         assert.deepEqual(reviewDispositionsMod().parseDispositionTag(ack),
             { tag: 'defered', value: '#512' }, 'the tag round-trips through the part-3 parser');
@@ -460,26 +480,26 @@ suite('mergeBackstop — reviewRunRefOf, deferredAck, digest probe', function ()
 
     test('findExistingDigest reuses the open [debt] issue whose ledger marker carries this PR', function () {
         var m = mergeBackstopMod();
-        var marker = reviewDebtLedgerMod().buildDebtMarker(
-            m.appendCountedToLedger(null, [
-                { threadId: 'A', severity: 'IMPORTANT', path: 'a.js', claim: 'x' }
-            ], { prNumber: 42, nowIso: NOW }));
+        var rdl = reviewDebtLedgerMod();
+        var mine = rdl.buildDebtMarker(m.appendCountedToLedger(null, [
+            { threadId: 'A', severity: 'IMPORTANT', path: 'a.js', claim: 'x' }
+        ], { prNumber: 42, nowIso: NOW }));
+        var other = rdl.buildDebtMarker(m.appendCountedToLedger(null, [
+            { threadId: 'B', severity: 'IMPORTANT', path: 'b.js', claim: 'y' }
+        ], { prNumber: 43, nowIso: NOW }));
         var hit = m.findExistingDigest({ items: [
             { number: 7, title: 'unrelated' },
-            { number: 512, title: '[debt] Backstop replay PR', body: 'note\n' + marker },
-            { number: 513, title: '[debt] other PR', body: 'note\n' + reviewDebtLedgerMod().buildDebtMarker(
-                m.appendCountedToLedger(null, [
-                    { threadId: 'B', severity: 'IMPORTANT', path: 'b.js', claim: 'y' }
-                ], { prNumber: 43, nowIso: NOW })) }
+            { number: 512, title: '[debt] Backstop replay PR', body: 'note\n' + mine },
+            { number: 513, title: '[debt] other PR', body: 'note\n' + other }
         ] }, 42);
         assert.equal(hit.number, 512);
         assert.equal(hit.reused, true);
         assert.equal(m.findExistingDigest({ items: [{ number: 8, title: '[debt] no marker' }] }, 42), null);
+        assert.equal(m.findExistingDigest({ items: [] }, 42), null);
     });
 
     test('buildDebtSearchQuery scopes the probe to open [debt] issues of the repo', function () {
-        var m = mergeBackstopMod();
-        assert.equal(m.buildDebtSearchQuery('ex', 'repo'),
+        assert.equal(mergeBackstopMod().buildDebtSearchQuery('ex', 'repo'),
             'repo:ex/repo is:issue is:open in:title "[debt]"');
     });
 
@@ -490,8 +510,8 @@ suite('mergeBackstop — reviewRunRefOf, deferredAck, digest probe', function ()
         var failing = mergeBackstopMod({ loadProjectConfig: function () { throw new Error('boom'); } });
         assert.deepEqual(failing.machineLoginsOf({ machineAuthor: 'a' }), ['a'],
             'a config load failure falls back to jobParams only (never throws)');
-        var none = mergeBackstopMod();
-        assert.deepEqual(none.machineLoginsOf({}), [], 'unconfigured = the empty list (fail closed)');
+        assert.deepEqual(mergeBackstopMod().machineLoginsOf({}), [],
+            'unconfigured = the empty list (fail closed)');
     });
 });
 
@@ -507,30 +527,32 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.equal(f.rec.issues[0].title, '[debt] Backstop replay PR');
         assert.equal(out.digest, 501);
         assert.equal(out.resolved, 2, 'both counted threads resolve');
+        assert.equal(out.resolveFailures, 0);
         assert.equal(f.rec.resolves.length, 2);
         assert.equal(f.rec.replies.length, 2);
         assert.equal(f.rec.replies[0].inReplyToId, '9001', 'the ack rides the root comment');
         assert.contains(f.rec.replies[0].text, 'defered: #501');
-        assert.deepEqual(m_reviewDispositions().parseDispositionTag(f.rec.replies[0].text),
+        assert.deepEqual(reviewDispositionsMod().parseDispositionTag(f.rec.replies[0].text),
             { tag: 'defered', value: '#501' });
         assert.equal(out.ledgerStampPosted, true, 'the refreshed ledger is stamped on the PR');
         assert.equal(f.rec.posts.length, 1, 'one ledger stamp comment');
         var marker = ledgerMarkerOf(f.rec.posts[0].body);
         assert.equal(marker.findings.length, 2, 'both findings are in the ledger');
-        // file order per the ticket: digest issue BEFORE the resolves
-        assert.ok(f.rec.issuesCalledBeforeResolve !== undefined ||
-            f.rec.issues.length > 0, 'the digest filing precedes the resolve loop');
+        // ticket order: the digest issue files BEFORE the resolve loop
+        assert.ok(f.rec.order.indexOf('issue') < f.rec.order.indexOf('resolve'),
+            'filing precedes resolving');
     });
 
     test('AC1b ledger dedup on a repeated finding: a second run over the same identity refreshes', function () {
         var m = mergeBackstopMod();
-        var f = ioFixture({ threads: twoMachineImportantThreads(), resolveFails: { 'PRT_1': true } });
-        run(m, f); // first run: PRT_1 resolve fails — it stays open
-        assert.equal(f.rec.resolves.length, 1, 'only PRT_2 resolved');
-        assert.equal(out_failuresOf(f), 1, 'the failure is counted, never thrown');
-        // second run (next tick): both threads still open — the ledger entry refreshes
-        var out2 = run(m, f);
-        assert.equal(out2.digestReused, false, 'no digest was filed by the failed run — it files now');
+        var f = ioFixture({ threads: twoMachineImportantThreads(), resolveFailIds: ['PRT_1'] });
+        var out1 = run(m, f);
+        assert.equal(out1.resolved, 1, 'only PRT_2 resolved');
+        assert.equal(out1.resolveFailures, 1, 'the failure is counted, never thrown');
+        var out2 = run(m, f, defaultInput({ nowIso: '2026-11-06T12:00:00.000Z' }));
+        assert.equal(out2.digestReused, true,
+            'the digest from the first run exists and is reused, not re-filed');
+        assert.equal(f.rec.issues.length, 1, 'still exactly ONE digest issue for the PR');
         var marker = ledgerMarkerOf(f.rec.posts[f.rec.posts.length - 1].body);
         assert.equal(marker.findings.length, 2, 'still exactly TWO findings — no duplicates');
         var refreshed = marker.findings.filter(function (x) { return x.originThread === 'PRT_1'; })[0];
@@ -550,6 +572,7 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.equal(f.rec.issues.length, 0, 'no digest issue');
         assert.equal(f.rec.resolves.length, 0, 'no resolves');
         assert.equal(f.rec.posts.length, 0, 'no ledger stamp');
+        assert.equal(f.rec.order.indexOf('issue'), -1);
     });
 
     test('AC3 human-thread replay: humans listed open (human), never resolved', function () {
@@ -567,15 +590,16 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.contains(body, 'open (human)');
         assert.contains(body, 'a human finding');
         assert.equal(f.rec.resolves.length, 1, 'only the machine thread resolves');
-        var marker = ledgerMarkerOf(body);
-        assert.equal(marker.findings.length, 1, 'the human thread never enters the ledger');
+        assert.equal(ledgerMarkerOf(body).findings.length, 1,
+            'the human thread never enters the ledger');
     });
 
     test('digest reuse: an open [debt] issue already carrying this PR is reused, not re-filed', function () {
         var m = mergeBackstopMod();
         var marker = reviewDebtLedgerMod().buildDebtMarker(
             m.appendCountedToLedger(null, [
-                { threadId: 'OLD', severity: 'IMPORTANT', path: 'a.js', claim: 'nothing validates the merge state token' }
+                { threadId: 'OLD', severity: 'IMPORTANT', path: 'a.js',
+                  claim: 'nothing validates the merge state token' }
             ], { prNumber: 42, nowIso: '2026-11-01T00:00:00.000Z' }));
         var f = ioFixture({ threads: twoMachineImportantThreads(),
             existingIssues: [{ number: 512, title: '[debt] Backstop replay PR', body: 'x\n' + marker }] });
@@ -584,10 +608,11 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.equal(out.digest, 512);
         assert.equal(out.digestReused, true);
         assert.equal(out.resolved, 2);
-        assert.contains(f.rec.replies[0].text, 'defered: #512', 'the acks point at the existing digest');
+        assert.contains(f.rec.replies[0].text, 'defered: #512',
+            'the acks point at the existing digest');
     });
 
-    test('record-keeping failure: a digest filing failure THROWS — the merge is deferred, nothing resolves', function () {
+    test('record-keeping failure: a digest filing failure THROWS — merge deferred, nothing resolves', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: twoMachineImportantThreads(), createIssueThrow: '422' });
         var threw = false;
@@ -598,10 +623,11 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
 
     test('record-keeping failure: a broken threads read throws (fail-closed read — no blind merges)', function () {
         var m = mergeBackstopMod();
-        var f = ioFixture({ threads: [], threadsThrow: '502' });
+        var f = ioFixture({ threadsThrow: '502' });
         var threw = false;
         try { run(m, f); } catch (e) { threw = true; }
-        assert.equal(threw, true, 'blindness was the #1319 pathology — a broken read never reads as clean');
+        assert.equal(threw, true,
+            'blindness was the #1319 pathology — a broken read never reads as clean');
         assert.equal(f.rec.issues.length, 0);
     });
 
@@ -617,7 +643,7 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
 
     test('capability miss: no threads primitive skips the backstop (merge as today)', function () {
         var m = mergeBackstopMod();
-        var f = ioFixture({ threadsPrimitive: true });
+        var f = ioFixture({ noThreads: true });
         var out = run(m, f);
         assert.equal(out.skipped, 'no-thread-primitive');
         assert.equal(out.counted.length, 0);
@@ -626,12 +652,7 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
 
     test('a resolve failure is per-thread: the rest resolve, the failed one stays open', function () {
         var m = mergeBackstopMod();
-        var f = ioFixture({ threads: twoMachineImportantThreads() });
-        f.io.resolveThread = function (a) {
-            f.rec.resolves.push(a);
-            if (a.threadId === 'PRT_1') throw new Error('422');
-            return '{}';
-        };
+        var f = ioFixture({ threads: twoMachineImportantThreads(), resolveFailIds: ['PRT_1'] });
         var out = run(m, f);
         assert.equal(out.resolved, 1);
         assert.equal(out.resolveFailures, 1);
@@ -661,19 +682,13 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
     test('outcomeLines: one observable line per replay shape', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: twoMachineImportantThreads() });
-        var out = run(m, f);
-        var line = m.outcomeLines(out)[0];
-        assert.contains(line, '#42');
-        assert.contains(line, '2');
-        assert.contains(line, '#501');
-        var clean = ioFixture({ threads: [] });
-        var cleanOut = run(m, clean);
+        var fired = m.outcomeLines(run(m, f))[0];
+        assert.contains(fired, '#42');
+        assert.contains(fired, '2');
+        assert.contains(fired, '#501');
+        var cleanOut = run(m, ioFixture({ threads: [] }));
         assert.contains(m.outcomeLines(cleanOut)[0], 'no unresolved machine-owned');
-        var skip = ioFixture({ threadsPrimitive: true });
-        assert.contains(m.outcomeLines(run(m, skip))[0], 'skipped');
+        var skipOut = run(m, ioFixture({ noThreads: true }));
+        assert.contains(m.outcomeLines(skipOut)[0], 'skipped');
     });
 });
-
-// m_reviewDispositions / failure counters helpers used inside the suites above.
-function m_reviewDispositions() { return reviewDispositionsMod(); }
-function out_failuresOf(f) { return f.lastOutcomeResolveFailures; }

@@ -137,6 +137,28 @@ function firstCommentOf(node) {
 }
 
 /**
+ * One review-thread row straight from a GraphQL reviewThread node — the
+ * canonical row shape both consumers of the node shapes take (the
+ * smProvider reviewThreadList and the gh-1353 merge-backstop counter):
+ * the resolve id, the reply anchor (the root comment's REST databaseId),
+ * the root author/body (the machine-auth and severity inputs), the
+ * resolved flag and the file location.
+ */
+function threadRowOf(node) {
+    var t = node || {};
+    var first = firstCommentOf(t);
+    return {
+        threadId: t.id || null,
+        rootCommentId: first.databaseId || null,
+        resolved: t.isResolved === true,
+        author: (first.author && (first.author.login || first.author.name)) || '',
+        body: first.body || '',
+        path: t.path || null,
+        line: (t.line === 0 || t.line) ? t.line : null
+    };
+}
+
+/**
  * The root-comment holder of a conversation — {} when there is none.
  */
 function conversationRootOf(conversation) {
@@ -522,6 +544,7 @@ function collectThreadInventory(conversations, graphqlRaw) {
 
 module.exports = {
     parseGraphQLNodes: parseGraphQLNodes,
+    threadRowOf: threadRowOf,
     conversationRootId: conversationRootId,
     buildFromGraphQL: buildFromGraphQL,
     buildFromConversations: buildFromConversations,
