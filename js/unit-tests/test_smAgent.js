@@ -69,6 +69,7 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
             './common/autoStart.js': unreadable,
             './common/commentMarkup.js': unreadable,
             './common/tcRunRegistry.js': unreadable,
+            './common/ledgerCore.js': unreadable,
             './common/tcMaintenanceLedger.js': unreadable,
             './common/tcAlternation.js': unreadable,
             './common/tcTriage.js': unreadable,
@@ -105,7 +106,8 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
         './common/tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
             './reviewVerdicts.js': reviewVerdictsReal()
         }), {}),
-        './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})), 
+        './common/ledgerCore.js': LEDGERCORE,
+        './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
             './reviewVerdicts.js': reviewVerdictsReal()
         }), {}),
         './common/tcAlternation.js': loadModule('js/common/tcAlternation.js', makeRequire({
