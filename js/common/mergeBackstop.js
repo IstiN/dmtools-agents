@@ -72,6 +72,10 @@ var threadInventory = require('./reviewThreadInventory.js');
 var mcpParse = require('./mcpParse.js');
 var configLoader = require('../configLoader.js');
 
+/* global github_get_pr_review_threads, github_get_pr_comments,
+   github_create_comment, github_search_issues, github_create_issue,
+   github_resolve_pr_thread, github_reply_to_pr_thread */
+
 // The backstop threshold (epic §4: "severity >= IMPORTANT" / ">=⚠️") —
 // an invariant, not a knob: BLOCKING and IMPORTANT count, everything
 // below is the triage path's business.

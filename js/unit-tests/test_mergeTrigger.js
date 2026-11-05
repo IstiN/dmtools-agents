@@ -70,27 +70,37 @@ function bsThreadInventory() {
     }
     return _bsMods.ti;
 }
-function mergeBackstopModule() {
-    if (!_bsMods.mb) {
-        _bsMods.mb = loadModule('js/common/mergeBackstop.js', makeRequire({
-            './reviewVerdicts.js': bsReviewVerdicts(),
-            './findingRegistry.js': bsFindingRegistry(),
-            './reviewDebtLedger.js': bsReviewDebtLedger(),
-            './reviewDispositions.js': bsReviewDispositions(),
-            './machineAuthor.js': bsMachineAuthor(),
-            './reviewThreadInventory.js': bsThreadInventory(),
-            './mcpParse.js': mcpParseModule,
-            '../configLoader.js': { loadProjectConfig: function () { return null; } }
-        }), {});
-    }
-    return _bsMods.mb;
+function mergeBackstopModuleFor(mods) {
+    // gh-1353: the mergeBackstop instance must SEE the same bridge tools the
+    // mergeTrigger fixture serves (one engine-global set in production). An
+    // unmocked name lands undefined → githubBridgeIo maps null (capability
+    // miss), never the harness's network-guard thrower.
+    var bridge = mods || {};
+    return loadModule('js/common/mergeBackstop.js', makeRequire({
+        './reviewVerdicts.js': bsReviewVerdicts(),
+        './findingRegistry.js': bsFindingRegistry(),
+        './reviewDebtLedger.js': bsReviewDebtLedger(),
+        './reviewDispositions.js': bsReviewDispositions(),
+        './machineAuthor.js': bsMachineAuthor(),
+        './reviewThreadInventory.js': bsThreadInventory(),
+        './mcpParse.js': mcpParseModule,
+        '../configLoader.js': { loadProjectConfig: function () { return null; } }
+    }), {
+        github_get_pr_review_threads: bridge.github_get_pr_review_threads,
+        github_get_pr_comments: bridge.github_get_pr_comments,
+        github_create_comment: bridge.github_create_comment,
+        github_search_issues: bridge.github_search_issues,
+        github_create_issue: bridge.github_create_issue,
+        github_resolve_pr_thread: bridge.github_resolve_pr_thread,
+        github_reply_to_pr_thread: bridge.github_reply_to_pr_thread
+    });
 }
 
 function loadMergeTrigger(mods) {
     return loadModule('js/mergeTrigger.js',
         makeRequire({
             './common/mcpParse.js': mcpParseModule,
-            './common/mergeBackstop.js': mergeBackstopModule()
+            './common/mergeBackstop.js': mergeBackstopModuleFor(mods)
         }), mods);
 }
 
@@ -1020,9 +1030,11 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
             threadsByNumber: { 12: [ghThread('PRT_1', importantBody('machine finding'))] },
             createIssueThrows: '422'
         });
-        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
-        assert.equal(result.failed, 1, 'the item counts failed — the run throws, the sweep continues');
-        assert.equal(result.merged, 0);
+        var err = null;
+        try { run(fx, { repo: 'a/b', machineAuthor: BOT }); } catch (e) { err = e; }
+        assert.ok(err, 'a nonzero failed count throws — the JSRunner surfaces the job failure');
+        assert.contains(err.message, 'failed=1');
+        assert.contains(err.message, 'merged=0');
         assert.equal(fx.calls.merges.length, 0, 'no merge without the digest');
         assert.equal(fx.calls.threadResolves.length, 0, 'no thread closes without its digest');
     });

@@ -37,6 +37,11 @@
 // (mergeBot's copy was byte-identical to mergeTrigger.js's).
 var mcpParse = require('../common/mcpParse.js');
 
+// gh-1353: the merge backstop (epic gh-1328 §4) rides every squash-merge —
+// ONE digest issue + `defered` resolutions for open machine-owned
+// >=IMPORTANT threads before the merge proceeds. A record, not a gate.
+var mergeBackstop = require('../common/mergeBackstop.js');
+
 // Thin wrapper keeps every call site unchanged.
 function parseMcp(raw) { return mcpParse.parseMcp(raw); }
 
