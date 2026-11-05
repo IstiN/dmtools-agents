@@ -22,6 +22,7 @@ var gitStaging = require('./common/gitStaging.js');
 var trackersModule = require('./common/trackers.js');
 var commentMarkup = require('./common/commentMarkup.js');
 var legFailureReport = require('./common/legFailureReport.js');
+var legStartSignal = require('./common/legStartSignal.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
@@ -555,6 +556,11 @@ var SETUP_FAILURE_WORKFLOW = 'preCliDevelopmentSetup';
 
 /** The pre-flight line captured at leg start (module state, like _workingDir). */
 var _preflightLine = null;
+/** The raw pre-flight state — the head SHA feeds the leg-start status (gh-1364). */
+var _preflightState = null;
+/** gh-1364 exactly-once guards: the leg emits its leg-start line a single time. */
+var _legStartEmitted = false;
+var _legStartLine = null;
 
 /**
  * gh-1363 leg-start signal: collect the canonical
@@ -565,7 +571,9 @@ var _preflightLine = null;
  */
 function collectPreflightStateStep() {
     try {
-        _preflightLine = legFailureReport.preflightLine(legFailureReport.collectPreflightState(runCommandStr));
+        var state = legFailureReport.collectPreflightState(runCommandStr);
+        _preflightState = state;
+        _preflightLine = legFailureReport.preflightLine(state);
         if (_preflightLine) console.log(_preflightLine);
         return _preflightLine;
     } catch (e) {
@@ -577,6 +585,11 @@ function collectPreflightStateStep() {
 /** The remembered leg-start pre-flight line (null when never collected). */
 function currentPreflightLine() {
     return _preflightLine;
+}
+
+/** The raw pre-flight state (gh-1364 uses the head SHA; null when never collected). */
+function currentPreflightHeadSha() {
+    return _preflightState && _preflightState.head ? _preflightState.head : null;
 }
 
 /** Best-effort env read via the dmtools Java bridge; null when unavailable. */
@@ -743,6 +756,135 @@ function postSetupErrorComment(config, customParams, ticketKey, stage, errorMess
     }
 }
 
+// ── gh-1364: the leg-start phase signal ──────────────────────────────────────
+// Machine-readable answer to "can agent legs currently start work on this
+// main SHA?" — in the 2026-11-04 outage every leg died in the setup phase and
+// the only way to know that was to open run logs by hand. Every leg crosses
+// the setup boundary, so the boundary emits the signal itself:
+//   1. ALWAYS one summary line: `leg-start: ok (branch <name>)` or
+//      `leg-start: failed (<reason-class>: <first error line>)` (formats and
+//      the closed reason set live in js/common/legStartSignal.js);
+//   2. BEST-EFFORT commit status on the head SHA the leg ran against —
+//      leg-start/ok (description: branch name) / leg-start/failed
+//      (description: reason class) — via the same github_create_commit_status
+//      plumbing js/common/ci.js uses. A posting failure must never fail the
+//      leg: warn and continue (the same trade-off as the tracker comments).
+// Exactly once per leg: the emit helpers flip a module flag, so a checkout
+// failure followed by the action-level catch reports the signal once.
+// Acting on the signal (gating dispatch, parking) is issue 02's analyzer +
+// SM policy — this wiring only emits.
+
+/** The remembered leg-start summary line (null until the boundary is crossed). */
+function currentLegStartLine() {
+    return _legStartLine;
+}
+
+function markLegStartEmitted(line) {
+    _legStartEmitted = true;
+    _legStartLine = line;
+    return line;
+}
+
+/**
+ * Fresh `git rev-parse HEAD` probe — the fallback when the pre-flight head is
+ * absent or not a SHA (post-checkout that is the dev branch tip — still the
+ * truest "where the leg runs"). Null when the probe fails or answers a
+ * non-SHA (gh-1364 rework: extracted so resolveLegStartHeadSha stays a thin
+ * remembered→fresh chain under the CRAP ratchet).
+ */
+function probeFreshHeadSha() {
+    try {
+        var sha = cleanCommandOutput(runCmd({ command: 'git rev-parse HEAD' }) || '').trim();
+        if (legStartSignal.isValidHeadSha(sha)) return sha;
+    } catch (e) {
+        console.warn('leg-start: head SHA not resolvable (commit status skipped):', e && e.message ? e.message : e);
+    }
+    return null;
+}
+
+/**
+ * The head SHA the leg ran against: the pre-flight head captured before any
+ * git operation mutated the workspace, else a fresh rev-parse. Null when
+ * neither resolves — the status then stays log-only.
+ */
+function resolveLegStartHeadSha() {
+    var remembered = currentPreflightHeadSha();
+    if (legStartSignal.isValidHeadSha(remembered)) return remembered;
+    return probeFreshHeadSha();
+}
+
+/**
+ * Post the leg-start commit status — best-effort end to end. The skip guards
+ * (no config / non-github tracker / no repository scope) are the pure
+ * `resolveLegStartStatusTarget` chain in js/common/legStartSignal.js (gh-1364
+ * rework); here stays the small posting path: resolve the head, build the
+ * payload, post. A null config never reaches the tracker build — the helper
+ * skips it first (createTracker's own fallback loader is throw-safe). An
+ * unresolvable head or a throwing status API is warned, never fatal. Returns
+ * the posted args, or null when skipped/failed.
+ */
+function postLegStartStatusBestEffort(config, customParams, body) {
+    try {
+        var target = legStartSignal.resolveLegStartStatusTarget(
+            config, trackersModule.createTracker(config, customParams || {}).provider());
+        if (target.skip) {
+            if (target.warn) console.warn(target.warn);
+            return null;
+        }
+        var sha = resolveLegStartHeadSha();
+        if (!sha) return null;
+        var args = legStartSignal.buildCommitStatusArgs({
+            workspace: target.workspace,
+            repository: target.repository,
+            sha: sha,
+            ok: body.ok === true,
+            branchName: body.branchName,
+            reasonClass: body.reasonClass,
+            runUrl: legFailureReport.runUrlFromEnv(readEnvVar)
+        });
+        github_create_commit_status(args);
+        console.log('Posted commit status ' + args.context + ' on ' + sha.substring(0, 8) +
+            (args.targetUrl ? ' → ' + args.targetUrl : ''));
+        return args;
+    } catch (e) {
+        console.warn('leg-start commit status posting failed (non-fatal):', e);
+        return null;
+    }
+}
+
+/** The ok half: setup crossed, the dev branch is ready. Returns the line (null when already emitted). */
+function emitLegStartOk(config, customParams, branchName) {
+    if (_legStartEmitted) return null;
+    markLegStartEmitted(legStartSignal.okSummaryLine(branchName));
+    console.log(_legStartLine);
+    postLegStartStatusBestEffort(config, customParams, { ok: true, branchName: branchName });
+    return _legStartLine;
+}
+
+/** The failed half: classify the setup error into the closed set, log, post best-effort. */
+function emitLegStartFailed(config, customParams, errorText) {
+    if (_legStartEmitted) return null;
+    var reasonClass = legStartSignal.classifySetupError(errorText);
+    markLegStartEmitted(legStartSignal.failedSummaryLine(reasonClass, errorText));
+    console.log(_legStartLine);
+    postLegStartStatusBestEffort(config, customParams, { ok: false, reasonClass: reasonClass });
+    return _legStartLine;
+}
+
+/**
+ * The ok step at the end of the setup phase (after branch setup AND the
+ * environment-setup commands — the last steps that can stop the leg before
+ * the agent starts). Best-effort: a signal failure never fails the leg.
+ */
+function runLegStartOkStep(config, customParams, params, actualParams, ticketKey) {
+    try {
+        var ticket = params.ticket || actualParams.ticket || { key: ticketKey, fields: {} };
+        emitLegStartOk(config, customParams, configLoader.resolveBranchName(config, ticket, 'development'));
+    } catch (e) {
+        console.warn('leg-start ok signal failed (non-fatal):', e);
+    }
+}
+
 // ── gh-1042: helpers extracted from action() ────────────────────────────────
 // Same tracker/SCM/git/file calls in the same order; the pure parse/build/
 // decide helpers are exported for direct unit testing. Mirrors the
@@ -816,6 +958,7 @@ function checkoutBranchOrReport(config, customParams, ticketKey, actualParams, p
         var branchError = decideErrorMessage(e);
         console.error('Branch checkout failed:', branchError);
         postSetupErrorComment(config, customParams, ticketKey, 'Git Branch Setup', branchError);
+        emitLegStartFailed(config, customParams, branchError);
         throw new Error('Git branch setup failed: ' + branchError);
     }
 }
@@ -875,6 +1018,7 @@ function runSetupCommandsStep(customParams, config, folder, ticketKey) {
         var setupError = decideErrorMessage(e);
         console.error('Setup commands failed:', setupError);
         postSetupErrorComment(config, customParams, ticketKey, 'Environment Setup', setupError);
+        emitLegStartFailed(config, customParams, setupError);
         throw new Error('Environment setup failed: ' + setupError);
     }
 }
@@ -976,6 +1120,11 @@ function action(params) {
         // verify build credentials) before the CLI agent starts coding.
         runSetupCommandsStep(customParams, config, folder, ticketKey);
 
+        // 3.6. gh-1364: the setup boundary is crossed — the dev branch is ready and
+        // the environment is installed. Emit the leg-start ok signal (one summary
+        // line + best-effort leg-start/ok commit status on the head SHA).
+        runLegStartOkStep(config, customParams, params, actualParams, ticketKey);
+
         // 4. Fetch linked test cases (with failure comments) into input folder
         // Gives the bug agent context about what the test asserts and why it's failing
         runFetchLinkedTestsStep(actualParams);
@@ -985,6 +1134,13 @@ function action(params) {
 
     } catch (error) {
         console.error('Error in preCliDevelopmentSetup:', error);
+        // gh-1364: a setup-phase death outside the two report-wrapped steps
+        // (config load, question fetch, …) still marks the leg failed —
+        // exactly-once guarded (checkout/environment failures already
+        // emitted); dryRun legs never cross the boundary and stay silent.
+        if (!isDryRunParams(params)) {
+            emitLegStartFailed(config, customParams, decideErrorMessage(error));
+        }
         throw error;
     }
 }
@@ -1020,6 +1176,15 @@ if (typeof module !== 'undefined' && module.exports) {
         currentPreflightLine,
         deriveSetupRepeatCount,
         readEnvVar,
+        // gh-1364: leg-start phase signal wiring — exported for direct unit testing.
+        currentPreflightHeadSha,
+        currentLegStartLine,
+        resolveLegStartHeadSha,
+        probeFreshHeadSha,
+        postLegStartStatusBestEffort,
+        emitLegStartOk,
+        emitLegStartFailed,
+        runLegStartOkStep,
         // gh-1363 rework: enrichment helpers extracted for the crap ratchet.
         deriveEnrichmentContext,
         isEnrichedContext,

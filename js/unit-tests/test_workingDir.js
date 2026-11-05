@@ -140,6 +140,7 @@ function loadPreCli(workingDir) {
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
             './common/trackers.js': trackersModuleReal
         }),
         modMocks
@@ -262,6 +263,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             modMocks
         );
@@ -335,6 +337,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             modMocks
         );
@@ -412,6 +415,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
+            './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
         }),
             modMocks
         );
