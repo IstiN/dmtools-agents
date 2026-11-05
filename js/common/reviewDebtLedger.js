@@ -60,22 +60,39 @@ function debtIdentity(file, claim, severityClass) {
         findingRegistry.severityClassOf(String(severityClass || 'SUGGESTION')));
 }
 
+// ── payload picking ──────────────────────────────────────────────────────────
+
+// A value the payload genuinely carries (not absent, not an explicit null,
+// not the empty string — the alias tables skip those).
+function present(v) {
+    return v !== undefined && v !== null && v !== '';
+}
+
+// The first present value of the named payload keys (primary + legacy
+// alias), else the fallback.
+function firstOf(src, k1, k2, fallback) {
+    if (present(src[k1])) return src[k1];
+    if (present(src[k2])) return src[k2];
+    return fallback;
+}
+
 /**
  * Normalizes a deferred-thread payload into the canonical ledger entry
  * (the ledgerCore.appendFinding normalize builder).
  */
 function normalizeDebtFinding(input, at) {
     var src = input || {};
-    var file = String(src.path || src.file || '');
-    var claim = String(src.claim || src.body || '');
-    var severityClass = findingRegistry.severityClassOf(String(src.severityClass || src.tier || 'SUGGESTION'));
+    var file = String(firstOf(src, 'path', 'file', ''));
+    var claim = String(firstOf(src, 'claim', 'body', ''));
+    var severityClass = findingRegistry.severityClassOf(
+        String(firstOf(src, 'severityClass', 'tier', 'SUGGESTION')));
     return {
         id: debtIdentity(file, claim, severityClass),
         file: file,
         claim: ledgerCore.truncate(claim),
         severityClass: severityClass,
         tier: String(src.tier || severityClass),
-        originThread: src.threadId || src.originThread || null,
+        originThread: firstOf(src, 'threadId', 'originThread', null),
         threadUrl: src.threadUrl || null,
         originPr: src.originPr || null,
         note: ledgerCore.truncate(src.note),
@@ -171,6 +188,24 @@ function ageDaysOf(f, nowMs) {
     return Math.max(0, Math.floor((now - t) / (24 * 60 * 60 * 1000)));
 }
 
+// One digest line: file, claim, tier label, age/occurrence/thread suffixes.
+function digestLineOf(f, nowMs) {
+    var line = '- `' + (f.file || '?') + '` — ' + (f.claim || '(no claim)') +
+        ' [' + (f.tier || f.severityClass || 'SUGGESTION') + ']';
+    var age = ageDaysOf(f, nowMs);
+    if (age !== null) line += ' — ' + age + 'd old';
+    if (f.occurrences > 1) line += ' — seen ' + f.occurrences + 'x';
+    if (f.threadUrl) line += ' — [thread](' + f.threadUrl + ')';
+    return line;
+}
+
+// The digest headline: counts, the sweep-queue verdict.
+function digestHeader(openCount, total, sweepDueNow) {
+    return '\uD83E\uDDFF Review debt ledger digest (gh-1352) — ' + openCount + ' deferred review finding' +
+        (openCount === 1 ? '' : 's') + ' (' + total + ' total), ' +
+        (sweepDueNow ? 'the batched sweep PR is due now' : 'queued for a batched sweep PR') + ':';
+}
+
 /**
  * The digest comment: one line per open deferred finding (file, claim, age,
  * occurrences), the sweep queue status and the explicit "no action
@@ -183,19 +218,9 @@ function buildDebtDigest(l, nowIso) {
     if (!open.length) {
         return '\uD83E\uDDFF Review debt ledger (gh-1352) — no deferred review findings. Review-side debt is clear.';
     }
-    var due = sweepDue(l, nowIso);
-    var lines = [
-        '\uD83E\uDDFF Review debt ledger digest (gh-1352) — ' + open.length + ' deferred review finding' +
-        (open.length === 1 ? '' : 's') + ' (' + total + ' total), ' +
-        (due.due ? 'the batched sweep PR is due now' : 'queued for a batched sweep PR') + ':'
-    ];
+    var lines = [digestHeader(open.length, total, sweepDue(l, nowIso).due)];
     open.forEach(function (f) {
-        var age = ageDaysOf(f, nowMs);
-        lines.push('- `' + (f.file || '?') + '` — ' + (f.claim || '(no claim)') +
-            ' [' + (f.tier || f.severityClass || 'SUGGESTION') + ']' +
-            (age !== null ? ' — ' + age + 'd old' : '') +
-            (f.occurrences > 1 ? ' — seen ' + f.occurrences + 'x' : '') +
-            (f.threadUrl ? ' — [thread](' + f.threadUrl + ')' : ''));
+        lines.push(digestLineOf(f, nowMs));
     });
     lines.push('');
     lines.push('Deferred findings are fixed in one batched test/comment-fix PR; stale items are re-validated and dropped with a note. No action is required right now.');

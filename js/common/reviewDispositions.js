@@ -127,33 +127,60 @@ function buildThreadAckReply(disposition) {
  *      executor fills the ledger id);
  *   5. otherwise → null (needs fix-or-defer; the caller counts the skip).
  */
+// The thread's policy tier: the severity class of its body and the
+// resolved policy's entry for it (null = unclassified — the gh-828
+// non-blocking parity).
+function tierEntryOf(thread, policy) {
+    var tierKey = String(reviewVerdicts.threadSeverity((thread || {}).body) || 'none').toUpperCase();
+    return {
+        tierKey: tierKey,
+        entry: (policy || reviewPolicy.defaultPolicy()).severities[tierKey] || null
+    };
+}
+
+// The `fixed:` evidence for a thread id — the lap-addressed map entry, or
+// null when the lap left no evidence for it.
+function fixedRefOf(opts, threadId) {
+    return opts.fixedThreadIds ? opts.fixedThreadIds[String(threadId)] : null;
+}
+
+// The policy gate: an unclassified thread or a tier whose fix is never/
+// opportunistic is closable WITHOUT a fix (the epic's "nits …
+// triage-resolve with ack").
+function closableWithoutFix(entry) {
+    return !entry ||
+        entry.fix === 'never' || entry.fix === 'oportunistic' || entry.fix === 'opportunistic';
+}
+
+// The wontfix value — never empty (a reasonless closure is the gh-1332
+// invariant-3 sin in miniature).
+function wontfixValue(entry) {
+    return DEFAULT_WONTFIX_REASON + ' (round ' + (entry ? entry.round : 'none') + ')';
+}
+
 function dispositionForThread(thread, policy, opts) {
     var t = thread || {};
     var o = opts || {};
-    var p = policy || reviewPolicy.defaultPolicy();
-    var tierKey = String(reviewVerdicts.threadSeverity(t.body) || 'none').toUpperCase();
-    var entry = p.severities[tierKey] || null;
+    var tier = tierEntryOf(t, policy);
 
-    if (entry && entry.round === 'rework') return null;
+    if (tier.entry && tier.entry.round === 'rework') return null;
 
-    var fixed = o.fixedThreadIds ? o.fixedThreadIds[String(t.threadId)] : null;
+    var fixed = fixedRefOf(o, t.threadId);
     if (fixed) {
-        return { tag: 'fixed', value: String(fixed), defer: false, tier: tierKey };
+        return { tag: 'fixed', value: String(fixed), defer: false, tier: tier.tierKey };
     }
 
-    var closableWithoutFix = !entry ||
-        entry.fix === 'never' || entry.fix === 'oportunistic' || entry.fix === 'opportunistic';
-    if (closableWithoutFix) {
+    if (closableWithoutFix(tier.entry)) {
         return {
             tag: 'wontfix',
-            value: DEFAULT_WONTFIX_REASON + ' (round ' + (entry ? entry.round : 'none') + ')',
+            value: wontfixValue(tier.entry),
             defer: false,
-            tier: tierKey
+            tier: tier.tierKey
         };
     }
 
     if (o.allowDefer) {
-        return { tag: 'defered', value: null, defer: true, tier: tierKey };
+        return { tag: 'defered', value: null, defer: true, tier: tier.tierKey };
     }
     return null;
 }

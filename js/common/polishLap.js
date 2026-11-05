@@ -42,6 +42,18 @@ var INSTABILITY_BUDGET = 2;
 
 // ── the trigger ──────────────────────────────────────────────────────────────
 
+// Any open thread census in a `round: polish` policy tier (the open-thread
+// half of the trigger; digest never counts — gh-1350 doctrine).
+function hasOpenPolishTierCensus(record, p) {
+    for (var i = 0; i < reviewPolicy.TIERS.length; i++) {
+        var tier = reviewPolicy.TIERS[i];
+        var sev = p.severities[tier];
+        if (!sev || sev.round !== 'polish') continue;
+        if (reviewVerdicts.censusCount(record[reviewPolicy.CENSUS_KEY_BY_TIER[tier]]) > 0) return true;
+    }
+    return false;
+}
+
 /**
  * True when the effective verdict record triggers the polish lap:
  * APPROVE, the lap-gated census clean (reviewPolicy gating tiers), and at
@@ -52,16 +64,18 @@ function isPolishTrigger(record, policy) {
     if (!record || record.verdict !== 'APPROVE') return false;
     var p = policy || reviewPolicy.defaultPolicy();
     if (reviewPolicy.gatingCensusCount(record, p).count > 0) return false;
-    for (var i = 0; i < reviewPolicy.TIERS.length; i++) {
-        var tier = reviewPolicy.TIERS[i];
-        var sev = p.severities[tier];
-        if (!sev || sev.round !== 'polish') continue;
-        if (reviewVerdicts.censusCount(record[reviewPolicy.CENSUS_KEY_BY_TIER[tier]]) > 0) return true;
-    }
-    return false;
+    return hasOpenPolishTierCensus(record, p);
 }
 
 // ── the lap plan (top-K + overflow) ─────────────────────────────────────────
+
+// The policy entry a thread body classifies into, or null — non-polish
+// tiers and unclassifiable bodies answer null (they never ride the lap).
+function polishRoundEntryOf(p, body) {
+    var tierKey = String(reviewVerdicts.threadSeverity(body) || 'none').toUpperCase();
+    var entry = p.severities[tierKey];
+    return (entry && entry.round === 'polish') ? entry : null;
+}
 
 /**
  * The polish-tier threads of a thread list: bodies classifying into a tier
@@ -72,9 +86,7 @@ function polishTierThreads(threads, policy) {
     var out = [];
     (threads || []).forEach(function (t) {
         if (!t || t.resolved) return;
-        var tierKey = String(reviewVerdicts.threadSeverity(t.body) || 'none').toUpperCase();
-        var entry = p.severities[tierKey];
-        if (entry && entry.round === 'polish') out.push(t);
+        if (polishRoundEntryOf(p, t.body)) out.push(t);
     });
     return out;
 }
@@ -142,13 +154,20 @@ function instabilityBudgetExhausted(laps, headSha) {
  *                        triage path (+ digest) when the trigger held but
  *                        the lap may not run.
  */
+// Why the polish lap is not dispatched on a record that failed the
+// trigger shape (pure — the reason rides the audit log and the tests).
+function notPolishTriggerReason(record, p) {
+    if (!record) return 'no-polish-tier-open';
+    if (record.verdict !== 'APPROVE') return 'not-approve';
+    if (reviewPolicy.gatingCensusCount(record, p).count > 0) return 'lap-gated-census-open';
+    return 'no-polish-tier-open';
+}
+
 function polishDecision(record, policy, threads, headSha, laps) {
     var p = policy || reviewPolicy.defaultPolicy();
     var out = { trigger: false, dispatch: false, reason: null, plan: null, triageRest: false };
     if (!isPolishTrigger(record, p)) {
-        out.reason = record && record.verdict !== 'APPROVE' ? 'not-approve'
-            : (record && reviewPolicy.gatingCensusCount(record, p).count > 0 ? 'lap-gated-census-open'
-                : 'no-polish-tier-open');
+        out.reason = notPolishTriggerReason(record, p);
         return out;
     }
     out.trigger = true;

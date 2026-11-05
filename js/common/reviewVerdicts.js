@@ -409,32 +409,48 @@ function resolveLoserLabel(verdict) {
 /**
  * Human-readable reconciliation comment citing BOTH verdict sources (AC2).
  */
-function buildReconciliationComment(effective, loserLabel, headSha) {
-    var newer = effective.record;
+// The nit caveat on a rework-loser removal (gh-1352: open nits stay for
+// the polish lap — nits never hold labels).
+function nitNoteOf(newer, loserLabel) {
     var nitCount = censusCount(newer.nits);
-    var nitNote = (loserLabel === LABEL_REWORK && nitCount > 0)
+    return (loserLabel === LABEL_REWORK && nitCount > 0)
         ? ' (open nits stay: the polish lap owns them — gh-1352, nits never hold labels)'
         : '';
-    var lines = [];
-    if (effective.conflict) {
-        var older = effective.conflict.older;
-        lines.push('⚖️ Verdict reconciliation (gh-807): two review verdicts on head `' + headSha + '` —');
-        lines.push('- ' + older.verdict + ' at ' + (older.at || 'unknown time') + ' (source: ' + older.source + ')');
-        lines.push('- ' + newer.verdict + ' at ' + (newer.at || 'unknown time') + ' (source: ' + newer.source + ')');
-        lines.push('');
-        lines.push('Newest wins: **' + newer.verdict + '** — removing `' + loserLabel + '`' +
-            (loserLabel === LABEL_APPROVED
-                ? ' until re-review (approval-gated paths blocked, gh-807).'
-                : ' (suggestions do not justify a rework arm; the approval stands).' + nitNote));
-    } else {
-        lines.push('⚖️ Verdict reconciliation (gh-807): the effective review verdict on head `' + headSha +
-            '` is **' + newer.verdict + '** (at ' + (newer.at || 'unknown time') + ', source: ' + newer.source + ').');
-        lines.push('');
-        lines.push('Removing `' + loserLabel + '`' +
-            (loserLabel === LABEL_APPROVED
-                ? ' until re-review (approval-gated paths blocked, gh-807).'
-                : ' (suggestions do not justify a rework arm; the approval stands).' + nitNote));
+}
+
+// The removal tail: why the loser label is being dropped.
+function removalPhraseOf(loserLabel, nitNote) {
+    return loserLabel === LABEL_APPROVED
+        ? ' until re-review (approval-gated paths blocked, gh-807).'
+        : ' (suggestions do not justify a rework arm; the approval stands).' + nitNote;
+}
+
+// The comment headline(s): the conflict shape names both verdicts, the
+// plain shape names the effective one.
+function reconciliationHeadLines(effective, headSha) {
+    var newer = effective.record;
+    if (!effective.conflict) {
+        return ['⚖️ Verdict reconciliation (gh-807): the effective review verdict on head `' + headSha +
+            '` is **' + newer.verdict + '** (at ' + (newer.at || 'unknown time') + ', source: ' + newer.source + ').'];
     }
+    var older = effective.conflict.older;
+    return [
+        '⚖️ Verdict reconciliation (gh-807): two review verdicts on head `' + headSha + '` —',
+        '- ' + older.verdict + ' at ' + (older.at || 'unknown time') + ' (source: ' + older.source + ')',
+        '- ' + newer.verdict + ' at ' + (newer.at || 'unknown time') + ' (source: ' + newer.source + ')'
+    ];
+}
+
+// The newest-wins lead the conflict shape prefixes the removal with.
+function newestWinsLeadOf(effective) {
+    return effective.conflict ? 'Newest wins: **' + effective.record.verdict + '** — ' : '';
+}
+
+function buildReconciliationComment(effective, loserLabel, headSha) {
+    var lines = reconciliationHeadLines(effective, headSha);
+    lines.push('');
+    lines.push(newestWinsLeadOf(effective) + 'Removing `' + loserLabel + '`' +
+        removalPhraseOf(loserLabel, nitNoteOf(effective.record, loserLabel)));
     return lines.join('\n');
 }
 
