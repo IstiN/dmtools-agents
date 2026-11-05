@@ -1451,7 +1451,11 @@ suite('preCliDevelopmentSetup.checkoutBranch — seam helpers (gh-1190)', functi
         console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
         try {
             mod.checkoutLocalBranchWithAlign('PROJ-1', 'ai/PROJ-1', 'master');
-            assert.equal(calls[0], 'git checkout ai/PROJ-1', 'checkout runs first');
+            assert.equal(calls[0], 'git checkout -- .dmtools-target-workingdir',
+                'gh-1358: runtime-artifact reset runs before the checkout');
+            assert.equal(calls[1], 'git rm --cached --ignore-unmatch .dmtools-target-workingdir',
+                'gh-1358: runtime-artifact untrack follows the reset');
+            assert.equal(calls[2], 'git checkout ai/PROJ-1', 'checkout runs first');
             assert.ok(calls.indexOf('git cherry origin/master HEAD') !== -1, 'alignment follows the checkout');
             assert.ok(calls.indexOf('git reset --hard origin/master') === -1,
                 'a unique-patch diverged branch is NOT reset');

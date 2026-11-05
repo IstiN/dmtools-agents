@@ -202,6 +202,7 @@ function probeRemoteBranch(branchName, warnMessage) {
 
 /** Plain (no-hook) two-branch feature creation tail for this action. */
 function createFeatureBranchPlain(config, featureBranchName) {
+    discardRuntimeArtifactModifications();
     // ensureRemoteBranchRef fetches with an explicit destination refspec
     // (+refs/heads/<b>:refs/remotes/origin/<b>) so origin/<baseBranch> exists
     // even in a shallow/single-branch CI clone that never checked this branch
@@ -237,8 +238,43 @@ function establishFeatureBranch(config, customParams, ticket) {
     });
 }
 
+// gh-1358: pipeline-owned runtime artifacts that ARE tracked in the repo but
+// get rewritten by every leg — a stale local modification of one of them
+// aborts `git checkout` with "local changes would be overwritten" and the
+// whole leg dies at branch setup (four consecutive dev-leg failures on
+// #1352). The helpers below run best-effort before every branch switch:
+// non-fatal (warn and continue — the checkout reports any real conflict that
+// remains). Once gh-1358 untracks the marker on master and a branch aligns
+// with it, both are no-ops.
+var PIPELINE_RUNTIME_ARTIFACTS = ['.dmtools-target-workingdir'];
+
+/** Best-effort: reset a stale local modification of one runtime artifact. */
+function resetRuntimeArtifact(artifact) {
+    try {
+        runCmd({ command: 'git checkout -- ' + artifact });
+    } catch (resetErr) {
+        console.warn('Could not reset runtime artifact', artifact + ':', resetErr);
+    }
+}
+
+/** Best-effort: stop tracking one runtime artifact on the current branch. */
+function untrackRuntimeArtifact(artifact) {
+    try {
+        runCmd({ command: 'git rm --cached --ignore-unmatch ' + artifact });
+    } catch (rmErr) {
+        console.warn('Could not untrack runtime artifact', artifact + ':', rmErr);
+    }
+}
+
+/** Reset + untrack every known runtime artifact before a branch switch. */
+function discardRuntimeArtifactModifications() {
+    PIPELINE_RUNTIME_ARTIFACTS.forEach(resetRuntimeArtifact);
+    PIPELINE_RUNTIME_ARTIFACTS.forEach(untrackRuntimeArtifact);
+}
+
 /** Local dev branch: checkout, then align with the base branch. */
 function checkoutLocalBranchWithAlign(ticketKey, branchName, rebaseBase) {
+    discardRuntimeArtifactModifications();
     console.log('Branch exists locally, aligning with base:', branchName);
     runCmd({ command: 'git checkout ' + branchName });
     alignBranchWithBase(ticketKey, branchName, rebaseBase);
@@ -251,6 +287,7 @@ function checkoutLocalBranchWithAlign(ticketKey, branchName, rebaseBase) {
  * origin when the fetch+checkout fails.
  */
 function checkoutExistingRemoteBranch(ticketKey, branchName, rebaseBase) {
+    discardRuntimeArtifactModifications();
     console.log('Branch exists on remote, fetching and aligning with base:', branchName);
     try {
         runCmd({ command: prHelper.buildOriginFetchCommand(branchName + ':' + branchName) });
