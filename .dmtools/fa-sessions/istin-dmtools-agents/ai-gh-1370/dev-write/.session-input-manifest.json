@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-05T20:04:43.885Z",
+  "ticketKey": "pr-1378",
+  "headSha": "47854b8ae72d380dda2ebb61479bba5293da41f1",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:7b14eb4032fadd97",
+      "size": 48973
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:25493f59db7ad0f4",
+      "size": 3887142
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:ea3c31783b138f71",
+      "size": 2277
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:e140d03a2c671c77",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:f0d68e8d6edfd1bf",
+      "size": 12499
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:d0bf7578db10538c",
+      "size": 5909
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:0179808d81c351c2",
+      "size": 2878
+    },
+    "request.md": {
+      "hash": "fnv1a64:d4bd9cc55fea6f2f",
+      "size": 2534
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:2a95baa27b47672d",
+      "size": 991
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:7e978c31c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:56e647680e90e376",
+      "size": 2620
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:d4bd9cc55fea6f2f",
+      "size": 2534
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs60Po_0",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_mergeBot.js:156",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — CRAP ratchet exceeded on both `backstopBridgeMocks` builders**\n\nThe `crap` check fails on head `47854b8a` (ci_failures.md; ci_failures_full.log):\n\n```text\nNEW > 8  js/unit-tests/test_mergeBot.js::backstopBridgeMocks: 9\nNEW > 8  js/unit-tests/test_mergeTrigger.js::backstopBridgeMocks: 9\n0 regression(s), 2 new over threshold, 0 improvement(s), 0 removed\n##[error]Process completed with exit code 2.\n```\n\nThe `resolveFailIds` branch added inside the `github_resolve_pr_thread` mock pushes the\n`backstopBridgeMocks` builder over the CRAP 8 threshold in **both** test files. (The PR\ndescription's \"all new functions ≤ 8\" holds for mergeBackstop.js, but the ratchet also\ncovers these modified test builders.)\n\nFix with the repo's own precedent — a named mock builder, exactly like `checkRunsPayload`\nin this file (\"gh-1200 precedent: named mock builders\"):\n\n```js\nfunction resolveThreadMock(opts, calls) {\n    return function (a) {\n        if ((opts.resolveFailIds || []).indexOf(String(a.threadId)) !== -1) {\n            throw new Error('422 ' + a.threadId);\n        }\n        calls.threadResolves.push(a);\n        return '{}';\n    };\n}\n// in backstopBridgeMocks:\ngithub_resolve_pr_thread: resolveThreadMock(opts, calls),\n```\n\nApply the identical extraction in `js/unit-tests/test_mergeTrigger.js` (its builder copy\nis flagged at the same threshold). Unit tests themselves are green (verified locally:\n63 + 139 passed) — this gate is the only red check."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60PpDW",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeBackstop.js:894",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: gate the ack-stats fragment on `ackIdle(out)` in the counted line too**\n\nA >=IMPORTANT-only replay (zero below-threshold machine threads, `ackIdle` true) now\nappends an idle fragment to the outcome line:\n\n```\n…resolved 1, resolve failures 0, ack failures 0; suggestion/nit machine thread(s)\nack-resolved without a fix (wontfix) 0, resolve failures 0, ack-reply failures 0;\n0 open human thread(s)…\n```\n\n`cleanOutcomeLine` already handles this — it keeps the pure gh-1353 wording when\n`ackIdle(out)` is true. `countedOutcomeLine` embeds `ackStatsLine(out)` unconditionally,\nso a gh-1353-only replay's log line changes shape for no information. Symmetric form:\n\n```js\n', ack failures ' + out.ackFailures + '; ' +\n(ackIdle(out) ? '' : ackStatsLine(out) + '; ') + out.human.length +\n```\n\nOptional polish — the lines are informational only (no machine parser consumes them,\nverified by grep), so behavior is unaffected either way."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60PpF6",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_mergeTrigger.js:184",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: dedupe the twin `backstopBridgeMocks` builders into `_fixtures/`**\n\n`js/unit-tests/test_mergeBot.js` and `js/unit-tests/test_mergeTrigger.js` carry\nnear-identical copies of `backstopBridgeMocks`, and this PR had to extend both copies\nwith the exact same `resolveFailIds` branch — the classic parallel-edit cost of\nduplicated fixtures (miss one copy and the two suites silently diverge in failure\ninjection capability).\n\nThe repo already has a shared-fixture pattern: `js/unit-tests/_fixtures/releaseArtefactsMock.js`\nis loaded via `loadModule('js/unit-tests/_fixtures/…', makeRequire({}, {}), {})` in\nmultiple suites. Extracting the builder there (e.g. `_fixtures/backstopBridgeMocks.js`,\ntaking `(opts, calls)` and returning the mock bag) ends the parallel edits — and doing\nit together with the resolve-fail extraction from the blocking thread drops both copies\nbelow the CRAP ratchet in one move.\n\nThe two copies do differ today (mergeBot's also mocks `github_search_issues` for\n`calls.debtSearches`) — parameterize that one difference rather than merging blindly."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60PpJB",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeBackstop.js:199",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: document the `none`-severity fallthrough onto the wontfix ack path**\n\nThe ack path covers everything below rank(IMPORTANT) — including a machine thread whose\nbody carries **no recognizable severity marker**. `reviewVerdicts.threadSeverity`\nreturns `'none'` for it, and `findingRegistry.severityClassOf` falls back to\n`'SUGGESTION'` (`findingRegistry.js:225` — `'NIT'` also maps through the fallback, so\nit lands here deliberately). Net behavior: a marker-less machine-owned thread is now\nauto-resolved at merge time with a public\n`wontfix: below gating threshold — epic invariant (gh-1370)` ack — under gh-1353 it was\nleft untouched (\"the triage path's business\").\n\nConfirm this is intended. For what it's worth, the alternative is a deadlock: holding\nthe merge on an unresolvable classification would never converge, so ack-path is the\nonly terminal outcome for such threads — but that reasoning (and the `'none' → ack`\nfallthrough) deserves one line in the `classifyThreads` doc comment so a later audit\nreading the digest/ack trail understands why a marker-less thread closed as `wontfix`\nrather than being a misclassification."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:974ca0fc",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — CRAP ratchet exceeded on both `backstopBridgeMocks` builders**\n\nThe `crap` check fails on head `47854b8a` (ci_failures.md; ci_failures_full.log):\n\n```text\nNEW > 8  js/unit-tests/test_mergeBot.js::backstopBridgeMocks: 9\nNEW > 8  js/unit-tests/test_mergeTrigger.js::backstopBridgeMocks: 9\n0 regression(s), 2 new over threshold, 0 improvement(s), 0 removed\n##[error]Process completed with exit code 2.\n```\n\nThe `resolveFailIds` branch added inside the `github_resolve_pr_thread` mock pushes the\n`backstopBridgeMocks` builder over the CRAP 8 threshold in **both** test files. (The PR\ndescription's \"all new functions ≤ 8\" holds for mergeBackstop.js, but the ratchet also\ncovers these modified test builders.)\n\nFix with the repo's own precedent — a named mock builder, exactly like `checkRunsPayload`\nin this file (\"gh-1200 precedent: named mock builders\"):\n\n```js\nfunction resolveThreadMock(opts, calls) {\n    return function (a) {\n        if ((opts.resolveFailIds || []).indexOf(String(a.threadId)) !== -1) {\n            throw new Error('422 ' + a.threadId);\n        }\n        calls.threadResolves.push(a);\n        return '{}';\n    };\n}\n// in backstopBridgeMocks:\ngithub_resolve_pr_thread: resolveThreadMock(opts, calls),\n```\n\nApply the identical extraction in `js/unit-tests/test_mergeTrigger.js` (its builder copy\nis flagged at the same threshold). Unit tests themselves are green (verified locally:\n63 + 139 passed) — this gate is the only red check."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:ba3f504c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: gate the ack-stats fragment on `ackIdle(out)` in the counted line too**\n\nA >=IMPORTANT-only replay (zero below-threshold machine threads, `ackIdle` true) now\nappends an idle fragment to the outcome line:\n\n```\n…resolved 1, resolve failures 0, ack failures 0; suggestion/nit machine thread(s)\nack-resolved without a fix (wontfix) 0, resolve failures 0, ack-reply failures 0;\n0 open human thread(s)…\n```\n\n`cleanOutcomeLine` already handles this — it keeps the pure gh-1353 wording when\n`ackIdle(out)` is true. `countedOutcomeLine` embeds `ackStatsLine(out)` unconditionally,\nso a gh-1353-only replay's log line changes shape for no information. Symmetric form:\n\n```js\n', ack failures ' + out.ackFailures + '; ' +\n(ackIdle(out) ? '' : ackStatsLine(out) + '; ') + out.human.length +\n```\n\nOptional polish — the lines are informational only (no machine parser consumes them,\nverified by grep), so behavior is unaffected either way."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:7ece8600",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: dedupe the twin `backstopBridgeMocks` builders into `_fixtures/`**\n\n`js/unit-tests/test_mergeBot.js` and `js/unit-tests/test_mergeTrigger.js` carry\nnear-identical copies of `backstopBridgeMocks`, and this PR had to extend both copies\nwith the exact same `resolveFailIds` branch — the classic parallel-edit cost of\nduplicated fixtures (miss one copy and the two suites silently diverge in failure\ninjection capability).\n\nThe repo already has a shared-fixture pattern: `js/unit-tests/_fixtures/releaseArtefactsMock.js`\nis loaded via `loadModule('js/unit-tests/_fixtures/…', makeRequire({}, {}), {})` in\nmultiple suites. Extracting the builder there (e.g. `_fixtures/backstopBridgeMocks.js`,\ntaking `(opts, calls)` and returning the mock bag) ends the parallel edits — and doing\nit together with the resolve-fail extraction from the blocking thread drops both copies\nbelow the CRAP ratchet in one move.\n\nThe two copies do differ today (mergeBot's also mocks `github_search_issues` for\n`calls.debtSearches`) — parameterize that one difference rather than merging blindly."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:d3d3d107",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: document the `none`-severity fallthrough onto the wontfix ack path**\n\nThe ack path covers everything below rank(IMPORTANT) — including a machine thread whose\nbody carries **no recognizable severity marker**. `reviewVerdicts.threadSeverity`\nreturns `'none'` for it, and `findingRegistry.severityClassOf` falls back to\n`'SUGGESTION'` (`findingRegistry.js:225` — `'NIT'` also maps through the fallback, so\nit lands here deliberately). Net behavior: a marker-less machine-owned thread is now\nauto-resolved at merge time with a public\n`wontfix: below gating threshold — epic invariant (gh-1370)` ack — under gh-1353 it was\nleft untouched (\"the triage path's business\").\n\nConfirm this is intended. For what it's worth, the alternative is a deadlock: holding\nthe merge on an unresolvable classification would never converge, so ack-path is the\nonly terminal outcome for such threads — but that reasoning (and the `'none' → ack`\nfallthrough) deserves one line in the `classifyThreads` doc comment so a later audit\nreading the digest/ack trail understands why a marker-less thread closed as `wontfix`\nrather than being a misclassification."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:4dd981c5",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 47854b8ae72d380dda2ebb61479bba5293da41f1 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:3ec5153a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The gh-1370 gate design is sound (shared per-thread resolver, gate-after-loops, human threads untouched, >=IMPORTANT digest path preserved) and its acceptance replays are well tested — all three suites pass locally (63 + 139 green). One 🚨 BLOCKING: CI is red — the CRAP ratchet reports `backstopBridgeMocks: 9 > 8` in both `test_mergeBot.js` and `test_mergeTrigger.js` (exit code 2).\n\n**Key Issues**:\n- 🚨 BLOCKING — crap gate red on head `47854b8a`: the added `resolveFailIds` branch pushed both twin mock builders over threshold; extract a named `resolveThreadMock` (repo precedent: `checkRunsPayload`) in both files\n- 💡 SUGGESTION — `countedOutcomeLine` embeds idle ack-stats (\"…(wontfix) 0, resolve failures 0…\") on >=IMPORTANT-only replays; gate on `ackIdle(out)` like `cleanOutcomeLine` does\n- 💡 SUGGESTION — the twin `backstopBridgeMocks` copies grew identically; move to `js/unit-tests/_fixtures/` (existing `releaseArtefactsMock.js` pattern)\n- 💡 SUGGESTION — marker-less machine threads (`threadSeverity` `'none'` → `severityClassOf` fallback `'SUGGESTION'`) now close as public `wontfix` acks; document the fallthrough in `classifyThreads`\n\n**Next Steps**:\n1. Extract the named resolve-thread mock in both test files → crap gate green\n2. Optionally apply the three suggestion-level polish items\n3. Re-run `dmtools run js/unit-tests/run_all.json` — all ACs (AC1 six-ack replay, AC2 held-merge retry, human-thread untouched, >=IMPORTANT digest unchanged) are already pinned by passing tests"
+    }
+  ]
+}
