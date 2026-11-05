@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-05T18:21:13.302Z",
+  "ticketKey": "pr-1377",
+  "headSha": "83e51a9264e4057ff2258f7b8878c1d520d4ba92",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:3430cfdf2a18f033",
+      "size": 48976
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:99abafabe8cc11c7",
+      "size": 3880272
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:9eea9d173b138f71",
+      "size": 2277
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:455b8a4d054e0030",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:f4ef4b81a678513c",
+      "size": 12173
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:4c1aec02d3f179fd",
+      "size": 5328
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:d3082a87576c52e4",
+      "size": 2116
+    },
+    "request.md": {
+      "hash": "fnv1a64:356f4cbd23821873",
+      "size": 1773
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:1c9de8d597fd47c5",
+      "size": 887
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:59d41a80c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:46a3f5ca96fafddc",
+      "size": 1847
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:356f4cbd23821873",
+      "size": 1773
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs60NDvH",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeBackstop.js:374",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — `crap` ratchet fails on this head (83e51a9)**\n\nThe pre-merge gate is red on this exact commit (ci_failures.md, check `crap`, [run 42079136870](https://github.com/IstiN/dmtools-agents/actions/runs/42079136870/job/127427284085)) — tests pass (8836/0) but the ratchet step exits 2:\n\n```text\nREGRESSION  js/unit-tests/test_mergeBot.js::fixture: 12 -> 14\nNEW > 8  js/common/mergeBackstop.js::findExistingDigest: 11\nNEW > 8  js/common/mergeBackstop.js::digestNumberOf: 8.3\n1 regression(s), 2 new over threshold, 0 improvement(s), 0 removed\n```\n\nAll three violations are introduced by this PR:\n\n1. **`findExistingDigest` (CC 11 @ 100% cov, threshold 8)** — the `excludeNumber !== undefined && excludeNumber !== null && String(...) === String(...)` guard at `mergeBackstop.js:374` added +3 decision points to a function already at the ceiling. Extract the predicate into a helper (e.g. `isExcludedDigestIssue(issue, excludeNumber)`) and `findExistingDigest` returns to CC ≤ 8.\n2. **`digestNumberOf` (CRAP 8.3)** — partial branch coverage: the `typeof n === 'string'` branch is never exercised (the test fixture's `createIssue` always returns an integer `number`). AGENTS.md requires all new JS logic covered by unit tests. Add a case asserting `{number: '512'}` → `512` and `{number: 'x'}` → `null`.\n3. **`test_mergeBot.js::fixture` (12 → 14)** — the new nested ternary at `test_mergeBot.js:174` duplicates the `opts.headSha || 'deadbeef'` fallback on both arms. Extract e.g. `fixtureHead(opts) { var sha = opts.headSha || 'deadbeef'; return opts.bareHead ? sha : { sha: sha }; }` to restore the baseline CC."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60NDzk",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeBackstop.js:566",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the race-dedup abandons the duplicate issue but leaves it open and re-adoptable — replays have no deterministic tie-break**\n\nThe post-create probe (`mergeBackstop.js:566`) adopts a concurrent funnel's digest and records `digestDuplicate`, but the abandoned issue stays **open** with a ledger marker carrying this PR's `originPr` (there is no close/update io primitive to retire it). `findExistingDigest` returns the **first** search hit with no deterministic ordering, and GitHub issue-search ordering for identically-titled `[debt]` issues is best-match (opaque). Consequence: on the next backstop replay for this PR (new review round → new merge attempt), the probe can adopt the **abandoned duplicate** as the \"existing digest\" — new `defered:` acks then point at a different issue than the first round's acks, and the module-header invariant *\"one digest per PR survives replays\"* silently splits into two open digests.\n\nTwo related weaknesses of the same mechanism:\n\n- The post-create probe also races GitHub's search-index lag — a concurrent funnel's digest may not be searchable yet, so both funnels keep their own digest anyway. The code comment discloses the race honestly, but the header invariant is now stronger than the actual guarantee.\n- The PR ledger stamp posted before the race carries this run's ledger either way, so no findings are lost (identity dedup) — this is record-keeping divergence, not data loss.\n\nSuggested direction: make `findExistingDigest` pick deterministically among matches (e.g. lowest issue number, or the issue whose ledger marker carries the newest `at`) so every replay converges on the same issue even after a race; align the header invariant wording with the best-effort reality; optionally echo the abandoned number into the PR ledger stamp so the part-3 sweep can see (and later retire) the duplicate."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60ND3_",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeBackstop.js:536",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: `digestNumberOf`'s string branch accepts non-positive numbers, contradicting its own documented \"positive\" contract**\n\nThe numeric branch requires `n > 0`, but the string branch only requires `isFinite(Number(n))` — so `{number: '0'}` → `0` and `{number: '-3'}` → `-3` both pass as a \"usable digest issue number\", while the numeric `0` correctly throws. The function's doc comment promises *\"null unless the payload carries a positive issue number\"*. Unreachable with today's bridge (GitHub returns integer issue numbers), but the contract mismatch is real and the fix is one token:\n\n```js\nif (typeof n === 'string' && n.trim() !== '' && isFinite(Number(n)) && Number(n) > 0) return Number(n);\n```\n\nPair it with the coverage test for this branch requested in the CI comment (`{number: '512'}` → 512, `{number: 'x'}` → null) and both the suggestion and the CRAP violation close together."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:a1b219db",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — `crap` ratchet fails on this head (83e51a9)**\n\nThe pre-merge gate is red on this exact commit (ci_failures.md, check `crap`, [run 42079136870](https://github.com/IstiN/dmtools-agents/actions/runs/42079136870/job/127427284085)) — tests pass (8836/0) but the ratchet step exits 2:\n\n```text\nREGRESSION  js/unit-tests/test_mergeBot.js::fixture: 12 -> 14\nNEW > 8  js/common/mergeBackstop.js::findExistingDigest: 11\nNEW > 8  js/common/mergeBackstop.js::digestNumberOf: 8.3\n1 regression(s), 2 new over threshold, 0 improvement(s), 0 removed\n```\n\nAll three violations are introduced by this PR:\n\n1. **`findExistingDigest` (CC 11 @ 100% cov, threshold 8)** — the `excludeNumber !== undefined && excludeNumber !== null && String(...) === String(...)` guard at `mergeBackstop.js:374` added +3 decision points to a function already at the ceiling. Extract the predicate into a helper (e.g. `isExcludedDigestIssue(issue, excludeNumber)`) and `findExistingDigest` returns to CC ≤ 8.\n2. **`digestNumberOf` (CRAP 8.3)** — partial branch coverage: the `typeof n === 'string'` branch is never exercised (the test fixture's `createIssue` always returns an integer `number`). AGENTS.md requires all new JS logic covered by unit tests. Add a case asserting `{number: '512'}` → `512` and `{number: 'x'}` → `null`.\n3. **`test_mergeBot.js::fixture` (12 → 14)** — the new nested ternary at `test_mergeBot.js:174` duplicates the `opts.headSha || 'deadbeef'` fallback on both arms. Extract e.g. `fixtureHead(opts) { var sha = opts.headSha || 'deadbeef'; return opts.bareHead ? sha : { sha: sha }; }` to restore the baseline CC."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:60283b4c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the race-dedup abandons the duplicate issue but leaves it open and re-adoptable — replays have no deterministic tie-break**\n\nThe post-create probe (`mergeBackstop.js:566`) adopts a concurrent funnel's digest and records `digestDuplicate`, but the abandoned issue stays **open** with a ledger marker carrying this PR's `originPr` (there is no close/update io primitive to retire it). `findExistingDigest` returns the **first** search hit with no deterministic ordering, and GitHub issue-search ordering for identically-titled `[debt]` issues is best-match (opaque). Consequence: on the next backstop replay for this PR (new review round → new merge attempt), the probe can adopt the **abandoned duplicate** as the \"existing digest\" — new `defered:` acks then point at a different issue than the first round's acks, and the module-header invariant *\"one digest per PR survives replays\"* silently splits into two open digests.\n\nTwo related weaknesses of the same mechanism:\n\n- The post-create probe also races GitHub's search-index lag — a concurrent funnel's digest may not be searchable yet, so both funnels keep their own digest anyway. The code comment discloses the race honestly, but the header invariant is now stronger than the actual guarantee.\n- The PR ledger stamp posted before the race carries this run's ledger either way, so no findings are lost (identity dedup) — this is record-keeping divergence, not data loss.\n\nSuggested direction: make `findExistingDigest` pick deterministically among matches (e.g. lowest issue number, or the issue whose ledger marker carries the newest `at`) so every replay converges on the same issue even after a race; align the header invariant wording with the best-effort reality; optionally echo the abandoned number into the PR ledger stamp so the part-3 sweep can see (and later retire) the duplicate."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:de7ebe1b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: `digestNumberOf`'s string branch accepts non-positive numbers, contradicting its own documented \"positive\" contract**\n\nThe numeric branch requires `n > 0`, but the string branch only requires `isFinite(Number(n))` — so `{number: '0'}` → `0` and `{number: '-3'}` → `-3` both pass as a \"usable digest issue number\", while the numeric `0` correctly throws. The function's doc comment promises *\"null unless the payload carries a positive issue number\"*. Unreachable with today's bridge (GitHub returns integer issue numbers), but the contract mismatch is real and the fix is one token:\n\n```js\nif (typeof n === 'string' && n.trim() !== '' && isFinite(Number(n)) && Number(n) > 0) return Number(n);\n```\n\nPair it with the coverage test for this branch requested in the CI comment (`{number: '512'}` → 512, `{number: 'x'}` → null) and both the suggestion and the CRAP violation close together."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:25aa6914",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 83e51a9264e4057ff2258f7b8878c1d520d4ba92 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:fc3a9d3e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The 6 gh-1371 findings are implemented correctly — single comments read, shared `headShaOf`, createIssue validation, post-create race dedup, io non-mutation, full severity label map — and both touched suites pass locally (51 + 79, matching the PR description). But the merge gate is red: the `crap` ratchet fails on this head (1 regression + 2 new over-threshold functions), which is blocking.\n\n**Key Issues**:\n- 🚨 CI `crap` check fails on 83e51a9: `findExistingDigest` NEW 11 > 8, `digestNumberOf` NEW 8.3 > 8 (uncovered string branch), `test_mergeBot.js::fixture` REGRESSION 12 → 14 — all three introduced by this diff\n- ⚠️ Race-dedup leaves the abandoned duplicate digest open and re-adoptable; `findExistingDigest` has no deterministic tie-break, so a later replay can adopt the abandoned issue and split the deferral record\n- 💡 `digestNumberOf`'s string branch accepts `0`/negative numbers, contradicting its own \"positive issue number\" contract\n\n**Next Steps**:\n1. Extract the exclusion predicate from `findExistingDigest` (back to CC ≤ 8) and a `fixtureHead(opts)` helper in `test_mergeBot.js` (fixture back to CC ≤ 12)\n2. Add unit coverage for `digestNumberOf`'s string branch (`'512'` → 512, `'x'` → null) and gate it on `Number(n) > 0`\n3. Pick a deterministic digest tie-break (lowest number or newest ledger marker) in `findExistingDigest` and align the \"one digest per PR survives replays\" invariant wording with the best-effort race behavior"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    }
+  ]
+}
