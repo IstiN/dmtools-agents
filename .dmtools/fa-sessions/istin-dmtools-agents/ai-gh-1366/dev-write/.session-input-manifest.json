@@ -1,0 +1,257 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-05T15:45:23.898Z",
+  "ticketKey": "pr-1376",
+  "headSha": "5c0a5fdad9f9c0794cdbae5f138feef241db2175",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:e3ebbaee44af49bf",
+      "size": 12303
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:176c68cb881fa151",
+      "size": 27324
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:30eef8ea046e856f",
+      "size": 13218
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:c572f372f72ed049",
+      "size": 5307
+    },
+    "request.md": {
+      "hash": "fnv1a64:79ce1e981fe5da92",
+      "size": 4963
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:35b1003f947fc138",
+      "size": 1305
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:9bc02011c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:7dba4d57bbc08f5a",
+      "size": 5067
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:79ce1e981fe5da92",
+      "size": 4963
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs60G7Cv",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/failureAnalyzer.js:116",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — `crap` ratchet failed on head 351bd614**\n\nThe `crap` check (threshold 8, ratchet \"CRAP may only decrease\") fails on this PR's head — [run 42039749348](https://github.com/IstiN/dmtools-agents/actions/runs/42039749348/job/127287194643). Unit tests are green (8815 passed, 0 failed); this is purely the complexity ratchet:\n\n```\nREGRESSION  js/machineSmAgent.js::action: 9 -> 11\nNEW > 8  js/common/failureAnalyzer.js::resolveFailureAnalysisConfig: 16\nNEW > 8  js/common/failureAnalyzer.js::buildFailureVerdictComment: 13\nNEW > 8  js/common/failureAnalyzer.js::verdictFromPayload: 13.3\nNEW > 8  js/common/failureAnalyzer.js::parkDiagnosticComment: 10\nNEW > 8  js/machineSmAgent.js::collectFailureAnalysisState: 10.8\n1 regression(s), 5 new over threshold, 0 improvement(s), 0 removed\n```\n\nSuggested decompositions (keeping behavior verbatim, per the gh-1185 house pattern already used in this file):\n\n- `resolveFailureAnalysisConfig` (CRAP 16): extract per-knob validators (`afterFailuresOf(block)`, `blockedLabelOf(block)`, `backoffOf(block)`) — each becomes a small linear function and the resolver becomes a 3-call sequence.\n- `buildFailureVerdictComment` / `verdictFromPayload` (13 / 13.3): extract the shared payload-shaping (`verdictPayloadOf(record)`) so build and parse mirror one function instead of two copies of the same defaults ladder.\n- `parkDiagnosticComment` (10): split the marker line, the heading/summary and the optional sections into helpers.\n- `collectFailureAnalysisState` (10.8): extract the state derivation (`failureAnalysisStateFrom(comments, machineLogins)`) from the try/catch wrapper.\n- `action` (9 → 11): the new `machineLabels.push(...)` branch pushed the dispatcher over — extract the label-list assembly (`machineQueryLabelsOf(cfg)`).\n\nThis must land before merge: the pre-merge gate is red and rework is armed (red 1/3 on this head)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60G7F9",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/machineSmAgent.js",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: failure-analysis state is collected even while the feature is disabled**\n\n`reconcileIssue` calls `collectFailureAnalysisState(...)` unconditionally:\n\n```js\nbuilt.state.failureAnalysis = collectFailureAnalysisState(provider, issue.number, cfg.machineLogins);\n```\n\nWith the feature off (missing `failureAnalysis` config → `{ enabled: false }` — the default for every existing consumer), this still performs **one `github_get_pr_comments` REST call per machine-managed issue per tick** (up to `issueLimit` = 50) and parses the full comment history — for gates that can never fire, since both `failureAnalysisGate` and `gateBlindRedispatch` check `failureAnalysisEnabledOf(cfg)` first and bail.\n\nThe PR's own invariant — \"disabled/unreadable/unparseable leaves the loop byte-identical to today\" — holds for *decisions* but not for *I/O*: this is a real API-quota/latency regression for every deployment that never opts in, and it also runs for issues the engine-skip (`blocked`/`needs-human`/active run) would immediately discard.\n\nSuggested fix — gate it exactly like the sibling `blockedLabel` push in `action()`:\n\n```js\nbuilt.state.failureAnalysis = (cfg.failureAnalysis && cfg.failureAnalysis.enabled)\n    ? collectFailureAnalysisState(provider, issue.number, cfg.machineLogins)\n    : null;\n```\n\nand pin it in the scripted replay: assert `issueComments` is never called while disabled (the scripted provider can record the fetches — the AC7 test already pins the label-query side of this)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60G7KF",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/machineSmAgent.js",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the park can never re-engage — idempotency is keyed on the issue, not on the verdict episode**\n\nThe gate requires a **global** marker count of zero:\n\n```js\nif (verdict && verdict.classification === 'deterministic-infra' && faState.parkCommentCount === 0) {\n```\n\n`countParkComments` counts **all** `<!-- dmtools:failure-block ... -->` markers on the issue, across all history. Two permanent breakages follow:\n\n1. **Second episode never parks (AC4 fallout).** After the first park episode, a human removes `sm:leg-blocked` (the documented resume gesture). If the failure returns — same signature after a failed human fix, or a brand-new failure mode — a fresh `deterministic-infra` verdict can never park again: the gate returns null (count is 1), the consumed `analyzedAtCount` suppresses re-analysis until the streak rebuilds, and once it does, the analyzer re-classifies deterministic-infra and is *ignored again*. The issue blind-retries forever while the analyzer keeps correctly screaming \"deterministic\". The code comment says the protection targets the **stale verdict of the cleared episode**; the implementation suppresses every future episode.\n\n2. **A failed label-add strands the park half-applied.** `applyFailurePark` posts the comment first, then adds the label (deliberate order). If the label-add throws once (any REST hiccup), the next tick reads `parkCommentCount === 1` → gate null → the label is **never** retried — while the posted diagnostic claims \"re-dispatch is STOPPED for this issue\". Retries continue.\n\nFix direction: the park marker payload already carries `signature` — make the count signature-scoped, e.g. `countParkComments(comments, streakSignature)` counting only markers whose embedded signature matches the current streak signature. That keeps the intended AC4 protection (a stale same-signature verdict cannot re-park) while letting a genuinely new episode park, and a failed label-add re-enters the gate next tick. Please add a replay test: cleared park → new deterministic verdict for a *different* signature → expect label + exactly one new diagnostic."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60G7Nh",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/failureAnalyzer.js",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: park-marker counting is not machine-identity-gated (asymmetric trust vs the verdict markers)**\n\nVerdict markers are parsed fail-closed against the machine-author allowlist (the gh-807 rule — `parseFailureVerdicts(..., { authorLogins })`), but `countParkComments` scans **every** comment body for the `dmtools:failure-block` marker regardless of author:\n\n```js\nfunction countParkComments(comments) {\n    ...\n    var start = body.indexOf(PARK_MARKER_PREFIX);\n    if (start !== -1 && body.indexOf(PARK_MARKER_SUFFIX, start) !== -1) count++;\n```\n\nThe marker format is public (it's in this repo), so any comment-capable identity — human or compromised leg — can post a one-line `<!-- dmtools:failure-block {} -->` and permanently hold `parkCommentCount ≥ 1`. Via the gate at `machineSmAgent.js:284` that silently suppresses **every future park action and diagnostic** on the issue: the forged marker doesn't park the issue (the doctrine holds) — it prevents the machine from parking it, fail-open, with no log trace. Every other machine-marker family in this codebase is fail-closed; this is the one write-adjacent counter that isn't.\n\nSuggested fix: parse the marker payload and require a machine-authored author — e.g. route through `reviewVerdicts.parseMarkerComments` with the same `authorLogins` + `failClosed` discipline used for verdicts (the park marker JSON already exists, so a `parkMarkersFrom(comments, opts)` helper gives you both the count and the signature-scoping suggested in the sibling thread). Pin it with a forged-author test mirroring the \"machine-identity gate\" test in `test_failureAnalyzer.js`."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60G7Q5",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/failureAnalyzer.js",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: all new comments cite the wrong issue — \"gh-136\" should be \"gh-1366\"**\n\nThis work item is **gh-1366** (PR title, branch `ai/gh-1366`, `Closes #1366`), but every new comment and test-suite name in this PR references **gh-136** — the module header here (`failureAnalyzer.js — gh-136, the AI failure-analyzer leg`), plus ~30 more occurrences across `failureAnalyzer.js`, `machineSmAgent.js`, `smProvider.js`, both workflow YAMLs and all three test files: `grep -rn \"gh-136[^0-9]\" js/ .github/ workflows/` (e.g. `gh-136 AC7`, `gh-136 house protocol`, `gh-136: analyze`).\n\nMisdirected traceability: future archaeology following these comments lands on a different issue. Mechanical fix across the added lines: `s/gh-136([^0-9])/gh-1366\\1/g` — taking care to leave the genuine `gh-1363` references (the signature-normalizer module) untouched."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60G7U5",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": ".github/workflows/ai-teammate.yml:77",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: `analyze` shipped as a dispatchable leg before the factory handler exists**\n\n`analyze` is now a valid `workflow_dispatch` choice here, but the factory loop this stub delegates to (`factory-teammate.yml` in `IstiN/dmtools-agentic-workflows`) has no `leg=analyze` handler yet — as the PR description itself discloses. Until it lands, an enabled `failureAnalysis` config converts every threshold crossing into a no-op analyzer dispatch that still occupies a runner slot and an active-run tick (the SM then idles on it via the concurrency gate).\n\nOff-by-default config makes this safe to merge, so this is not a blocker — but please consider one of:\n\n1. Ship the factory leg handler first, then land this choice addition (the strict-equality crossing means nothing else breaks in the meantime).\n2. Carry a short `# analyze: requires the factory leg (gh-1366) — no-op until it ships` comment in **both** ymls, so the stub and the SM-side contract can't drift silently.\n\nAlso note the choice sets have now diverged: this live workflow is `[dev, review, rework, polish, analyze]` while `workflows/ai-teammate.yml.template` is `[dev, review, rework, analyze]` — the template never received `polish` (gh-1352), so the gap predates this PR but this change widens it. Worth backfilling `polish` in the template in the same stroke."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60G7Xu",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/failureAnalyzer.js",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: verdict free text lands unescaped in the park diagnostic's markdown**\n\nThe marker payload is marker-safe (`markerSafeReplacer` neutralizes `-->`/`<!--`), but the *rendered* body is raw markdown:\n\n```js\n(v.suspected_root_cause ? m.bold('Suspected root cause:') + ' ' + v.suspected_root_cause + '\\n' : '') +\n```\n\n`suspected_root_cause` and `suggested_fix` originate from an AI analysis of raw CI logs; a crafted log line can smuggle headings, links or fences into a machine-authored comment (e.g. a \"suggested fix\" linking somewhere). `evidence` is fenced via `m.code`, but a log line containing ` ``` ` would break that fence too. GitHub neutralizes scripts, so impact is cosmetic/phishing at most — hence suggestion-tier — but the house rule elsewhere is that AI-derived text is data, not protocol.\n\nSuggested fix: render the two free-text fields through `m.inline(...)`/`m.code(...)` (or escape markdown metacharacters), giving the diagnostic the same hygiene the marker payload already has."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60G7cF",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/machineSmAgent.js",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: \"confidence null\" renders in the park action reason**\n\nWhen the verdict carries no confidence (`verdictFromPayload` defaults it to `null`), the audit reason becomes:\n\n```\ndeterministic-infra verdict (confidence null) — parking: ...\n```\n\nSuggest omitting the parenthetical when `confidence` is null — the same degrade-to-omission rule the gh-1366 report applies to a missing phase (\"no phase → no Phase line, never the literal string 'undefined'\").\n\n```js\n'(' + (typeof verdict.confidence === 'number' ? 'confidence ' + verdict.confidence + ') ' : '') + ...\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:a14370c8",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — `crap` ratchet failed on head 351bd614**\n\nThe `crap` check (threshold 8, ratchet \"CRAP may only decrease\") fails on this PR's head — [run 42039749348](https://github.com/IstiN/dmtools-agents/actions/runs/42039749348/job/127287194643). Unit tests are green (8815 passed, 0 failed); this is purely the complexity ratchet:\n\n```\nREGRESSION  js/machineSmAgent.js::action: 9 -> 11\nNEW > 8  js/common/failureAnalyzer.js::resolveFailureAnalysisConfig: 16\nNEW > 8  js/common/failureAnalyzer.js::buildFailureVerdictComment: 13\nNEW > 8  js/common/failureAnalyzer.js::verdictFromPayload: 13.3\nNEW > 8  js/common/failureAnalyzer.js::parkDiagnosticComment: 10\nNEW > 8  js/machineSmAgent.js::collectFailureAnalysisState: 10.8\n1 regression(s), 5 new over threshold, 0 improvement(s), 0 removed\n```\n\nSuggested decompositions (keeping behavior verbatim, per the gh-1185 house pattern already used in this file):\n\n- `resolveFailureAnalysisConfig` (CRAP 16): extract per-knob validators (`afterFailuresOf(block)`, `blockedLabelOf(block)`, `backoffOf(block)`) — each becomes a small linear function and the resolver becomes a 3-call sequence.\n- `buildFailureVerdictComment` / `verdictFromPayload` (13 / 13.3): extract the shared payload-shaping (`verdictPayloadOf(record)`) so build and parse mirror one function instead of two copies of the same defaults ladder.\n- `parkDiagnosticComment` (10): split the marker line, the heading/summary and the optional sections into helpers.\n- `collectFailureAnalysisState` (10.8): extract the state derivation (`failureAnalysisStateFrom(comments, machineLogins)`) from the try/catch wrapper.\n- `action` (9 → 11): the new `machineLabels.push(...)` branch pushed the dispatcher over — extract the label-list assembly (`machineQueryLabelsOf(cfg)`).\n\nThis must land before merge: the pre-merge gate is red and rework is armed (red 1/3 on this head)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:48e4719e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: failure-analysis state is collected even while the feature is disabled**\n\n`reconcileIssue` calls `collectFailureAnalysisState(...)` unconditionally:\n\n```js\nbuilt.state.failureAnalysis = collectFailureAnalysisState(provider, issue.number, cfg.machineLogins);\n```\n\nWith the feature off (missing `failureAnalysis` config → `{ enabled: false }` — the default for every existing consumer), this still performs **one `github_get_pr_comments` REST call per machine-managed issue per tick** (up to `issueLimit` = 50) and parses the full comment history — for gates that can never fire, since both `failureAnalysisGate` and `gateBlindRedispatch` check `failureAnalysisEnabledOf(cfg)` first and bail.\n\nThe PR's own invariant — \"disabled/unreadable/unparseable leaves the loop byte-identical to today\" — holds for *decisions* but not for *I/O*: this is a real API-quota/latency regression for every deployment that never opts in, and it also runs for issues the engine-skip (`blocked`/`needs-human`/active run) would immediately discard.\n\nSuggested fix — gate it exactly like the sibling `blockedLabel` push in `action()`:\n\n```js\nbuilt.state.failureAnalysis = (cfg.failureAnalysis && cfg.failureAnalysis.enabled)\n    ? collectFailureAnalysisState(provider, issue.number, cfg.machineLogins)\n    : null;\n```\n\nand pin it in the scripted replay: assert `issueComments` is never called while disabled (the scripted provider can record the fetches — the AC7 test already pins the label-query side of this)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:8a05a7c0",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the park can never re-engage — idempotency is keyed on the issue, not on the verdict episode**\n\nThe gate requires a **global** marker count of zero:\n\n```js\nif (verdict && verdict.classification === 'deterministic-infra' && faState.parkCommentCount === 0) {\n```\n\n`countParkComments` counts **all** `<!-- dmtools:failure-block ... -->` markers on the issue, across all history. Two permanent breakages follow:\n\n1. **Second episode never parks (AC4 fallout).** After the first park episode, a human removes `sm:leg-blocked` (the documented resume gesture). If the failure returns — same signature after a failed human fix, or a brand-new failure mode — a fresh `deterministic-infra` verdict can never park again: the gate returns null (count is 1), the consumed `analyzedAtCount` suppresses re-analysis until the streak rebuilds, and once it does, the analyzer re-classifies deterministic-infra and is *ignored again*. The issue blind-retries forever while the analyzer keeps correctly screaming \"deterministic\". The code comment says the protection targets the **stale verdict of the cleared episode**; the implementation suppresses every future episode.\n\n2. **A failed label-add strands the park half-applied.** `applyFailurePark` posts the comment first, then adds the label (deliberate order). If the label-add throws once (any REST hiccup), the next tick reads `parkCommentCount === 1` → gate null → the label is **never** retried — while the posted diagnostic claims \"re-dispatch is STOPPED for this issue\". Retries continue.\n\nFix direction: the park marker payload already carries `signature` — make the count signature-scoped, e.g. `countParkComments(comments, streakSignature)` counting only markers whose embedded signature matches the current streak signature. That keeps the intended AC4 protection (a stale same-signature verdict cannot re-park) while letting a genuinely new episode park, and a failed label-add re-enters the gate next tick. Please add a replay test: cleared park → new deterministic verdict for a *different* signature → expect label + exactly one new diagnostic."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:de453516",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: park-marker counting is not machine-identity-gated (asymmetric trust vs the verdict markers)**\n\nVerdict markers are parsed fail-closed against the machine-author allowlist (the gh-807 rule — `parseFailureVerdicts(..., { authorLogins })`), but `countParkComments` scans **every** comment body for the `dmtools:failure-block` marker regardless of author:\n\n```js\nfunction countParkComments(comments) {\n    ...\n    var start = body.indexOf(PARK_MARKER_PREFIX);\n    if (start !== -1 && body.indexOf(PARK_MARKER_SUFFIX, start) !== -1) count++;\n```\n\nThe marker format is public (it's in this repo), so any comment-capable identity — human or compromised leg — can post a one-line `<!-- dmtools:failure-block {} -->` and permanently hold `parkCommentCount ≥ 1`. Via the gate at `machineSmAgent.js:284` that silently suppresses **every future park action and diagnostic** on the issue: the forged marker doesn't park the issue (the doctrine holds) — it prevents the machine from parking it, fail-open, with no log trace. Every other machine-marker family in this codebase is fail-closed; this is the one write-adjacent counter that isn't.\n\nSuggested fix: parse the marker payload and require a machine-authored author — e.g. route through `reviewVerdicts.parseMarkerComments` with the same `authorLogins` + `failClosed` discipline used for verdicts (the park marker JSON already exists, so a `parkMarkersFrom(comments, opts)` helper gives you both the count and the signature-scoping suggested in the sibling thread). Pin it with a forged-author test mirroring the \"machine-identity gate\" test in `test_failureAnalyzer.js`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:89310a62",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: all new comments cite the wrong issue — \"gh-136\" should be \"gh-1366\"**\n\nThis work item is **gh-1366** (PR title, branch `ai/gh-1366`, `Closes #1366`), but every new comment and test-suite name in this PR references **gh-136** — the module header here (`failureAnalyzer.js — gh-136, the AI failure-analyzer leg`), plus ~30 more occurrences across `failureAnalyzer.js`, `machineSmAgent.js`, `smProvider.js`, both workflow YAMLs and all three test files: `grep -rn \"gh-136[^0-9]\" js/ .github/ workflows/` (e.g. `gh-136 AC7`, `gh-136 house protocol`, `gh-136: analyze`).\n\nMisdirected traceability: future archaeology following these comments lands on a different issue. Mechanical fix across the added lines: `s/gh-136([^0-9])/gh-1366\\1/g` — taking care to leave the genuine `gh-1363` references (the signature-normalizer module) untouched."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:337162c3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: `analyze` shipped as a dispatchable leg before the factory handler exists**\n\n`analyze` is now a valid `workflow_dispatch` choice here, but the factory loop this stub delegates to (`factory-teammate.yml` in `IstiN/dmtools-agentic-workflows`) has no `leg=analyze` handler yet — as the PR description itself discloses. Until it lands, an enabled `failureAnalysis` config converts every threshold crossing into a no-op analyzer dispatch that still occupies a runner slot and an active-run tick (the SM then idles on it via the concurrency gate).\n\nOff-by-default config makes this safe to merge, so this is not a blocker — but please consider one of:\n\n1. Ship the factory leg handler first, then land this choice addition (the strict-equality crossing means nothing else breaks in the meantime).\n2. Carry a short `# analyze: requires the factory leg (gh-1366) — no-op until it ships` comment in **both** ymls, so the stub and the SM-side contract can't drift silently.\n\nAlso note the choice sets have now diverged: this live workflow is `[dev, review, rework, polish, analyze]` while `workflows/ai-teammate.yml.template` is `[dev, review, rework, analyze]` — the template never received `polish` (gh-1352), so the gap predates this PR but this change widens it. Worth backfilling `polish` in the template in the same stroke."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:fa76c0df",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: verdict free text lands unescaped in the park diagnostic's markdown**\n\nThe marker payload is marker-safe (`markerSafeReplacer` neutralizes `-->`/`<!--`), but the *rendered* body is raw markdown:\n\n```js\n(v.suspected_root_cause ? m.bold('Suspected root cause:') + ' ' + v.suspected_root_cause + '\\n' : '') +\n```\n\n`suspected_root_cause` and `suggested_fix` originate from an AI analysis of raw CI logs; a crafted log line can smuggle headings, links or fences into a machine-authored comment (e.g. a \"suggested fix\" linking somewhere). `evidence` is fenced via `m.code`, but a log line containing ` ``` ` would break that fence too. GitHub neutralizes scripts, so impact is cosmetic/phishing at most — hence suggestion-tier — but the house rule elsewhere is that AI-derived text is data, not protocol.\n\nSuggested fix: render the two free-text fields through `m.inline(...)`/`m.code(...)` (or escape markdown metacharacters), giving the diagnostic the same hygiene the marker payload already has."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:65d9ce24",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: \"confidence null\" renders in the park action reason**\n\nWhen the verdict carries no confidence (`verdictFromPayload` defaults it to `null`), the audit reason becomes:\n\n```\ndeterministic-infra verdict (confidence null) — parking: ...\n```\n\nSuggest omitting the parenthetical when `confidence` is null — the same degrade-to-omission rule the gh-1366 report applies to a missing phase (\"no phase → no Phase line, never the literal string 'undefined'\").\n\n```js\n'(' + (typeof verdict.confidence === 'number' ? 'confidence ' + verdict.confidence + ') ' : '') + ...\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:6feb6ee7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 351bd614924fa1fcb1633a940bb2d85c8f6602de — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:90d8e32a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: Red `crap` gate blocks merge — 1 complexity regression (`machineSmAgent::action` 9→11) plus 5 new over-threshold functions in the new analyzer code; unit tests themselves are green (8815 passed). Beyond CI, three important findings in the failure-analyzer: state collection runs per issue per tick even while the feature is disabled, the park gate's global marker count can permanently disable re-parking after a cleared episode or a failed label-add, and the park-marker counter is not machine-identity-gated (a forged one-line marker silently suppresses parking).\n\n**Key Issues**:\n- 🚨 `crap` ratchet: `resolveFailureAnalysisConfig` 16, `buildFailureVerdictComment` 13, `verdictFromPayload` 13.3, `parkDiagnosticComment` 10, `collectFailureAnalysisState` 10.8, `action` 9→11\n- ⚠️ `collectFailureAnalysisState` runs while disabled — extra `github_get_pr_comments` call per issue per tick (contradicts the \"byte-identical when disabled\" invariant)\n- ⚠️ Park idempotency keyed on the issue, not the episode — re-park impossible after the AC4 resume gesture or a failed label-add\n- ⚠️ `countParkComments` ignores comment authors — forged `dmtools:failure-block` markers defeat the park gate (gh-807 asymmetry)\n- 💡/🪶: `gh-136` vs `gh-1366` references across all new comments; factory `analyze`-leg gap (author-disclosed; suggest a stub comment); unescaped verdict free text in the diagnostic markdown; \"confidence null\" in the park reason\n\n**Next Steps**:\n1. Decompose the 6 over-threshold functions to restore the `crap` ratchet (per-knob validators, shared payload shaper, extracted state derivation)\n2. Gate state collection on `failureAnalysis.enabled`; make park counting signature-scoped and author-gated\n3. Fix the `gh-1366` references; backfill `polish` in `workflows/ai-teammate.yml.template` while syncing the `analyze` choice"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:9b3833f3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Validation CI went red on the head — merge aborted, rework re-queued. (linked issue #1366 re-armed) (approval latch kept — no re-review after fixes)\n🔴 red head 8232900f8280a39595085a70efc07d0cd0864fde — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)"
+    }
+  ]
+}
