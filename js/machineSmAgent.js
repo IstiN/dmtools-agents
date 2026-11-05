@@ -479,20 +479,26 @@ function resolveSelectedThread(provider, prNumber, t, policy, ledgerOk, logins, 
     }
 }
 
+// The per-tag triage counters (one shape, two consumers — the no-thread
+// early return and the live tally; `duplicate` rides the audit log too).
+function triageCounters() {
+    return { resolved: 0, fixed: 0, wontfix: 0, duplicate: 0, defered: 0, needsFixOrDefer: 0 };
+}
+
 function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
     var logins = machineLoginsOf(cfg);
     var gate = triageGate(provider, prNumber, headSha, logins, cfg);
-    var none = { resolved: 0, fixed: 0, wontfix: 0, duplicate: 0, defered: 0, needsFixOrDefer: 0 };
-    if (!gate.ok) return none;
+    if (!gate.ok) return triageCounters();
     var policy = (cfg && cfg.reviewPolicy) || reviewPolicyModule.defaultPolicy();
     var ledgerOk = ledgerAvailableOn(provider);
-    var out = { resolved: 0, fixed: 0, wontfix: 0, duplicate: 0, defered: 0, needsFixOrDefer: 0 };
+    var out = triageCounters();
     gate.sel.resolvable.forEach(function (t) {
         resolveSelectedThread(provider, prNumber, t, policy, ledgerOk, logins, out);
     });
     console.log('  ✅ resolveSuggestionThreads on PR #' + prNumber + ': resolved ' + out.resolved +
         '/' + gate.sel.resolvable.length + ' machine thread(s) — fixed ' + out.fixed + ', wontfix ' +
-        out.wontfix + ', defered ' + out.defered + ', needs-fix-or-defer ' + out.needsFixOrDefer);
+        out.wontfix + ', duplicate ' + out.duplicate + ', defered ' + out.defered +
+        ', needs-fix-or-defer ' + out.needsFixOrDefer);
     return out;
 }
 

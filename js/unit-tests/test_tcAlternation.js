@@ -21,7 +21,7 @@ var registry = loadModule('js/common/tcRunRegistry.js', makeRequire({
     './reviewVerdicts.js': reviewVerdicts
 }));
 var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
-var tcLedger = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE, 
+var tcLedger = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
     './reviewVerdicts.js': reviewVerdicts
 }));
 var alt = loadModule('js/common/tcAlternation.js', makeRequire({

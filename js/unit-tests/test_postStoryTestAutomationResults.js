@@ -46,7 +46,7 @@ function loadPostStoryTestAutomationResults(mocks) {
         './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
             './reviewVerdicts.js': reviewVerdicts
         }), allMocks),
-        './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})), 
+        './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})),
             './reviewVerdicts.js': reviewVerdicts
         }), allMocks),
         './machineAuthor.js': machineAuthor
@@ -65,7 +65,7 @@ function loadPostStoryTestAutomationResults(mocks) {
             './common/pullRequest.js': prHelper,
             './postStoryTestAutomationShared.js': sharedModule,
             './common/tcTriage.js': loadModule('js/common/tcTriage.js', makeRequire({}), allMocks),
-            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})), 
+            './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})),
                 './reviewVerdicts.js': reviewVerdicts
             }), allMocks),
             './common/tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
@@ -75,7 +75,7 @@ function loadPostStoryTestAutomationResults(mocks) {
                 './tcRunRegistry.js': loadModule('js/common/tcRunRegistry.js', makeRequire({
                     './reviewVerdicts.js': reviewVerdicts
                 }), allMocks),
-                './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})), 
+                './tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})),
                     './reviewVerdicts.js': reviewVerdicts
                 }), allMocks)
             }), allMocks),
@@ -1473,7 +1473,7 @@ var gh1331ReviewVerdicts = loadModule('js/common/reviewVerdicts.js', makeRequire
 var gh1331Registry = loadModule('js/common/tcRunRegistry.js', makeRequire({
     './reviewVerdicts.js': gh1331ReviewVerdicts
 }));
-var gh1331Ledger = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})), 
+var gh1331Ledger = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})),
     './reviewVerdicts.js': gh1331ReviewVerdicts
 }));
 var gh1331Alternation = loadModule('js/common/tcAlternation.js', makeRequire({
