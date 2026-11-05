@@ -93,6 +93,17 @@ function refreshFinding(existing, incoming, at, refreshKeys) {
     return existing;
 }
 
+// A fresh entry carries the lifecycle defaults the core owns; the
+// consumer's normalize (or the raw input) supplies identity + evidence
+// fields on top.
+function applyLifecycleDefaults(incoming, at) {
+    if (incoming.status === undefined) incoming.status = 'open';
+    if (incoming.firstSeenAt === undefined) incoming.firstSeenAt = at;
+    if (incoming.lastSeenAt === undefined) incoming.lastSeenAt = at;
+    if (incoming.occurrences === undefined) incoming.occurrences = 1;
+    return incoming;
+}
+
 /**
  * Appends a finding into a deep-copied ledger: identity match refreshes,
  * otherwise the normalized entry is pushed. `normalize(input, at)` is the
@@ -111,14 +122,7 @@ function appendFinding(prev, input, normalize, refreshKeys) {
     if (existing) {
         refreshFinding(existing, incoming, at, refreshKeys);
     } else {
-        // A fresh entry carries the lifecycle defaults the core owns;
-        // the consumer's normalize (or the raw input) supplies identity
-        // + evidence fields on top.
-        if (incoming.status === undefined) incoming.status = 'open';
-        if (incoming.firstSeenAt === undefined) incoming.firstSeenAt = at;
-        if (incoming.lastSeenAt === undefined) incoming.lastSeenAt = at;
-        if (incoming.occurrences === undefined) incoming.occurrences = 1;
-        l.findings.push(incoming);
+        l.findings.push(applyLifecycleDefaults(incoming, at));
     }
     return l;
 }

@@ -1122,6 +1122,26 @@ suite('machineSm disposition loop (gh-1352)', function () {
         assert.equal(p.calls.resolves.length, 0);
     });
 
+    test('a non-string head sha cannot stamp a marker — the lap stays home, the threads triage (fail closed)', function () {
+        // crap4js coverage lap: pins the dispatchPolishLap !marker guard —
+        // a numeric head passes the gate (latestVerdictForHead String()-/
+        // prefix-matches) but buildPolishLapMarker rejects non-strings, so
+        // the unbuildable marker keeps the leg home and hands to triage.
+        var NUMERIC_HEAD = 7654321;
+        var p = loopProvider([sugg(1)], {
+            record: { head: '7654321abcdef0123456789', verdict: 'APPROVE', blocking: 0, important: 0,
+                      suggestions: 2, at: '2026-11-04T00:00:00.000Z', source: 'pr_review.json' }
+        });
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: NUMERIC_HEAD, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished, 'a head the marker builder rejects never dispatches unstamped');
+        assert.equal(p.calls.dispatches.length, 0, 'no dispatch without the once-per-head stamp');
+        assert.ok(p.calls.posts.every(function (body) { return body.indexOf('dmtools:polish-lap') === -1; }),
+            'no lap-marker comment is stamped (only the triage ledger marker may post)');
+        assert.equal(p.calls.resolves.length, 1, 'the threads fall open to triage with dispositions');
+    });
+
     test('a provider without postPrComment never reaches the polish dispatch', function () {
         var p = loopProvider([sugg(1)]);
         delete p.postPrComment;

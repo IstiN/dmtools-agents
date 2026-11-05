@@ -15,13 +15,6 @@ function core() {
     return loadModule('js/common/ledgerCore.js', makeRequire({}), {});
 }
 
-function finding(id, over) {
-    var f = { id: id, status: 'open', firstSeenAt: '2026-11-01T00:00:00.000Z',
-              lastSeenAt: '2026-11-01T00:00:00.000Z', occurrences: 1 };
-    for (var k in (over || {})) f[k] = over[k];
-    return f;
-}
-
 suite('ledgerCore — shape + identity append/refresh', function () {
     var lc = core();
 

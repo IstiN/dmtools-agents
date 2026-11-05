@@ -105,6 +105,20 @@ suite('polishLap — bounds + plan (top-K, overflow to triage)', function () {
             'nits ride triage under default (round none), IMPORTANT is lap-gated');
     });
 
+    test('null entries, already-resolved threads and unclassifiable bodies stay out of the plan', function () {
+        // crap4js coverage lap: pins the skip branches — a null list entry,
+        // a resolved thread and a body with no severity marker are all
+        // skipped (the plan never laps a closed or unclassifiable thread).
+        var kept = pl.polishTierThreads([
+            null,
+            { threadId: 'PRRT_R', resolved: true, body: '💡 SUGGESTION: already closed' },
+            thread('PRRT_1', 'SUGGESTION'),
+            { threadId: 'PRRT_U', resolved: false, body: 'free-form reviewer prose — no severity marker' }
+        ], null);
+        assert.deepEqual(kept.map(function (t) { return t.threadId; }), ['PRRT_1'],
+            'resolved threads and bodies without a severity marker never ride the lap');
+    });
+
     test('custom bounds flow through the resolved policy', function () {
         var policy = reviewPolicy.validateReviewPolicy({ bounds: { polishMaxThreads: 2 } }, 'test');
         var threads = [];
