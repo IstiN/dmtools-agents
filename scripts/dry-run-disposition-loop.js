@@ -95,6 +95,8 @@ var machineSmAgent = loadModule('js/machineSmAgent.js', makeRequire({
     './common/smProvider.js': { createSmProvider: function () { return {}; } },
     './common/reviewVerdicts.js': reviewVerdicts,
     './common/machineAuthor.js': machineAuthor,
+    './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js',
+        makeRequire({ './machineAuthor.js': machineAuthor, './reviewVerdicts.js': reviewVerdicts }), {}),
     './common/reviewPolicy.js': reviewPolicy,
     './common/reviewDispositions.js': reviewDispositions,
     './common/reviewDebtLedger.js': reviewDebtLedger,

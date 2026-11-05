@@ -27,6 +27,7 @@ var reviewPolicy = loadModule('js/common/reviewPolicy.js',
 var HEAD_A = 'aaaabbbbccccddddeeeeffff0000111122223333';
 var HEAD_B = 'bbbbccccddddeeeeffff0000111122223333aaa1';
 var HEAD_C = 'ccccddddeeeeffff0000111122223333aaa1bbbb2';
+var HEAD_R = 'rrr000111222333eeefff000111222333rrr44444';
 
 function record(over) {
     var rec = { head: HEAD_A, verdict: 'APPROVE', blocking: 0, important: 0,
@@ -163,18 +164,70 @@ suite('polishLap — once per head + instability budget (cross-head bound)', fun
             '2 consecutive laps on consecutive heads -> stop polishing');
     });
 
-    test('a rework lap between polish laps resets the budget (not consecutive polish)', function () {
-        // The lap list carries kind; polishLap markers only record polish
-        // laps, so the interleave shows up as distinct lap sources — here:
-        // the caller passes only polish laps, and a non-consecutive head
-        // sequence (same head twice = one lap per head impossible) is
-        // exercised by the dedup path instead.
-        var laps = [
-            { head: HEAD_A, at: '2026-11-04T01:00:00.000Z' },
-            { head: HEAD_A, at: '2026-11-04T01:30:00.000Z' }
-        ];
+    test('a machine-stamped rework lap between polish laps resets the budget (the documented consecutive bound)', function () {
+        // The interleave the name always promised, now actually constructed:
+        // polish HEAD_A → a real rework lap on HEAD_R (the machine-stamped
+        // dmtools:rework-lap evidence) → polish HEAD_B → deciding HEAD_C.
+        // The polish laps are NOT consecutive — the budget resets and the
+        // fresh head still dispatches (a PR interleaving real rework laps
+        // never goes permanently polish-dead).
+        var laps = pl.mergedLapHistory(
+            [
+                { head: HEAD_A, at: '2026-11-04T01:00:00.000Z' },
+                { head: HEAD_B, at: '2026-11-04T03:00:00.000Z' }
+            ],
+            [{ head: HEAD_R, at: '2026-11-04T02:00:00.000Z', pushed: 1, resolved: 2 }]);
+        assert.equal(pl.instabilityBudgetExhausted(laps, HEAD_C), false,
+            'a rework lap between the polish laps breaks consecutiveness — the budget resets');
+    });
+
+    test('a rework lap BEFORE the run does not rescue it — 2 consecutive polish laps still exhaust', function () {
+        var laps = pl.mergedLapHistory(
+            [
+                { head: HEAD_A, at: '2026-11-04T02:00:00.000Z' },
+                { head: HEAD_B, at: '2026-11-04T03:00:00.000Z' }
+            ],
+            [{ head: HEAD_R, at: '2026-11-04T01:00:00.000Z', pushed: 1 }]);
+        assert.equal(pl.instabilityBudgetExhausted(laps, HEAD_C), true,
+            'the reset applies BETWEEN polish laps — a rework lap before the run is history');
+    });
+
+    test('duplicate head entries collapse — one lap per head (same-head dedup)', function () {
+        // once-per-head makes this shape impossible in practice; the budget
+        // counts DISTINCT heads in the consecutive run.
+        var laps = pl.mergedLapHistory(
+            [
+                { head: HEAD_A, at: '2026-11-04T01:00:00.000Z' },
+                { head: HEAD_A, at: '2026-11-04T01:30:00.000Z' }
+            ],
+            []);
         assert.equal(pl.instabilityBudgetExhausted(laps, HEAD_B), false,
             'duplicate head entries collapse — one lap per head');
+    });
+
+    test('the reset rides the decision: after polish→rework→polish the third head still dispatches', function () {
+        var laps = pl.mergedLapHistory(
+            [
+                { head: HEAD_A, at: '2026-11-04T01:00:00.000Z' },
+                { head: HEAD_B, at: '2026-11-04T03:00:00.000Z' }
+            ],
+            [{ head: HEAD_R, at: '2026-11-04T02:00:00.000Z', pushed: 1, resolved: 2 }]);
+        var d = pl.polishDecision(record({ suggestions: 2 }), reviewPolicy.defaultPolicy(), [], HEAD_C, laps);
+        assert.equal(d.dispatch, true, 'the budget counts CONSECUTIVE polish laps — the interleave reset lets this dispatch');
+    });
+
+    test('without the interleave the decision still hands off (instability-budget)', function () {
+        var laps = pl.mergedLapHistory(
+            [
+                { head: HEAD_A, at: '2026-11-04T01:00:00.000Z' },
+                { head: HEAD_B, at: '2026-11-04T02:00:00.000Z' }
+            ],
+            []);
+        var d = pl.polishDecision(record({ suggestions: 2 }), reviewPolicy.defaultPolicy(), [], HEAD_C, laps);
+        assert.equal(d.dispatch, false);
+        assert.equal(d.reason, 'instability-budget',
+            'AC5: 2 consecutive polish laps -> third round triage-resolves; no third lap');
+        assert.equal(d.triageRest, true, 'the decision hands the rest to triage');
     });
 
     test('the third round after an exhausted budget triage-resolves (no dispatch)', function () {
@@ -247,5 +300,30 @@ suite('polishLap — the dmtools:polish-lap marker family', function () {
         var laps = pl.parsePolishLapMarkers([{ body: body, user: { login: 'bot' } }],
             { authorLogins: ['bot'] });
         assert.deepEqual(laps[0].resolvedThreadIds, ['PRRT_1', 'PRRT_2']);
+    });
+
+    test('the budget round-trips the merged families: polish + rework markers through the parses', function () {
+        var rlg = loadModule('js/common/reworkLoopGuard.js', makeRequire({
+            './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            './reviewVerdicts.js': reviewVerdictsReal()
+        }), {});
+        var comments = [
+            { body: pl.buildPolishLapMarker(HEAD_A, { threads: 1, at: '2026-11-04T01:00:00.000Z' }),
+              user: { login: 'dmtools-factory-bot' } },
+            { body: rlg.buildLapMarker(HEAD_R, 1, 2, null, '2026-11-04T02:00:00.000Z'),
+              user: { login: 'dmtools-factory-bot' } },
+            { body: pl.buildPolishLapMarker(HEAD_B, { threads: 1, at: '2026-11-04T03:00:00.000Z' }),
+              user: { login: 'dmtools-factory-bot' } }
+        ];
+        var allow = ['dmtools-factory-bot'];
+        var laps = pl.mergedLapHistory(
+            pl.parsePolishLapMarkers(comments, { authorLogins: allow }),
+            rlg.parseLapMarkers(comments, { authorLogins: allow }));
+        assert.deepEqual(laps.map(function (l) { return l.kind; }),
+            ['polish', 'rework', 'polish'], 'oldest-first merged history, kinds tagged');
+        assert.deepEqual(laps.map(function (l) { return l.head; }), [HEAD_A, HEAD_R, HEAD_B],
+            'the time sort interleaves the two marker families');
+        assert.equal(pl.instabilityBudgetExhausted(laps, HEAD_C), false,
+            'the rework lap between the polish laps resets the budget');
     });
 });

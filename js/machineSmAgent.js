@@ -61,6 +61,10 @@ var reviewDispositionsModule = require('./common/reviewDispositions.js');
 var reviewDebtLedgerModule = require('./common/reviewDebtLedger.js');
 var reviewPolicyModule = require('./common/reviewPolicy.js');
 var polishLapModule = require('./common/polishLap.js');
+// gh-1352 rework round: the instability budget counts CONSECUTIVE polish
+// laps — the machine-stamped dmtools:rework-lap markers are the
+// non-polish dispatch evidence that breaks consecutiveness (the reset).
+var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure decision core — decideActions(state, cfg) → actions[]
@@ -518,7 +522,7 @@ function tryPolishLap(provider, issue, issueNo, prNumber, headSha, cfg) {
             return { polished: true, plan: d.plan };
         }
         if (d && d.trigger) {
-            console.log('  ⏭️  gh-' + issue.number + ' polish lap not dispatched (' + d.reason +
+            console.log('  ⏭️  gh-' + issueNo + ' polish lap not dispatched (' + d.reason +
                 ') — the threads triage below');
         }
     } catch (ePolish) {
@@ -614,7 +618,14 @@ function polishGateDecision(provider, prNumber, headSha, cfg) {
     var effective = reviewVerdictsModule.latestVerdictForHead(records, headSha);
     if (!effective) return null;
     var policy = (cfg && cfg.reviewPolicy) || reviewPolicyModule.defaultPolicy();
-    var laps = polishLapModule.parsePolishLapMarkers(provider.prCommentList(prNumber), { authorLogins: logins });
+    // The cross-head bounds consume the MERGED lap history: polish-lap
+    // markers + rework-lap markers (the non-polish dispatch evidence),
+    // one time-sorted stream — the budget counts CONSECUTIVE polish laps
+    // and resets when a rework lap sits between them (gh-1352 review).
+    var comments = provider.prCommentList(prNumber);
+    var laps = polishLapModule.mergedLapHistory(
+        polishLapModule.parsePolishLapMarkers(comments, { authorLogins: logins }),
+        reworkLoopGuardModule.parseLapMarkers(comments, { authorLogins: logins }));
     return polishLapModule.polishDecision(effective.record, policy,
         provider.reviewThreadList(prNumber), headSha, laps);
 }

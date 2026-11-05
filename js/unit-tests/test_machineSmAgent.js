@@ -42,6 +42,8 @@ function agentModuleMap(projectConfig, holder) {
         './common/smProvider.js': { createSmProvider: function () { return holder ? holder.provider : {}; } },
         './common/reviewVerdicts.js': rvShared(),
         './common/machineAuthor.js': maShared(),
+        './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js',
+            makeRequire({ './machineAuthor.js': maShared(), './reviewVerdicts.js': rvShared() }), {}),
         './common/reviewPolicy.js': policy,
         './common/reviewDispositions.js': loadModule('js/common/reviewDispositions.js',
             makeRequire({ './reviewVerdicts.js': rvShared(), './reviewPolicy.js': policy }), {}),
@@ -1270,6 +1272,33 @@ suite('machineSm disposition loop (gh-1352)', function () {
         assert.ok(!out.polished, 'the budget stops the polish cycle');
         assert.equal(p.calls.dispatches.length, 0);
         assert.equal(p.calls.resolves.length, 2);
+    });
+
+    test('a rework lap between polish laps resets the budget through the gate (the lap dispatches)', function () {
+        // The documented consecutive bound, wired: polishLap markers +
+        // dmtools:rework-lap markers parse from the SAME comment list and
+        // merge into one history — the rework lap between the two polish
+        // laps breaks consecutiveness, so a third head still dispatches.
+        var rlg = loadModule('js/common/reworkLoopGuard.js', makeRequire({
+            './machineAuthor.js': maShared(),
+            './reviewVerdicts.js': rvShared()
+        }), {});
+        var comments = [
+            { body: pl.buildPolishLapMarker('head1', { threads: 1, at: '2026-11-04T01:00:00.000Z' }),
+              user: { login: 'ai-teammate' } },
+            { body: rlg.buildLapMarker('rework-head', 1, 1, null, '2026-11-04T02:00:00.000Z'),
+              user: { login: 'ai-teammate' } },
+            { body: pl.buildPolishLapMarker('head2', { threads: 1, at: '2026-11-04T03:00:00.000Z' }),
+              user: { login: 'ai-teammate' } }
+        ];
+        var p = loopProvider([sugg(1)], { comments: comments });
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(out.polished, 'the rework lap between the polish laps resets the budget — the lap dispatches');
+        assert.equal(p.calls.dispatches.length, 1);
+        assert.equal(p.calls.dispatches[0].leg, 'polish');
+        assert.equal(p.calls.resolves.length, 0, 'the lap owns the threads this tick');
     });
 
     test('allowPolish:false (the post-merge hygiene pass) never dispatches a lap', function () {

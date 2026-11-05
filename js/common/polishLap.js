@@ -19,7 +19,12 @@
  *              instability budget (a CROSS-HEAD bound — "once per head"
  *              alone cannot stop a polish cycle that moves the head): the
  *              machine stops polishing and hands the rest to triage +
- *              digest.
+ *              digest. A machine-stamped NON-polish lap (the
+ *              dmtools:rework-lap marker family) between two polish laps
+ *              breaks consecutiveness — the budget resets (gh-1352
+ *              review round: the budget must count CONSECUTIVE polish
+ *              laps, not every polish lap of the PR's lifetime; the
+ *              rework-lap markers are the non-polish dispatch evidence).
  *
  * Pure module — no dmtools globals. GraalJS-clean (var + plain functions,
  * JSON-safe data). Requires hoisted (gh-823).
@@ -110,28 +115,61 @@ function planLap(threads, policy) {
 // ── the cross-head bounds ────────────────────────────────────────────────────
 
 /**
- * Whether THIS head already carries a polish lap (once per head).
+ * Whether THIS head already carries a polish lap (once per head). The
+ * merged history's non-polish entries (kind rework) never count — a
+ * rework lap on this head is not a polish lap on it.
  */
 function ranOnHead(laps, headSha) {
     var head = String(headSha || '');
-    return (laps || []).some(function (l) { return !!l && String(l.head) === head; });
+    return (laps || []).some(function (l) {
+        if (!l || l.kind === 'rework') return false;
+        return String(l.head) === head;
+    });
 }
 
 /**
- * The instability budget (gh-1352): true when the most recent polish laps
- * cover >= INSTABILITY_BUDGET DISTINCT consecutive heads (and none of them
- * is the head being decided — a fresh head is decided by once-per-head).
- * Duplicate entries for the same head collapse (one lap per head).
+ * The instability budget (gh-1352): true when the run of CONSECUTIVE
+ * polish laps — newest backward, stopping at a machine-stamped non-polish
+ * lap (the documented reset) — covers >= INSTABILITY_BUDGET DISTINCT
+ * heads other than the head being decided (a fresh head is decided by
+ * once-per-head). Duplicate entries for the same head collapse (one lap
+ * per head). Entries without a kind are polish laps (the polish-lap
+ * marker family only records polish laps).
  */
 function instabilityBudgetExhausted(laps, headSha) {
     var head = String(headSha || '');
     var heads = {};
-    (laps || []).forEach(function (l) {
-        if (!l || !l.head) return;
-        if (String(l.head) === head) return;
+    var list = (laps || []);
+    for (var i = list.length - 1; i >= 0; i--) {
+        var l = list[i];
+        if (!l || !l.head) continue;
+        if (String(l.head) === head) continue;
+        if (l.kind === 'rework') return false; // a non-polish lap between polish laps — the reset
         heads[String(l.head)] = true;
-    });
+        if (Object.keys(heads).length >= INSTABILITY_BUDGET) return true;
+    }
     return Object.keys(heads).length >= INSTABILITY_BUDGET;
+}
+
+/**
+ * The combined lap history the cross-head bounds consume: the parsed
+ * polish-lap markers + the parsed non-polish (rework) lap markers, each
+ * entry tagged with its kind, time-sorted oldest-first. A machine-stamped
+ * rework lap BETWEEN two polish laps is the dispatch evidence that breaks
+ * consecutiveness (the budget resets); before/after the run it is
+ * history. Rework entries carry head+at only — the budget and once-per-
+ * head read no rework payload fields.
+ */
+function mergedLapHistory(polishLaps, reworkLaps) {
+    var out = [];
+    (polishLaps || []).forEach(function (l) {
+        if (l && l.head) out.push({ head: String(l.head), at: String(l.at || ''), kind: 'polish', lap: l });
+    });
+    (reworkLaps || []).forEach(function (m) {
+        if (m && m.head) out.push({ head: String(m.head), at: String(m.at || ''), kind: 'rework' });
+    });
+    out.sort(function (a, b) { return (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0); });
+    return out;
 }
 
 // ── the decision ─────────────────────────────────────────────────────────────
@@ -246,6 +284,7 @@ if (typeof module !== 'undefined' && module.exports) {
         planLap: planLap,
         ranOnHead: ranOnHead,
         instabilityBudgetExhausted: instabilityBudgetExhausted,
+        mergedLapHistory: mergedLapHistory,
         polishDecision: polishDecision,
         buildPolishLapMarker: buildPolishLapMarker,
         parsePolishLapMarkers: parsePolishLapMarkers
