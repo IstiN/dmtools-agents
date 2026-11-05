@@ -1,0 +1,187 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-05T11:43:57.503Z",
+  "ticketKey": "pr-1373",
+  "headSha": "c52341b6a876737085b99475c5e4e92fd3db0a5b",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:6e12eb082518988e",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:0ae650a023d3fefd",
+      "size": 18476
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:78c97adf5c63f190",
+      "size": 2903
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:fa8123dc3e81d730",
+      "size": 2858
+    },
+    "request.md": {
+      "hash": "fnv1a64:f41c5c5f94815767",
+      "size": 2515
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:b3b375268b87c427",
+      "size": 710
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:a03cbb3bc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:4a0324804c314285",
+      "size": 2611
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:f41c5c5f94815767",
+      "size": 2515
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs60C_oj",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/preCliDevelopmentSetup.js:829",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: `postLegStartStatusBestEffort` — the docblock's \"null config never reaches the tracker build\" is false: the tracker is built *before* the `!config` guard runs**\n\n`js/preCliDevelopmentSetup.js:828-829`:\n\n```javascript\nvar target = legStartSignal.resolveLegStartStatusTarget(\n    config, trackersModule.createTracker(config, customParams || {}).provider());\n```\n\nJavaScript evaluates the arguments **before** the call, so `trackersModule.createTracker(config, customParams || {}).provider()` runs first — even when `config` is null. Only then does `resolveLegStartStatusTarget` hit its `!config` guard (`js/common/legStartSignal.js:188-190`). The docblock at `js/preCliDevelopmentSetup.js:826-827` states the opposite: *\"A null config never reaches the tracker build — the helper skips it first\"*. Demonstrated with a counting stub mirroring the exact call shape:\n\n```text\nskip=true | tracker built times=1 | guard evaluated times=1\nCONFIRMED: tracker built BEFORE the !config guard ran\n```\n\nConsequences are behaviorally safe (the leg never fails; the status stays skipped with the warning — that's why the tests stay green), but:\n\n1. **The documented property is false.** On the no-config path — including the `action()` catch where a config-load failure leaves `config === undefined` — a tracker is still built via `_resolveEffectiveConfig(null, …)` → `_loadConfigSafe` (`js/common/trackers.js:277-283, 291-294`), i.e. a full `loadProjectConfig` discovery round (file IO) whose result is immediately discarded. The rework thread's reply repeated the same claim (\"a null config skips before any tracker work\").\n2. Small wasted IO on every config-less skip, and a misleading comment for the next maintainer (someone could rely on \"tracker never built when config is null\" when reasoning about `createTracker` side effects).\n\nSuggested shape — make the guard actually gate the tracker build (early return on `!config` before touching the tracker; the pure helper's `!config` branch stays for direct callers/tests):\n\n```javascript\nif (!config) {\n    console.warn('leg-start commit status skipped: no config (line stays log-only)');\n    return null;\n}\nvar target = legStartSignal.resolveLegStartStatusTarget(\n    config, trackersModule.createTracker(config, customParams || {}).provider());\n```\n\nOne reorder + the docblock sentence becomes true. No behavioral change either way — the existing tests pin the observable outcomes (`no config → null, warning, no status call`)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:a63f53af",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI gate `crap` failed — 3 new functions over the CRAP ratchet (red CI on head 363c94ed)**\n\nThe `crap` check failed (`0 regression(s), 3 new over threshold` → `Process completed with exit code 2`), per `ci_failures.md`:\n\n```text\nNEW > 8  js/preCliDevelopmentSetup.js::resolveLegStartHeadSha: 8.1\nNEW > 8  js/preCliDevelopmentSetup.js::postLegStartStatusBestEffort: 10\nNEW > 8  js/unit-tests/test_preCliDevelopmentSetup.js::loadForGh1364: 11.1\n```\n\nThe ratchet (CRAP_THRESHOLD=8, \"CRAP may only decrease\") requires lowering cyclomatic complexity or closing the uncovered branches. All three functions pass their tests — this is purely the complexity/coverage gate, and the repo already has the playbook (the gh-1363 rework \"enrichment helpers extracted for the crap ratchet\", see the exports comment below this block).\n\nConcrete fix paths:\n\n1. **`resolveLegStartHeadSha` (8.1)** — extract `isValidHeadSha(sha)` and `probeFreshHeadSha()` helpers, and add the missing mixed-path test (remembered SHA absent/invalid → fresh `git rev-parse HEAD` **succeeds** — currently the only uncovered branch; today's tests only hit remembered-valid and fallback-throws).\n2. **`postLegStartStatusBestEffort` (10)** — extract the guard chain (`no config` / `provider !== 'github'` / `no repository scope` / `no sha`) into a pure `resolveLegStartStatusTarget(config, customParams)` helper in `legStartSignal.js` (zero-IO, 100% coverable), leaving a small posting path here. The `!config` guard is currently untested — add a direct call with `config: null`.\n3. **`loadForGh1364` (11.1, cov 90.6%)** — split the globals builder (`gh1364Globals(bag, opts)`) from the require-map builder so each helper's CC and uncovered branches fit under the gate.\n\nTests themselves are green (875 passed, 0 failed; `run_legStartSignal` 26/26 and `run_preCliDevelopmentSetup` 95/95 verified locally) — only the ratchet gate blocks the merge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:6be3ebd3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: classifier recall — ref-race checkout failures land in `other` instead of `checkout`**\n\nThe `checkout` pattern list covers pathspec/remote-ref/transport messages well, but misses the failure shape this pipeline can hit when `origin/<devBranch>` disappears between `probeRemoteBranch()` and `checkoutExistingRemoteBranch()`'s fallback reset:\n\n```text\nfatal: 'origin/dev/PROJ-1' is not a commit and a branch 'dev/PROJ-1' cannot be created from it\n```\n\nThat message matches no pattern → classifies `other` (the \"environment/setup-command\" bucket per the docblock) instead of `checkout`, even though it is exactly a ref problem. Consider adding `'is not a commit'` (and/or `'cannot be created from'`) to the `checkout` array.\n\nSignal-only impact: the leg still stops and the failed status still posts — only the reason class is coarser. Pure data change in `CLASS_PATTERNS`, fully testable in `test_legStartSignal.js`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:94d4acda",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: dead `legStartSignal` entries in require maps of loaders that never load `preCliDevelopmentSetup.js`**\n\nOnly `js/preCliDevelopmentSetup.js` requires `./common/legStartSignal.js` (verified: `grep -rln \"require.*legStartSignal\" js/`). But the mechanical addition also landed in require maps used to load modules that never touch it — `makeIsolatedConfigLoader` (`configLoader.js`), the `preCliTestAutomationSetup` loaders, and the `postTestAutomationResults` loaders in this file. `makeRequire()` ignores unused map entries, so it is harmless — just noise copied along with the (already-dead) `legFailureReport` neighbor lines.\n\nOptional: drop these entries or leave as-is for symmetry; no behavior change either way."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:4c85fb74",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: CI gate `crap` — fixed on head PR head 29093f489 (tree 3af8f4d99a4ca20f08608035857cb25f8d5e34c — the rework content on origin/ai/gh-1364; the factory auto-save WIP chain is squashed by the rework post-action)**\n\nAll three flagged functions are now under the ratchet (CRAP_THRESHOLD=8), using the gh-1363-rework extraction playbook:\n\n| Function | CRAP before | CRAP now | Fix |\n|---|---|---|---|\n| `js/preCliDevelopmentSetup.js::resolveLegStartHeadSha` | 8.1 | 2.0 | extracted `probeFreshHeadSha()` (wiring, exported) + pure `isValidHeadSha(sha)` in `js/common/legStartSignal.js` |\n| `js/preCliDevelopmentSetup.js::postLegStartStatusBestEffort` | 10 | 7.0 | guard chain (`no config` / `provider !== 'github'` / `no repository scope`) extracted into the pure `resolveLegStartStatusTarget(config, provider)` in `legStartSignal.js`; the wiring keeps only the small posting path |\n| `js/unit-tests/test_preCliDevelopmentSetup.js::loadForGh1364` | 11.1 (cov 90.6%) | 2.0 (100%) | split into `gh1364Globals(bag, opts)` (7.0) + `gh1364RequireMap(trackers, opts)` (4.0) + the thin composition |\n\nNotes on the two judgement calls:\n\n- `resolveLegStartStatusTarget` takes the **resolved provider name**, not `customParams`: `legStartSignal.js` is a zero-requires module by design, so it cannot build the tracker itself — tracker construction (and its throw-safe config fallback, `_loadConfigSafe`) stays in the wiring. The `!config` guard lives in the pure helper, so a null config skips before any tracker work, with the same `no config (line stays log-only)` warning.\n- The previously uncovered branches are closed by new tests: the mixed path (`resolveLegStartHeadSha`) is pinned by two tests — pre-flight state collection **fails** → the fresh `git rev-parse HEAD` probe still feeds the status, and remembered head **not a SHA** → the fresh probe resolves the real head; the `config: null` direct call is pinned too (warns log-only, returns null, no status call).\n\nVerification (local reproduction of the CI gate — pinned `IstiN/crap4js@83ee6201`, nyc 17 instrument, released `crap-baseline.json`):\n\n```text\nCRAP Ratchet\n============\n0 regression(s), 0 new over threshold, 0 improvement(s), 0 removed\n```\n\nexit 0. Full suite: `dmtools run js/unit-tests/run_all.json` → 8761 passed, 0 failed (the known `test_sessionDelta` AC3 node-harness failure is the `FA_SESSION_ROOT` runner artifact noted in the PR description — it fails identically on the clean base commit and passes on the dmtools runner)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:9df3fc69",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: classifier recall — adopted (fixed on head PR head 29093f489 (tree 3af8f4d99a4ca20f08608035857cb25f8d5e34c — the rework content on origin/ai/gh-1364; the factory auto-save WIP chain is squashed by the rework post-action))**\n\nBoth suggested patterns are now in the `checkout` array of `CLASS_PATTERNS` in `js/common/legStartSignal.js`:\n\n- `'is not a commit'`\n- `'cannot be created from'`\n\nThe exact ref-race failure shape from the thread now classifies `checkout`:\n\n```text\nfatal: 'origin/dev/PROJ-1' is not a commit and a branch 'dev/PROJ-1' cannot be created from it\n→ leg-start: failed (checkout: fatal: 'origin/dev/PROJ-1' is not a commit and ...)\n```\n\nPinned by 3 new tests in `js/unit-tests/test_legStartSignal.js` (the exact message above, a bare `is not a commit` message, and a `cannot be created from` message without the other phrase). Precedence is unchanged — `git-state` patterns still win for dirty-workspace messages, and neither new pattern collides with the `config` set. `run_legStartSignal` 43/43 green."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:394eb0ea",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 **NIT: dead require-map entries — dropped (fixed on head PR head 29093f489 (tree 3af8f4d99a4ca20f08608035857cb25f8d5e34c — the rework content on origin/ai/gh-1364; the factory auto-save WIP chain is squashed by the rework post-action))**\n\nRemoved the dead `'./common/legStartSignal.js'` entries from exactly the loaders the thread names in `js/unit-tests/test_workingDir.js`:\n\n- the `configLoader.js` require maps (including `makeIsolatedConfigLoader` and the in-test `freshConfigLoader` reloads),\n- the `preCliTestAutomationSetup.js` loaders,\n- the `postTestAutomationResults.js` loaders.\n\n14 entries dropped. The 4 entries in maps that load `js/preCliDevelopmentSetup.js` (`loadPreCli` and the 3 in-test reloads of the module) are **kept** — those are load-bearing, not symmetry: `makeRequire()` throws `makeRequire: module not found: ./common/legStartSignal.js` without them (verified — removing all entries reds 3 `preCliDevelopmentSetup > runCmd workingDir` tests; with only the live 4 kept, `run_workingDir` is 22/22 green). No behavior change, as the thread expected — `makeRequire()` ignored the unused entries either way."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:f24675ae",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: `postLegStartStatusBestEffort` — the docblock's \"null config never reaches the tracker build\" is false: the tracker is built *before* the `!config` guard runs**\n\n`js/preCliDevelopmentSetup.js:828-829`:\n\n```javascript\nvar target = legStartSignal.resolveLegStartStatusTarget(\n    config, trackersModule.createTracker(config, customParams || {}).provider());\n```\n\nJavaScript evaluates the arguments **before** the call, so `trackersModule.createTracker(config, customParams || {}).provider()` runs first — even when `config` is null. Only then does `resolveLegStartStatusTarget` hit its `!config` guard (`js/common/legStartSignal.js:188-190`). The docblock at `js/preCliDevelopmentSetup.js:826-827` states the opposite: *\"A null config never reaches the tracker build — the helper skips it first\"*. Demonstrated with a counting stub mirroring the exact call shape:\n\n```text\nskip=true | tracker built times=1 | guard evaluated times=1\nCONFIRMED: tracker built BEFORE the !config guard ran\n```\n\nConsequences are behaviorally safe (the leg never fails; the status stays skipped with the warning — that's why the tests stay green), but:\n\n1. **The documented property is false.** On the no-config path — including the `action()` catch where a config-load failure leaves `config === undefined` — a tracker is still built via `_resolveEffectiveConfig(null, …)` → `_loadConfigSafe` (`js/common/trackers.js:277-283, 291-294`), i.e. a full `loadProjectConfig` discovery round (file IO) whose result is immediately discarded. The rework thread's reply repeated the same claim (\"a null config skips before any tracker work\").\n2. Small wasted IO on every config-less skip, and a misleading comment for the next maintainer (someone could rely on \"tracker never built when config is null\" when reasoning about `createTracker` side effects).\n\nSuggested shape — make the guard actually gate the tracker build (early return on `!config` before touching the tracker; the pure helper's `!config` branch stays for direct callers/tests):\n\n```javascript\nif (!config) {\n    console.warn('leg-start commit status skipped: no config (line stays log-only)');\n    return null;\n}\nvar target = legStartSignal.resolveLegStartStatusTarget(\n    config, trackersModule.createTracker(config, customParams || {}).provider());\n```\n\nOne reorder + the docblock sentence becomes true. No behavioral change either way — the existing tests pin the observable outcomes (`no config → null, warning, no status call`)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:bd9c1a0b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 363c94ed5514562fbd2be57a35f169796305d5b4 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:56356329",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: Red CI — the `crap` ratchet gate fails on 3 new functions (`resolveLegStartHeadSha` 8.1, `postLegStartStatusBestEffort` 10, `loadForGh1364` 11.1 vs threshold 8). Code, tests (875 passed incl. the new 26+95) and ticket scope are otherwise clean; one suggestion on classifier recall, one nit.\n\n**Key Issues**:\n- 🚨 `ci_failures.md` — `crap` check failed on 363c94ed; extract small helpers (the gh-1363-rework pattern) + close the uncovered branches to get under the ratchet\n- 💡 `legStartSignal.js:58` — `is not a commit` / `cannot be created from` ref-race failures classify `other` instead of `checkout`\n- 🪶 `test_workingDir.js` — dead `legStartSignal` require-map entries in loaders of modules that never require it\n\n**Next Steps**:\n1. Fix the CRAP ratchet (see inline thread on `js/preCliDevelopmentSetup.js:794`) — CI must be green\n2. Optionally extend the `checkout` pattern list; drop the dead test map entries"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:b7abbc11",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔄 zombie re-dispatch 29093f48974f31822a66e38fa66be1956b15211f — zombie 1/3 at 2026-11-05T11:14:49.197Z\n\nThis head carried no dispatched validation run at all — the dispatch was lost (gh-821). CI was re-dispatched automatically (bounded: 1 per head per hour; 3 in a row on the same head park the PR validation_failed)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:f9741ad7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — APPROVE\n\n**Summary**: Re-review of the rework head (29093f489): all three previously raised findings are verifiably fixed — the blocking CRAP-ratchet CI gate now passes (reproduced locally with the exact CI pipeline: pinned crap4js@83ee6201, nyc-17 instrument, released baseline → exit 0, `0 regression(s), 0 new over threshold`; the three flagged functions dropped to CRAP 2.0 / 7.0 / 2.0), the 💡 classifier now catches ref-race checkout failures (`is not a commit`, `cannot be created from` — 43/43 tests green), and the 🪶 dead require-map entries are dropped (22/22 green). One new 💡 suggestion: `postLegStartStatusBestEffort` builds the tracker *before* the pure `!config` guard runs (JS argument evaluation order), contradicting its own docblock and costing a redundant config-discovery IO round on the config-less skip path — behavior stays safe, tests pin the outcomes.\n\n**Key Issues**:\n- 💡 `js/preCliDevelopmentSetup.js:829` — tracker built before the `resolveLegStartStatusTarget` `!config` guard; docblock claim \"a null config never reaches the tracker build\" is false (one-line early-return fixes it)\n\n**Next Steps**:\n1. Optional polish: early-return on `!config` in `postLegStartStatusBestEffort` before building the tracker so the code matches the documented skip-first ordering\n2. Mergeable as-is — no blocking or important findings remain; ticket ACs 1–6 are all covered by tests (exactly-once signal, closed reason set, best-effort status, classifier coverage, dispatch untouched)"
+    }
+  ]
+}
