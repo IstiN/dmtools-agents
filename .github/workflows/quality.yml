@@ -33,6 +33,16 @@
 # informational, not failures). Its clones-mode report also feeds the README
 # `duplication` endpoint badge published from the same run.
 #
+# Runtime-artifact guard (gh-1365): two read-only `git ls-files` queries over the
+# checked-out INDEX (no working-dir state involved — robust on PR checkouts and
+# dirty runner workspaces) hard-fail the job when pipeline-owned runtime artifacts
+# are tracked: (1) a tracked file matching the checked-in gitignore-style pattern
+# list ci/runtime-artifact-patterns.txt — extend THAT file, not this workflow; (2)
+# a file matching .gitignore but still tracked — the missed-cleanup signature of
+# the gh-1358/.dmtools-target-workingdir incident. A modified TRACKED artifact
+# blocks every dev-leg checkout; untracked+ignored copies are harmless by
+# construction.
+#
 # Tool pin: IstiN/crap4js by commit SHA (fork of vabhzw17eg2qu4m9-bit/crap4js v0.15.0 +
 # --baseline / --update-baseline, pipe-safe exit). Installed from GitHub — the npm 'crap4js'
 # package is an unrelated third-party project.
@@ -106,6 +116,79 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Runtime-artifact guard (tracked artifacts / tracked-but-ignored)
+        # gh-1365: pipeline-owned runtime artifacts must never be tracked — a modified
+        # TRACKED artifact in a runner workspace blocks every dev-leg checkout (the
+        # gh-1358/.dmtools-target-workingdir incident), while an untracked+ignored
+        # copy is harmless by construction. Both checks are read-only `git ls-files`
+        # queries evaluated against the checked-out INDEX — no working-dir state is
+        # consulted, so dirty runner workspaces cannot influence the verdict:
+        #  1. tracked files matching ci/runtime-artifact-patterns.txt — the checked-in
+        #     gitignore-style list deployments extend WITHOUT touching this workflow;
+        #  2. tracked files matching the repo's own ignore rules (`--exclude-standard`)
+        #     — the "tracked but ignored" state, i.e. the missed-cleanup signature.
+        # Any hit fails the job naming the file and the exact remediation (never just
+        # a count); both checks always run so one bad tree reports every violation.
+        run: |
+          set -e
+          patterns="ci/runtime-artifact-patterns.txt"
+          status=0
+          report="$(mktemp)"
+
+          hits="$(git ls-files --ignored --cached --exclude-from="$patterns")"
+          if [ -n "$hits" ]; then
+            status=1
+            {
+              echo "## Runtime-artifact guard: tracked runtime artifacts (FAIL)"
+              echo
+              echo "Tracked files match \`$patterns\` — runtime artifacts must never be tracked. Untrack each one:"
+              echo
+              while IFS= read -r f; do
+                echo "- \`$f\` — run \`git rm --cached \"$f\"\` and add the path to .gitignore"
+                echo "::error file=$f::tracked runtime artifact matches $patterns — untrack it: git rm --cached \"$f\" and add the path to .gitignore"
+              done <<EOF
+          $hits
+          EOF
+              echo
+            } >> "$report"
+          else
+            {
+              echo "## Runtime-artifact guard: tracked runtime artifacts (pass)"
+              echo
+              echo "No tracked file matches \`$patterns\`."
+              echo
+            } >> "$report"
+          fi
+
+          ignored="$(git ls-files --ignored --cached --exclude-standard)"
+          if [ -n "$ignored" ]; then
+            status=1
+            {
+              echo "## Runtime-artifact guard: tracked-but-ignored files (FAIL)"
+              echo
+              echo "These tracked files match the repo's own .gitignore rules but are still tracked (the missed-cleanup signature — untrack so the ignore rule takes effect):"
+              echo
+              while IFS= read -r f; do
+                echo "- \`$f\` — run \`git rm --cached \"$f\"\`"
+                echo "::error file=$f::tracked but matches .gitignore — untrack it: git rm --cached \"$f\""
+              done <<EOF
+          $ignored
+          EOF
+              echo
+            } >> "$report"
+          else
+            {
+              echo "## Runtime-artifact guard: tracked-but-ignored files (pass)"
+              echo
+              echo "No tracked-but-ignored files."
+              echo
+            } >> "$report"
+          fi
+
+          cat "$report"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          exit $status
 
       - uses: actions/setup-node@v4
         with:
