@@ -6,9 +6,92 @@
 // loadModule of js/mergeTrigger.js must map the helper in makeRequire (it
 // throws on unmapped ids).
 var mcpParseModule = loadModule('js/common/mcpParse.js', makeRequire({}), {});
+
+// gh-1353: the merge backstop rides the sweep (before every squash-merge).
+// The wiring's require needs the module's full dependency closure mapped,
+// with the configLoader stubbed (the real one probes .dmtools/config).
+var _bsMods = {};
+function bsMachineAuthor() {
+    if (!_bsMods.ma) _bsMods.ma = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    return _bsMods.ma;
+}
+function bsReviewVerdicts() {
+    if (!_bsMods.rv) {
+        _bsMods.rv = loadModule('js/common/reviewVerdicts.js', makeRequire({
+            './machineAuthor.js': bsMachineAuthor()
+        }), {});
+    }
+    return _bsMods.rv;
+}
+function bsFindingRegistry() {
+    if (!_bsMods.fr) {
+        _bsMods.fr = loadModule('js/common/findingRegistry.js', makeRequire({
+            './reviewVerdicts.js': bsReviewVerdicts()
+        }), {});
+    }
+    return _bsMods.fr;
+}
+function bsLedgerCore() {
+    if (!_bsMods.lc) _bsMods.lc = loadModule('js/common/ledgerCore.js', makeRequire({}), {});
+    return _bsMods.lc;
+}
+function bsReviewDebtLedger() {
+    if (!_bsMods.rdl) {
+        _bsMods.rdl = loadModule('js/common/reviewDebtLedger.js', makeRequire({
+            './reviewVerdicts.js': bsReviewVerdicts(),
+            './findingRegistry.js': bsFindingRegistry(),
+            './ledgerCore.js': bsLedgerCore()
+        }), {});
+    }
+    return _bsMods.rdl;
+}
+function bsReviewPolicy() {
+    if (!_bsMods.rp) {
+        _bsMods.rp = loadModule('js/common/reviewPolicy.js', makeRequire({
+            './reviewVerdicts.js': bsReviewVerdicts()
+        }), {});
+    }
+    return _bsMods.rp;
+}
+function bsReviewDispositions() {
+    if (!_bsMods.rd) {
+        _bsMods.rd = loadModule('js/common/reviewDispositions.js', makeRequire({
+            './reviewVerdicts.js': bsReviewVerdicts(),
+            './reviewPolicy.js': bsReviewPolicy()
+        }), {});
+    }
+    return _bsMods.rd;
+}
+function bsThreadInventory() {
+    if (!_bsMods.ti) {
+        _bsMods.ti = loadModule('js/common/reviewThreadInventory.js', makeRequire({
+            './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {})
+        }), {});
+    }
+    return _bsMods.ti;
+}
+function mergeBackstopModule() {
+    if (!_bsMods.mb) {
+        _bsMods.mb = loadModule('js/common/mergeBackstop.js', makeRequire({
+            './reviewVerdicts.js': bsReviewVerdicts(),
+            './findingRegistry.js': bsFindingRegistry(),
+            './reviewDebtLedger.js': bsReviewDebtLedger(),
+            './reviewDispositions.js': bsReviewDispositions(),
+            './machineAuthor.js': bsMachineAuthor(),
+            './reviewThreadInventory.js': bsThreadInventory(),
+            './mcpParse.js': mcpParseModule,
+            '../configLoader.js': { loadProjectConfig: function () { return null; } }
+        }), {});
+    }
+    return _bsMods.mb;
+}
+
 function loadMergeTrigger(mods) {
     return loadModule('js/mergeTrigger.js',
-        makeRequire({ './common/mcpParse.js': mcpParseModule }), mods);
+        makeRequire({
+            './common/mcpParse.js': mcpParseModule,
+            './common/mergeBackstop.js': mergeBackstopModule()
+        }), mods);
 }
 
 /* REST-vs-GraphQL get_pr payload shapes (gh-1081): kept out of fixture()
@@ -67,7 +150,8 @@ function fixtureMergePr(opts, calls, m) {
 
 function fixture(opts) {
     opts = opts || {};
-    var calls = { merges: [], removes: [], comments: [], gets: [], issueGets: [] };
+    var calls = { merges: [], removes: [], comments: [], gets: [], issueGets: [],
+        threads: [], threadResolves: [], threadReplies: [], debtIssues: [] };
     var labeledIssues = opts.labeledIssues || [];      // numbers returned by the label search
     var issueStates = opts.issueStates || {};          // number -> 'OPEN' | 'CLOSED' | null (404 body)
     var prs = (opts.prs || []).map(fixturePrEntry);
@@ -89,7 +173,26 @@ function fixture(opts) {
             return fixtureMergePr(opts, calls, m);
         },
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
-        github_create_comment: function (c) { calls.comments.push(c); return '{}'; }
+        github_create_comment: function (c) { calls.comments.push(c); return '{}'; },
+        // gh-1353 merge-backstop bridge tools: the threads read serves
+        // opts.threadsByNumber (PR number → reviewThread nodes) — empty by
+        // default (clean replay, merges as today); noThreads removes the
+        // primitive entirely (capability miss).
+        github_get_pr_review_threads: opts.noThreads ? undefined : function (a) {
+            calls.threads.push(a);
+            return JSON.stringify({ data: { repository: { pullRequest:
+                { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
+        },
+        github_get_pr_comments: function (a) {
+            return JSON.stringify(opts.prCommentsByNumber && opts.prCommentsByNumber[a.pullRequestId] || []);
+        },
+        github_create_issue: function (a) {
+            calls.debtIssues.push(a);
+            if (opts.createIssueThrows) throw new Error(opts.createIssueThrows);
+            return JSON.stringify({ number: 500 + calls.debtIssues.length, title: a.title });
+        },
+        github_resolve_pr_thread: function (a) { calls.threadResolves.push(a); return '{}'; },
+        github_reply_to_pr_thread: function (a) { calls.threadReplies.push(a); return '{}'; }
     };
     // ghRepo is injected unconditionally: when absent it lands as undefined,
     // which keeps typeof-GH_REPO paths exactly where they were.
@@ -829,5 +932,122 @@ suite('mergeTrigger: extracted helpers (gh-1081)', function () {
             .isIssueOpen('o', 'n', 1), false);
         assert.equal(loadWith(function () { throw new Error('boom'); })
             .isIssueOpen('o', 'n', 1), false);
+    });
+});
+
+// ── gh-1353 merge backstop wiring (record before every squash-merge) ─────────
+
+suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
+    var BOT = 'merge-bot';
+    function ghThread(id, body, over) {
+        var t = {
+            id: id,
+            isResolved: false,
+            path: 'js/common/mergeState.js',
+            line: 42,
+            comments: { nodes: [{ databaseId: 9000 + id.length,
+                author: { login: BOT + '[bot]' }, body: body }] }
+        };
+        for (var k in (over || {})) t[k] = over[k];
+        return t;
+    }
+    function importantBody(claim) {
+        return '⚠️ severity: IMPORTANT — ' + claim;
+    }
+    var CLEAN_PR = { number: 12, labels: [], body: 'What it does\n\nCloses #5\n', headRefName: 'feature/x' };
+
+    test('backstop replay: 2 machine ⚠️ threads → ONE digest issue, both resolved defered, merge proceeds', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            threadsByNumber: { 12: [
+                ghThread('PRT_1', importantBody('nothing validates the merge state token')),
+                ghThread('PRT_2', importantBody('sessions never expire'))
+            ] }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.success, true);
+        assert.equal(result.merged, 1, 'the merge proceeds after the record');
+        assert.equal(result.failed, 0);
+        assert.equal(fx.calls.debtIssues.length, 1, 'exactly ONE digest issue per PR');
+        assert.equal(fx.calls.debtIssues[0].title, '[debt] PR #12');
+        assert.equal(fx.calls.threadResolves.length, 2, 'both counted threads resolve');
+        assert.equal(fx.calls.threadResolves[0].threadId, 'PRT_1');
+        assert.contains(fx.calls.threadReplies[0].text, 'defered: #501');
+        assert.equal(fx.calls.merges.length, 1, 'the squash-merge still happens');
+    });
+
+    test('clean replay: no unresolved >=⚠️ machine threads → no digest, merge as today', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            threadsByNumber: { 12: [
+                ghThread('PRT_1', '💡 severity: SUGGESTION — extract this', { line: 7 }),
+                ghThread('PRT_2', '', { isResolved: true })
+            ] }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.merged, 1);
+        assert.equal(fx.calls.debtIssues.length, 0, 'no digest issue');
+        assert.equal(fx.calls.threadResolves.length, 0, 'nothing resolved');
+        assert.equal(fx.calls.merges.length, 1);
+    });
+
+    test('human-thread replay: humans listed open (human) in the digest, never resolved', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            threadsByNumber: { 12: [
+                ghThread('PRT_1', importantBody('machine finding')),
+                ghThread('H1', importantBody('a human finding'),
+                    { comments: { nodes: [{ databaseId: 9100,
+                        author: { login: 'human-reviewer' }, body: importantBody('a human finding') }] } })
+            ] }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.merged, 1);
+        assert.equal(fx.calls.debtIssues.length, 1);
+        assert.contains(fx.calls.debtIssues[0].body, 'open (human)');
+        assert.contains(fx.calls.debtIssues[0].body, 'a human finding');
+        assert.equal(fx.calls.threadResolves.length, 1, 'only the machine thread resolves');
+        assert.equal(fx.calls.threadResolves[0].threadId, 'PRT_1');
+    });
+
+    test('digest-filing failure: the merge is NOT attempted this tick (never merges undigested)', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            threadsByNumber: { 12: [ghThread('PRT_1', importantBody('machine finding'))] },
+            createIssueThrows: '422'
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.failed, 1, 'the item counts failed — the run throws, the sweep continues');
+        assert.equal(result.merged, 0);
+        assert.equal(fx.calls.merges.length, 0, 'no merge without the digest');
+        assert.equal(fx.calls.threadResolves.length, 0, 'no thread closes without its digest');
+    });
+
+    test('capability miss: no threads primitive → the backstop skips, merge as today', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            noThreads: true
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.merged, 1);
+        assert.equal(fx.calls.debtIssues.length, 0);
+        assert.equal(fx.calls.merges.length, 1);
+    });
+
+    test('unconfigured machineAuthor counts nothing (fail closed): machine threads ignored, merge as today', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            threadsByNumber: { 12: [ghThread('PRT_1', importantBody('machine finding'))] }
+        });
+        var result = run(fx); // no machineAuthor in jobParams
+        assert.equal(result.merged, 1);
+        assert.equal(fx.calls.debtIssues.length, 0, 'no logins = nothing is machine-owned');
+        assert.equal(fx.calls.threadResolves.length, 0);
     });
 });

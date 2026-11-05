@@ -83,7 +83,9 @@ function mcpParseMod() {
 // The configLoader dependency is stubbed per scenario: machineLoginsOf reads
 // the per-repo machineAuthor knob through it (failing closed to jobParams
 // only when the load throws — the stub's job in most suites).
-function mergeBackstopMod(configLoaderStub) {
+// `globalMods` maps engine github-bridge globals (githubBridgeIo's inputs)
+// — loadModule shadows them as module vars; an unlisted name stays absent.
+function mergeBackstopMod(configLoaderStub, globalMods) {
     return loadModule('js/common/mergeBackstop.js', makeRequire({
         './reviewVerdicts.js': reviewVerdictsMod(),
         './findingRegistry.js': findingRegistryMod(),
@@ -93,7 +95,7 @@ function mergeBackstopMod(configLoaderStub) {
         './reviewThreadInventory.js': threadInventoryMod(),
         './mcpParse.js': mcpParseMod(),
         '../configLoader.js': configLoaderStub || { loadProjectConfig: function () { return null; } }
-    }), {});
+    }), globalMods || {});
 }
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -534,6 +536,9 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.equal(out.resolved, 2, 'both counted threads resolve');
         assert.equal(out.resolveFailures, 0);
         assert.equal(f.rec.resolves.length, 2);
+        assert.deepEqual(f.rec.resolves[0],
+            { workspace: OWNER, repository: NAME, pullRequestId: '42', threadId: 'PRT_1' },
+            'the resolve rides the full github_resolve_pr_thread schema');
         assert.equal(f.rec.replies.length, 2);
         assert.equal(f.rec.replies[0].inReplyToId, '9001', 'the ack rides the root comment');
         assert.contains(f.rec.replies[0].text, 'defered: #501');
@@ -695,5 +700,114 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.contains(m.outcomeLines(cleanOut)[0], 'no unresolved machine-owned');
         var skipOut = run(m, ioFixture({ noThreads: true }));
         assert.contains(m.outcomeLines(skipOut)[0], 'skipped');
+    });
+});
+
+// ── the merge-path wiring (runBackstopForPr + githubBridgeIo) ────────────────
+
+suite('mergeBackstop — runBackstopForPr (the merge-path wiring)', function () {
+    function runForPr(m, f, over) {
+        var said = [];
+        var out = m.runBackstopForPr(f.io, OWNER, NAME,
+            over && over.job !== undefined ? over.job : { machineAuthor: MACHINE },
+            42,
+            (over && over.pr) || { number: 42, title: 'Backstop replay PR', headRefOid: 'deadbeefcafe0123456789abcdef' },
+            function (line) { said.push(line); });
+        return { out: out, said: said };
+    }
+
+    test('counted shape: the outcome lines are said and the digest files', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: twoMachineImportantThreads() });
+        var r = runForPr(m, f);
+        assert.equal(r.out.digest, 501);
+        assert.equal(r.out.resolved, 2);
+        assert.equal(r.said.length, 1, 'one observable line');
+        assert.contains(r.said[0], '#42');
+        assert.contains(r.said[0], '#501');
+        assert.contains(f.rec.issues[0].body, 'head deadbee',
+            'the head sha flowed (short form) into the review-run reference');
+    });
+
+    test('REST-shaped PR payload: the head sha rides pr.head.sha', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: twoMachineImportantThreads() });
+        var r = runForPr(m, f, { pr: { number: 42, title: 'Rest PR', head: { sha: 'cafe0123456789' } } });
+        assert.equal(r.out.digest, 501);
+        assert.contains(f.rec.issues[0].body, 'cafe012',
+            'headShaOf(pr) reads the REST shape');
+    });
+
+    test('clean shape: merge as today — one clean line, no digest', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [] });
+        var r = runForPr(m, f);
+        assert.equal(r.out.counted.length, 0);
+        assert.equal(r.out.digest, null);
+        assert.equal(f.rec.issues.length, 0);
+        assert.contains(r.said[0], 'no unresolved machine-owned');
+    });
+
+    test('an empty machine allowlist counts nothing (fail closed, merge as today)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: twoMachineImportantThreads() });
+        var r = runForPr(m, f, { job: {} });
+        assert.equal(r.out.counted.length, 0, 'no logins = nothing is machine-owned');
+        assert.equal(f.rec.issues.length, 0, 'no digest');
+    });
+
+    test('a record-keeping failure throws through — the caller defers the merge', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: twoMachineImportantThreads(), createIssueThrow: '422' });
+        var threw = false;
+        try { runForPr(m, f); } catch (e) { threw = true; }
+        assert.equal(threw, true, 'never silently merge with open >=⚠️ threads and no digest');
+        assert.equal(f.rec.resolves.length, 0);
+    });
+
+    test('capability miss: no threads primitive skips the backstop (merge as today)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ noThreads: true });
+        var r = runForPr(m, f);
+        assert.equal(r.out.skipped, 'no-thread-primitive');
+        assert.contains(r.said[0], 'skipped');
+    });
+});
+
+suite('mergeBackstop — githubBridgeIo (the engine bridge enumeration)', function () {
+    test('mocked bridge tools map onto the io keys', function () {
+        var gt = function () { return '{}'; };
+        var gc = function () { return '[]'; };
+        var m = mergeBackstopMod({
+            loadProjectConfig: function () { return null; }
+        }, {
+            github_get_pr_review_threads: gt,
+            github_get_pr_comments: gc,
+            github_create_comment: function () { return '{}'; },
+            github_search_issues: function () { return '{}'; },
+            github_create_issue: function () { return '{}'; },
+            github_resolve_pr_thread: function () { return '{}'; },
+            github_reply_to_pr_thread: function () { return '{}'; }
+        });
+        var io = m.githubBridgeIo();
+        assert.equal(io.getThreads, gt, 'getThreads rides github_get_pr_review_threads');
+        assert.equal(io.getComments, gc, 'getComments rides github_get_pr_comments');
+        assert.equal(typeof io.createComment, 'function');
+        assert.equal(typeof io.searchIssues, 'function');
+        assert.equal(typeof io.createIssue, 'function');
+        assert.equal(typeof io.resolveThread, 'function');
+        assert.equal(typeof io.replyToThread, 'function');
+    });
+
+    test('a bridge tool absent from the runtime maps null (capability miss, never a throw)', function () {
+        var m = mergeBackstopMod({
+            loadProjectConfig: function () { return null; }
+        }, {
+            github_get_pr_review_threads: undefined,
+            github_resolve_pr_thread: null
+        });
+        var io = m.githubBridgeIo();
+        assert.equal(io.getThreads, null);
+        assert.equal(io.resolveThread, null);
     });
 });

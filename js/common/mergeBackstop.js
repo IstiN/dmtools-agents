@@ -52,7 +52,10 @@
  * github bridge primitives (or test mocks): getThreads (github_get_pr_
  * review_threads), getComments (github_get_pr_comments), createComment,
  * searchIssues, createIssue (github_create_issue — owner/repo schema),
- * resolveThread (github_resolve_pr_thread), replyToThread. Payload
+ * resolveThread (github_resolve_pr_thread — the full
+ * workspace/repository/pullRequestId/threadId schema), replyToThread
+ * (github_reply_to_pr_thread). The merge paths call runBackstopForPr
+ * instead (githubBridgeIo() enumerates the engine's bridge tools). Payload
  * normalization rides mcpParse; thread rows ride reviewThreadInventory.
  *
  * Pure module — no dmtools globals (the io is injected). GraalJS-clean
@@ -416,10 +419,11 @@ function createIssueTool(b, owner, name) {
     };
 }
 
-function resolveThreadTool(b) {
+function resolveThreadTool(b, owner, name) {
     if (!b.resolveThread) return null;
     return function (prNumber, thread) {
-        b.resolveThread({ threadId: String(thread.threadId) });
+        b.resolveThread({ workspace: owner, repository: name,
+            pullRequestId: String(prNumber), threadId: String(thread.threadId) });
     };
 }
 
@@ -445,7 +449,7 @@ function githubTools(owner, name, io) {
         postPrComment: postCommentTool(b, owner, name),
         searchDebtIssues: searchTool(b, owner, name),
         createIssue: createIssueTool(b, owner, name),
-        resolveThread: resolveThreadTool(b),
+        resolveThread: resolveThreadTool(b, owner, name),
         replyToThread: replyTool(b, owner, name)
     };
 }
@@ -585,6 +589,64 @@ function runBackstop(io, owner, name, input) {
     return out;
 }
 
+// ── the merge-path wiring (shared by mergeTrigger + sm/mergeBot) ─────────────
+
+/**
+ * The dmtools github-bridge globals → the io bag runBackstop consumes.
+ * The ONE place that names the engine's bridge tools: each identifier is
+ * typeof-guarded, so a runtime without a primitive maps null (capability
+ * miss — the path skips degraded) instead of throwing a ReferenceError in
+ * a harness that did not declare it. Absent = null, never a stub.
+ */
+function githubBridgeIo() {
+    return {
+        getThreads: (typeof github_get_pr_review_threads === 'function') ? github_get_pr_review_threads : null,
+        getComments: (typeof github_get_pr_comments === 'function') ? github_get_pr_comments : null,
+        createComment: (typeof github_create_comment === 'function') ? github_create_comment : null,
+        searchIssues: (typeof github_search_issues === 'function') ? github_search_issues : null,
+        createIssue: (typeof github_create_issue === 'function') ? github_create_issue : null,
+        resolveThread: (typeof github_resolve_pr_thread === 'function') ? github_resolve_pr_thread : null,
+        replyToThread: (typeof github_reply_to_pr_thread === 'function') ? github_reply_to_pr_thread : null
+    };
+}
+
+// PR title across payload shapes (GraphQL and REST both carry `title`).
+function prTitleOf(pr) {
+    return (pr && pr.title) || '';
+}
+
+// Head sha across payload shapes: GraphQL `headRefOid`, REST `head.sha`.
+function headShaOf(pr) {
+    if (!pr) return null;
+    if (pr.headRefOid) return pr.headRefOid;
+    return (pr.head && pr.head.sha) || null;
+}
+
+/**
+ * The one-call wiring for a merge path about to squash-merge an approved
+ * green PR (gh-1353): builds the input from the PR payload + jobParams,
+ * runs the backstop and says the outcome lines verbatim. Throws only on
+ * record-keeping failures (a broken threads/comments read, a digest
+ * filing failure) — the CALLER defers THAT merge (never merges
+ * undigested); per-thread resolve/ack failures never throw (the digest
+ * records everyone).
+ *
+ *   bridges — the io bag (githubBridgeIo() in production; test mocks).
+ *   job     — the caller's jobParams (machineAuthor allowlist lives there).
+ *   pr      — the parsed get_pr payload (either shape).
+ */
+function runBackstopForPr(bridges, owner, name, job, prNumber, pr, say) {
+    var out = runBackstop(bridges, owner, name, {
+        prNumber: prNumber,
+        prTitle: prTitleOf(pr),
+        headSha: headShaOf(pr),
+        logins: machineLoginsOf(job),
+        nowIso: (new Date()).toISOString()
+    });
+    outcomeLines(out).forEach(function (line) { if (say) say(line); });
+    return out;
+}
+
 // ── caller-facing log lines ──────────────────────────────────────────────────
 
 /**
@@ -622,7 +684,9 @@ if (typeof module !== 'undefined' && module.exports) {
         buildDebtSearchQuery: buildDebtSearchQuery,
         findExistingDigest: findExistingDigest,
         githubTools: githubTools,
+        githubBridgeIo: githubBridgeIo,
         runBackstop: runBackstop,
+        runBackstopForPr: runBackstopForPr,
         outcomeLines: outcomeLines
     };
 }
