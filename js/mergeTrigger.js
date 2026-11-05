@@ -44,9 +44,12 @@
 // (mergeTrigger's copies were byte-identical to sm/mergeBot.js's).
 var mcpParse = require('./common/mcpParse.js');
 
-// gh-1353: the merge backstop (epic gh-1328 §4) rides every squash-merge —
-// ONE digest issue + `defered` resolutions for open machine-owned
-// >=IMPORTANT threads before the merge proceeds. A record, not a gate.
+// gh-1353: the merge backstop rides every squash-merge — and since gh-1370
+// it is a GATE on machine-owned threads: ONE digest issue + `defered`
+// resolutions for open machine-owned >=IMPORTANT threads, `wontfix`
+// ack-resolutions for the below-threshold ones, and a failed resolution
+// HOLDS the merge (merging with an open machine thread is a policy
+// violation; the next tick retries).
 var mergeBackstop = require('./common/mergeBackstop.js');
 
 // Thin wrappers keep every call site and module.exports entry unchanged.
@@ -296,13 +299,16 @@ function mergeDecisionOf(ms) {
 }
 
 /**
- * gh-1353 merge backstop before a squash-merge: counts unresolved
- * machine-owned >=IMPORTANT review threads; any count files ONE digest
- * issue and resolves each counted thread `defered: #digest`, then the
- * merge proceeds. Human-authored threads are never resolved — they are
- * listed `open (human)` and the merge follows branch protection as
- * before. Throws only on record-keeping failures (broken read, digest
- * filing) — processIssueItem/processOrphanPr isolation defers THAT merge.
+ * gh-1370 merge backstop before a squash-merge: every open machine-owned
+ * review thread must reach terminal resolution — >=IMPORTANT threads ride
+ * the digest (ONE digest issue, `defered: #digest` resolves), SUGGESTION/
+ * NIT threads resolve WITHOUT a fix (`wontfix` ack tags), and human
+ * threads stay untouched (branch protection owns them). A record-keeping
+ * OR resolution failure throws — the per-item isolation below counts it
+ * failed (the merge of THAT PR defers to the next tick — the retry) and
+ * the sweep's aggregate throw fails the job: the escalation surface when
+ * resolution keeps failing (gh-1370: merging with open machine threads is
+ * a policy violation).
  */
 function backstopBeforeMerge(ctx, prNumber, pr) {
     mergeBackstop.runBackstopForPr(mergeBackstop.githubBridgeIo(),
@@ -324,10 +330,12 @@ function runStateMachine(ctx, prNumber, onMerged) {
 
     var decision = mergeDecisionOf(ms);
     if (decision === 'merge') {
-        // gh-1353: record the review debt BEFORE the merge (digest + defered
-        // resolutions). A record-keeping failure throws — the per-item
+        // gh-1353 + gh-1370: every open machine-owned review thread must
+        // reach terminal resolution BEFORE the merge (digest + defered
+        // resolutions for >=IMPORTANT, wontfix acks below the threshold).
+        // A record-keeping or resolution failure throws — the per-item
         // isolation below counts it failed and the merge defers to the
-        // next tick (never merges undigested).
+        // next tick (never merges with an open machine thread).
         backstopBeforeMerge(ctx, prNumber, pr);
         var res = squashMerge(ctx.owner, ctx.name, prNumber);
         if (res.merged) {

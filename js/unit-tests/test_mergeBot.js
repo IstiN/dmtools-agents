@@ -135,6 +135,8 @@ function backstopBridgeMocks(opts, calls) {
     // default (clean replay, merges as today); noThreads removes the
     // primitive entirely (capability miss). Extracted so fixture() keeps
     // its baseline CRAP (gh-1200 precedent: named mock builders).
+    // gh-1370: resolveFailIds names thread ids whose resolve throws — the
+    // read-live opts lets a test clear the fault and replay the retry.
     return {
         github_get_pr_review_threads: opts.noThreads ? undefined : function (a) {
             calls.threads.push(a);
@@ -150,7 +152,13 @@ function backstopBridgeMocks(opts, calls) {
             if (opts.createIssueThrows) throw new Error(opts.createIssueThrows);
             return JSON.stringify({ number: 500 + calls.debtIssues.length, title: a.title });
         },
-        github_resolve_pr_thread: function (a) { calls.threadResolves.push(a); return '{}'; },
+        github_resolve_pr_thread: function (a) {
+            if ((opts.resolveFailIds || []).indexOf(String(a.threadId)) !== -1) {
+                throw new Error('422 ' + a.threadId);
+            }
+            calls.threadResolves.push(a);
+            return '{}';
+        },
         github_reply_to_pr_thread: function (a) { calls.threadReplies.push(a); return '{}'; }
     };
 }
@@ -227,7 +235,7 @@ function fixture(opts) {
     // gh-1353 merge-backstop bridge tools (named builder — see there).
     Object.assign(mods, backstopBridgeMocks(opts, calls));
     var bot = loadMergeBot(mods);
-    return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls, crCalls: crCalls, listCalls: listCalls };
+    return { bot: bot, calls: calls, mods: mods, opts: opts, wfCalls: wfCalls, crCalls: crCalls, listCalls: listCalls };
 }
 
 suite('mergeBot', function () {
@@ -1598,7 +1606,7 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.merges.length, 1, 'the squash-merge still happens');
     });
 
-    test('clean replay: no unresolved >=⚠️ machine threads → no digest, merge as today', function () {
+    test('gh-1370: a lone SUGGESTION machine thread → wontfix ack-resolved, no digest, merge proceeds', function () {
         var fx = fixture({
             labels: ['pr_approved', 'ai_validating'],
             threadsByNumber: { 42: [
@@ -1608,8 +1616,54 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         });
         var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
         assert.equal(result.acted, 1);
-        assert.equal(fx.calls.debtIssues.length, 0, 'no digest issue');
-        assert.equal(fx.calls.threadResolves.length, 0, 'nothing resolved');
+        assert.equal(fx.calls.debtIssues.length, 0, 'no digest issue — below the gating threshold');
+        assert.equal(fx.calls.threadResolves.length, 1, 'the open machine thread resolves (terminal)');
+        assert.contains(fx.calls.threadReplies[0].text, 'wontfix:',
+            'the ack carries the machine-parsed wontfix disposition');
+        assert.equal(fx.calls.merges.length, 1);
+    });
+
+    test('gh-1370 AC1 funnel replay: 4 SUGGESTION + 2 NIT → all six ack-resolved, no digest, merge proceeds', function () {
+        var threads = [
+            ghThread('PRT_S1', '💡 severity: SUGGESTION — a', { line: 1 }),
+            ghThread('PRT_S2', '💡 severity: SUGGESTION — b', { line: 2 }),
+            ghThread('PRT_S3', '💡 severity: SUGGESTION — c', { line: 3 }),
+            ghThread('PRT_S4', '💡 severity: SUGGESTION — d', { line: 4 }),
+            ghThread('PRT_N1', '🪶 severity: NIT — e', { line: 5 }),
+            ghThread('PRT_N2', '🪶 severity: NIT — f', { line: 6 })
+        ];
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating'],
+            threadsByNumber: { 42: threads }
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.success, true);
+        assert.equal(result.acted, 1, 'zero open machine threads → merge proceeds');
+        assert.equal(fx.calls.debtIssues.length, 0, 'no digest for below-threshold threads');
+        assert.equal(fx.calls.threadResolves.length, 6, 'all six reach terminal resolution');
+        assert.equal(fx.calls.threadReplies.length, 6, 'each resolution carries its machine ack');
+        assert.contains(fx.calls.threadReplies[0].text, 'wontfix:');
+        assert.equal(fx.calls.merges.length, 1);
+    });
+
+    test('gh-1370 AC2: a nit resolution failure → acted 0, merge deferred aloud; the retry merges', function () {
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating'],
+            threadsByNumber: { 42: [ghThread('PRT_N1', '🪶 severity: NIT — a nit', { line: 5 })] },
+            resolveFailIds: ['PRT_N1']
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.success, true, 'the bot stays green — the merge defers, the queue moves');
+        assert.equal(result.acted, 0, 'no merge with an open machine thread');
+        assert.equal(fx.calls.merges.length, 0);
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('merge backstop failed') !== -1;
+        }), 'the deferral is said aloud: ' + JSON.stringify(result.log));
+        fx.opts.resolveFailIds = []; // the transient API fault clears
+        var retry = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(retry.acted, 1, 'the retry (next event/tick) converges');
+        assert.equal(fx.calls.threadResolves.length, 1);
+        assert.contains(fx.calls.threadReplies[0].text, 'wontfix:');
         assert.equal(fx.calls.merges.length, 1);
     });
 
