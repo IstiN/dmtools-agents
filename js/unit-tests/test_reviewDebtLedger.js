@@ -187,4 +187,29 @@ suite('reviewDebtLedger — the async owner digest', function () {
         assert.contains(d, 'batched');
         assert.contains(d, 'No action is required');
     });
+
+    test('digest line suffixes: re-occurrence count, thread link, tier/claim fallbacks, unparsable age', function () {
+        // crap4js coverage lap: pins every digest-line suffix branch — a
+        // re-occurrence prints "seen Nx", the thread link renders, missing
+        // tier/claim fall back, and an unparsable firstSeenAt prints no age.
+        var m = mod();
+        var l = m.appendDebtFinding(m.emptyLedger(), thread({}));
+        l = m.appendDebtFinding(l, thread({}));           // same identity → occurrences = 2
+        var d = m.buildDebtDigest(l, '2026-11-05T00:00:00.000Z');
+        assert.contains(d, 'seen 2x', 'the re-occurrence count rides the line');
+        assert.contains(d, '[thread](https://x/pull/9#discussion_r9001)', 'the thread link renders');
+        var bare = m.appendDebtFinding(m.emptyLedger(), {
+            threadId: 9002, severityClass: '', claim: '', threadUrl: ''
+        });
+        d = m.buildDebtDigest(bare, '2026-11-05T00:00:00.000Z');
+        assert.contains(d, '`?` — (no claim) [SUGGESTION]', 'empty claim/aliases fall back, severity default holds');
+        // buildDebtDigest accepts any ledger-shaped input (the sweep reads
+        // re-validation drops, callers may pass parsed records) — a finding
+        // whose firstSeenAt never parses prints no age suffix.
+        var hand = { v: 1, at: '2026-11-05T00:00:00.000Z', findings: [
+            { status: 'open', file: 'js/x.js', claim: 'c', tier: 'SUGGESTION', occurrences: 1, firstSeenAt: 'not-a-date' }
+        ] };
+        assert.notContains(m.buildDebtDigest(hand, '2026-11-05T00:00:00.000Z'), 'd old',
+            'an unparsable firstSeenAt prints no age suffix');
+    });
 });
