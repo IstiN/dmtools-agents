@@ -17,3 +17,8 @@
 # dmtools pipeline runtime state - never tracked (gh-1358)
 .dmtools-target-workingdir
 .fah/
+# gh-1365 AC4 test fixture: the pattern below (added together with the tracked file
+# ci/runtime-artifact-canary.txt in this commit, NO workflow edit) must make the
+# runtime-artifact guard fail the job. The next commit removes the fixture again —
+# the proof lives in this commit, the final tree stays clean.
+ci/runtime-artifact-canary.txt

@@ -1,0 +1,8 @@
+gh-1365 AC4 test fixture — exists ONLY inside this fixture commit.
+
+The pattern ci/runtime-artifact-canary.txt added to
+ci/runtime-artifact-patterns.txt in the same commit must make the quality
+workflow's runtime-artifact guard fail while this file is tracked:
+  git ls-files --ignored --cached --exclude-from=ci/runtime-artifact-patterns.txt
+must list this file, and the job must hard-fail naming it. The following
+commit reverts the fixture; the final tree passes both guard checks.
