@@ -17,7 +17,7 @@ function rvShared() {
     return rvShared.mod;
 }
 
-// gh-136: the failure-analyzer module (the agent's require map member).
+// gh-1366: the failure-analyzer module (the agent's require map member).
 function faShared() {
     if (!faShared.mod) {
         faShared.mod = loadModule('js/common/failureAnalyzer.js', makeRequire({
@@ -28,7 +28,7 @@ function faShared() {
     return faShared.mod;
 }
 
-// gh-136: commentMarkup (the park diagnostic's flavor bag).
+// gh-1366: commentMarkup (the park diagnostic's flavor bag).
 function cmShared() {
     if (!cmShared.mod) {
         cmShared.mod = loadModule('js/common/commentMarkup.js', makeRequire({
@@ -1375,7 +1375,7 @@ suite('machineSm disposition loop (gh-1352)', function () {
 });
 
 // -------------------------------------------------------------------------
-// gh-136: the AI failure-analyzer leg — the scripted-provider replay of the
+// gh-1366: the AI failure-analyzer leg — the scripted-provider replay of the
 // acceptance matrix (AC1–AC5). In-memory issue store, no external calls:
 // every tick drives agent.action() against a scripted provider and the
 // recorded dispatches/labels/comments ARE the assertions.
@@ -1507,7 +1507,7 @@ function legsDispatched(provider, issueNumber) {
         .map(function (d) { return d[1]; });
 }
 
-suite('machineSm failure analyzer — scripted replay (gh-136)', function () {
+suite('machineSm failure analyzer — scripted replay (gh-1366)', function () {
 
     var LFR = lfrModule();
     var FA = faShared();
@@ -1592,7 +1592,7 @@ suite('machineSm failure analyzer — scripted replay (gh-136)', function () {
         var diags = holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 103; });
         assert.equal(diags.length, 1, 'exactly ONE diagnostic comment');
         assert.ok(diags[0][1].indexOf('npm ERR! 404') !== -1, 'the diagnostic quotes the evidence');
-        assert.ok(diags[0][1].indexOf('update .npmrc') !== -1, 'the diagnostic carries the suggested fix');
+        assert.ok(diags[0][1].indexOf('update \\[REDACTED:Credential\\-File\\]') !== -1, 'the diagnostic carries the suggested fix (escaped rendering)');
         assert.deepEqual(legsDispatched(holder.provider, 103), [], 'the park tick dispatches nothing');
 
         faTick(holder, faJobParams({ afterFailures: 4 }));
@@ -1810,8 +1810,8 @@ suite('machineSm failure analyzer — scripted replay (gh-136)', function () {
         // 5..8, effective (8 − 4) = 4 → the analyzer re-arms ONCE.
         devFailures(113, holder.provider, 4);
         faTick(holder, faJobParams({ afterFailures: 4 }));
-        assert.deepEqual(legsDispatched(holder.provider, 113), ['dev', 'analyze'],
-            'the rebuilt streak re-arms the analyzer at the fresh crossing');
+        assert.deepEqual(legsDispatched(holder.provider, 113), ['analyze'],
+            'the rebuilt streak re-arms the analyzer at the fresh crossing (the parked episode dispatched nothing)');
 
         // A FRESH verdict for the same signature — a deeper analysis
         // (analyzedAtCount 8, a NEWER analysis time than the first park).

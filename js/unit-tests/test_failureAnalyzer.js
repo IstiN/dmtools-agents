@@ -1,5 +1,5 @@
 /**
- * Unit tests for failureAnalyzer.js — gh-136, the AI failure-analyzer leg.
+ * Unit tests for failureAnalyzer.js — gh-1366, the AI failure-analyzer leg.
  *
  * The module is the pure half of the failure-analysis state machine:
  *   - the SM-config knob resolution (missing → disabled silently; malformed
@@ -69,7 +69,7 @@ function verdictComment(fa, record, author) {
              body: fa.buildFailureVerdictComment(record) };
 }
 
-suite('failureAnalyzer config (gh-136 AC7)', function () {
+suite('failureAnalyzer config (gh-1366 AC7)', function () {
     var fa = faShared();
 
     test('missing config disables the feature silently — no error, no behavior change', function () {
@@ -127,7 +127,7 @@ suite('failureAnalyzer config (gh-136 AC7)', function () {
     });
 });
 
-suite('failureAnalyzer streak math (gh-136 AC1/AC2/AC6)', function () {
+suite('failureAnalyzer streak math (gh-1366 AC1/AC2/AC6)', function () {
     var fa = faShared();
     var lfr = lfrShared();
 
@@ -196,7 +196,7 @@ suite('failureAnalyzer streak math (gh-136 AC1/AC2/AC6)', function () {
     });
 });
 
-suite('failureAnalyzer verdict marker (gh-136 house protocol)', function () {
+suite('failureAnalyzer verdict marker (gh-1366 house protocol)', function () {
     var fa = faShared();
 
     function record(over) {
@@ -312,7 +312,7 @@ suite('failureAnalyzer verdict marker (gh-136 house protocol)', function () {
     });
 });
 
-suite('failureAnalyzer park diagnostic (gh-136 AC3)', function () {
+suite('failureAnalyzer park diagnostic (gh-1366 AC3)', function () {
     var fa = faShared();
 
     var VERDICT = {
@@ -332,7 +332,7 @@ suite('failureAnalyzer park diagnostic (gh-136 AC3)', function () {
         assert.ok(body.indexOf('deterministic-infra') !== -1);
         assert.ok(body.indexOf('setup script pins a deleted registry mirror') !== -1, 'root cause named');
         assert.ok(body.indexOf('npm ERR! 404 not-found@1.0.0') !== -1, 'evidence quoted');
-        assert.ok(body.indexOf('update .npmrc to the live registry') !== -1, 'suggested fix named');
+        assert.ok(body.indexOf('update \\[REDACTED:Credential\\-File\\] to the live registry') !== -1, 'suggested fix named (escaped rendering)');
         assert.ok(body.indexOf('sm:leg-blocked') !== -1, 'the resume gesture names the label');
     });
 
@@ -405,7 +405,8 @@ suite('failureAnalyzer park diagnostic (gh-136 AC3)', function () {
             suggested_fix: 'run **rm -rf** / then > quote it',
             evidence: []
         }, 'sm:leg-blocked', MARKDOWN);
-        assert.ok(hostile.indexOf('# Heading') === -1, 'a heading cannot render');
+        assert.ok(hostile.indexOf('\n# Heading') === -1, 'a heading cannot render — the line start is escaped');
+        assert.ok(hostile.indexOf('\\# Heading') !== -1, 'the heading text survives escaped (verbatim on render)');
         assert.ok(hostile.indexOf('[click me](https://evil.example)') === -1, 'a link cannot render');
         assert.ok(hostile.indexOf('\\[click me\\]\\(https://evil\\.example\\)') !== -1, 'the link survives escaped (verbatim on render)');
         assert.ok(hostile.indexOf('\\*\\*rm \\-rf\\*\\*') !== -1, 'bold cannot render');

@@ -855,7 +855,7 @@ function _ghCloseIssue(owner, repo, issueNumber, comment) {
     return github_close_issue({ workspace: owner, repository: repo, number: issueNumber });
 }
 
-// gh-136: the failure-analyzer's issue-comment read — the plain-issue
+// gh-1366: the failure-analyzer's issue-comment read — the plain-issue
 // discussion page (github_get_pr_comments serves plain issues too; PRs
 // are issues upstream, the trackers.js parity). Memoized per tick (kind
 // issueComments): the SM reads the streak + verdict markers once per
@@ -878,7 +878,7 @@ function _ghIssueComments(owner, repo, issueNumber) {
     return list;
 }
 
-// gh-136: the ONE park-diagnostic write on the issue (github_create_comment
+// gh-1366: the ONE park-diagnostic write on the issue (github_create_comment
 // POSTs to issues/{n}/comments — the close-issue precedent's number shape).
 // Invalidate-after-mutation (the gh-957 house primitive): the same-tick
 // re-read must observe the posted diagnostic.
@@ -1116,7 +1116,7 @@ function githubProvider(cfg) {
             return _ghCloseIssue(owner, repo, issueNumber, comment);
         },
 
-        // ── gh-136 failure-analyzer primitives (plain-issue comments) ──
+        // ── gh-1366 failure-analyzer primitives (plain-issue comments) ──
         issueComments: function (issueNumber) {
             return _ghIssueComments(owner, repo, issueNumber);
         },

@@ -1901,7 +1901,7 @@ suite('smProvider — gh-1352 ledger primitives: postPrComment invalidates the p
 });
 
 // -------------------------------------------------------------------------
-// gh-136: the failure-analyzer's issue-comment primitives — the SM reads
+// gh-1366: the failure-analyzer's issue-comment primitives — the SM reads
 // the issue's comment history (streak + verdict markers) and posts the
 // ONE park diagnostic. Same memoize/invalidate discipline as the ledger
 // primitives above; plain issues ride github_get_pr_comments (PRs are
@@ -1909,7 +1909,7 @@ suite('smProvider — gh-1352 ledger primitives: postPrComment invalidates the p
 // close-issue precedent).
 // -------------------------------------------------------------------------
 
-suite('smProvider — gh-136 failure-analyzer issue-comment primitives', function () {
+suite('smProvider — gh-1366 failure-analyzer issue-comment primitives', function () {
 
     var MOD = 'js/common/smProvider.js';
 

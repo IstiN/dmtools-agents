@@ -39,7 +39,7 @@
  *   issueLimit        — how many open issues to scan per tick (default 50)
  *   closeComment      — comment posted by the close-issue safety net
  *   machineAuthor     — the machine-identity allowlist (comma-separated)
- *   failureAnalysis   — gh-136, the AI failure-analyzer leg (optional;
+ *   failureAnalysis   — gh-1366, the AI failure-analyzer leg (optional;
  *                       ABSENT → disabled silently). { afterFailures:
  *                       consecutive same-signature failures before the
  *                       analyzer dispatches (default 4); blockedLabel:
@@ -79,14 +79,14 @@ var polishLapModule = require('./common/polishLap.js');
 // laps — the machine-stamped dmtools:rework-lap markers are the
 // non-polish dispatch evidence that breaks consecutiveness (the reset).
 var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
-// gh-136: the AI failure-analyzer leg — the pure contract (config knobs,
+// gh-1366: the AI failure-analyzer leg — the pure contract (config knobs,
 // streak crossing, verdict markers, park diagnostic) shared by the SM
 // decision core and the analyzer leg itself.
 var failureAnalyzerModule = require('./common/failureAnalyzer.js');
-// gh-136: the park diagnostic renders in the machine loop's markdown
+// gh-1366: the park diagnostic renders in the machine loop's markdown
 // flavor (commentMarkup.forFlavor('markdown')).
 var commentMarkupModule = require('./common/commentMarkup.js');
-// gh-136: the failureAnalysis block override merge (shallow, knob-level).
+// gh-1366: the failureAnalysis block override merge (shallow, knob-level).
 var mergeObjectsModule = require('./common/mergeObjects.js');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ function decideGreenUnapprovedActions(has, pr) {
     return [{ type: 'skip', reason: 'steady state' }];
 }
 
-// ── gh-136: the failure-analyzer stages ──────────────────────────────────
+// ── gh-1366: the failure-analyzer stages ──────────────────────────────────
 // Evaluated between the engine-level human holds and the routing: a parked
 // issue skips entirely (the label is the human latch), and a fresh
 // deterministic-infra verdict is APPLIED (park action) before any
@@ -301,7 +301,7 @@ function failureAnalysisGate(state, cfg) {
 }
 
 /**
- * The blind-retry gate (gh-136 AC1): a re-dispatch decision crossing the
+ * The blind-retry gate (gh-1366 AC1): a re-dispatch decision crossing the
  * afterFailures threshold is diverted to the analyzer leg ONCE — exactly
  * the crossing, so a crashed analyzer (no verdict → nothing consumed)
  * moves the streak past the threshold and blind retries continue (AC5).
@@ -338,7 +338,7 @@ function decideActions(state, cfg) {
     var skip = decideEngineSkip(has, state.activeRunForIssue);
     if (skip) return [skip];
 
-    // gh-136: the analyzer's park states — before any routing.
+    // gh-1366: the analyzer's park states — before any routing.
     var faGate = failureAnalysisGate(state, cfg);
     if (faGate) return [faGate];
 
@@ -818,7 +818,7 @@ function resolveMachineSmConfig(p, projectConfig) {
     // operator tuning the wrong bound.
     cfg.maxResolveThreads = resolveMaxResolveThreads(override, p,
         reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP);
-    // gh-136: the failure-analyzer knobs ride the same override chain —
+    // gh-1366: the failure-analyzer knobs ride the same override chain —
     // `machineSm.failureAnalysis` (project) over `jobParams.failureAnalysis`
     // (job), knob by knob like every other machineSm knob. Missing
     // everywhere → disabled silently; a malformed block THROWS here (hard
@@ -1083,7 +1083,7 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveRepoCfg: resolveRepoCfg,
         probeOrphanRun: probeOrphanRun,
         filterLiveActiveIssues: filterLiveActiveIssues,
-        // gh-136: the failure-analyzer stages (the scripted replay suite
+        // gh-1366: the failure-analyzer stages (the scripted replay suite
         // covers them through action(); the pure gates are exported for
         // surgical unit tests).
         failureAnalysisGate: failureAnalysisGate,
