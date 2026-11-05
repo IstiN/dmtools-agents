@@ -152,6 +152,7 @@ function nitBody(claim) {
 function ioFixture(opts) {
     var f = {
         threads: [],
+        comments: [],
         noThreads: false,
         threadsThrow: null,
         commentsThrow: null,
@@ -172,7 +173,11 @@ function ioFixture(opts) {
         getComments: function () {
             mark('comments');
             if (f.commentsThrow) throw new Error(f.commentsThrow);
-            return '[]';
+            // reality: the posts ARE the PR comment stream (write-then-read
+            // parity — the same read the next run's ledger base uses)
+            return JSON.stringify(f.comments.concat(rec.posts.map(function (p) {
+                return { body: p.body, user: { login: MACHINE } };
+            })));
         },
         createComment: function (a) { mark('post'); rec.posts.push(a); return '{}'; },
         createIssue: function (a) {
