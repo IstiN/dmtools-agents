@@ -738,6 +738,17 @@ suite('mergeBackstop — runBackstopForPr (the merge-path wiring)', function () 
             'headShaOf(pr) reads the REST shape');
     });
 
+    test('a PR payload without head/title (or no payload at all) degrades, never throws', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: twoMachineImportantThreads() });
+        var r = runForPr(m, f, { pr: { number: 42, head: {} } });
+        assert.equal(r.out.digest, 501, 'the digest still files');
+        assert.contains(f.rec.issues[0].body, 'PR #42', 'the title fell back to the PR number');
+        assert.contains(f.rec.issues[0].body, 'head ?', 'the missing head reads as unknown, not a crash');
+        var bare = runForPr(m, ioFixture({ threads: [] }), { pr: null });
+        assert.equal(bare.out.counted.length, 0, 'a null PR payload is a clean replay');
+    });
+
     test('clean shape: merge as today — one clean line, no digest', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: [] });
@@ -799,15 +810,27 @@ suite('mergeBackstop — githubBridgeIo (the engine bridge enumeration)', functi
         assert.equal(typeof io.replyToThread, 'function');
     });
 
-    test('a bridge tool absent from the runtime maps null (capability miss, never a throw)', function () {
+    test('bridge tools absent from the runtime map null (capability miss, never a throw)', function () {
+        // Every slot absent: the FALSE side of all seven typeof guards is
+        // exercised (branch coverage — the true side rides the test above).
         var m = mergeBackstopMod({
             loadProjectConfig: function () { return null; }
         }, {
             github_get_pr_review_threads: undefined,
-            github_resolve_pr_thread: null
+            github_get_pr_comments: undefined,
+            github_create_comment: undefined,
+            github_search_issues: undefined,
+            github_create_issue: undefined,
+            github_resolve_pr_thread: undefined,
+            github_reply_to_pr_thread: undefined
         });
         var io = m.githubBridgeIo();
         assert.equal(io.getThreads, null);
+        assert.equal(io.getComments, null);
+        assert.equal(io.createComment, null);
+        assert.equal(io.searchIssues, null);
+        assert.equal(io.createIssue, null);
         assert.equal(io.resolveThread, null);
+        assert.equal(io.replyToThread, null);
     });
 });

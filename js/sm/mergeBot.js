@@ -573,18 +573,30 @@ function latchValidated(owner, name, pr, say) {
 }
 
 /**
- * Squash-merge attempt for an approved head (gh-1040 extraction,
- * verbatim): merges through squashMerge (one transparent retry) and
- * logs the caller's merged line on success or the verbatim refusal on
- * failure. Returns the acted credit (1 or 0).
+ * Squash-merge attempt for an approved head (gh-1040 extraction):
+ * gh-1353 merge backstop FIRST (ONE digest issue + `defered` resolutions
+ * for open machine-owned >=IMPORTANT review threads — a record, not a
+ * gate), then merges through squashMerge (one transparent retry) and logs
+ * the caller's merged line on success or the verbatim refusal on failure.
+ * A record-keeping failure (broken read, digest-filing) defers the merge
+ * — said aloud, acted 0, the queue keeps moving (never merges undigested).
+ * Returns the acted credit (1 or 0).
  */
-function mergeApprovedHead(owner, name, pr, mergedLine, say) {
-    var m = squashMerge(owner, name, pr.number);
+function mergeApprovedHead(run, pr, mergedLine) {
+    try {
+        mergeBackstop.runBackstopForPr(mergeBackstop.githubBridgeIo(),
+            run.owner, run.name, run.job, pr.number, pr, run.say);
+    } catch (eBackstop) {
+        run.say('❌ pr-' + pr.number + ' merge backstop failed — merge deferred' +
+            ' (never merges undigested): ' + (eBackstop.message || eBackstop));
+        return 0;
+    }
+    var m = squashMerge(run.owner, run.name, pr.number);
     if (m.merged) {
-        say(mergedLine);
+        run.say(mergedLine);
         return 1;
     }
-    say('❌ pr-' + pr.number + ' merge refused: ' + m.error);
+    run.say('❌ pr-' + pr.number + ' merge refused: ' + m.error);
     return 0;
 }
 
@@ -672,9 +684,8 @@ function advancePastDeadHead(run, pr, labels, headSha) {
     run.deadHeadPassed = false;
     var upRollup = checksRollup(String(headSha), pr, run.job, run.owner, run.name);
     if (upRollup !== 'green' || mergeStateOf(pr) !== 'CLEAN') return 0;
-    return mergeApprovedHead(run.owner, run.name, pr,
-        '🧲 pr-' + pr.number + ' squash-merged (approved + validated + green + CLEAN — advanced past a skipped dead head)',
-        run.say);
+    return mergeApprovedHead(run, pr,
+        '🧲 pr-' + pr.number + ' squash-merged (approved + validated + green + CLEAN — advanced past a skipped dead head)');
 }
 
 /**
@@ -746,8 +757,8 @@ function handleArmedPr(run, pr, approved, headSha) {
     }
 
     if (approved) {
-        run.acted += mergeApprovedHead(run.owner, run.name, pr,
-            '🧲 pr-' + pr.number + ' squash-merged (approved + green + CLEAN)', run.say);
+        run.acted += mergeApprovedHead(run, pr,
+            '🧲 pr-' + pr.number + ' squash-merged (approved + green + CLEAN)');
     } else {
         // Green head, no approval yet: latch for the review leg.
         if (latchValidated(run.owner, run.name, pr, run.say)) run.acted++;
