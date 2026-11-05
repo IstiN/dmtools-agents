@@ -155,6 +155,14 @@ function backstopBridgeMocks(opts, calls) {
     };
 }
 
+// gh-1371 round 2 (CI crap ratchet): the head shape of the fixture PR —
+// `bareHead` mimics the older bridge shape (a bare sha string instead of
+// the { sha } object). Extracted from fixture() to restore its baseline CC.
+function fixtureHead(opts) {
+    var sha = opts.headSha || 'deadbeef';
+    return opts.bareHead ? sha : { sha: sha };
+}
+
 function fixture(opts) {
     opts = opts || {};
     var calls = { merges: [], adds: [], removes: [], comments: [], cli: [],
@@ -171,7 +179,7 @@ function fixture(opts) {
         draft: opts.draft === true,
         mergeable: opts.mergeable !== undefined ? opts.mergeable : true,
         mergeable_state: opts.mergeableState || 'clean',
-        head: { sha: opts.headSha || 'deadbeef' },
+        head: fixtureHead(opts),
         statusCheckRollup: opts.statusCheckRollup || undefined,
         labels: (opts.labels || ['ai_validating']).map(function (n) {
             return { name: n };
@@ -1659,5 +1667,19 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         assert.equal(result.acted, 1);
         assert.equal(fx.calls.debtIssues.length, 0, 'no logins = nothing is machine-owned');
         assert.equal(fx.calls.threadResolves.length, 0);
+    });
+
+    test('gh-1371 finding 2: a bare-string head PR rides the shared headShaOf — merge still proceeds', function () {
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating'],
+            bareHead: true,
+            threadsByNumber: { 42: [ghThread('PRT_1', importantBody('machine finding'))] }
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 1, 'a bare-string head (the older bridge shape) still merges');
+        assert.equal(fx.calls.debtIssues.length, 1);
+        assert.contains(fx.calls.debtIssues[0].body, 'head deadbee',
+            'the head sha flowed through the shared derivation into the digest');
+        assert.equal(fx.calls.merges.length, 1);
     });
 });

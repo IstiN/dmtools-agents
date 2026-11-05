@@ -15,7 +15,15 @@
  *      refresh its entry instead of duplicating), plus per-thread severity,
  *      path:line, one-line summary, thread permalink and review-run
  *      reference. An already-open digest issue whose ledger marker carries
- *      this PR number is REUSED (one digest per PR survives replays);
+ *      this PR number is REUSED — the pick is deterministic (gh-1371
+ *      round 2: the LOWEST issue number among the marker-matching digests),
+ *      so replays converge on one digest even after a race. The race
+ *      itself is best-effort: a digest a concurrent merge funnel files
+ *      between our probe and our create is adopted post-create, OURS is
+ *      abandoned OPEN (out.digestDuplicate, echoed into the PR ledger
+ *      stamp for the part-3 sweep to retire) — "one digest per PR
+ *      survives replays" is the convergent invariant, not a hard
+ *      guarantee;
  *   2. each counted thread resolves with the canonical machine-parsed tag
  *      `defered: #<digest-issue>` (reviewDispositions.TAGS — the epic's
  *      deferral spelling; the tag round-trips parseDispositionTag);
@@ -85,8 +93,12 @@ var MIN_SEVERITY_CLASS = 'IMPORTANT';
 // 500-char evidence truncate — this is the RENDER cap).
 var SUMMARY_MAX = 160;
 
-// The readable severity labels of the digest table rows.
-var SEVERITY_LABELS = { BLOCKING: '🚨 BLOCKING', IMPORTANT: '⚠️ IMPORTANT' };
+// The readable severity labels of the digest table rows — EVERY tier of
+// the findingRegistry class set (gh-1371: unmarked/NIT human threads used
+// to render an unlabeled severity in the human table). An unknown class
+// still falls back to its raw string.
+var SEVERITY_LABELS = { BLOCKING: '🚨 BLOCKING', IMPORTANT: '⚠️ IMPORTANT',
+    SUGGESTION: '💡 SUGGESTION' };
 
 // The io keys githubTools normalizes (a non-function slot = capability miss).
 var IO_KEYS = ['getThreads', 'getComments', 'createComment', 'searchIssues',
@@ -356,30 +368,55 @@ function digestCarriesPr(issue, prNumber) {
     return false;
 }
 
+// The raw issue list of a search payload — an array rides through, the
+// {items}/{issues} envelopes flatten, anything else is no matches.
+function digestIssueList(issuesPayload) {
+    if (Array.isArray(issuesPayload)) return issuesPayload;
+    return (issuesPayload && (issuesPayload.items || issuesPayload.issues)) || [];
+}
+
+// The gh-1371 race-dedup exclusion: one KNOWN number is skipped — the
+// post-create probe looks for a CONCURRENT funnel's digest, never the
+// PR's own just-filed duplicate.
+function isExcludedDigestIssue(issue, excludeNumber) {
+    return excludeNumber !== undefined && excludeNumber !== null &&
+        String(issue && issue.number) === String(excludeNumber);
+}
+
 /**
  * The already-open digest issue whose ledger marker carries prNumber, or
  * null. The machine marker decides — a human-made `[debt]` issue without
- * our marker is never reused.
+ * our marker is never reused. excludeNumber (gh-1371) skips one known
+ * number — the post-create race dedup looks for a CONCURRENT funnel's
+ * digest, never the PR's own just-filed duplicate. Among multiple matches
+ * the pick is DETERMINISTIC (gh-1371 round 2: the LOWEST issue number) —
+ * GitHub issue-search ordering is best-match and opaque, so a "first hit"
+ * could flip between replays and point new `defered:` acks at the
+ * abandoned duplicate; every replay now converges on the same issue.
  */
-function findExistingDigest(issuesPayload, prNumber) {
-    var list = Array.isArray(issuesPayload) ? issuesPayload :
-        ((issuesPayload && (issuesPayload.items || issuesPayload.issues)) || []);
-    for (var i = 0; i < list.length; i++) {
-        if (digestCarriesPr(list[i], prNumber)) {
-            return { number: list[i].number, title: list[i].title || '', reused: true };
+function findExistingDigest(issuesPayload, prNumber, excludeNumber) {
+    var best = null;
+    digestIssueList(issuesPayload).forEach(function (issue) {
+        if (isExcludedDigestIssue(issue, excludeNumber)) return;
+        if (!digestCarriesPr(issue, prNumber)) return;
+        if (!best || Number(issue.number) < Number(best.number)) {
+            best = { number: issue.number, title: (issue && issue.title) || '', reused: true };
         }
-    }
-    return null;
+    });
+    return best;
 }
 
 // ── the github io adapters (injected bridge — capability-gated) ──────────────
 
 // A non-function io slot is a capability miss (no bridge tool): normalized
-// to null so the callers' gates can skip the degraded path.
+// to null so the callers' gates can skip the degraded path. Normalized into
+// a COPY (gh-1371): the injected io bag is the caller's object — writing
+// the null slots back onto it would mutate the caller's state.
 function normalizedIo(io) {
-    var b = io || {};
+    var src = io || {};
+    var b = {};
     IO_KEYS.forEach(function (k) {
-        if (typeof b[k] !== 'function') b[k] = null;
+        b[k] = (typeof src[k] === 'function') ? src[k] : null;
     });
     return b;
 }
@@ -469,6 +506,7 @@ function emptyOutcome(prNumber) {
         counts: null,
         digest: null,
         digestReused: false,
+        digestDuplicate: null,
         digestProbeUnavailable: false,
         resolved: 0,
         resolveFailures: 0,
@@ -480,27 +518,44 @@ function emptyOutcome(prNumber) {
 
 // The ledger base for the append — fails closed on a broken read: stamping
 // a partial ledger would clobber the marker family's newest-wins state.
-function ledgerBaseOf(t, prNumber, logins) {
-    var comments = t.prComments(prNumber);
-    return reviewDebtLedger.latestDebtLedger(comments, { authorLogins: logins || [] }) ||
-        reviewDebtLedger.emptyLedger();
+// Takes the ALREADY-READ comments (gh-1371: one pr-comments read per
+// counted run — the ledger base and the digest share it).
+function ledgerBaseOf(comments, logins) {
+    return reviewDebtLedger.latestDebtLedger(comments || [],
+        { authorLogins: logins || [] }) || reviewDebtLedger.emptyLedger();
 }
 
 // The PR-side ledger stamp (marker + async digest, part 3's defer pattern).
-// Soft: the digest issue body carries the same ledger payload.
+// Soft: the digest issue body carries the same ledger payload. Posted AFTER
+// the digest filing (gh-1371 round 2) so the race outcome is known and the
+// abandoned duplicate can be echoed for the sweep.
 function stampLedger(t, prNumber, ledger, out) {
     if (typeof t.postPrComment !== 'function') return;
     try {
         t.postPrComment(prNumber,
             reviewDebtLedger.buildDebtMarker(ledger) + '\n' +
-            reviewDebtLedger.buildDebtDigest(ledger));
+            reviewDebtLedger.buildDebtDigest(ledger) +
+            duplicateStampNote(out && out.digestDuplicate));
         out.ledgerStampPosted = true;
     } catch (eStamp) { /* soft — the digest issue carries the marker */ }
 }
 
+// The race-dedup echo (gh-1371 round 2): when a concurrent funnel's digest
+// won, the duplicate we filed stays OPEN (there is no close/update io
+// primitive to retire it) — the stamp carries its number so the part-3
+// sweep can see it and close it later. A clean filing echoes nothing.
+function duplicateStampNote(duplicateNumber) {
+    if (!duplicateNumber) return '';
+    return '\n♻️ race dedup: a concurrent merge funnel filed the digest first —' +
+        ' duplicate issue #' + duplicateNumber + ' was abandoned OPEN and is safe' +
+        ' to close by the review-debt sweep (this ledger is the surviving record).';
+}
+
 // The probe: an already-open digest for this PR, or null. Optional
 // primitive — a missing one degrades one-per-PR dedup (logged), never fails.
-function probeExistingDigest(t, owner, name, input, out) {
+// excludeNumber (gh-1371) skips one known number (the post-create race
+// dedup skips our own just-filed issue).
+function probeExistingDigest(t, owner, name, input, out, excludeNumber) {
     if (typeof t.searchDebtIssues !== 'function') {
         out.digestProbeUnavailable = true;
         return null;
@@ -508,11 +563,35 @@ function probeExistingDigest(t, owner, name, input, out) {
     if (!owner || !name) return null;
     return findExistingDigest(
         t.searchDebtIssues(buildDebtSearchQuery(owner, name)),
-        input.prNumber);
+        input.prNumber, excludeNumber);
 }
 
-// Files the digest (or reuses the probed one); a createIssue throw throws
-// through — the merge defers rather than merging undigested.
+// One `number` slot value → a usable positive digest issue number, or
+// null. BOTH shapes gate on > 0 (gh-1371 round 2: the string branch used
+// to accept '0' and '-3', contradicting the documented positive contract
+// the numeric branch already enforced). Extracted so digestNumberOf stays
+// under the CRAP ratchet ceiling (CI crap — findExistingDigest round).
+function usableDigestNumber(n) {
+    var parsed = (typeof n === 'number') ? n : Number(String(n));
+    return (isFinite(parsed) && parsed > 0) ? parsed : null;
+}
+
+// The usable digest issue number off a bridge payload — null unless the
+// payload carries a positive issue number (a bridge error body has none,
+// gh-1371: `created.number` used to read undefined and the threads were
+// resolved against a nonexistent digest).
+function digestNumberOf(payload) {
+    return usableDigestNumber(payload && payload.number);
+}
+
+// Files the digest (or reuses the probed one); a createIssue throw — or a
+// create response WITHOUT a usable issue number — throws through: the merge
+// defers rather than pointing `defered:` tags at a nonexistent digest
+// (gh-1371). The search-then-create probe is racy across the two merge
+// funnels (gh-1371 — the backstop rides BOTH mergeTrigger and mergeBot): a
+// concurrent funnel can file its own digest between our probe and our
+// create. Dedup runs POST-create too — the concurrent digest wins, ours is
+// abandoned (digestDuplicate), and the tags converge on ONE digest.
 function fileDigest(t, comments, owner, name, input, out, ledger) {
     var probed = probeExistingDigest(t, owner, name, input, out);
     if (probed) {
@@ -526,9 +605,21 @@ function fileDigest(t, comments, owner, name, input, out, ledger) {
         reviewRunRef: reviewRunRefOf(comments, input.headSha, input.logins),
         ledger: ledger
     });
-    var created = t.createIssue(issue.title, issue.body);
-    out.digest = created && created.number;
-    return { number: out.digest };
+    var created = digestNumberOf(t.createIssue(issue.title, issue.body));
+    if (!created) {
+        throw new Error('mergeBackstop: digest filing returned no issue number' +
+            ' — never resolve threads against a nonexistent digest');
+    }
+    var raced = probeExistingDigest(t, owner, name, input, out, created);
+    var racedNumber = raced && digestNumberOf(raced);
+    if (racedNumber) {
+        out.digest = racedNumber;
+        out.digestReused = true;
+        out.digestDuplicate = created;
+        return raced;
+    }
+    out.digest = created;
+    return { number: created };
 }
 
 // Resolve FIRST, ack only on success (gh-828 round 3). Per-thread failures
@@ -580,15 +671,23 @@ function runBackstop(io, owner, name, input) {
     out.human = cls.human;
     out.counts = cls.counts;
     if (!cls.counted.length) return out; // clean replay — merge as today
+    // ONE comments read per counted run (gh-1371): the payload is shared by
+    // the ledger append (its base) and the digest (its review-run
+    // reference). Fail-closed: a broken read defers the merge to the next
+    // tick — the #1319 pathology never reads as clean.
     var comments = t.prComments ? t.prComments(inp.prNumber) : null;
     if (!comments) {
         throw new Error('mergeBackstop: no pr-comments primitive — the ledger append cannot read its base');
     }
-    var ledger = appendCountedToLedger(ledgerBaseOf(t, inp.prNumber, inp.logins),
+    var ledger = appendCountedToLedger(ledgerBaseOf(comments, inp.logins),
         cls.counted, { owner: owner, name: name, prNumber: inp.prNumber, nowIso: inp.nowIso });
     out.ledgerFindings = Array.isArray(ledger.findings) ? ledger.findings.length : 0;
-    stampLedger(t, inp.prNumber, ledger, out);
+    // Filing runs BEFORE the stamp (gh-1371 round 2): the stamp then knows
+    // the race outcome and echoes an abandoned duplicate for the sweep.
+    // Record-keeping survives a filing failure — the merge defers and the
+    // next tick re-derives the same ledger (identity dedup) and stamps it.
     fileDigest(t, comments, owner, name, inp, out, ledger);
+    stampLedger(t, inp.prNumber, ledger, out);
     resolveCountedThreads(t, inp.prNumber, cls.counted, out.digest, out);
     return out;
 }
@@ -619,11 +718,15 @@ function prTitleOf(pr) {
     return (pr && pr.title) || '';
 }
 
-// Head sha across payload shapes: GraphQL `headRefOid`, REST `head.sha`.
+// Head sha across payload shapes (the ONE derivation, shared with the
+// merge paths — gh-1371: mergeBot's local copy delegates here): GraphQL
+// `headRefOid`, REST `head.sha`, older bridges a bare `head` string. A
+// non-string (an object head, a junk payload) reads as null — the digest
+// renders it as unknown instead of `[object Object]`.
 function headShaOf(pr) {
     if (!pr) return null;
-    if (pr.headRefOid) return pr.headRefOid;
-    return (pr.head && pr.head.sha) || null;
+    var sha = pr.headRefOid || (pr.head && (pr.head.sha || pr.head));
+    return (typeof sha === 'string' && sha) ? sha : null;
 }
 
 /**
@@ -671,6 +774,8 @@ function outcomeLines(out) {
         ' — resolved ' + out.resolved + ', resolve failures ' + out.resolveFailures +
         ', ack failures ' + out.ackFailures + '; ' + out.human.length +
         ' open human thread(s) listed open (human)' +
+        (out.digestDuplicate ? (' (duplicate digest #' + out.digestDuplicate +
+            ' abandoned — a concurrent merge funnel filed first)') : '') +
         (out.digestProbeUnavailable ? ' (digest probe unavailable — dedup degraded)' : '')];
 }
 
@@ -687,8 +792,10 @@ if (typeof module !== 'undefined' && module.exports) {
         deferredAck: deferredAck,
         buildDebtSearchQuery: buildDebtSearchQuery,
         findExistingDigest: findExistingDigest,
+        digestNumberOf: digestNumberOf,
         githubTools: githubTools,
         githubBridgeIo: githubBridgeIo,
+        headShaOf: headShaOf,
         runBackstop: runBackstop,
         runBackstopForPr: runBackstopForPr,
         outcomeLines: outcomeLines
