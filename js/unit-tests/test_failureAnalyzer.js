@@ -321,7 +321,7 @@ suite('failureAnalyzer park diagnostic (gh-1366 AC3)', function () {
         confidence: 0.9,
         suspected_root_cause: 'setup script pins a deleted registry mirror',
         evidence: ['npm ERR! 404 not-found@1.0.0', 'exit code 1'],
-        suggested_fix: 'update .npmrc to the live registry',
+        suggested_fix: 're-point the install script at the live registry mirror',
         analyzedAtCount: 4,
         at: '2026-11-05T10:00:00.000Z'
     };
@@ -332,8 +332,7 @@ suite('failureAnalyzer park diagnostic (gh-1366 AC3)', function () {
         assert.ok(body.indexOf('deterministic-infra') !== -1);
         assert.ok(body.indexOf('setup script pins a deleted registry mirror') !== -1, 'root cause named');
         assert.ok(body.indexOf('npm ERR! 404 not-found@1.0.0') !== -1, 'evidence quoted');
-        console.log('SEG:', JSON.stringify(body.split('\n')));
-        assert.ok(body.indexOf('update \\[REDACTED:Credential\\-File\\] to the live registry') !== -1, 'suggested fix named (escaped rendering)');
+        assert.ok(body.indexOf('re\\-point the install script at the live registry mirror') !== -1, 'suggested fix named (markdown-escaped rendering)');
         assert.ok(body.indexOf('sm:leg-blocked') !== -1, 'the resume gesture names the label');
     });
 

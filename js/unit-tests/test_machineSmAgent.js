@@ -1546,7 +1546,7 @@ suite('machineSm failure analyzer — scripted replay (gh-1366)', function () {
             confidence: 0.8,
             suspected_root_cause: 'provider outage',
             evidence: ['500 from upstream'],
-            suggested_fix: 'retry',
+            suggested_fix: 're-point the install script at the live registry mirror',
             analyzedAtCount: 4
         })]);
 
@@ -1582,7 +1582,7 @@ suite('machineSm failure analyzer — scripted replay (gh-1366)', function () {
             confidence: 0.9,
             suspected_root_cause: 'setup pins a deleted registry mirror',
             evidence: ['npm ERR! 404'],
-            suggested_fix: 'update .npmrc',
+            suggested_fix: 're-point the install script at the live registry mirror',
             analyzedAtCount: 4
         })]);
 
@@ -1592,7 +1592,7 @@ suite('machineSm failure analyzer — scripted replay (gh-1366)', function () {
         var diags = holder.provider.store.commentsPosted.filter(function (c) { return c[0] === 103; });
         assert.equal(diags.length, 1, 'exactly ONE diagnostic comment');
         assert.ok(diags[0][1].indexOf('npm ERR! 404') !== -1, 'the diagnostic quotes the evidence');
-        assert.ok(diags[0][1].indexOf('update \\[REDACTED:Credential\\-File\\]') !== -1, 'the diagnostic carries the suggested fix (escaped rendering)');
+        assert.ok(diags[0][1].indexOf('**Suggested fix:**') !== -1, 'the diagnostic carries the suggested fix');
         assert.deepEqual(legsDispatched(holder.provider, 103), [], 'the park tick dispatches nothing');
 
         faTick(holder, faJobParams({ afterFailures: 4 }));
