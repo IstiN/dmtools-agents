@@ -8,6 +8,11 @@
 // a separate coverage unit of complexity 1 (CRAP 2, far below the bar).
 var stubToolchainLine = function (t) { return t; };
 
+// gh-1352 scope 4a: the shared ledger core, loaded once at file scope — the
+// bugBookkeeping map and the per-test require maps reference it from nested
+// scopes.
+var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
+
 function loadTrackersDev(mocks) {
     return loadModule('js/common/trackers.js', makeRequire({
         '../config.js': configModule,
@@ -116,7 +121,6 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
 
     var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}));
     var reviewVerdictsModule = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorModule }));
-var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
     var tcLedgerModule = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,  './reviewVerdicts.js': reviewVerdictsModule }));
     var requireMap = {
         './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },

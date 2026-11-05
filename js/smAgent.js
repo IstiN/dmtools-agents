@@ -249,6 +249,10 @@ var autoStartModule = require('./common/autoStart.js');
 // quotaCircuitBreaker/commentMarkup without them being on the sandbox list.
 var commentMarkupModule = require('./common/commentMarkup.js');
 var tcRunRegistryModule = require('./common/tcRunRegistry.js');
+// gh-1352 scope 4: the ledger lifecycle lives in the shared ledger core —
+// tcMaintenanceLedger requires it, so the sandbox helper layer must carry
+// the block BEFORE the ledger (a helper's require resolves by var name).
+var ledgerCoreModule = require('./common/ledgerCore.js');
 var tcMaintenanceLedgerModule = require('./common/tcMaintenanceLedger.js');
 // gh-1331: the cross-lap alternation layer — the dispatcher (localExecution)
 // requires it; it sits after its registry/ledger deps in the sandbox list.
@@ -1420,6 +1424,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
         { id: 'machineAuthor.js', varName: '_mau', fallbackExpr: helperFallbackExpr(machineAuthorModule, 'machineAuthorModule') },
         { id: 'reviewVerdicts.js', varName: '_rvd', fallbackExpr: helperFallbackExpr(reviewVerdictsModule, 'reviewVerdictsModule') },
         { id: 'tcRunRegistry.js', varName: '_trr', fallbackExpr: helperFallbackExpr(tcRunRegistryModule, 'tcRunRegistryModule') },
+        { id: 'ledgerCore.js', varName: '_lgc', fallbackExpr: helperFallbackExpr(ledgerCoreModule, 'ledgerCoreModule') },
         { id: 'tcMaintenanceLedger.js', varName: '_tml', fallbackExpr: helperFallbackExpr(tcMaintenanceLedgerModule, 'tcMaintenanceLedgerModule') },
         { id: 'tcAlternation.js', varName: '_tal', fallbackExpr: helperFallbackExpr(tcAlternationModule, 'tcAlternationModule') },
         { id: 'tcTriage.js', varName: '_ttg', fallbackExpr: helperFallbackExpr(tcTriageModule, 'tcTriageModule') },
@@ -1450,6 +1455,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
         '      if (id.indexOf("machineAuthor.js") !== -1) return _mau.exports;\n' +
         '      if (id.indexOf("reviewVerdicts.js") !== -1) return _rvd.exports;\n' +
         '      if (id.indexOf("tcRunRegistry.js") !== -1) return _trr.exports;\n' +
+        '      if (id.indexOf("ledgerCore.js") !== -1) return _lgc.exports;\n' +
         '      if (id.indexOf("tcMaintenanceLedger.js") !== -1) return _tml.exports;\n' +
         '      if (id.indexOf("tcAlternation.js") !== -1) return _tal.exports;\n' +
         '      if (id.indexOf("tcTriage.js") !== -1) return _ttg.exports;\n' +
