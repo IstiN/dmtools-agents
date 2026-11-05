@@ -515,6 +515,11 @@ function action(params) {
         stepWriteReviewPolicyContext(ctx);
 
         var testCases = stepFetchLinkedTestCases(ctx);
+        if (branchSetup.isDryRunParams(params)) {
+            console.log('[dryRun] Skipping mutating story test automation setup for', ctx.storyKey);
+            stepWriteTestPrContext(ctx);
+            return { success: true, dryRun: true };
+        }
         stepCheckoutTestBranch(ctx);
         stepWriteTestPrContext(ctx);
         stepRemoveIrrelevantTestCode(ctx, testCases);

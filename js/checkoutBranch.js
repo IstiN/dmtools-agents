@@ -179,6 +179,10 @@ function checkoutDevBranch(branchName, branchBase) {
 
 function action(params) {
     try {
+        if (branchSetup.isDryRunParams(params)) {
+            console.log('[dryRun] checkoutBranch: skipping branch checkout');
+            return { success: true, dryRun: true };
+        }
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var customParams = resolveActionCustomParams(params);
         var ticketKey = params.ticket.key;

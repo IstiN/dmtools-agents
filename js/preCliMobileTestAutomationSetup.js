@@ -583,6 +583,11 @@ function action(params) {
         var inputs = resolveMobileSetupInputs(params);
 
         console.log('=== Mobile test automation setup for:', inputs.ticketKey, '===');
+        if (branchSetup.isDryRunParams(params)) {
+            console.log('[dryRun] Skipping mutating mobile test automation setup for', inputs.ticketKey);
+            fetchLinkedTestCasesSafely(inputs.ticketKey, inputs.folder, inputs.tracker);
+            return { success: true, dryRun: true };
+        }
 
         // Step 1: Move trigger ticket to In Development
         moveTicketToInDevelopment(inputs.tracker, inputs.ticketKey);

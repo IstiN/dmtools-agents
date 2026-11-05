@@ -309,6 +309,21 @@ function writeReviewPolicyContext(inputFolder, reviewPolicy) {
     }
 }
 
+function resolveBaseBranchForPr(prDetails, config) {
+    return prDetails.base ? prDetails.base.ref : config.git.baseBranch;
+}
+
+function resolveHeadBranchForPr(prDetails) {
+    return prDetails.head ? prDetails.head.ref : null;
+}
+
+function resolveOrPrepareTestPr(scm, config, tracker, ticketKey, inputFolder) {
+    var pr = findTestPRForTicket(scm, ticketKey);
+    if (pr) return { pr: pr, result: null };
+    const testBranchName = buildTestBranchName(ticketKey);
+    return prepareBranchWithoutOpenPr(scm, config, tracker, ticketKey, testBranchName, inputFolder);
+}
+
 function action(params) {
     var tracker = null;
     try {
@@ -323,6 +338,10 @@ function action(params) {
         // The tracker exists already so the failure is posted on the ticket.
         var reviewPolicy = resolveLegReviewPolicy(config, params);
 
+        if (branchSetup.isDryRunParams(params)) {
+            console.log('[dryRun] Skipping mutating test rework setup for', ticketKey);
+            return { success: true, dryRun: true };
+        }
         console.log('=== Test rework setup for:', ticketKey, '===');
 
         // Clear stale output files from any previous run so the post-action
@@ -338,14 +357,9 @@ function action(params) {
         }
 
         // Step 2: Find PR on test/{KEY} branch specifically
-        var pr = findTestPRForTicket(scm, ticketKey);
-        const testBranchName = buildTestBranchName(ticketKey);
-
-        if (!pr) {
-            var noPrOutcome = prepareBranchWithoutOpenPr(scm, config, tracker, ticketKey, testBranchName, inputFolder);
-            if (noPrOutcome.result) return noPrOutcome.result;
-            pr = noPrOutcome.pr;
-        }
+        var prOutcome = resolveOrPrepareTestPr(scm, config, tracker, ticketKey, inputFolder);
+        if (prOutcome.result) return prOutcome.result;
+        var pr = prOutcome.pr;
 
         // Step 3: PR details
         const prDetails = gh.getPRDetails(scm, pr.number);
@@ -354,7 +368,7 @@ function action(params) {
         }
 
         // Step 4: Checkout test branch
-        const branchName = prDetails.head ? prDetails.head.ref : null;
+        const branchName = resolveHeadBranchForPr(prDetails);
         if (!branchName) {
             return buildFailureResult('Could not determine branch from PR details');
         }
@@ -364,7 +378,7 @@ function action(params) {
         }
 
         // Step 5: Diff + discussions
-        const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
+        const baseBranch = resolveBaseBranchForPr(prDetails, config);
 
         // Step 4.5: Merge base branch and detect conflicts
         const conflictFiles = gitOps.detectMergeConflicts(baseBranch, inputFolder);
