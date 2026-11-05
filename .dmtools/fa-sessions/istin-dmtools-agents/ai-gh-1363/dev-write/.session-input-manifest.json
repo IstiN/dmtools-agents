@@ -1,0 +1,275 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-05T07:43:40.518Z",
+  "ticketKey": "pr-1372",
+  "headSha": "bfa60a51dca6e9a2631b87c8a925a88810afd121",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:543e93cabd635aae",
+      "size": 45793
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:f3d62a64802ecc64",
+      "size": 3805719
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:7d44369a4b508c21",
+      "size": 1773
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:95194ffc01f65ab9",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:0dda997be056ee76",
+      "size": 25779
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:2a9205a9f3c2a34a",
+      "size": 12136
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:699fc0bdeea71d04",
+      "size": 2109
+    },
+    "request.md": {
+      "hash": "fnv1a64:92eeca5991fa9220",
+      "size": 1766
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:72207afc279652d2",
+      "size": 1448
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:a5c2a9acc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:f2154c36ea875402",
+      "size": 1835
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:92eeca5991fa9220",
+      "size": 1766
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6z9u-Z",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/preCliDevelopmentSetup.js:677",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — crap ratchet fails on 3 new functions (threshold 8)**\n\nThe `crap` check fails on head `bfa60a51` (`ci_failures.md`, run [41984873724](https://github.com/IstiN/dmtools-agents/actions/runs/41984873724/job/127103190928)):\n\n```\nNEW > 8  js/preCliDevelopmentSetup.js::readEnvVar: 9\nNEW > 8  js/preCliDevelopmentSetup.js::deriveSetupRepeatCount: 10\nNEW > 8  js/preCliDevelopmentSetup.js::postSetupErrorComment: 13\n0 regression(s), 3 new over threshold, 0 improvement(s), 0 removed\n```\n\nAll three functions are introduced/mass-grown by this PR. The ratchet requires new code ≤ 8 — updating the baseline is not an option (\"CRAP may only decrease\").\n\nConcrete split guidance (the repo's gh-1042 extraction pattern):\n\n- `postSetupErrorComment` (CC 13) — extract the enrichment block (lines `if (!ctx.signature)` … `var enriched = …`) into `deriveEnrichmentContext(tracker, ticketKey, stage, errorMessage, context)`; the remainder is a single try/post/warn (CC ≈ 3).\n- `deriveSetupRepeatCount` (CC 10) — extract the body-collection loop (`bodies.push(...)`) into a `commentBodies(comments)` helper; keep only signature derivation + try/catch here.\n- `readEnvVar` (CC 9) — split into `readJavaEnv(name)` and `readProcessEnv(name)`, each one try/catch; `readEnvVar` becomes `readJavaEnv(name) || readProcessEnv(name)`.\n\nExisting tests pin the behavior (150/150 pass locally), so a pure extraction is safe. Merge is blocked until the gate is green."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z9vAZ",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/preCliDevelopmentSetup.js:891",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: pre-flight line captures the wrong workspace when `config.workingDir` is set**\n\n`collectPreflightStateStep()` (this call site, step 1.4) runs **before** `checkoutBranchOrReport()` (step 2) — but `_workingDir` is assigned only inside `checkoutBranch()` (`js/preCliDevelopmentSetup.js:330`), which is reached in step 2. At capture time `_workingDir` is still `null`, so `runCommandStr` → `runCmd` executes `git rev-parse` / `git status --porcelain` in the **process cwd (the agents repo)**, not in the configured target repository.\n\nConsequence: for every dynamic-repo/`workingDir` setup (the mode `test_preCliDevelopmentSetupDynamicRepo.js` exists for), the `git pre-flight: branch=… head=… dirty=… staged=… paths=[…]` line in the failure report describes the agents checkout — where the leg never ran — instead of the target workspace the report is about. A post-hoc reader gets a confidently wrong `branch=`/`head=` (misleading diagnostics are worse than an omitted line, which the module already supports via `preflightLine(null)`).\n\nNote the failure path itself is affected too: `checkoutBranch` sets `_workingDir` before failing, so the setup-error comment posts the stale wrong-workspace pre-flight line captured at step 1.4.\n\nSuggested fix: resolve `config.workingDir` (from the already-loaded `config` at this point in `action()`) into `_workingDir` — or pass it explicitly to `collectPreflightStateStep(config.workingDir)` and thread it through `runCmd` — before the capture, and add a `workingDir` test asserting the pre-flight commands carry `workingDirectory` (the existing test at `test_preCliDevelopmentSetup.js` only covers the no-workingDir case)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z9vCG",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "scripts/report-leg-failure.sh:138",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `--argjson priorBodies` ships the whole comment history through argv — E2BIG past 128 KiB, contradicting this script's own rule**\n\nThe header of this script states: *\"Payload bytes travel via stdin (never argv — E2BIG past 128 KiB, the same rule the token-usage publisher learned)\"*. This line then puts the **largest payload component** — `PRIOR_BODIES`, i.e. every comment body on the issue (`gh issue view --json comments`) — on the jq command line as a single `--argjson` argv entry.\n\nDemonstrated on Linux (`MAX_ARG_STRLEN` = 128 KiB): a ~140 KB array makes jq fail with `Argument list too long`. The failure is swallowed by `|| echo '{}'`, so the notice silently degrades to the bare-link fallback — **exactly on the issues where the feature matters most**: repeat-count context only renders when prior failure comments exist, and each failure cycle grows the history (this repo's issues routinely carry multi-KB bot notices, so 128 KiB is reachable within tens of comments).\n\nFix options (all keep `gh` output on non-argv channels):\n\n```bash\n# process substitution + --slurpfile: data never touches argv\njq -n --arg workflow \"${WORKFLOW_FILE:-ai-teammate.yml}\" ... \\\n  --slurpfile priorBodies <(printf '%s' \"$PRIOR_BODIES\") \\\n  '{...} * {priorBodies: $priorBodies[0]}'\n```\n\nor fold `PRIOR_BODIES` into the stdin JSON the node program already reads (`env.priorBodies`), dropping `--argjson` entirely. A regression test can pin it by piping a >128 KiB fixture through the payload build."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z9vDn",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "scripts/report-leg-failure.sh:11",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the advertised `--self-test` does not exist — the PR's stated verification command is a no-op**\n\nThe PR description's \"How to verify\" says `bash scripts/report-leg-failure.sh --self-test`. The script never parses `--self-test` (or any argument — it reads env vars only). Running it today just prints `::warning::report-leg-failure: NUMBER/GITHUB_REPOSITORY unset — nothing to notice on` and exits 0: the verification \"passes\" while testing nothing, which is worse than failing loudly.\n\nEither implement a real self-test mode (exercise `leg_failure_outcome_line` + the payload build against a fixture payload with stubbed `gh`/node on PATH, assert the enriched body shape and the AC6 bare-link fallback), or drop `--self-test` from the PR description so the documented surface matches the actual contract in this behavior block."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z9vFU",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/preCliDevelopmentSetup.js:656",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the enriched setup-error comment renders the error text twice**\n\nWith enrichment active, `excerpt` defaults to `errorMessage` here — but the legacy block above already posts the same text as `Error:` (`m.code(truncateForComment(errorMessage))`). The posted comment shows, e.g.:\n\n```\n*Stage:* Git Branch Setup\n*Error:* {code}checkout boom{code}\n\n*Phase:* setup\n*Failing step:* Git Branch Setup\n*Log excerpt (last 1 lines):*\n{code}checkout boom{code}\n```\n\nFor short errors the \"Log excerpt\" section adds zero information and lengthens the ticket comment (each report also grows the comment history that `report-leg-failure.sh` later re-reads for signatures). Consider passing `excerpt: null` (or only when distinct from `errorMessage`) so `renderExcerptSection` omits the duplicate block — the phase/step/pre-flight/repeat/signature sections still ride along."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z9vH0",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "scripts/report-leg-failure.sh:73",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: empty `OUTCOME` is reported as \"run success\" — a missing env var fabricates a success notice**\n\n`[ -z \"$OUTCOME\" ]` routes to the success branch and posts `🤖 AI Teammate run success: <url>`. If the future workflow flip forgets to wire `OUTCOME`, every failed leg would post a **false success comment** — the worst possible diagnostic, and it contradicts the PR's own \"never guessed\" principle (the repeat line is omitted when unknown rather than guessed).\n\nSafer contract: post the historical line only for a real `success`; for an empty/unknown outcome either skip the notice (with a `::warning::`) or post the bare-link line with the empty outcome left visible so the misconfiguration is obvious:\n\n```bash\ncase \"$OUTCOME\" in\n  success) ... post bare link ... ;;\n  \"\") echo \"::warning::report-leg-failure: OUTCOME unset — notice skipped\"; exit 0 ;;\nesac\n```\n\n`NUMBER`-unset already degrades to a warning + exit 0; the same pattern fits here."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z9vJx",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_legFailureReport.js:530",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: pack-carry suite is substring-grep only — brittle and behavior-free**\n\nThis suite verifies the transport by asserting `indexOf('tail -n 30')`, `indexOf('--log-failed')`, `indexOf('buildFailureComment')` etc. against the raw text of `scripts/report-leg-failure.sh` / `ci/release_packs.mjs`. Such string-pins pass for any refactor that keeps the substrings and fail on innocent rewording — they assert nothing behavioral (the suite itself never runs the script).\n\nSince the builder side is already behavior-tested, add one true end-to-end case instead: run `scripts/report-leg-failure.sh` in the test harness with `gh`/`node`/`jq` stubs on `PATH` (stub `gh` records `--body-file -` and echoes canned `--log-failed`/comments output), set `NUMBER`/`OUTCOME=failure`/CI env, and assert the recorded posted body contains the phase/step/signature lines. That single test subsumes most of the greps and also covers the success-path byte-shape (AC6) for real. Keep the two FACTORY_SETUP registration greps (`PACKS.indexOf(...)`) — those pin pack wiring, which is genuinely a string-level contract."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z9vLE",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "scripts/report-leg-failure.sh:70",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: shell printf fallback drops the `<run-url-unavailable>` placeholder**\n\n`leg_failure_outcome_line` has two layers: the node path renders `outcomeLine(outcome, '')` → `🤖 AI Teammate run failure: <run-url-unavailable>`, but the plain-shell fallback (`printf '🤖 AI Teammate run %s: %s' \"$1\" \"$2\"`) prints an empty `%s` when `RUN_URL` is unset — `🤖 AI Teammate run failure: ` with nothing after the colon. One extra default aligns the layers:\n\n```bash\n|| printf '🤖 AI Teammate run %s: %s' \"$1\" \"${2:-<run-url-unavailable>}\"\n```"
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6z9vM2",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/legFailureReport.js:283",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: missing `phase` renders the literal string \"undefined\"**\n\nThe doc comment above says \"Phase is the only mandatory field\", but `m.bold('Phase:') + ' ' + p.phase` has no guard — a caller that forgets `phase` posts `Phase: undefined` into the ticket (only `step`, the run section, the excerpt, the repeat and the signature degrade gracefully to omission). One line makes the contract self-defensive:\n\n```js\n(p.phase == null ? '' : m.bold('Phase:') + ' ' + p.phase + '\\n') +\n```\n\nBoth current call sites always pass `phase`, so this is hygiene, not a live bug."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:6721515b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — crap ratchet fails on 3 new functions (threshold 8)**\n\nThe `crap` check fails on head `bfa60a51` (`ci_failures.md`, run [41984873724](https://github.com/IstiN/dmtools-agents/actions/runs/41984873724/job/127103190928)):\n\n```\nNEW > 8  js/preCliDevelopmentSetup.js::readEnvVar: 9\nNEW > 8  js/preCliDevelopmentSetup.js::deriveSetupRepeatCount: 10\nNEW > 8  js/preCliDevelopmentSetup.js::postSetupErrorComment: 13\n0 regression(s), 3 new over threshold, 0 improvement(s), 0 removed\n```\n\nAll three functions are introduced/mass-grown by this PR. The ratchet requires new code ≤ 8 — updating the baseline is not an option (\"CRAP may only decrease\").\n\nConcrete split guidance (the repo's gh-1042 extraction pattern):\n\n- `postSetupErrorComment` (CC 13) — extract the enrichment block (lines `if (!ctx.signature)` … `var enriched = …`) into `deriveEnrichmentContext(tracker, ticketKey, stage, errorMessage, context)`; the remainder is a single try/post/warn (CC ≈ 3).\n- `deriveSetupRepeatCount` (CC 10) — extract the body-collection loop (`bodies.push(...)`) into a `commentBodies(comments)` helper; keep only signature derivation + try/catch here.\n- `readEnvVar` (CC 9) — split into `readJavaEnv(name)` and `readProcessEnv(name)`, each one try/catch; `readEnvVar` becomes `readJavaEnv(name) || readProcessEnv(name)`.\n\nExisting tests pin the behavior (150/150 pass locally), so a pure extraction is safe. Merge is blocked until the gate is green."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:abff0c57",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: pre-flight line captures the wrong workspace when `config.workingDir` is set**\n\n`collectPreflightStateStep()` (this call site, step 1.4) runs **before** `checkoutBranchOrReport()` (step 2) — but `_workingDir` is assigned only inside `checkoutBranch()` (`js/preCliDevelopmentSetup.js:330`), which is reached in step 2. At capture time `_workingDir` is still `null`, so `runCommandStr` → `runCmd` executes `git rev-parse` / `git status --porcelain` in the **process cwd (the agents repo)**, not in the configured target repository.\n\nConsequence: for every dynamic-repo/`workingDir` setup (the mode `test_preCliDevelopmentSetupDynamicRepo.js` exists for), the `git pre-flight: branch=… head=… dirty=… staged=… paths=[…]` line in the failure report describes the agents checkout — where the leg never ran — instead of the target workspace the report is about. A post-hoc reader gets a confidently wrong `branch=`/`head=` (misleading diagnostics are worse than an omitted line, which the module already supports via `preflightLine(null)`).\n\nNote the failure path itself is affected too: `checkoutBranch` sets `_workingDir` before failing, so the setup-error comment posts the stale wrong-workspace pre-flight line captured at step 1.4.\n\nSuggested fix: resolve `config.workingDir` (from the already-loaded `config` at this point in `action()`) into `_workingDir` — or pass it explicitly to `collectPreflightStateStep(config.workingDir)` and thread it through `runCmd` — before the capture, and add a `workingDir` test asserting the pre-flight commands carry `workingDirectory` (the existing test at `test_preCliDevelopmentSetup.js` only covers the no-workingDir case)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:c41884b2",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `--argjson priorBodies` ships the whole comment history through argv — E2BIG past 128 KiB, contradicting this script's own rule**\n\nThe header of this script states: *\"Payload bytes travel via stdin (never argv — E2BIG past 128 KiB, the same rule the token-usage publisher learned)\"*. This line then puts the **largest payload component** — `PRIOR_BODIES`, i.e. every comment body on the issue (`gh issue view --json comments`) — on the jq command line as a single `--argjson` argv entry.\n\nDemonstrated on Linux (`MAX_ARG_STRLEN` = 128 KiB): a ~140 KB array makes jq fail with `Argument list too long`. The failure is swallowed by `|| echo '{}'`, so the notice silently degrades to the bare-link fallback — **exactly on the issues where the feature matters most**: repeat-count context only renders when prior failure comments exist, and each failure cycle grows the history (this repo's issues routinely carry multi-KB bot notices, so 128 KiB is reachable within tens of comments).\n\nFix options (all keep `gh` output on non-argv channels):\n\n```bash\n# process substitution + --slurpfile: data never touches argv\njq -n --arg workflow \"${WORKFLOW_FILE:-ai-teammate.yml}\" ... \\\n  --slurpfile priorBodies <(printf '%s' \"$PRIOR_BODIES\") \\\n  '{...} * {priorBodies: $priorBodies[0]}'\n```\n\nor fold `PRIOR_BODIES` into the stdin JSON the node program already reads (`env.priorBodies`), dropping `--argjson` entirely. A regression test can pin it by piping a >128 KiB fixture through the payload build."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:19aaa212",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the advertised `--self-test` does not exist — the PR's stated verification command is a no-op**\n\nThe PR description's \"How to verify\" says `bash scripts/report-leg-failure.sh --self-test`. The script never parses `--self-test` (or any argument — it reads env vars only). Running it today just prints `::warning::report-leg-failure: NUMBER/GITHUB_REPOSITORY unset — nothing to notice on` and exits 0: the verification \"passes\" while testing nothing, which is worse than failing loudly.\n\nEither implement a real self-test mode (exercise `leg_failure_outcome_line` + the payload build against a fixture payload with stubbed `gh`/node on PATH, assert the enriched body shape and the AC6 bare-link fallback), or drop `--self-test` from the PR description so the documented surface matches the actual contract in this behavior block."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:8f01c7d4",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the enriched setup-error comment renders the error text twice**\n\nWith enrichment active, `excerpt` defaults to `errorMessage` here — but the legacy block above already posts the same text as `Error:` (`m.code(truncateForComment(errorMessage))`). The posted comment shows, e.g.:\n\n```\n*Stage:* Git Branch Setup\n*Error:* {code}checkout boom{code}\n\n*Phase:* setup\n*Failing step:* Git Branch Setup\n*Log excerpt (last 1 lines):*\n{code}checkout boom{code}\n```\n\nFor short errors the \"Log excerpt\" section adds zero information and lengthens the ticket comment (each report also grows the comment history that `report-leg-failure.sh` later re-reads for signatures). Consider passing `excerpt: null` (or only when distinct from `errorMessage`) so `renderExcerptSection` omits the duplicate block — the phase/step/pre-flight/repeat/signature sections still ride along."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:da1c491d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: empty `OUTCOME` is reported as \"run success\" — a missing env var fabricates a success notice**\n\n`[ -z \"$OUTCOME\" ]` routes to the success branch and posts `🤖 AI Teammate run success: <url>`. If the future workflow flip forgets to wire `OUTCOME`, every failed leg would post a **false success comment** — the worst possible diagnostic, and it contradicts the PR's own \"never guessed\" principle (the repeat line is omitted when unknown rather than guessed).\n\nSafer contract: post the historical line only for a real `success`; for an empty/unknown outcome either skip the notice (with a `::warning::`) or post the bare-link line with the empty outcome left visible so the misconfiguration is obvious:\n\n```bash\ncase \"$OUTCOME\" in\n  success) ... post bare link ... ;;\n  \"\") echo \"::warning::report-leg-failure: OUTCOME unset — notice skipped\"; exit 0 ;;\nesac\n```\n\n`NUMBER`-unset already degrades to a warning + exit 0; the same pattern fits here."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:07258529",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: pack-carry suite is substring-grep only — brittle and behavior-free**\n\nThis suite verifies the transport by asserting `indexOf('tail -n 30')`, `indexOf('--log-failed')`, `indexOf('buildFailureComment')` etc. against the raw text of `scripts/report-leg-failure.sh` / `ci/release_packs.mjs`. Such string-pins pass for any refactor that keeps the substrings and fail on innocent rewording — they assert nothing behavioral (the suite itself never runs the script).\n\nSince the builder side is already behavior-tested, add one true end-to-end case instead: run `scripts/report-leg-failure.sh` in the test harness with `gh`/`node`/`jq` stubs on `PATH` (stub `gh` records `--body-file -` and echoes canned `--log-failed`/comments output), set `NUMBER`/`OUTCOME=failure`/CI env, and assert the recorded posted body contains the phase/step/signature lines. That single test subsumes most of the greps and also covers the success-path byte-shape (AC6) for real. Keep the two FACTORY_SETUP registration greps (`PACKS.indexOf(...)`) — those pin pack wiring, which is genuinely a string-level contract."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:bd811cb6",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: shell printf fallback drops the `<run-url-unavailable>` placeholder**\n\n`leg_failure_outcome_line` has two layers: the node path renders `outcomeLine(outcome, '')` → `🤖 AI Teammate run failure: <run-url-unavailable>`, but the plain-shell fallback (`printf '🤖 AI Teammate run %s: %s' \"$1\" \"$2\"`) prints an empty `%s` when `RUN_URL` is unset — `🤖 AI Teammate run failure: ` with nothing after the colon. One extra default aligns the layers:\n\n```bash\n|| printf '🤖 AI Teammate run %s: %s' \"$1\" \"${2:-<run-url-unavailable>}\"\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:c12b7c92",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: missing `phase` renders the literal string \"undefined\"**\n\nThe doc comment above says \"Phase is the only mandatory field\", but `m.bold('Phase:') + ' ' + p.phase` has no guard — a caller that forgets `phase` posts `Phase: undefined` into the ticket (only `step`, the run section, the excerpt, the repeat and the signature degrade gracefully to omission). One line makes the contract self-defensive:\n\n```js\n(p.phase == null ? '' : m.bold('Phase:') + ' ' + p.phase + '\\n') +\n```\n\nBoth current call sites always pass `phase`, so this is hygiene, not a live bug."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:5e9607a8",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head bfa60a51dca6e9a2631b87c8a925a88810afd121 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:ajaxspace:2026-11-05:ca5d88c8",
+      "kind": "comment",
+      "author": "ajaxspace",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Pre-merge spec review (vs #1363 + epic #1362):\n\n**Verified in the diff** ✅ — shared builder `legFailureReport.js` serving both flavors;\nreport carries the pre-flight state line, phase, failing step, run id + link, hard-capped\nexcerpt (`EXCERPT_MAX_LINES = 30`, re-trimmed in the renderer so callers can't exceed),\nrepeat phrase only at count ≥ 2; pure signature normalizer (`workflow | step | normalized\nmessage`) with the repeat count derived from `failure-signature:` lines in prior failure\ncomments (no new persistence — clean approach); in-leg integration enriched\n(`preCliDevelopmentSetup` setup-error comments); CLI `scripts/report-leg-failure.sh`\nshipped via the release packs with safe degradation.\n\n**Three review points:**\n\n1. **BLOCKING — `crap` check FAILURE.** A new function exceeds the CRAP ≤ 8 threshold\n   (the gate log names it). Split/simplify per the #1360 precedent.\n\n2. **UNVERIFIED CLAIM — \"sessionDelta UT-3 AC3 fails identically on clean f3183be\n   (pre-existing, unrelated)\".** I ran the full `run_all.json` on clean `main` under the\n   local dmtools runtime: **8547 passed, 0 failed** — no sessionDelta failure reproduces\n   here. If the failure is real in the CI runtime (dmtools v0.1.88 GraalJS), re-verify it\n   on the CI runner WITHOUT your changes and name the exact divergence; if it does not\n   fail there either, it is a regression from this PR and must be fixed before merge.\n\n3. **SCOPE — the workflow-side failure path is not wired yet.** The spec called for the\n   shared builder on BOTH failure paths; this PR ships the CLI + pack registration, but\n   the engine-side factory workflow (the poster of the bare `AI Teammate run failure:`\n   link) is outside this repo, so nothing calls `report-leg-failure.sh` yet. Agreed this\n   is the correct repo boundary — but it must be TRACKED: an issue for the engine-side\n   flip (owner repo) so the workflow path doesn't stay bare forever.\n\nPoints 1-2 are merge blockers; point 3 needs a tracking issue, not a code change."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-05:fb61609d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-05",
+      "updatedAt": "2026-11-05",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The `crap` quality gate is red on this PR: three new functions in `js/preCliDevelopmentSetup.js` exceed the CRAP>8 new-code threshold (`postSetupErrorComment` 13, `deriveSetupRepeatCount` 10, `readEnvVar` 9). Two important issues: the gh-1363 pre-flight line captures the wrong workspace when `config.workingDir` is set (capture runs before `_workingDir` is assigned), and `report-leg-failure.sh` ships the entire prior-comment history through jq's argv — E2BIG past 128 KiB, contradicting the script's own payload rule and silently dropping repeat-count enrichment on exactly the recurring-failure issues it targets. The builder itself (`legFailureReport.js`) is clean, pure, well-tested, and AC-conformant.\n\n**Key Issues**:\n- 🚨 crap ratchet red — 3 new functions over threshold (CI failure on `bfa60a51`)\n- ⚠️ pre-flight line reads the agents repo instead of the target repo under `workingDir` (`preCliDevelopmentSetup.js:891` vs `:330`)\n- ⚠️ `--argjson priorBodies` argv payload violates the stdin rule (`report-leg-failure.sh:138`)\n- 💡 `--self-test` advertised in the PR but not implemented · setup-path excerpt duplicates the `Error:` line · empty `OUTCOME` fabricates a success notice · pack-carry suite is substring-grep only\n- 🪶 printf fallback drops `<run-url-unavailable>` · `renderReport` renders `Phase: undefined`\n\n**Digest**: `js/unit-tests/test_workingDir.js` — `legFailureReport` stub entries added to `loadModule` maps of modules that never require it (`configLoader`/`outputFiles` paths) — dead stub entries, harmless but noise.\n\n**Next Steps**:\n1. Split `postSetupErrorComment` / `deriveSetupRepeatCount` / `readEnvVar` into small helpers (gh-1042 extraction pattern) to bring each under CRAP 8 — unblocks CI\n2. Resolve the target-repo `workingDir` before capturing pre-flight state; add a workingDir-path test\n3. Feed `priorBodies` to jq via `--slurpfile`/stdin, never argv\n4. Implement (or drop) the advertised `bash scripts/report-leg-failure.sh --self-test`"
+    }
+  ]
+}
