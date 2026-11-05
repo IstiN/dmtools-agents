@@ -104,15 +104,34 @@ function conversationAuthorLogin(convRoot) {
 }
 
 /**
+ * The author login/name carried by one GraphQL comment — '' when the
+ * comment names no one. One definition of "who wrote this comment" for
+ * both the enriched shape (nodeAuthor) and the row shape (threadRowOf).
+ */
+function commentAuthorNameOf(comment) {
+    var author = comment.author || null;
+    return (author && (author.login || author.name)) || '';
+}
+
+/**
  * The author of a GraphQL thread: the first comment's author wins; the
  * matched conversation root is the fallback (the dmtools export may omit
  * fields on the GraphQL payload).
  */
 function nodeAuthor(first, convRoot) {
-    if (first.author && (first.author.login || first.author.name)) {
-        return first.author.login || first.author.name;
-    }
+    var named = commentAuthorNameOf(first);
+    if (named) return named;
     return conversationAuthorLogin(convRoot);
+}
+
+/**
+ * The diff position: 0 is a valid position (a comment may pin the
+ * function-signature line), any other falsy value is no position at all.
+ * One definition of a "real" line for the row shape (threadRowOf) and the
+ * enriched shape (resolveNodeLine).
+ */
+function ownLineOf(line) {
+    return (line === 0 || line) ? line : null;
 }
 
 /**
@@ -121,7 +140,8 @@ function nodeAuthor(first, convRoot) {
  * side carries one.
  */
 function resolveNodeLine(node, conversation) {
-    if (node.line === 0 || node.line) return node.line;
+    var own = ownLineOf(node.line);
+    if (own !== null) return own;
     if (!conversation) return null;
     return conversation.line || conversation.original_line || null;
 }
@@ -134,6 +154,28 @@ function firstCommentOf(node) {
     var comments = node.comments && node.comments.nodes;
     if (!comments || !comments.length) return {};
     return comments[0] || {};
+}
+
+/**
+ * One review-thread row straight from a GraphQL reviewThread node — the
+ * canonical row shape both consumers of the node shapes take (the
+ * smProvider reviewThreadList and the gh-1353 merge-backstop counter):
+ * the resolve id, the reply anchor (the root comment's REST databaseId),
+ * the root author/body (the machine-auth and severity inputs), the
+ * resolved flag and the file location.
+ */
+function threadRowOf(node) {
+    var t = node || {};
+    var first = firstCommentOf(t);
+    return {
+        threadId: t.id || null,
+        rootCommentId: first.databaseId || null,
+        resolved: t.isResolved === true,
+        author: commentAuthorNameOf(first),
+        body: first.body || '',
+        path: t.path || null,
+        line: ownLineOf(t.line)
+    };
 }
 
 /**
@@ -522,6 +564,7 @@ function collectThreadInventory(conversations, graphqlRaw) {
 
 module.exports = {
     parseGraphQLNodes: parseGraphQLNodes,
+    threadRowOf: threadRowOf,
     conversationRootId: conversationRootId,
     buildFromGraphQL: buildFromGraphQL,
     buildFromConversations: buildFromConversations,

@@ -194,6 +194,7 @@
         "js/unit-tests/test_reviewSpecClaims.js",
         "js/unit-tests/test_mergeBot.js",
         "js/unit-tests/test_mergeTrigger.js",
+        "js/unit-tests/test_mergeBackstop.js",
         "js/unit-tests/test_smJiraSource.js",
         "js/unit-tests/test_ciCheckMirror.js",
         "js/unit-tests/test_gitPushGuard.js",

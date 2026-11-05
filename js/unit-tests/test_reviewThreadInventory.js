@@ -270,3 +270,94 @@ suite('reviewThreadInventory.buildFromConversations — GraphQL id enrichment', 
         assert.equal(result.enriched[0].resolved, false, 'no resolved enrichment either');
     });
 });
+
+suite('reviewThreadInventory.threadRowOf — the canonical row contract (gh-1353)', function() {
+
+    test('full node → resolve id, reply anchor, author, body, location, resolved=false', function() {
+        var inv = loadInventory();
+        var row = inv.threadRowOf({
+            id: 'PRT_1',
+            isResolved: false,
+            path: 'js/common/mergeBackstop.js',
+            line: 42,
+            comments: { nodes: [{ databaseId: 9001,
+                author: { login: 'dmtools-factory-bot[bot]' }, body: '⚠️ severity: IMPORTANT — x' }] }
+        });
+        assert.equal(row.threadId, 'PRT_1');
+        assert.equal(row.rootCommentId, 9001);
+        assert.equal(row.resolved, false);
+        assert.equal(row.author, 'dmtools-factory-bot[bot]');
+        assert.equal(row.body, '⚠️ severity: IMPORTANT — x');
+        assert.equal(row.path, 'js/common/mergeBackstop.js');
+        assert.equal(row.line, 42);
+    });
+
+    test('line 0 is a valid position and stays 0 — never normalized to null', function() {
+        var inv = loadInventory();
+        var row = inv.threadRowOf({ id: 'PRT_2', line: 0,
+            comments: { nodes: [{ databaseId: 1, body: 'on the signature line' }] } });
+        assert.equal(row.line, 0);
+        assert.equal(row.line !== null, true, '0 is a position, not the absence of one');
+    });
+
+    test('missing line → null, missing path → null, missing id → null', function() {
+        var inv = loadInventory();
+        var row = inv.threadRowOf({ comments: { nodes: [{ databaseId: 2, body: 'x' }] } });
+        assert.equal(row.line, null);
+        assert.equal(row.path, null);
+        assert.equal(row.threadId, null);
+    });
+
+    test('null node → the all-defaults row (never throws)', function() {
+        var inv = loadInventory();
+        var row = inv.threadRowOf(null);
+        assert.equal(row.threadId, null);
+        assert.equal(row.rootCommentId, null);
+        assert.equal(row.resolved, false);
+        assert.equal(row.author, '');
+        assert.equal(row.body, '');
+        assert.equal(row.path, null);
+        assert.equal(row.line, null);
+    });
+
+    test('author falls back to name when the login is absent', function() {
+        var inv = loadInventory();
+        var row = inv.threadRowOf({ id: 'PRT_3',
+            comments: { nodes: [{ databaseId: 3, author: { name: 'Human Reviewer' }, body: 'nit' }] } });
+        assert.equal(row.author, 'Human Reviewer');
+    });
+
+    test('authorless first comment → empty author, body still read', function() {
+        var inv = loadInventory();
+        var row = inv.threadRowOf({ id: 'PRT_4',
+            comments: { nodes: [{ databaseId: 4, body: 'just a body' }] } });
+        assert.equal(row.author, '');
+        assert.equal(row.body, 'just a body');
+    });
+
+    test('thread without comments → empty first-comment defaults', function() {
+        var inv = loadInventory();
+        var row = inv.threadRowOf({ id: 'PRT_5', path: 'a.js', line: 7, comments: { nodes: [] } });
+        assert.equal(row.rootCommentId, null);
+        assert.equal(row.author, '');
+        assert.equal(row.body, '');
+        assert.equal(row.path, 'a.js');
+    });
+
+    test('resolved is GraphQL truth: only isResolved === true counts', function() {
+        var inv = loadInventory();
+        assert.equal(inv.threadRowOf({ id: 'A', isResolved: true }).resolved, true);
+        assert.equal(inv.threadRowOf({ id: 'B', isResolved: 1 }).resolved, false, 'truthy ≠ true');
+        assert.equal(inv.threadRowOf({ id: 'C', isResolved: 'true' }).resolved, false, '"true" ≠ true');
+        assert.equal(inv.threadRowOf({ id: 'D' }).resolved, false, 'missing flag = open');
+    });
+
+    test('enriched path keeps line 0 too (node position wins over the conversation)', function() {
+        var inv = loadInventory();
+        var result = inv.buildFromGraphQL(
+            [gqlNode({ dbId: 1301, graphqlId: 'PRRT_zero', path: 'src/z.ts', line: 0, body: 'zero-line', author: 'lee' })],
+            [conversation({ id: 1301, body: 'zero-line', author: 'lee', path: 'src/z.ts', line: 10 })]
+        );
+        assert.equal(result.enriched[0].line, 0, 'node line 0 wins; the conversation line never overrides it');
+    });
+});

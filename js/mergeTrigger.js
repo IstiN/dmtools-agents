@@ -44,6 +44,11 @@
 // (mergeTrigger's copies were byte-identical to sm/mergeBot.js's).
 var mcpParse = require('./common/mcpParse.js');
 
+// gh-1353: the merge backstop (epic gh-1328 §4) rides every squash-merge —
+// ONE digest issue + `defered` resolutions for open machine-owned
+// >=IMPORTANT threads before the merge proceeds. A record, not a gate.
+var mergeBackstop = require('./common/mergeBackstop.js');
+
 // Thin wrappers keep every call site and module.exports entry unchanged.
 function parseMcp(raw) { return mcpParse.parseMcp(raw); }
 
@@ -291,6 +296,20 @@ function mergeDecisionOf(ms) {
 }
 
 /**
+ * gh-1353 merge backstop before a squash-merge: counts unresolved
+ * machine-owned >=IMPORTANT review threads; any count files ONE digest
+ * issue and resolves each counted thread `defered: #digest`, then the
+ * merge proceeds. Human-authored threads are never resolved — they are
+ * listed `open (human)` and the merge follows branch protection as
+ * before. Throws only on record-keeping failures (broken read, digest
+ * filing) — processIssueItem/processOrphanPr isolation defers THAT merge.
+ */
+function backstopBeforeMerge(ctx, prNumber, pr) {
+    mergeBackstop.runBackstopForPr(mergeBackstop.githubBridgeIo(),
+        ctx.owner, ctx.name, ctx.job, prNumber, pr, ctx.say);
+}
+
+/**
  * The shared state machine (bash `case "$state"` parity). Returns
  * 'merged' | 'skipped'. `onMerged(mergedPrNumber)` performs the
  * post-merge label/comment bookkeeping for the caller's path.
@@ -305,6 +324,11 @@ function runStateMachine(ctx, prNumber, onMerged) {
 
     var decision = mergeDecisionOf(ms);
     if (decision === 'merge') {
+        // gh-1353: record the review debt BEFORE the merge (digest + defered
+        // resolutions). A record-keeping failure throws — the per-item
+        // isolation below counts it failed and the merge defers to the
+        // next tick (never merges undigested).
+        backstopBeforeMerge(ctx, prNumber, pr);
         var res = squashMerge(ctx.owner, ctx.name, prNumber);
         if (res.merged) {
             onMerged(prNumber);
@@ -447,7 +471,7 @@ function action(params) {
 
     var log = [];
     function say(line) { log.push(line); console.log(line); }
-    var ctx = { owner: owner, name: name, log: log, say: say };
+    var ctx = { owner: owner, name: name, job: job, log: log, say: say };
 
     var candidates = collectCandidates(owner, name, opts, ctx);
 
@@ -483,6 +507,7 @@ if (typeof module !== 'undefined' && module.exports) {
         mergeDecisionOf: mergeDecisionOf,
         isIssueOpen: isIssueOpen,
         squashMerge: squashMerge,
+        backstopBeforeMerge: backstopBeforeMerge,
         tryRemoveLabel: tryRemoveLabel,
         tryComment: tryComment
     };
