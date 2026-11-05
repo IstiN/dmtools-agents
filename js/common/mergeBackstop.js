@@ -360,24 +360,42 @@ function digestCarriesPr(issue, prNumber) {
     return false;
 }
 
+// The raw issue list of a search payload — an array rides through, the
+// {items}/{issues} envelopes flatten, anything else is no matches.
+function digestIssueList(issuesPayload) {
+    if (Array.isArray(issuesPayload)) return issuesPayload;
+    return (issuesPayload && (issuesPayload.items || issuesPayload.issues)) || [];
+}
+
+// The gh-1371 race-dedup exclusion: one KNOWN number is skipped — the
+// post-create probe looks for a CONCURRENT funnel's digest, never the
+// PR's own just-filed duplicate.
+function isExcludedDigestIssue(issue, excludeNumber) {
+    return excludeNumber !== undefined && excludeNumber !== null &&
+        String(issue && issue.number) === String(excludeNumber);
+}
+
 /**
  * The already-open digest issue whose ledger marker carries prNumber, or
  * null. The machine marker decides — a human-made `[debt]` issue without
  * our marker is never reused. excludeNumber (gh-1371) skips one known
  * number — the post-create race dedup looks for a CONCURRENT funnel's
- * digest, never the PR's own just-filed duplicate.
+ * digest, never the PR's own just-filed duplicate. Among multiple matches
+ * the pick is DETERMINISTIC (gh-1371 round 2: the LOWEST issue number) —
+ * GitHub issue-search ordering is best-match and opaque, so a "first hit"
+ * could flip between replays and point new `defered:` acks at the
+ * abandoned duplicate; every replay now converges on the same issue.
  */
 function findExistingDigest(issuesPayload, prNumber, excludeNumber) {
-    var list = Array.isArray(issuesPayload) ? issuesPayload :
-        ((issuesPayload && (issuesPayload.items || issuesPayload.issues)) || []);
-    for (var i = 0; i < list.length; i++) {
-        if (excludeNumber !== undefined && excludeNumber !== null &&
-            String(list[i].number) === String(excludeNumber)) continue;
-        if (digestCarriesPr(list[i], prNumber)) {
-            return { number: list[i].number, title: list[i].title || '', reused: true };
+    var best = null;
+    digestIssueList(issuesPayload).forEach(function (issue) {
+        if (isExcludedDigestIssue(issue, excludeNumber)) return;
+        if (!digestCarriesPr(issue, prNumber)) return;
+        if (!best || Number(issue.number) < Number(best.number)) {
+            best = { number: issue.number, title: (issue && issue.title) || '', reused: true };
         }
-    }
-    return null;
+    });
+    return best;
 }
 
 // ── the github io adapters (injected bridge — capability-gated) ──────────────
@@ -500,15 +518,29 @@ function ledgerBaseOf(comments, logins) {
 }
 
 // The PR-side ledger stamp (marker + async digest, part 3's defer pattern).
-// Soft: the digest issue body carries the same ledger payload.
+// Soft: the digest issue body carries the same ledger payload. Posted AFTER
+// the digest filing (gh-1371 round 2) so the race outcome is known and the
+// abandoned duplicate can be echoed for the sweep.
 function stampLedger(t, prNumber, ledger, out) {
     if (typeof t.postPrComment !== 'function') return;
     try {
         t.postPrComment(prNumber,
             reviewDebtLedger.buildDebtMarker(ledger) + '\n' +
-            reviewDebtLedger.buildDebtDigest(ledger));
+            reviewDebtLedger.buildDebtDigest(ledger) +
+            duplicateStampNote(out && out.digestDuplicate));
         out.ledgerStampPosted = true;
     } catch (eStamp) { /* soft — the digest issue carries the marker */ }
+}
+
+// The race-dedup echo (gh-1371 round 2): when a concurrent funnel's digest
+// won, the duplicate we filed stays OPEN (there is no close/update io
+// primitive to retire it) — the stamp carries its number so the part-3
+// sweep can see it and close it later. A clean filing echoes nothing.
+function duplicateStampNote(duplicateNumber) {
+    if (!duplicateNumber) return '';
+    return '\n♻️ race dedup: a concurrent merge funnel filed the digest first —' +
+        ' duplicate issue #' + duplicateNumber + ' was abandoned OPEN and is safe' +
+        ' to close by the review-debt sweep (this ledger is the surviving record).';
 }
 
 // The probe: an already-open digest for this PR, or null. Optional
@@ -526,15 +558,22 @@ function probeExistingDigest(t, owner, name, input, out, excludeNumber) {
         input.prNumber, excludeNumber);
 }
 
+// One `number` slot value → a usable positive digest issue number, or
+// null. BOTH shapes gate on > 0 (gh-1371 round 2: the string branch used
+// to accept '0' and '-3', contradicting the documented positive contract
+// the numeric branch already enforced). Extracted so digestNumberOf stays
+// under the CRAP ratchet ceiling (CI crap — findExistingDigest round).
+function usableDigestNumber(n) {
+    var parsed = (typeof n === 'number') ? n : Number(String(n));
+    return (isFinite(parsed) && parsed > 0) ? parsed : null;
+}
+
 // The usable digest issue number off a bridge payload — null unless the
 // payload carries a positive issue number (a bridge error body has none,
 // gh-1371: `created.number` used to read undefined and the threads were
 // resolved against a nonexistent digest).
 function digestNumberOf(payload) {
-    var n = payload && payload.number;
-    if (typeof n === 'number' && isFinite(n) && n > 0) return n;
-    if (typeof n === 'string' && n.trim() !== '' && isFinite(Number(n))) return Number(n);
-    return null;
+    return usableDigestNumber(payload && payload.number);
 }
 
 // Files the digest (or reuses the probed one); a createIssue throw — or a
@@ -635,8 +674,12 @@ function runBackstop(io, owner, name, input) {
     var ledger = appendCountedToLedger(ledgerBaseOf(comments, inp.logins),
         cls.counted, { owner: owner, name: name, prNumber: inp.prNumber, nowIso: inp.nowIso });
     out.ledgerFindings = Array.isArray(ledger.findings) ? ledger.findings.length : 0;
-    stampLedger(t, inp.prNumber, ledger, out);
+    // Filing runs BEFORE the stamp (gh-1371 round 2): the stamp then knows
+    // the race outcome and echoes an abandoned duplicate for the sweep.
+    // Record-keeping survives a filing failure — the merge defers and the
+    // next tick re-derives the same ledger (identity dedup) and stamps it.
     fileDigest(t, comments, owner, name, inp, out, ledger);
+    stampLedger(t, inp.prNumber, ledger, out);
     resolveCountedThreads(t, inp.prNumber, cls.counted, out.digest, out);
     return out;
 }
@@ -741,6 +784,7 @@ if (typeof module !== 'undefined' && module.exports) {
         deferredAck: deferredAck,
         buildDebtSearchQuery: buildDebtSearchQuery,
         findExistingDigest: findExistingDigest,
+        digestNumberOf: digestNumberOf,
         githubTools: githubTools,
         githubBridgeIo: githubBridgeIo,
         headShaOf: headShaOf,

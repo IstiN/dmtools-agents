@@ -980,3 +980,80 @@ suite('mergeBackstop — gh-1371 review findings', function () {
         assert.equal(human.length, 3, 'the three human tiers all land in the human table');
     });
 });
+
+// ── gh-1371 round 2: the rework lap (CI ratchet + race determinism) ─────────
+
+suite('mergeBackstop — gh-1371 round 2 rework (ratchet + race determinism)', function () {
+    test('CI ratchet #2 + thread 3: digestNumberOf — the string branch is covered AND positive-gated', function () {
+        var m = mergeBackstopMod();
+        assert.equal(m.digestNumberOf({ number: 512 }), 512, 'the numeric shape (unchanged)');
+        assert.equal(m.digestNumberOf({ number: '512' }), 512,
+            'the string shape the bridge envelopes carry — now COVERED (was the CRAP 8.3 hole)');
+        assert.equal(m.digestNumberOf({ number: ' 512 ' }), 512, 'whitespace-padded strings parse');
+        assert.equal(m.digestNumberOf({ number: 'x' }), null, 'junk strings are null (now COVERED)');
+        assert.equal(m.digestNumberOf({ number: '' }), null, 'the empty string is null');
+        assert.equal(m.digestNumberOf({ number: '0' }), null,
+            "'0' contradicts the documented positive contract — null (was 0)");
+        assert.equal(m.digestNumberOf({ number: '-3' }), null,
+            "'-3' contradicts the documented positive contract — null (was -3)");
+        assert.equal(m.digestNumberOf({ number: 0 }), null, 'numeric zero is null (unchanged)');
+        assert.equal(m.digestNumberOf({ number: NaN }), null, 'non-finite numerics are null');
+        assert.equal(m.digestNumberOf({}), null, 'no number slot is null');
+        assert.equal(m.digestNumberOf(null), null, 'no payload is null');
+    });
+
+    test('thread 2: findExistingDigest picks DETERMINISTICALLY — the lowest number wins, regardless of search order', function () {
+        var m = mergeBackstopMod();
+        var marker = reviewDebtLedgerMod().buildDebtMarker(
+            m.appendCountedToLedger(null, [
+                { threadId: 'A', severity: 'IMPORTANT', path: 'a.js', claim: 'x' }
+            ], { prNumber: 42, nowIso: NOW }));
+        var dup = function (n) {
+            return { number: n, title: '[debt] Backstop replay PR', body: 'x\n' + marker };
+        };
+        // the race outcome: TWO open digests carry this PR's marker (the
+        // abandoned duplicate is still open — there is no close primitive).
+        // GitHub issue-search order is best-match (opaque) — the pick must
+        // not depend on it.
+        assert.equal(m.findExistingDigest({ items: [dup(520), dup(505)] }, 42).number, 505,
+            'best-match order listed the newer digest first — the lowest number still wins');
+        assert.equal(m.findExistingDigest({ items: [dup(505), dup(520)] }, 42).number, 505,
+            'the reversed order picks the SAME issue (deterministic tie-break)');
+        assert.equal(m.findExistingDigest({ items: [dup(505), dup(520)] }, 42, 505).number, 520,
+            'the exclusion still wins over the tie-break (the post-create probe skips our own filing)');
+        assert.equal(m.findExistingDigest({ items: [dup(505), dup(520)] }, 42, 505).reused, true,
+            'the adopted digest keeps its shape (number, title, reused)');
+    });
+
+    test('thread 2: the race echo lands in the PR ledger stamp — the sweep can see the abandoned duplicate', function () {
+        var m = mergeBackstopMod();
+        var concurrentMarker = reviewDebtLedgerMod().buildDebtMarker(
+            m.appendCountedToLedger(null, [
+                { threadId: 'RACE', severity: 'IMPORTANT', path: 'a.js',
+                  claim: 'nothing validates the merge state token' }
+            ], { prNumber: 42, nowIso: '2026-11-05T11:00:00.000Z' }));
+        var f = ioFixture({ threads: twoMachineImportantThreads() });
+        var searches = 0;
+        f.io.searchIssues = function () {
+            searches++;
+            // pre-create probe: clean; post-create probe: the concurrent
+            // funnel's digest is now visible
+            return JSON.stringify({ items: searches === 1 ? [] : [
+                { number: 512, title: '[debt] Concurrent funnel', body: 'x\n' + concurrentMarker }
+            ] });
+        };
+        var out = run(m, f);
+        assert.equal(out.digestDuplicate, 501, 'the race scenario from the finding-4 test');
+        assert.equal(f.rec.posts.length, 1, 'still one ledger stamp comment');
+        assert.contains(f.rec.posts[0].body, '#501',
+            'the stamp carries the abandoned number for the part-3 sweep');
+        assert.contains(f.rec.posts[0].body, 'abandoned', 'the abandonment is said, not silent');
+        assert.ok(ledgerMarkerOf(f.rec.posts[0].body), 'the echo never breaks the machine marker');
+        // the clean path never advertises a duplicate
+        var f2 = ioFixture({ threads: twoMachineImportantThreads() });
+        var out2 = run(m, f2);
+        assert.equal(out2.digestDuplicate, null);
+        assert.notContains(f2.rec.posts[0].body, 'abandoned',
+            'no duplicate — no echo (the stamp stays clean)');
+    });
+});
