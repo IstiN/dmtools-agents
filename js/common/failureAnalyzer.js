@@ -301,10 +301,11 @@ var PARK_EVIDENCE_MAX_LINES = 10;
 var PARK_MARKDOWN_METACHAR = /[\\`*_{}\[\]()#+\-.!|>~]/g;
 
 function parkEscapedText(text) {
-    var RE = '\\$&';
-    console.log('DBG repl:', JSON.stringify(RE), 'len', RE.length, '| src:', JSON.stringify(PARK_MARKDOWN_METACHAR.source));
-    var out = String(text == null ? '' : text).replace(PARK_MARKDOWN_METACHAR, RE);
-    console.log('DBG out:', JSON.stringify(out));
+    var out = String(text == null ? '' : text).replace(PARK_MARKDOWN_METACHAR, '\\$&');
+    if (String(text).indexOf('Credential') !== -1) {
+        console.log('DBG codes IN :', String(text).split('').map(function (c) { var n = c.charCodeAt(0); return n > 126 ? '<' + n + '>' : c; }).join(''));
+        console.log('DBG codes OUT:', out.split('').map(function (c) { var n = c.charCodeAt(0); return n > 126 ? '<' + n + '>' : c; }).join(''));
+    }
     return out;
 }
 
