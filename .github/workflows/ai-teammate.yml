@@ -67,7 +67,10 @@ on:
       leg:
         description: 'Which leg to run'
         type: choice
-        options: [dev, review, rework]
+        # gh-1352: polish — the bounded suggestion-only lap the disposition
+        # loop dispatches on an approved BLOCKED head (top-K threads,
+        # once-per-head, instability-budgeted).
+        options: [dev, review, rework, polish]
       reason:
         description: 'Why (audit trail)'
         type: string

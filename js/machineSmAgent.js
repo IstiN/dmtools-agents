@@ -467,14 +467,23 @@ function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
 function dispositionLoop(provider, issue, action, cfg) {
     var prNumber = action.prNumber;
     var headSha = action.headSha;
+    // executeAction passes the full issue object; tests and callers may
+    // pass the bare number — normalize once (the provider primitive takes
+    // the number).
+    var issueNo = issue && issue.number !== undefined ? issue.number : issue;
     if (action.allowPolish !== false) {
         try {
             var d = polishGateDecision(provider, prNumber, headSha, cfg);
             if (d && d.dispatch) {
-                console.log('  🔬 gh-' + issue.number + ' polish lap dispatched on PR #' + prNumber +
+                console.log('  🔬 gh-' + issueNo + ' polish lap dispatched on PR #' + prNumber +
                     ' (' + d.reason + ', top-K ' + (d.plan ? d.plan.lapThreads.length : 0) +
                     ', overflow ' + (d.plan ? d.plan.overflowThreads.length : 0) + ')');
-                provider.dispatchLeg(issue, 'polish', d.reason, cfg.workflowFile);
+                if (!dispatchPolishLap(provider, issueNo, prNumber, headSha, d.plan, cfg)) {
+                    console.warn('  ⚠️ polish-lap marker could not be stamped on PR #' + prNumber +
+                        ' — the lap stays home (fail closed: an unstamped lap cannot honour ' +
+                        'once-per-head) — the threads triage below');
+                    return resolveSuggestionThreads(provider, prNumber, headSha, cfg);
+                }
                 return { polished: true, plan: d.plan };
             }
             if (d && d.trigger) {
@@ -489,13 +498,43 @@ function dispositionLoop(provider, issue, action, cfg) {
     return resolveSuggestionThreads(provider, prNumber, headSha, cfg);
 }
 
+// gh-1352 — stamp the per-head lap marker BEFORE the leg dispatch (the
+// once-per-head + instability-budget memory lives on the PR; a dispatch
+// without it is invisible to the next tick's gate and laps forever).
+// Returns false when the marker is unbuildable (no head) or the post
+// fails — the caller falls open to triage and never dispatches.
+function dispatchPolishLap(provider, issueNumber, prNumber, headSha, plan, cfg) {
+    var lapIds = (plan && plan.lapThreads || []).map(function (t) { return t && t.threadId; })
+        .filter(function (id) { return !!id; });
+    var marker = polishLapModule.buildPolishLapMarker(headSha, {
+        threads: plan ? plan.lapThreads.length : 0,
+        overflow: plan ? plan.overflowThreads.length : 0,
+        resolvedThreadIds: lapIds
+    });
+    if (!marker) return false;
+    try {
+        provider.postPrComment(prNumber, marker);
+    } catch (eStamp) {
+        console.warn('  ⚠️ polish-lap marker post failed on PR #' + prNumber + ': ' +
+            (eStamp.message || eStamp));
+        return false;
+    }
+    provider.dispatchLeg(issueNumber, 'polish',
+        'gh-1352 bounded polish lap (top-K ' + lapIds.length + ', overflow ' +
+        (plan ? plan.overflowThreads.length : 0) + ')', cfg.workflowFile);
+    return true;
+}
+
 // The polish-lap gate (gh-1352 scope 3): the effective APPROVE record for
 // the head, the parsed lap markers (machine-authored only) and the open
 // thread list feed the pure polishDecision. Returns null when the gate
-// cannot run (no head/logins, missing comment primitives) — never throws.
+// cannot run (no head/logins, missing comment primitives — postPrComment
+// included: the dispatch must stamp its per-head marker, the once-per-head
+// + instability-budget memory) — never throws.
 function polishGateDecision(provider, prNumber, headSha, cfg) {
     var logins = machineLoginsOf(cfg);
     if (!headSha || !logins.length || typeof provider.prCommentList !== 'function' ||
+        typeof provider.postPrComment !== 'function' ||
         typeof provider.verdictRecords !== 'function' ||
         typeof provider.reviewThreadList !== 'function') {
         return null;

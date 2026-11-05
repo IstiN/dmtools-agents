@@ -22,6 +22,18 @@ function maShared() {
     return maShared.mod;
 }
 
+// The polish-lap module under test (marker round-trip in the loop suites).
+function plShared() {
+    if (!plShared.mod) plShared.mod = loadModule('js/common/polishLap.js',
+        makeRequire({
+            './reviewVerdicts.js': rvShared(),
+            './machineAuthor.js': maShared(),
+            './reviewPolicy.js': loadModule('js/common/reviewPolicy.js',
+                makeRequire({ './reviewVerdicts.js': rvShared() }), {})
+        }), {});
+    return plShared.mod;
+}
+
 function agentModuleMap(projectConfig, holder) {
     var policy = loadModule('js/common/reviewPolicy.js',
         makeRequire({ './reviewVerdicts.js': rvShared() }), {});
@@ -1043,6 +1055,7 @@ suite('machineSm disposition loop (gh-1352)', function () {
     });
 
     var HEAD2 = 'aaaabbbbccccddddeeeeffff0000111122223333';
+    var pl = plShared();
     var APPROVE_POLISH_ONLY = { head: HEAD2, verdict: 'APPROVE', blocking: 0, important: 0,
                                 suggestions: 3, nits: 1, at: '2026-11-04T00:00:00.000Z',
                                 source: 'pr_review.json' };
@@ -1068,7 +1081,7 @@ suite('machineSm disposition loop (gh-1352)', function () {
                  author: 'ai-teammate', body: '💡 SUGGESTION: polish ' + i };
     }
 
-    test('polish-tier-only census on a fresh head dispatches the polish lap and skips triage', function () {
+    test('polish-tier-only census on a fresh head dispatches the lap, stamps the marker and skips triage', function () {
         var p = loopProvider([sugg(1), sugg(2), sugg(3)]);
         var out = agent2.dispositionLoop(p, 42,
             { prNumber: 99, headSha: HEAD2, allowPolish: true },
@@ -1077,8 +1090,68 @@ suite('machineSm disposition loop (gh-1352)', function () {
         assert.equal(p.calls.dispatches.length, 1);
         assert.equal(p.calls.dispatches[0].leg, 'polish');
         assert.equal(p.calls.dispatches[0].wf, 'ai-teammate.yml');
+        // gh-1352 review: the provider primitive takes the issue NUMBER
+        // (executeAction dispatch parity) — an issue object would reach
+        // github_trigger_workflow as "[object Object]".
+        assert.equal(p.calls.dispatches[0].issue, 42, 'dispatchLeg carries the issue number');
+        // gh-1352 review: the dispatch stamps the per-head lap marker —
+        // the once-per-head + instability-budget memory. Without the
+        // marker post the bounds are dead code (the next tick re-laps).
+        assert.equal(p.calls.posts.length, 1, 'the lap marker is stamped at dispatch');
+        var laps = pl.parsePolishLapMarkers(
+            p.calls.posts.map(function (body) { return { body: body, user: { login: 'ai-teammate' } }; }),
+            { authorLogins: ['ai-teammate'] });
+        assert.equal(laps.length, 1);
+        assert.equal(laps[0].head, HEAD2, 'the marker names the head');
+        assert.deepEqual(laps[0].resolvedThreadIds, ['RT_1', 'RT_2', 'RT_3'],
+            'the lap plan thread ids ride the marker (fixed: evidence)');
         assert.equal(p.calls.resolves.length, 0, 'the lap owns the threads — triage stays out this tick');
-        assert.equal(p.calls.posts.length, 0);
+    });
+
+    test('a failed lap-marker post stays home and falls open to triage (fail closed)', function () {
+        var p = loopProvider([sugg(1), sugg(2)]);
+        p.postPrComment = function () { throw new Error('403'); };
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished, 'no marker, no lap — an unstamped lap cannot honour once-per-head');
+        assert.equal(p.calls.dispatches.length, 0, 'the leg is never dispatched unstamped');
+        // the triage fallback still runs — but the broken comment primitive
+        // also kills deferral, so the mandatory-fix suggestion tiers stay
+        // open (needs-fix-or-defer), exactly the fail-closed doctrine.
+        assert.equal(p.calls.resolves.length, 0);
+    });
+
+    test('a provider without postPrComment never reaches the polish dispatch', function () {
+        var p = loopProvider([sugg(1)]);
+        delete p.postPrComment;
+        var out = agent2.dispositionLoop(p, 42,
+            { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out.polished, 'the gate needs the marker primitive');
+        assert.equal(p.calls.dispatches.length, 0);
+        assert.equal(p.calls.resolves.length, 0,
+            'no marker primitive also means no deferral — the thread stays open (fail closed)');
+    });
+
+    test('the stamped marker is the once-per-head memory: a second tick on the same head triages', function () {
+        // Round 1: dispatch stamps the marker on the PR.
+        var p = loopProvider([sugg(1), sugg(2)]);
+        agent2.dispositionLoop(p, 42, { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.equal(p.calls.dispatches.length, 1);
+        // Round 2 (the lap ran, some threads remain open, head unchanged):
+        // the posted marker is now on the comment list — no second lap.
+        var p2 = loopProvider([sugg(2)], {
+            comments: p.calls.posts.map(function (body) {
+                return { body: body, user: { login: 'ai-teammate' } };
+            })
+        });
+        var out2 = agent2.dispositionLoop(p2, 42, { prNumber: 99, headSha: HEAD2, allowPolish: true },
+            { machineLogins: ['ai-teammate'], workflowFile: 'ai-teammate.yml' });
+        assert.ok(!out2.polished, 'once per head — the memory holds across ticks');
+        assert.equal(p2.calls.dispatches.length, 0);
+        assert.equal(p2.calls.resolves.length, 1);
     });
 
     test('once-per-head: a lap marker on this head hands the threads to triage instead', function () {
