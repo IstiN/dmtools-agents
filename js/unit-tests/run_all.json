@@ -245,6 +245,7 @@
         "js/unit-tests/test_loseJson.js",
         "js/unit-tests/test_legRunVocab.js",
         "js/unit-tests/test_legFailureReport.js",
+        "js/unit-tests/test_failureAnalyzer.js",
         "js/unit-tests/test_publishParams.js"
       ]
     }

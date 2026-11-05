@@ -855,6 +855,41 @@ function _ghCloseIssue(owner, repo, issueNumber, comment) {
     return github_close_issue({ workspace: owner, repository: repo, number: issueNumber });
 }
 
+// gh-1366: the failure-analyzer's issue-comment read — the plain-issue
+// discussion page (github_get_pr_comments serves plain issues too; PRs
+// are issues upstream, the trackers.js parity). Memoized per tick (kind
+// issueComments): the SM reads the streak + verdict markers once per
+// issue per tick.
+function _ghIssueComments(owner, repo, issueNumber) {
+    var memoId = String(issueNumber);
+    var memo = ioCacheGet(owner, repo, 'issueComments', memoId);
+    if (memo) return memo;
+    var list = [];
+    try {
+        var raw = parseMcp(github_get_pr_comments({
+            workspace: owner, repository: repo, pullRequestId: memoId
+        }));
+        list = _ghParseCommentList(raw);
+    } catch (e) {
+        console.warn('  ⚠️ issue-comment read failed (fail-open): ' + (e.message || e));
+        list = [];
+    }
+    ioCachePut(owner, repo, 'issueComments', memoId, list);
+    return list;
+}
+
+// gh-1366: the ONE park-diagnostic write on the issue (github_create_comment
+// POSTs to issues/{n}/comments — the close-issue precedent's number shape).
+// Invalidate-after-mutation (the gh-957 house primitive): the same-tick
+// re-read must observe the posted diagnostic.
+function _ghPostIssueComment(owner, repo, issueNumber, body) {
+    var out = github_create_comment({
+        workspace: owner, repository: repo, number: issueNumber, body: body
+    });
+    ioCacheDrop(owner, repo, 'issueComments', String(issueNumber));
+    return out;
+}
+
 function _ghRemovePrLabel(owner, repo, prNumber, label) {
     // Absent label → 404; treat as an idempotent no-op.
     try {
@@ -1079,6 +1114,15 @@ function githubProvider(cfg) {
 
         closeIssue: function (issueNumber, comment) {
             return _ghCloseIssue(owner, repo, issueNumber, comment);
+        },
+
+        // ── gh-1366 failure-analyzer primitives (plain-issue comments) ──
+        issueComments: function (issueNumber) {
+            return _ghIssueComments(owner, repo, issueNumber);
+        },
+
+        postIssueComment: function (issueNumber, body) {
+            return _ghPostIssueComment(owner, repo, issueNumber, body);
         },
 
         addIssueLabel: function (issueNumber, label) {

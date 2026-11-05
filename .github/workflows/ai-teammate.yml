@@ -70,7 +70,11 @@ on:
         # gh-1352: polish — the bounded suggestion-only lap the disposition
         # loop dispatches on an approved BLOCKED head (top-K threads,
         # once-per-head, instability-budgeted).
-        options: [dev, review, rework, polish]
+        # gh-1366: analyze — the AI failure-analyzer leg the SM dispatches
+        # when a same-signature failure streak crosses
+        # failureAnalysis.afterFailures (transient vs deterministic-infra).
+        # analyze: requires the factory leg (gh-1366) — no-op until it ships.
+        options: [dev, review, rework, polish, analyze]
       reason:
         description: 'Why (audit trail)'
         type: string

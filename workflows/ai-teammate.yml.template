@@ -73,7 +73,15 @@ on:
         description: 'Which leg to run'
         required: true
         type: choice
-        options: [dev, review, rework]
+        # gh-1352: polish — the bounded suggestion-only lap the disposition
+        # loop dispatches on an approved BLOCKED head (top-K threads,
+        # once-per-head, instability-budgeted). Backfilled from the live
+        # workflow so the choice sets cannot drift.
+        # gh-1366: analyze — the AI failure-analyzer leg the machine SM
+        # dispatches when a same-signature failure streak crosses
+        # failureAnalysis.afterFailures (transient vs deterministic-infra).
+        # analyze: requires the factory leg (gh-1366) — no-op until it ships.
+        options: [dev, review, rework, polish, analyze]
       reason:
         description: 'Why this dispatch (audit trail, shown in logs)'
         required: false

@@ -38,6 +38,20 @@
  *   agentHandle       — assignee that marks an issue machine-managed (default 'ai-teammate')
  *   issueLimit        — how many open issues to scan per tick (default 50)
  *   closeComment      — comment posted by the close-issue safety net
+ *   machineAuthor     — the machine-identity allowlist (comma-separated)
+ *   failureAnalysis   — gh-1366, the AI failure-analyzer leg (optional;
+ *                       ABSENT → disabled silently). { afterFailures:
+ *                       consecutive same-signature failures before the
+ *                       analyzer dispatches (default 4); blockedLabel:
+ *                       the park label (default 'sm:leg-blocked');
+ *                       backoff: retry-interval multiplier reserved knob
+ *                       (default 1 = off) }. Malformed → hard validation
+ *                       error at SM start. On the failure path the SM
+ *                       dispatches the `analyze` leg at the exact
+ *                       threshold crossing; a deterministic-infra verdict
+ *                       parks the issue (label + ONE diagnostic comment)
+ *                       until the label is removed or the issue is
+ *                       re-assigned.
  *
  * Decision core (decideActions) is pure and unit-tested; all GitHub I/O
  * goes through `gh` via cli_execute_command and is injectable/mocks-able
@@ -65,6 +79,15 @@ var polishLapModule = require('./common/polishLap.js');
 // laps — the machine-stamped dmtools:rework-lap markers are the
 // non-polish dispatch evidence that breaks consecutiveness (the reset).
 var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
+// gh-1366: the AI failure-analyzer leg — the pure contract (config knobs,
+// streak crossing, verdict markers, park diagnostic) shared by the SM
+// decision core and the analyzer leg itself.
+var failureAnalyzerModule = require('./common/failureAnalyzer.js');
+// gh-1366: the park diagnostic renders in the machine loop's markdown
+// flavor (commentMarkup.forFlavor('markdown')).
+var commentMarkupModule = require('./common/commentMarkup.js');
+// gh-1366: the failureAnalysis block override merge (shallow, knob-level).
+var mergeObjectsModule = require('./common/mergeObjects.js');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure decision core — decideActions(state, cfg) → actions[]
@@ -224,6 +247,89 @@ function decideGreenUnapprovedActions(has, pr) {
     return [{ type: 'skip', reason: 'steady state' }];
 }
 
+// ── gh-1366: the failure-analyzer stages ──────────────────────────────────
+// Evaluated between the engine-level human holds and the routing: a parked
+// issue skips entirely (the label is the human latch), and a fresh
+// deterministic-infra verdict is APPLIED (park action) before any
+// re-dispatch can happen. Every stage fails safe to null — disabled config
+// or an unavailable issue-comment read leaves the loop byte-identical.
+
+function failureAnalysisEnabledOf(cfg) {
+    return !!(cfg && cfg.failureAnalysis && cfg.failureAnalysis.enabled);
+}
+
+function failureAnalysisStateOf(state) {
+    return (state && state.failureAnalysis && state.failureAnalysis.available)
+        ? state.failureAnalysis
+        : null;
+}
+
+/**
+ * The pre-routing gate: parked-skip or the park application. Returns the
+ * ONE action to return from decideActions, or null (feature off, state
+ * unavailable, nothing parked, no deterministic verdict for the current
+ * streak signature).
+ */
+function failureAnalysisGate(state, cfg) {
+    if (!failureAnalysisEnabledOf(cfg)) return null;
+    var faState = failureAnalysisStateOf(state);
+    if (!faState) return null;
+    var faCfg = cfg.failureAnalysis;
+    var labels = issueLabelsOf(state);
+    if (labels.indexOf(faCfg.blockedLabel) !== -1) {
+        return { type: 'skip', reason: 'parked by the failure analyzer (deterministic infra) — ' +
+            'remove ' + faCfg.blockedLabel + ' (or re-assign the issue) to resume dispatch' };
+    }
+    var verdict = failureAnalyzerModule.latestVerdictForSignature(faState.verdicts, faState.streakSignature);
+    if (verdict && verdict.classification === 'deterministic-infra' &&
+        !failureAnalyzerModule.coveringParkMarker(faState.parkMarkers, verdict)) {
+        // The park applies ONCE per verdict EPISODE: the trusted park
+        // markers carry the parked signature + analysis time, so a marker
+        // covering THIS verdict means the machine already parked it. When
+        // the marker exists and the label is gone, a HUMAN cleared the
+        // park (the landed-fix gesture, AC4) — the stale verdict must not
+        // re-park. A NEW episode (a different signature, or a fresher
+        // verdict after a failed human fix) is never covered → parks with
+        // its own diagnostic; a label-add that failed last tick has NO
+        // marker at all → re-enters the gate (the label is retried).
+        return { type: 'park', verdict: verdict,
+            reason: 'deterministic-infra verdict' +
+                failureAnalyzerModule.confidenceSuffix(verdict.confidence) + ' — parking: ' +
+                String(verdict.suspected_root_cause || 'root cause not stated') };
+    }
+    return null;
+}
+
+/**
+ * The blind-retry gate (gh-1366 AC1): a re-dispatch decision crossing the
+ * afterFailures threshold is diverted to the analyzer leg ONCE — exactly
+ * the crossing, so a crashed analyzer (no verdict → nothing consumed)
+ * moves the streak past the threshold and blind retries continue (AC5).
+ * Only dispatch actions divert; escalations (needs-human labels) ride on.
+ */
+function gateBlindRedispatch(actions, state, cfg) {
+    if (!failureAnalysisEnabledOf(cfg)) return actions;
+    var faState = failureAnalysisStateOf(state);
+    if (!faState) return actions;
+    var faCfg = cfg.failureAnalysis;
+    var consumed = failureAnalyzerModule.consumedCount(faState.verdicts, faState.streakSignature);
+    if (!failureAnalyzerModule.analysisDue(faState.streakCount, consumed, faCfg.afterFailures)) {
+        return actions;
+    }
+    for (var i = 0; i < actions.length; i++) {
+        if (actions[i].type !== 'dispatch') continue;
+        var diverted = {
+            type: 'dispatch',
+            leg: failureAnalyzerModule.ANALYZE_LEG,
+            reason: 'failure streak of ' + faCfg.afterFailures + ' identical failures — the analyzer leg ' +
+                'classifies transient vs deterministic before more blind retries' +
+                (faState.streakSignature ? ' (signature: ' + faState.streakSignature + ')' : '')
+        };
+        return actions.slice(0, i).concat([diverted]).concat(actions.slice(i + 1));
+    }
+    return actions;
+}
+
 function decideActions(state, cfg) {
     var labels = issueLabelsOf(state);
     var has = function (l) { return labels.indexOf(l) !== -1; };
@@ -232,13 +338,17 @@ function decideActions(state, cfg) {
     var skip = decideEngineSkip(has, state.activeRunForIssue);
     if (skip) return [skip];
 
+    // gh-1366: the analyzer's park states — before any routing.
+    var faGate = failureAnalysisGate(state, cfg);
+    if (faGate) return [faGate];
+
     // Rework round cap — mirrors ai-teammate.yml MAX_AUTO_REWORK_ROUNDS:
     // escalate instead of looping rework forever.
     var rounds = countReworkRounds(labels);
     var reworkExhausted = rounds >= maxRounds;
 
     var pr = state.pr;
-    if (!pr) return decideNoPrActions(has);
+    if (!pr) return gateBlindRedispatch(decideNoPrActions(has), state, cfg);
 
     if (pr.state !== 'OPEN') return decideClosedPrActions(pr);
 
@@ -247,7 +357,7 @@ function decideActions(state, cfg) {
     }
 
     if (pr.checkConclusion === 'red') {
-        return decideRedPrActions(pr, has, reworkExhausted, rounds);
+        return gateBlindRedispatch(decideRedPrActions(pr, has, reworkExhausted, rounds), state, cfg);
     }
 
     // ── green below ──────────────────────────────────────────────────────────
@@ -292,8 +402,29 @@ var ACTION_EXECUTORS = {
     },
     dispositionLoop: function (provider, action, issue, cfg) {
         return dispositionLoop(provider, issue, action, cfg);
+    },
+    // gh-1366: apply a deterministic-infra verdict — the park label (the
+    // latch that actually stops re-dispatch) + the ONE diagnostic comment.
+    park: function (provider, action, issue, cfg) {
+        return applyFailurePark(provider, issue, action, cfg);
     }
 };
+
+// gh-1366 — the park executor. The gate fires only for an episode no
+// trusted marker covers, so every fired park posts its own diagnostic.
+// The LABEL lands FIRST: it is the latch that actually stops re-dispatch,
+// so a failed write degrades to the SAFE half-applied state (parked, no
+// diagnostic — the parked-skip tick log still names the park) instead of
+// a diagnostic claiming "re-dispatch is STOPPED" while retries continue.
+// A failed comment post leaves the verdict uncovered: when a human later
+// clears the label, the gate re-fires and the park re-applies complete.
+function applyFailurePark(provider, issue, action, cfg) {
+    var faCfg = (cfg && cfg.failureAnalysis) || {};
+    var label = faCfg.blockedLabel || failureAnalyzerModule.DEFAULT_BLOCKED_LABEL;
+    provider.addIssueLabel(issue.number, label);
+    return provider.postIssueComment(issue.number, failureAnalyzerModule.parkDiagnosticComment(
+        action.verdict, label, commentMarkupModule.forFlavor('markdown')));
+}
 
 function executeAction(provider, action, issue, cfg) {
     var exec = ACTION_EXECUTORS[action.type];
@@ -687,6 +818,15 @@ function resolveMachineSmConfig(p, projectConfig) {
     // operator tuning the wrong bound.
     cfg.maxResolveThreads = resolveMaxResolveThreads(override, p,
         reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP);
+    // gh-1366: the failure-analyzer knobs ride the same override chain —
+    // `machineSm.failureAnalysis` (project) over `jobParams.failureAnalysis`
+    // (job), knob by knob like every other machineSm knob. Missing
+    // everywhere → disabled silently; a malformed block THROWS here (hard
+    // validation error at SM start — the house rule).
+    var faBlock = (override.failureAnalysis || p.failureAnalysis)
+        ? mergeObjectsModule.mergeObjects(p.failureAnalysis, override.failureAnalysis)
+        : undefined;
+    cfg.failureAnalysis = failureAnalyzerModule.resolveFailureAnalysisConfig(faBlock);
     // gh-1352: the disposition loop closes threads under the resolved
     // reviewPolicy (projectConfig.reviewPolicy > jobParams.reviewPolicy >
     // the built-in default) — the same resolution chain the review leg's
@@ -758,6 +898,51 @@ function filterLiveActiveIssues(provider, activeIssues, branchPrefix) {
     });
 }
 
+// gh-1366: the machine-issue query labels — the park label joins the query
+// only while the analyzer is enabled (parked issues stay listed so the
+// parked-skip reason stays observable in the tick log).
+function machineQueryLabelsOf(cfg) {
+    var machineLabels = ['agent:dev', 'agent:rework', 'agent:review',
+        'ai_developed', 'ai_pr_reviewed', 'pr_approved', 'needs-human'];
+    if (failureAnalysisEnabledOf(cfg)) {
+        machineLabels.push(cfg.failureAnalysis.blockedLabel);
+    }
+    return machineLabels;
+}
+
+// gh-1366: the pure derivation of one issue's failure-analysis state from
+// its comment history (the gh-1363 machine-readable signature lines + the
+// analyzer verdict markers + the trusted park markers).
+function failureAnalysisStateFrom(comments, machineLogins) {
+    var bodies = comments.map(function (c) {
+        return c && (c.body !== undefined ? c.body : c);
+    });
+    var streak = failureAnalyzerModule.failureStreak(bodies);
+    var authorOpts = { authorLogins: machineLogins || [] };
+    return {
+        available: true,
+        streakSignature: streak ? streak.signature : null,
+        streakCount: streak ? streak.count : 0,
+        verdicts: failureAnalyzerModule.parseFailureVerdicts(comments, authorOpts),
+        parkMarkers: failureAnalyzerModule.parkMarkersFrom(comments, authorOpts)
+    };
+}
+
+// gh-1366: one issue's failure-analysis state. A provider without the
+// issue-comment primitive (the gitlab twin, bare test mocks) → null: every
+// gate fails safe to today's behavior. A READ failure is equally fail-safe
+// — the loop is never wedged by one leg's input.
+function collectFailureAnalysisState(provider, issueNumber, machineLogins) {
+    if (typeof provider.issueComments !== 'function') return null;
+    try {
+        return failureAnalysisStateFrom(provider.issueComments(issueNumber) || [], machineLogins);
+    } catch (eFa) {
+        console.warn('  ⚠️ gh-' + issueNumber + ' failure-analysis read failed (fail-safe, blind retry): ' +
+            (eFa.message || eFa));
+        return null;
+    }
+}
+
 // One issue through the reconcile loop: probe the linked PR, run the pure
 // decision core, execute (or plan, in dryRun) every action. Returns the
 // per-issue counters action() aggregates.
@@ -800,6 +985,13 @@ function applyIssueAction(provider, issue, cfg, a) {
 function reconcileIssue(provider, issue, cfg, activeSet) {
     var counters = { acted: 0, dispatched: 0, skipped: 0, failures: 0 };
     var built = buildIssueState(provider, issue, cfg.branchPrefix, activeSet);
+    // gh-1366: the analyzer state rides ONLY while the feature is enabled
+    // — the disabled loop stays byte-identical today INCLUDING I/O: no
+    // issue-comment read per issue per tick for gates that can never fire
+    // (both gates bail on failureAnalysisEnabledOf first).
+    built.state.failureAnalysis = failureAnalysisEnabledOf(cfg)
+        ? collectFailureAnalysisState(provider, issue.number, cfg.machineLogins)
+        : null;
     var acts = decideActions(built.state, cfg);
     for (var i = 0; i < acts.length; i++) {
         var a = acts[i];
@@ -855,8 +1047,7 @@ function action(params) {
     }
 
     // 2. Reconcile every machine-managed issue through the provider.
-    var machineLabels = ['agent:dev', 'agent:rework', 'agent:review',
-        'ai_developed', 'ai_pr_reviewed', 'pr_approved', 'needs-human'];
+    var machineLabels = machineQueryLabelsOf(cfg);
     var issues = provider.listMachineIssues(machineLabels, cfg.agentHandle, cfg.issueLimit);
 
     var dispatched = 0, acted = 0, skipped = 0, failures = 0;
@@ -891,6 +1082,12 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveMachineSmConfig: resolveMachineSmConfig,
         resolveRepoCfg: resolveRepoCfg,
         probeOrphanRun: probeOrphanRun,
-        filterLiveActiveIssues: filterLiveActiveIssues
+        filterLiveActiveIssues: filterLiveActiveIssues,
+        // gh-1366: the failure-analyzer stages (the scripted replay suite
+        // covers them through action(); the pure gates are exported for
+        // surgical unit tests).
+        failureAnalysisGate: failureAnalysisGate,
+        gateBlindRedispatch: gateBlindRedispatch,
+        applyFailurePark: applyFailurePark
     };
 }
