@@ -146,7 +146,6 @@ function resolveNodeLine(node, conversation) {
     return conversation.line || conversation.original_line || null;
 }
 
-
 /**
  * The first comment of a GraphQL reviewThread node — {} when the node
  * carries no comments.
