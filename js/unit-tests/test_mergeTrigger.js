@@ -158,6 +158,31 @@ function fixtureMergePr(opts, calls, m) {
     return JSON.stringify({ merged: true });
 }
 
+function backstopBridgeMocks(opts, calls) {
+    // gh-1353 merge-backstop bridge tools: the threads read serves
+    // opts.threadsByNumber (PR number → reviewThread nodes) — empty by
+    // default (clean replay, merges as today); noThreads removes the
+    // primitive entirely (capability miss). Named builder keeps fixture()
+    // complexity at its gh-1081 value (CRAP ratchet).
+    return {
+        github_get_pr_review_threads: opts.noThreads ? undefined : function (a) {
+            calls.threads.push(a);
+            return JSON.stringify({ data: { repository: { pullRequest:
+                { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
+        },
+        github_get_pr_comments: function (a) {
+            return JSON.stringify(opts.prCommentsByNumber && opts.prCommentsByNumber[a.pullRequestId] || []);
+        },
+        github_create_issue: function (a) {
+            calls.debtIssues.push(a);
+            if (opts.createIssueThrows) throw new Error(opts.createIssueThrows);
+            return JSON.stringify({ number: 500 + calls.debtIssues.length, title: a.title });
+        },
+        github_resolve_pr_thread: function (a) { calls.threadResolves.push(a); return '{}'; },
+        github_reply_to_pr_thread: function (a) { calls.threadReplies.push(a); return '{}'; }
+    };
+}
+
 function fixture(opts) {
     opts = opts || {};
     var calls = { merges: [], removes: [], comments: [], gets: [], issueGets: [],
@@ -183,27 +208,10 @@ function fixture(opts) {
             return fixtureMergePr(opts, calls, m);
         },
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
-        github_create_comment: function (c) { calls.comments.push(c); return '{}'; },
-        // gh-1353 merge-backstop bridge tools: the threads read serves
-        // opts.threadsByNumber (PR number → reviewThread nodes) — empty by
-        // default (clean replay, merges as today); noThreads removes the
-        // primitive entirely (capability miss).
-        github_get_pr_review_threads: opts.noThreads ? undefined : function (a) {
-            calls.threads.push(a);
-            return JSON.stringify({ data: { repository: { pullRequest:
-                { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
-        },
-        github_get_pr_comments: function (a) {
-            return JSON.stringify(opts.prCommentsByNumber && opts.prCommentsByNumber[a.pullRequestId] || []);
-        },
-        github_create_issue: function (a) {
-            calls.debtIssues.push(a);
-            if (opts.createIssueThrows) throw new Error(opts.createIssueThrows);
-            return JSON.stringify({ number: 500 + calls.debtIssues.length, title: a.title });
-        },
-        github_resolve_pr_thread: function (a) { calls.threadResolves.push(a); return '{}'; },
-        github_reply_to_pr_thread: function (a) { calls.threadReplies.push(a); return '{}'; }
+        github_create_comment: function (c) { calls.comments.push(c); return '{}'; }
     };
+    // gh-1353 merge-backstop bridge tools (named builder — see there).
+    Object.assign(mods, backstopBridgeMocks(opts, calls));
     // ghRepo is injected unconditionally: when absent it lands as undefined,
     // which keeps typeof-GH_REPO paths exactly where they were.
     mods.GH_REPO = opts.ghRepo;

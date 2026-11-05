@@ -129,6 +129,32 @@ function checkRunsPayload(opts, checkRuns, commitSha) {
     return JSON.stringify({ check_runs: checkRuns });
 }
 
+function backstopBridgeMocks(opts, calls) {
+    // gh-1353 merge-backstop bridge tools: the threads read serves
+    // opts.threadsByNumber (PR number → reviewThread nodes) — empty by
+    // default (clean replay, merges as today); noThreads removes the
+    // primitive entirely (capability miss). Extracted so fixture() keeps
+    // its baseline CRAP (gh-1200 precedent: named mock builders).
+    return {
+        github_get_pr_review_threads: opts.noThreads ? undefined : function (a) {
+            calls.threads.push(a);
+            return JSON.stringify({ data: { repository: { pullRequest:
+                { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
+        },
+        github_get_pr_comments: function (a) {
+            return JSON.stringify(opts.prCommentsByNumber && opts.prCommentsByNumber[a.pullRequestId] || []);
+        },
+        github_search_issues: function (a) { calls.debtSearches.push(a); return JSON.stringify({ items: [] }); },
+        github_create_issue: function (a) {
+            calls.debtIssues.push(a);
+            if (opts.createIssueThrows) throw new Error(opts.createIssueThrows);
+            return JSON.stringify({ number: 500 + calls.debtIssues.length, title: a.title });
+        },
+        github_resolve_pr_thread: function (a) { calls.threadResolves.push(a); return '{}'; },
+        github_reply_to_pr_thread: function (a) { calls.threadReplies.push(a); return '{}'; }
+    };
+}
+
 function fixture(opts) {
     opts = opts || {};
     var calls = { merges: [], adds: [], removes: [], comments: [], cli: [],
@@ -181,26 +207,7 @@ function fixture(opts) {
         },
         github_add_labels: function (a) { calls.adds.push(a); return '{}'; },
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
-        // gh-1353 merge-backstop bridge tools: the threads read serves
-        // opts.threadsByNumber (PR number → reviewThread nodes) — empty by
-        // default (clean replay, merges as today); noThreads removes the
-        // primitive entirely (capability miss).
-        github_get_pr_review_threads: opts.noThreads ? undefined : function (a) {
-            calls.threads.push(a);
-            return JSON.stringify({ data: { repository: { pullRequest:
-                { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
-        },
-        github_get_pr_comments: function (a) {
-            return JSON.stringify(opts.prCommentsByNumber && opts.prCommentsByNumber[a.pullRequestId] || []);
-        },
-        github_search_issues: function (a) { calls.debtSearches.push(a); return JSON.stringify({ items: [] }); },
-        github_create_issue: function (a) {
-            calls.debtIssues.push(a);
-            if (opts.createIssueThrows) throw new Error(opts.createIssueThrows);
-            return JSON.stringify({ number: 500 + calls.debtIssues.length, title: a.title });
-        },
-        github_resolve_pr_thread: function (a) { calls.threadResolves.push(a); return '{}'; },
-        github_reply_to_pr_thread: function (a) { calls.threadReplies.push(a); return '{}'; },
+        github_create_comment: function (c) { calls.comments.push(c); return '{}'; },
         // Self-tick (owner rule 2026-10-04): capture every cli dispatch;
         // opts.cliThrows simulates a dead gh CLI for the failure path.
         cli_execute_command: function (c) {
@@ -209,6 +216,8 @@ function fixture(opts) {
             return '';
         }
     };
+    // gh-1353 merge-backstop bridge tools (named builder — see there).
+    Object.assign(mods, backstopBridgeMocks(opts, calls));
     var bot = loadMergeBot(mods);
     return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls, crCalls: crCalls, listCalls: listCalls };
 }
