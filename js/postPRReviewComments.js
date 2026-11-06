@@ -2226,6 +2226,51 @@ function triggerConfiguredRework(ctx) {
     }
 }
 
+// Jira review<->rework loop cap (live: 22 alternating review/rework runs on one Jira ticket, every
+// rework resolved all threads and each new review found fresh suggestions).
+// Each auto-started rework stamps rework-round-N on the ticket; once
+// maxAutoReworkRounds (default 3) rounds are spent the ticket gets
+// needs-human and no further rework is chained. Removing the labels is a
+// human decision that resets the budget.
+var DEFAULT_MAX_AUTO_REWORK_ROUNDS = 3;
+var NEEDS_HUMAN_LABEL = 'needs-human';
+
+function reworkRoundOf(labels) {
+    var max = 0;
+    (labels || []).forEach(function(l) {
+        var m = /^rework-round-(\d+)$/.exec(l);
+        if (m) max = Math.max(max, parseInt(m[1], 10));
+    });
+    return max;
+}
+
+function maxAutoReworkRoundsOf(customParams) {
+    var n = customParams && customParams.maxAutoReworkRounds;
+    return n > 0 ? n : DEFAULT_MAX_AUTO_REWORK_ROUNDS;
+}
+
+function addTicketLabel(ctx, label) {
+    try {
+        ctx.tracker.addLabel(ctx.ticketKey, label);
+    } catch (e) {
+        console.warn('⚠️ Failed to add label ' + label + ':', e.message || e);
+    }
+}
+
+// true = budget left (next round label stamped); false = capped (needs-human).
+function claimReworkRound(ctx, params) {
+    var labels = ticketLabels(params.ticket);
+    var round = reworkRoundOf(labels);
+    var max = maxAutoReworkRoundsOf(ctx.customParams);
+    if (round >= max) {
+        console.warn('🛑 autoStartRework: capped after ' + round + ' round(s) (max ' + max + ') — labeling ' + NEEDS_HUMAN_LABEL);
+        addTicketLabel(ctx, NEEDS_HUMAN_LABEL);
+        return false;
+    }
+    addTicketLabel(ctx, 'rework-round-' + (round + 1));
+    return true;
+}
+
 function startConfiguredRework(ctx, params) {
     if (!autoStartReworkConfigured(ctx.customParams)) return false;
     // Skip if ticket already has pr_approved label (merge in progress)
@@ -2233,6 +2278,11 @@ function startConfiguredRework(ctx, params) {
         console.log('ℹ️ autoStartRework: skipped — ticket has pr_approved label');
         return false;
     }
+    if (hasLabel(ticketLabels(params.ticket), NEEDS_HUMAN_LABEL)) {
+        console.log('ℹ️ autoStartRework: skipped — ticket has ' + NEEDS_HUMAN_LABEL);
+        return null;
+    }
+    if (!claimReworkRound(ctx, params)) return null;
     return triggerConfiguredRework(ctx);
 }
 
@@ -2248,7 +2298,10 @@ function shouldRunReworkLeg(isApproved, pr, repoInfo) {
  */
 function runReworkLeg(ctx, params, pr, repoInfo, isApproved) {
     if (!shouldRunReworkLeg(isApproved, pr, repoInfo)) return;
-    if (!startConfiguredRework(ctx, params)) {
+    var started = startConfiguredRework(ctx, params);
+    // null = capped / needs-human: no rework at all, not even the SM fallback.
+    if (started === null) return;
+    if (!started) {
         markForSmStoryRework(ctx.tracker, ctx.ticketKey);
         autoStart.triggerSmIfIdle({ config: ctx.config, customParams: ctx.customParams, scm: ctx.scm });
     }
@@ -2604,6 +2657,7 @@ function action(params) {
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
+        reworkRoundOf: reworkRoundOf,
         action,
         resolveCustomParams,
         isLinePresentInDiff,

@@ -1861,7 +1861,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         assert.deepEqual(triggers[0].stripKeys, ['removeLabel', 'autoStartRework', 'autoStartReworkConfigFile']);
         assert.deepEqual(
             h.opsOf('jira.addLabel').map(function(o) { return o.label; }),
-            ['ai_pr_reviewed'],
+            ['ai_pr_reviewed', 'rework-round-1'],
             'no sm_story_rework_triggered / agent:rework when the configured workflow started'
         );
         assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 0, 'SM not triggered when the workflow started');
@@ -1885,7 +1885,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
 
         assert.deepEqual(
             h.opsOf('jira.addLabel').map(function(o) { return o.label; }),
-            ['ai_pr_reviewed', 'sm_story_rework_triggered', 'agent:rework']
+            ['ai_pr_reviewed', 'rework-round-1', 'sm_story_rework_triggered', 'agent:rework']
         );
         assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 1);
     });
@@ -1912,6 +1912,54 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
             ['ai_pr_reviewed', 'sm_story_rework_triggered', 'agent:rework'],
             'falls back to the SM rework path'
         );
+    });
+
+    test('autoStartRework stamps rework-round-1 on the first auto rework', function() {
+        var h = loadReviewActionHarness({
+            reviewData: { recommendation: 'REQUEST_CHANGES', issueCounts: { blocking: 1, important: 0, suggestions: 0 }, inlineComments: [] },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+        h.mod.action(gh926ActionParams({
+            customParams: { autoStartRework: true, autoStartReworkConfigFile: 'agents/pr_rework.json' }
+        }));
+        assert.equal(h.opsOf('autoStart.triggerConfiguredWorkflowForTicket').length, 1);
+        assert.deepEqual(h.opsOf('jira.addLabel').map(function(o) { return o.label; }), ['ai_pr_reviewed', 'rework-round-1']);
+    });
+
+    test('autoStartRework is capped: at maxAutoReworkRounds the ticket gets needs-human and nothing is chained', function() {
+        var h = loadReviewActionHarness({
+            reviewData: { recommendation: 'REQUEST_CHANGES', issueCounts: { blocking: 1, important: 0, suggestions: 0 }, inlineComments: [] },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+        h.mod.action(gh926ActionParams({
+            ticketLabels: ['rework-round-1', 'rework-round-2'],
+            customParams: { autoStartRework: true, autoStartReworkConfigFile: 'agents/pr_rework.json', maxAutoReworkRounds: 2 }
+        }));
+        assert.equal(h.opsOf('autoStart.triggerConfiguredWorkflowForTicket').length, 0);
+        assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 0, 'no SM fallback either');
+        assert.deepEqual(h.opsOf('jira.addLabel').map(function(o) { return o.label; }), ['ai_pr_reviewed', 'needs-human']);
+    });
+
+    test('autoStartRework is skipped while the ticket has needs-human', function() {
+        var h = loadReviewActionHarness({
+            reviewData: { recommendation: 'REQUEST_CHANGES', issueCounts: { blocking: 1, important: 0, suggestions: 0 }, inlineComments: [] },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+        h.mod.action(gh926ActionParams({
+            ticketLabels: ['needs-human'],
+            customParams: { autoStartRework: true, autoStartReworkConfigFile: 'agents/pr_rework.json' }
+        }));
+        assert.equal(h.opsOf('autoStart.triggerConfiguredWorkflowForTicket').length, 0);
+        assert.deepEqual(h.opsOf('jira.addLabel').map(function(o) { return o.label; }), ['ai_pr_reviewed']);
+    });
+
+    test('reworkRoundOf picks the highest rework-round-N label', function() {
+        var mod = loadReviewActionHarness({ reviewData: GH926_CLEAN_APPROVE, repoInfo: GH926_REPO, prInfoContent: GH926_PR_INFO_42 }).mod;
+        assert.equal(mod.reworkRoundOf(['x', 'rework-round-2', 'rework-round-10', 'rework-round-x']), 10);
+        assert.equal(mod.reworkRoundOf([]), 0);
     });
 
     test('WIP label removal is contextId-prefixed when metadata carries contextId', function() {
