@@ -45,7 +45,7 @@
 var mcpParse = require('./common/mcpParse.js');
 
 // gh-1353: the merge backstop rides every squash-merge — and since gh-1370
-// it is a GATE on machine-owned threads: ONE digest issue + `defered`
+// it is a GATE on machine-owned threads: ONE digest issue + `deferred`
 // resolutions for open machine-owned >=IMPORTANT threads, `wontfix`
 // ack-resolutions for the below-threshold ones, and a failed resolution
 // HOLDS the merge (merging with an open machine thread is a policy
@@ -301,7 +301,7 @@ function mergeDecisionOf(ms) {
 /**
  * gh-1370 merge backstop before a squash-merge: every open machine-owned
  * review thread must reach terminal resolution — >=IMPORTANT threads ride
- * the digest (ONE digest issue, `defered: #digest` resolves), SUGGESTION/
+ * the digest (ONE digest issue, `deferred: #digest` resolves), SUGGESTION/
  * NIT threads resolve WITHOUT a fix (`wontfix` ack tags), and human
  * threads stay untouched (branch protection owns them). A record-keeping
  * OR resolution failure throws — the per-item isolation below counts it
@@ -331,7 +331,7 @@ function runStateMachine(ctx, prNumber, onMerged) {
     var decision = mergeDecisionOf(ms);
     if (decision === 'merge') {
         // gh-1353 + gh-1370: every open machine-owned review thread must
-        // reach terminal resolution BEFORE the merge (digest + defered
+        // reach terminal resolution BEFORE the merge (digest + deferred
         // resolutions for >=IMPORTANT, wontfix acks below the threshold).
         // A record-keeping or resolution failure throws — the per-item
         // isolation below counts it failed and the merge defers to the

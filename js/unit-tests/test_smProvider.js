@@ -1831,7 +1831,7 @@ suite('smProvider — gh-1221 createSmProvider characterization', function () {
 // stream: without invalidate-after-mutation (ioCacheDrop, the gh-957 house
 // primitive) every same-tick re-read serves the pre-post memo, the ledger
 // append rebuilds from the stale base, and the marker family's
-// last-write-wins silently drops every earlier defered finding.
+// last-write-wins silently drops every earlier deferred finding.
 suite('smProvider — gh-1352 ledger primitives: postPrComment invalidates the prVerdicts memo', function () {
 
     var MOD = 'js/common/smProvider.js';

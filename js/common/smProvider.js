@@ -1078,7 +1078,7 @@ function githubProvider(cfg) {
             // primitive): this write mutates the stream prCommentList
             // memoizes — a same-tick re-read (the NEXT deferral's
             // ledger base) must re-fetch, or the marker family's
-            // last-write-wins silently drops the earlier defered findings.
+            // last-write-wins silently drops the earlier deferred findings.
             ioCacheDrop(owner, repo, 'prVerdicts', String(prNumber));
             return out;
         },

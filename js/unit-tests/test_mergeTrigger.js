@@ -958,7 +958,7 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
     }
     var CLEAN_PR = { number: 12, labels: [], body: 'What it does\n\nCloses #5\n', headRefName: 'feature/x' };
 
-    test('backstop replay: 2 machine ⚠️ threads → ONE digest issue, both resolved defered, merge proceeds', function () {
+    test('backstop replay: 2 machine ⚠️ threads → ONE digest issue, both resolved deferred, merge proceeds', function () {
         var fx = fixture({
             labeledIssues: [5],
             prs: [CLEAN_PR],
@@ -975,7 +975,7 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.debtIssues[0].title, '[debt] PR #12');
         assert.equal(fx.calls.threadResolves.length, 2, 'both counted threads resolve');
         assert.equal(fx.calls.threadResolves[0].threadId, 'PRT_1');
-        assert.contains(fx.calls.threadReplies[0].text, 'defered: #501');
+        assert.contains(fx.calls.threadReplies[0].text, 'deferred: #501');
         assert.equal(fx.calls.merges.length, 1, 'the squash-merge still happens');
     });
 

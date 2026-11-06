@@ -25,7 +25,7 @@
  *      survives replays" is the convergent invariant, not a hard
  *      guarantee;
  *   2. each counted thread resolves with the canonical machine-parsed tag
- *      `defered: #<digest-issue>` (reviewDispositions.TAGS — the epic's
+ *      `deferred: #<digest-issue>` (reviewDispositions.TAGS — the canonical
  *      deferral spelling; the tag round-trips parseDispositionTag);
  *   3. the merge proceeds — but ONLY when every machine-owned thread
  *      reached terminal resolution (gh-1370): machine threads BELOW the
@@ -175,7 +175,7 @@ function digestRowOf(row, severityClass) {
 /**
  * The classifier (gh-1353 + gh-1370): walks unresolved review threads and
  * splits machine-owned open threads into the digest path (>=IMPORTANT —
- * digested + resolved `defered:`) from the ack path (SUGGESTION / NIT —
+ * digested + resolved `deferred:`) from the ack path (SUGGESTION / NIT —
  * resolved WITHOUT a fix, no digest, no ledger). Human-authored open
  * threads (any severity) land in `human` — never resolved, listed
  * `open (human)`. A thread without a resolve id is flagged (noThreadId —
@@ -320,7 +320,7 @@ function digestHeadline(count, prNumber) {
     return '🧵 Merge backstop (gh-1353) — ' + count + ' unresolved machine-owned review thread' +
         (count === 1 ? '' : 's') + ' with severity >= IMPORTANT (⚠️/🚨) open on PR #' + prNumber +
         ' at merge time. This issue is the gh-1328 §4 backstop record: each thread below was' +
-        ' resolved with a `defered` tag pointing here before the merge proceeded (gh-1370:' +
+        ' resolved with a `deferred` tag pointing here before the merge proceeded (gh-1370:' +
         ' every machine-owned thread must reach terminal resolution before merge).';
 }
 
@@ -350,7 +350,7 @@ function buildDigestIssue(parts) {
         '',
         'PR: ' + titleText,
         '',
-        '## Deferred machine threads (each resolved `defered: #<this issue>` at merge time)'
+        '## Deferred machine threads (each resolved `deferred: #<this issue>` at merge time)'
     ].concat(countedTableRows(counted, ctx, p.reviewRunRef));
     if (human.length) {
         lines = lines.concat(['',
@@ -365,14 +365,14 @@ function buildDigestIssue(parts) {
 
 /**
  * The ack reply posted into a resolved counted thread: the tag line is the
- * canonical machine-parsed disposition (`defered: #<digest-issue>` —
+ * canonical machine-parsed disposition (`deferred: #<digest-issue>` —
  * reviewDispositions.tagLine renders it; parseDispositionTag round-trips).
  */
 function deferredAck(digestNumber) {
     return '🤖 merge backstop (gh-1353) — machine-owned >=IMPORTANT review thread deferred at' +
         ' merge time; the finding lives in digest #' + digestNumber + ' and the review debt' +
         ' ledger (the batched sweep owns the fix).\n' +
-        reviewDispositions.tagLine({ tag: 'defered', value: '#' + digestNumber }) + '\n';
+        reviewDispositions.tagLine({ tag: 'deferred', value: '#' + digestNumber }) + '\n';
 }
 
 // ── the gh-1370 below-threshold ack (nits resolve-without-fix) ───────────────
@@ -435,7 +435,7 @@ function isExcludedDigestIssue(issue, excludeNumber) {
  * digest, never the PR's own just-filed duplicate. Among multiple matches
  * the pick is DETERMINISTIC (gh-1371 round 2: the LOWEST issue number) —
  * GitHub issue-search ordering is best-match and opaque, so a "first hit"
- * could flip between replays and point new `defered:` acks at the
+ * could flip between replays and point new `deferred:` acks at the
  * abandoned duplicate; every replay now converges on the same issue.
  */
 function findExistingDigest(issuesPayload, prNumber, excludeNumber) {
@@ -634,7 +634,7 @@ function digestNumberOf(payload) {
 
 // Files the digest (or reuses the probed one); a createIssue throw — or a
 // create response WITHOUT a usable issue number — throws through: the merge
-// defers rather than pointing `defered:` tags at a nonexistent digest
+// defers rather than pointing `deferred:` tags at a nonexistent digest
 // (gh-1371). The search-then-create probe is racy across the two merge
 // funnels (gh-1371 — the backstop rides BOTH mergeTrigger and mergeBot): a
 // concurrent funnel can file its own digest between our probe and our

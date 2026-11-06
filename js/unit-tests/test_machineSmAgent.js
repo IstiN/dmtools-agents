@@ -358,15 +358,15 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
                  author: 'ai-teammate', body: '💡 SUGGESTION: polish ' + i };
     }
 
-    test('AC1 replay (#1457–#1470), gh-1352 semantics: 4 suggestion threads → 4 resolves with defered dispositions in one tick', function () {
+    test('AC1 replay (#1457–#1470), gh-1352 semantics: 4 suggestion threads → 4 resolves with deferred dispositions in one tick', function () {
         var p = providerWith([sug(1), sug(2), sug(3), sug(4)]);
         var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
             { machineLogins: ['ai-teammate'] });
         assert.equal(out.resolved, 4);
-        assert.equal(out.defered, 4, 'default policy: suggestion fix is mandatory — the threads defer to the review debt ledger');
+        assert.equal(out.deferred, 4, 'default policy: suggestion fix is mandatory — the threads defer to the review debt ledger');
         assert.equal(p.calls.replies.length, 4, 'one ack reply per resolved thread');
         assert.contains(p.calls.replies[0].text, 'triage closure (gh-1352)');
-        assert.contains(p.calls.replies[0].text, 'defered: ');
+        assert.contains(p.calls.replies[0].text, 'deferred: ');
         assert.contains(p.calls.replies[0].text, 'review debt ledger');
         assert.equal(p.calls.resolves.length, 4);
         assert.equal(p.calls.posts.length, 4, 'one ledger marker+digest comment per deferral');
@@ -436,7 +436,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         var out = agent.resolveSuggestionThreads(provider, 1457, HEAD,
             { machineLogins: ['ai-teammate'] });
         assert.equal(out.resolved, 2, 'both threads resolve');
-        assert.equal(out.defered, 2, 'both deferrals stamp a finding id');
+        assert.equal(out.deferred, 2, 'both deferrals stamp a finding id');
         assert.equal(resolves.length, 2);
         // The durable ledger is the LAST posted marker (the marker family is
         // last-write-wins): it must carry BOTH findings, not just the newest.
@@ -550,7 +550,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         assert.equal(out.resolved, 0);
     });
 
-    test('a resolve failure does not abort the remaining threads (gh-1352: defered path)', function () {
+    test('a resolve failure does not abort the remaining threads (gh-1352: deferred path)', function () {
         var p = providerWith([sug(1), sug(2)]);
         p.resolveThread = function (pr, thread) {
             if (thread.threadId === 'RT_1') throw new Error('boom');
@@ -562,7 +562,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         assert.equal(p.calls.resolves.length, 1);
     });
 
-    test('a resolve failure leaves no ack behind (resolve-first idempotency; gh-1352 defered path)', function () {
+    test('a resolve failure leaves no ack behind (resolve-first idempotency; gh-1352 deferred path)', function () {
         // The ack must be posted only AFTER a successful resolve: with
         // reply-first, a persistent resolve failure re-selects the thread
         // next tick and spams one duplicate ack per tick, unbounded.
@@ -579,7 +579,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         assert.equal(p.calls.resolves.length, 1);
     });
 
-    test('a failed ack reply after a successful resolve is logged, not fatal (gh-1185; gh-1352 defered path)', function () {
+    test('a failed ack reply after a successful resolve is logged, not fatal (gh-1185; gh-1352 deferred path)', function () {
         // Resolve-first order: the resolve is counted even when the
         // cosmetic ack reply throws — the thread stays resolved and the
         // next tick's re-selection filters it out.
@@ -1103,7 +1103,7 @@ suite('machineSm executeAction', function () {
         assert.equal(replies.length, 2, 'an ack reply follows each resolve');
         assert.ok(replies[0].ack.indexOf('triage closure (gh-1352)') !== -1,
             'the ack carries the gh-1352 triage wording');
-        assert.ok(replies[0].ack.indexOf('defered: ') !== -1,
+        assert.ok(replies[0].ack.indexOf('deferred: ') !== -1,
             'default policy: suggestion fix is mandatory — the ack defers to the ledger');
     });
 
