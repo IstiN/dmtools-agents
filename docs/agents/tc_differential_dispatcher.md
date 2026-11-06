@@ -2,10 +2,10 @@
 
 Scripted CI dispatcher for parked differential rerun requests (TC-failure attribution, gh-1329 follow-up). A pure local-execution job — no AI CLI, the run is the verdict.
 
-When a validated guard TC fails and the automation leg's evidence cannot attribute the failure, the bug parks a differential rerun request in the TC maintenance ledger and carries the `tc_differential_pending` label (the SM rule queries it). This job — dispatched on the next SM tick, before any TC generator re-dispatches the bug — settles the request mechanically:
+When a validated TC fails and the automation leg's evidence cannot attribute the failure, the bug parks a differential rerun request in the TC maintenance ledger and carries the `tc_differential_pending` label (the SM rule queries it). Validated guards and validated own-oracle TCs alike park these requests (gh-1354 routes the bug's own oracle through the mechanical triage table too). This job — dispatched on the next SM tick, before any TC generator re-dispatches the bug — settles the request mechanically:
 
 1. **Run** — checkout the request's recorded last-green build (`lastGreenSha`) in the target repo and run the single TC script. Nothing but the build varies.
-2. **Route** — green on the old build → the change range caused the failure: the bug earns its bounce (moved to Ready For Development, evidence named in the comment). Red on the old build → the failure predates the change: the finding reopens as maintenance-debt sweep work. The bounce cap reached → owner escalation. A sibling-guard request never bounces its own bug.
+2. **Route** — green on the old build → the change range caused the failure. A guard request earns its bounce (moved to Ready For Development, evidence named in the comment); an own-oracle request hands to the AC re-check instead (a `rework` route — the AC verdict decides the bounce on the next automation lap, never an un-gated bounce). Red on the old build → the failure predates the change: the finding reopens as maintenance-debt sweep work (any role). The bounce cap reached → owner escalation. A sibling-guard request never bounces its own bug.
 3. **Resolve** — post the updated ledger marker (the consumed parked section disappears), post the route report, and clear the park label when nothing remains parked.
 
 Unrunnable requests (no checkout target, no run command configured) stay parked fail-safe: one explanation comment on first attempt, quiet bumps afterwards, and the request remains visible in every ledger digest — an attribution stall is never silent.
