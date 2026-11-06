@@ -5279,7 +5279,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 (failingJobs.length ? failingJobs.join(', ')
                                                     : '(check-run rollup unavailable)'));
                 }
-                if (isMachinePr && reworkEmptyCapped) {
+                if (isMachinePr && fvPrTerminal) {
+                    // gh-1369: terminal PR — no empty-lap cap escalation
+                    // (a human cannot fix a merged head), no linked-issue
+                    // re-arm, no PR-anchored arm. The red is recorded in
+                    // the report above; nothing to rework.
+                    console.log('  ⏭️  ' + key + ' PR #' + ticket.prNumber + ' is terminal (merged/closed) — ' +
+                        'validation red on shipped code never re-arms rework (gh-1369)');
+                } else if (isMachinePr && reworkEmptyCapped) {
                     // Withheld for MACHINE PRs regardless of linkage (the
                     // cap bounds the machine rework loop — linked-issue arm
                     // AND the PR-anchored unlinked arm).

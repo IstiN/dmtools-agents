@@ -11,6 +11,14 @@
  *
  * Pure module — no dmtools globals, JSON-safe in/out, trivially unit-tested.
  *
+ * Sibling: `isPrBodyFrozen` in `js/common/pullRequest.js` implements a
+ * near-sibling decision with a DIFFERENT contract (body-freeze vs
+ * rework-terminality; ADO `completed` + merge-queue labels vs GitHub-REST
+ * terminal-only; freeze-by-default vs fail-open). Do not unify the two
+ * without reconciling those differences and the fail-open doctrine — a
+ * dedup pass that flips one semantics most dangerously drops the fail-open
+ * behavior the arming paths rely on.
+ *
  * Fail-open doctrine: an unknown/absent state (a broken probe, a legacy
  * payload without `state`) is NOT terminal — the guards keep the legacy
  * semantics instead of silently disarming working paths.

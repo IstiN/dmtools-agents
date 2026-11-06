@@ -991,6 +991,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
                 syncBranchWithBase: function() { return { success: true, updated: false }; }
             }),
             './common/githubHelpers.js': githubHelpersModule,
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/feedbackLoop.js': pushReworkFeedbackLoop(opts, resumeAgentCalls),
             './common/autoStart.js': pushReworkAutoStart(opts),
             './common/outputFiles.js': pushReworkOutputFiles(opts),

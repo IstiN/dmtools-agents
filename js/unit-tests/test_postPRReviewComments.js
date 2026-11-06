@@ -205,6 +205,7 @@ function prReviewRequireMap(overrides) {
     var map = {
         './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
         './common/machineAuthor.js': machineAuthorModule,
+        './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
         './config.js': configModule,
         './common/scm.js': { createScm: function() { return {}; } },
         './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
@@ -505,6 +506,7 @@ suite('postPRReviewComments', function() {
                 makeRequire({
             './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
             './common/machineAuthor.js': machineAuthorModule,
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
                     './config.js': configModule,
                     './common/scm.js': { createScm: function() { return scm; } },
                     './common/autoStart.js': actionAutoStartStub(triggerSmIfIdleCalls),
@@ -757,6 +759,7 @@ suite('postPRReviewComments', function() {
                 makeRequire({
             './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
             './common/machineAuthor.js': machineAuthorModule,
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
                     './config.js': configModule,
                     './common/scm.js': { createScm: function() { return scm; } },
                     './common/autoStart.js': {
@@ -1038,6 +1041,7 @@ suite('postPRReviewComments', function() {
                 'js/postPRReviewComments.js',
                 makeRequire({
             './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/machineAuthor.js': machineAuthorModule,
                     './config.js': configModule,
                     './common/scm.js': {
@@ -1500,6 +1504,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
         'js/postPRReviewComments.js',
         makeRequire({
             './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/machineAuthor.js': machineAuthorModule,
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return scm; } },
@@ -2349,6 +2354,7 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
     test('readReviewJson: malformed JSON → null (and the empty-output branch)', function() {
         var bad = loadModule('js/postPRReviewComments.js', makeRequire({
             './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/machineAuthor.js': machineAuthorModule,
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } },
@@ -2441,6 +2447,7 @@ function makeResumeHarness(opts) {
 function gh926ResumeRequire(opts) {
     return makeRequire({
         './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
+        './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
         './common/machineAuthor.js': machineAuthorModule,
         './config.js': configModule,
         './common/scm.js': { createScm: function() { return {}; } },
@@ -2803,6 +2810,7 @@ function loadForPrSearch(foundPr) {
         makeRequire({
             './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
             './common/machineAuthor.js': machineAuthorModule,
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
