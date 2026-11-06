@@ -3147,6 +3147,29 @@ suite('pushReworkChanges completion-tail helpers (gh-969 CRAP split)', function(
         assert.equal(comments.length, 1);
     });
 
+    // gh-1369 rework round 2 (thread PRRT_kwDORYAuYs60bFYN, the CI `crap`
+    // ratchet): the terminal-guard branch raised rearmNoopRework's CC while
+    // its two catch paths had zero coverage — CRAP 8.5 broke the
+    // "CRAP may only decrease" ratchet. Both throws are pinned non-fatal
+    // here: a label/comment API failure must never abort the no-op notice.
+    test('rearmNoopRework — addLabel failure is non-fatal (CRAP coverage)', function() {
+        var comments = [];
+        var loaded = loadTail({ github_get_pr: function() { return JSON.stringify({ state: 'open' }); } });
+        var tracker = { addLabel: function() { throw new Error('label api down'); } };
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        loaded.mod.rearmNoopRework(scm, tracker, prMock(), 'PROJ-123', { owner: 'acme', repo: 'widget' });
+        assert.equal(comments.length, 1, 'the no-op comment still posts after a label failure');
+    });
+
+    test('rearmNoopRework — addComment failure is non-fatal (CRAP coverage)', function() {
+        var labels = [];
+        var loaded = loadTail({ github_get_pr: function() { return JSON.stringify({ state: 'open' }); } });
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var scm = { addComment: function() { throw new Error('comment api down'); } };
+        loaded.mod.rearmNoopRework(scm, tracker, prMock(), 'PROJ-123', { owner: 'acme', repo: 'widget' });
+        assert.deepEqual(labels, ['agent:rework'], 'the re-arm label still lands after a comment failure');
+    });
+
     test('noopLapDecisions — repoInfo reaches the guard: merged probe suppresses, resolutions path unaffected', function() {
         var labels = [], comments = [];
         var loaded = loadTail({

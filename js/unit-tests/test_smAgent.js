@@ -420,7 +420,11 @@ function makeSmAgent(opts) {
 
     // gh-1101 follow-up: opts.github.prAfterRefresh = the PR payload once
     // a silent-update clone ran (the fresh-sha reset's head-moved check).
+    // opts.github.prLookupError = make github_get_pr THROW (the gh-1369
+    // probe-failure replays: transport/auth/timeout failures the smAgent
+    // guards must fail open on) — mirrors issueLookupError above.
     function getPrMock() {
+        if (opts.github.prLookupError) throw new Error(opts.github.prLookupError);
         return JSON.stringify(mockPrPayload(opts.github, capturedCliCommands));
     }
 
@@ -18855,5 +18859,60 @@ suite('smAgent: conflict_rework + fail_validation terminal-PR guard (gh-1369 rew
 
         assert.equal(sm.capturedPrLabelAdds.length, 1, 'fail-open: the re-arm fires as before');
         assert.equal(sm.capturedPrLabelAdds[0].number, 505);
+    });
+
+    // gh-1369 rework round 2 (thread PRRT_kwDORYAuYs60bFZ0 / PRRT_kwDORYAuYs60bFcR):
+    // the inline guards dereference the var-hoisted bodyObj/prObj OUTSIDE their
+    // try — a github_get_pr THROW (transport/auth/timeout — the reason the
+    // catch exists) must degrade to the pre-rework graceful path (linked stays
+    // null → branch fallback → legacy arm), never a TypeError that aborts the
+    // item's whole handling for the tick.
+    test('conflict_rework — a github_get_pr READ FAILURE fails open: the legacy re-arm still lands (no TypeError abort)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                prLookupError: 'transport down',
+                items: [{ key: 'pr-95', labels: [], issueNumber: null, prNumber: 95,
+                          draft: false, branch: 'ai/gh-1074', author: 'ai-teammate',
+                          headSha: 'deadbee',
+                          pr: { number: 95, state: 'open', merged: false,
+                                mergeState: 'DIRTY', headSha: 'deadbee' } }],
+                issue: { number: 1074, state: 'open' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [CONFLICT_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1,
+            'fail-open: the branch-fallback re-arm still lands on the linked OPEN issue');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 1074);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.equal(sm.capturedTriggers.length, 0, 'no PR-anchored dispatch on the linked path');
+    });
+
+    test('fail_validation — a github_get_pr READ FAILURE fails open: the legacy re-arm + red report still land (no TypeError abort)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                prLookupError: 'transport down',
+                items: [{ key: 'pr-72', labels: ['pr_approved', 'ai_validating'], issueNumber: null,
+                          prNumber: 72, draft: false, branch: 'ai/gh-503', author: 'ai-teammate',
+                          headSha: 'sha72',
+                          pr: { number: 72, state: 'open', merged: false,
+                                headSha: 'sha72', checks: 'red' } }],
+                pr: { number: 72, state: 'open', merged: false,
+                      labels: ['pr_approved', 'ai_validating'] },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [FAIL_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1,
+            'fail-open: the legacy re-arm still lands despite the probe failure');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 503, 'linked-issue carrier (branch gh-503 fallback)');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.ok(sm.capturedPrComments.length >= 1, 'the red report still posts');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('rework re-queued') !== -1,
+            'the report keeps the legacy re-queued wording (not the terminal skip)');
     });
 });

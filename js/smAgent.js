@@ -4683,8 +4683,13 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // that merged while its listing still said open+DIRTY (the
                 // #1368 listing/action race) exits here, BEFORE the gh-683
                 // self-heal arm, the marker and the report. Fail-open: a
-                // payload without state keeps the legacy arm semantics.
-                if (cIsMachinePr &&
+                // payload without state keeps the legacy arm semantics —
+                // AND a github_get_pr THROW leaves bodyObj undefined (the
+                // var only assigns inside the try), so dereference it
+                // only when assigned (gh-1369 rework round 2: the throw
+                // case must degrade to the legacy branch fallback, never
+                // a TypeError that aborts the item's handling).
+                if (cIsMachinePr && bodyObj &&
                     prTerminalStateModule.isTerminalPrState(bodyObj.state, bodyObj.merged)) {
                     console.log('  ⏭️  ' + key + ' PR #' + ticket.prNumber + ' is terminal (merged/closed) — ' +
                         'conflict rework never arms on shipped code (gh-1369)');
@@ -5124,8 +5129,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // terminal-state evidence — a PR that merged while
                     // validation stayed red (the #1368 race) must not
                     // re-arm rework on the merged head below. Fail-open:
-                    // prObj without state keeps the legacy arm semantics.
-                    var fvPrTerminal = prTerminalStateModule.isTerminalPrState(prObj.state, prObj.merged);
+                    // prObj without state keeps the legacy arm semantics —
+                    // AND a github_get_pr THROW leaves prObj undefined (the
+                    // var only assigns inside the try): null-guard it so the
+                    // probe failure degrades to false (legacy re-arm) instead
+                    // of a TypeError that aborts the item's handling
+                    // (gh-1369 rework round 2).
+                    var fvPrTerminal = prObj
+                        ? prTerminalStateModule.isTerminalPrState(prObj.state, prObj.merged) : false;
                 }
                 // pr_approved is STICKY (owner rule 2026-09: no re-review
                 // after the first approval — review tokens are the budget).
