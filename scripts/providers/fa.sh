@@ -192,7 +192,7 @@ _fa_append_fallback_keys() {
 # spent, unprobed keys keep their static slot ("probe-budget"), so a slow or
 # unreachable endpoint costs every leg at most the budget, not N x timeout.
 # The API key is handed to curl via a stdin config (-K -), never as an argv
-# element, so it cannot leak through ps//proc cmdline.
+# element, so it cannot leak through ps / /proc cmdline.
 _fa_order_queue_by_quota() {
   [ -n "${FA_PROVIDERS_QUEUE:-}" ] || return 0
   case "$(printf '%s' "${FA_QUOTA_PROBE:-on}" | tr '[:upper:]' '[:lower:]')" in
