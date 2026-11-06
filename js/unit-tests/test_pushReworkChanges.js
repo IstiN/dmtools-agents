@@ -161,6 +161,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
         makeRequire({
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -567,6 +568,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
         makeRequire({
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -976,6 +978,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
         makeRequire({
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -1347,6 +1350,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
         makeRequire({
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -3655,6 +3659,7 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
             makeRequire({
                 './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
                 './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
+                './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
                 './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
                 './forkCheckout.js': forkCheckoutModule,
@@ -3725,6 +3730,7 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
             makeRequire({
                 './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
                 './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
+                './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
                 './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
                 './forkCheckout.js': forkCheckoutModule,
@@ -3843,6 +3849,7 @@ function loadCommitAndPush1082(mocks, moduleOverrides) {
         makeRequire(Object.assign({
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,

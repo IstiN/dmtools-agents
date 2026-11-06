@@ -5244,7 +5244,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                           'The rework arm is WITHHELD — a human owns this PR from here.'
                         : '⚠️ Validation CI went red on the head — merge aborted, rework re-queued.' +
                           (linked ? ' (linked issue #' + linked + ' re-armed)' : '') +
-                          ' (approval latch kept — no re-review after fixes)')))
+                          ' (approval latch kept — no re-review after fixes)'))
                     : ('⚠️ Validation CI went red on the head. Guest PR: rebase onto main and push — ' +
                        'validation re-runs automatically; auto-rework is reserved for the machine ' +
                        'account (gh-757). Your push clears the validation_failed park via the ' +
