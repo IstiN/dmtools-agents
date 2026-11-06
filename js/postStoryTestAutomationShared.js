@@ -173,12 +173,43 @@ function triggerAutoStartReviewWorkflow(autoStart, ticketKey, customParams, conf
  * (pr_test_automation_rework) shared by the test-review post-actions.
  * gh-1246 review: parameter order aligned with triggerAutoStartReviewWorkflow
  * — customParams before config.
+ * Optional reworkBudget ({ checkAutoReworkBudget, stampReworkRound, ticket,
+ * tracker }) caps the Jira review<->rework loop (returns null when capped).
  */
-function triggerAutoStartReworkWorkflow(autoStart, ticketKey, customParams, config) {
-    return triggerConfiguredAutoStartWorkflow(autoStart, ticketKey, customParams, config, {
-        flag: 'autoStartRework',
+var AUTO_START_REWORK_FLAG = 'autoStartRework';
+function isFlagConfigured(customParams, flag) {
+    var cfgKey = flag + 'ConfigFile';
+    return !!(customParams && customParams[flag] && customParams[cfgKey]);
+}
+
+function claimReworkBudgetIfPresent(reworkBudget, ticketKey, customParams) {
+    if (!reworkBudget || typeof reworkBudget.checkAutoReworkBudget !== 'function') {
+        return undefined;
+    }
+    return reworkBudget.checkAutoReworkBudget({
+        ticket: reworkBudget.ticket,
+        customParams: customParams,
+        tracker: reworkBudget.tracker,
+        ticketKey: ticketKey
+    });
+}
+
+function stampReworkBudgetIfPresent(reworkBudget, ticketKey, nextRound) {
+    if (nextRound && reworkBudget && typeof reworkBudget.stampReworkRound === 'function') {
+        reworkBudget.stampReworkRound(reworkBudget.tracker, ticketKey, nextRound);
+    }
+}
+
+function triggerAutoStartReworkWorkflow(autoStart, ticketKey, customParams, config, reworkBudget) {
+    if (!isFlagConfigured(customParams, AUTO_START_REWORK_FLAG)) return false;
+    var nextRound = claimReworkBudgetIfPresent(reworkBudget, ticketKey, customParams);
+    if (nextRound === null) return null;
+    var triggered = triggerConfiguredAutoStartWorkflow(autoStart, ticketKey, customParams, config, {
+        flag: AUTO_START_REWORK_FLAG,
         label: 'pr_test_automation_rework'
     });
+    if (triggered) stampReworkBudgetIfPresent(reworkBudget, ticketKey, nextRound);
+    return triggered;
 }
 
 /**

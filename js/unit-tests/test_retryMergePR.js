@@ -128,6 +128,27 @@ suite('retryMergePR', function() {
             'autoStartReworkConfigFile'
         ]);
     });
+
+    test('caps autoStartRework at maxAutoReworkRounds on merge conflict and labels needs-human', function() {
+        var added = [];
+        var loaded = loadRetryMergePR({
+            mocks: {
+                jira_add_label: function(args) { added.push(args.label); }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-125', fields: { labels: ['rework-round-1', 'rework-round-2'] } },
+            jobParams: {
+                metadata: { contextId: 'retry_merge' },
+                customParams: { removeLabel: 'sm_pr_merge_triggered', maxAutoReworkRounds: 2 }
+            }
+        });
+
+        assert.equal(result, true);
+        assert.equal(loaded.autoStartCalls.length, 0);
+        assert.deepEqual(added, ['needs-human']);
+    });
     test('ado: merge conflict -> ado_add_work_item_comment / ado_move_to_state / label removal, no jira_*', function() {
         var calls = [];
         function rec(n) { return function(a) { calls.push({ tool: n, args: a }); }; }

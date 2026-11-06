@@ -8,6 +8,7 @@ Retries merging an approved feature or bug-fix pull request that was blocked by 
 - `checkOpenPR` — confirms the PR is still open before attempting the merge.
 - `testCaseMerge` — merge options shared with test-case PR merge handlers.
 - `autoStartRework` / `autoStartReworkConfigFile` — routes the PR to rework if merge conflicts or checks fail.
+- `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
 
 _Human doc: [`agents/docs/agents/retry_merge.md`](agents/docs/agents/retry_merge.md)_
 
@@ -53,6 +54,7 @@ _retryMergePR.js_
   - `contentOutput.target`
   - `dryRun`
   - `localTeammate`
+  - `maxAutoReworkRounds`
   - `projectKey`
   - `removeLabel`
   - `smFallback`
@@ -77,6 +79,7 @@ _retryMergePR.js_
 - `contentOutput.target` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
+- `maxAutoReworkRounds` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `smFallback` _(used by JS action)_
 - `testCaseMerge` _(used by JS action)_

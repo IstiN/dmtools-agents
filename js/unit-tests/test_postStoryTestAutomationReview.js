@@ -294,6 +294,54 @@ suite('postStoryTestAutomationReview', function() {
         assert.deepEqual(statusMoves, []);
     });
 
+    test('REQUEST_CHANGES caps autoStartRework at maxAutoReworkRounds, labels needs-human, and skips SM fallback', function() {
+        var reworkTriggered = false;
+        var smTriggered = false;
+        var jiraLabels = [];
+
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({ recommendation: 'REQUEST_CHANGES', summary: 'Fix locators' });
+                }
+                return null;
+            },
+            listPrsResult: [
+                {
+                    number: 31,
+                    html_url: 'https://github.com/IstiN/trackstate/pull/31',
+                    head: { ref: 'test/TS-301' }
+                }
+            ],
+            jira_add_label: function(args) { jiraLabels.push(args.label); },
+            triggerConfiguredWorkflowForTicket: function() {
+                reworkTriggered = true;
+                return true;
+            }
+        }, {
+            autoStart: {
+                triggerSmIfIdle: function() { smTriggered = true; return { success: true }; }
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-301', fields: { labels: ['rework-round-1', 'rework-round-2'] } },
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_story_test_review_triggered',
+                    autoStartRework: true,
+                    autoStartReworkConfigFile: 'agents/story_test_automation_rework.json',
+                    maxAutoReworkRounds: 2
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(reworkTriggered, false);
+        assert.equal(smTriggered, false);
+        assert.ok(jiraLabels.indexOf('needs-human') !== -1);
+    });
+
     test('skips inline comments whose line is not in diff', function() {
         var module = loadPostStoryTestAutomationReview({
             file_read: function(opts) {

@@ -8,3 +8,4 @@ Retries merging an approved feature or bug-fix pull request that was blocked by 
 - `checkOpenPR` — confirms the PR is still open before attempting the merge.
 - `testCaseMerge` — merge options shared with test-case PR merge handlers.
 - `autoStartRework` / `autoStartReworkConfigFile` — routes the PR to rework if merge conflicts or checks fail.
+- `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.

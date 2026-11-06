@@ -12,7 +12,7 @@
  * js/postStoryTestAutomationShared.js; action() is a thin orchestrator.
  */
 
-const { LABELS } = require('./config.js');
+const { LABELS, triggerCappedAutoRework } = require('./config.js');
 const scmModule = require('./common/scm.js');
 const ghHelpers = require('./common/githubHelpers.js');
 const autoStart = require('./common/autoStart.js');
@@ -83,23 +83,18 @@ function triggerMerge(storyKey, config, customParams) {
     }
 }
 
-function triggerRework(storyKey, config, customParams) {
-    if (!customParams || !customParams.autoStartRework || !customParams.autoStartReworkConfigFile) {
-        return false;
-    }
-    try {
-        return autoStart.triggerConfiguredWorkflowForTicket({
-            ticketKey: storyKey,
-            customParams: customParams,
-            config: config,
-            configFile: customParams.autoStartReworkConfigFile,
-            label: 'story_test_automation_rework',
-            stripKeys: ['removeLabel', 'autoStartRework', 'autoStartReworkConfigFile']
-        });
-    } catch (e) {
-        console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
-        return false;
-    }
+function triggerRework(storyKey, config, customParams, ticket) {
+    // customParams.autoStartRework, customParams.autoStartReworkConfigFile,
+    // customParams.maxAutoReworkRounds are read by triggerCappedAutoRework.
+    return triggerCappedAutoRework({
+        autoStart: autoStart,
+        ticketKey: storyKey,
+        ticket: ticket,
+        customParams: customParams,
+        config: config,
+        tracker: getTracker(),
+        label: 'story_test_automation_rework'
+    });
 }
 
 function removeAutomationLabels(storyKey, params, customParams) {
@@ -213,15 +208,17 @@ function postReviewResponseComment(storyKey, params) {
 }
 
 /** After the verdict: merge or rework continuation, falling back to the SM. */
-function triggerOutcomeFollowUp(storyKey, config, customParams, isApproved) {
+function triggerOutcomeFollowUp(storyKey, config, customParams, isApproved, ticket) {
     var triggered;
     if (isApproved) {
         console.log('✅ Story PR approved — triggering merge agent');
         triggered = triggerMerge(storyKey, config, customParams);
     } else {
         console.log('📝 Changes requested on test-automation PR — keeping ticket in In Testing for rework');
-        triggered = triggerRework(storyKey, config, customParams);
+        triggered = triggerRework(storyKey, config, customParams, ticket);
     }
+    // null = capped / needs-human: do not fall back to SM trigger either.
+    if (triggered === null) return;
     if (!triggered) {
         autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
     }
@@ -270,7 +267,7 @@ function action(params) {
             postReworkFeedback(ctx.storyKey, reviewData, inlineComments);
         }
 
-        triggerOutcomeFollowUp(ctx.storyKey, ctx.config, ctx.customParams, isApproved);
+        triggerOutcomeFollowUp(ctx.storyKey, ctx.config, ctx.customParams, isApproved, params.ticket);
 
         try {
             getTracker().addLabel(ctx.storyKey, LABELS.AI_PR_REVIEWED);

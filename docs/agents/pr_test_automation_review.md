@@ -8,4 +8,5 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `autoStartRework` — when `true`, automatically trigger the rework workflow when the review asks for changes.
 - `autoStartReworkConfigFile` — agent config file used for the auto-started rework workflow.
+- `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
