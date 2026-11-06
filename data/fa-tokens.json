@@ -2516,5 +2516,16 @@
       "cacheRead": 0,
       "model": "kimi-for-coding"
     }
+  ],
+  "pr-1386": [
+    {
+      "leg": "rework",
+      "at": "2026-11-06T05:25:04Z",
+      "prompt": 128152,
+      "completion": 12058,
+      "total": 140210,
+      "cacheRead": 1430272,
+      "model": "glm-5.3-flash"
+    }
   ]
 }
