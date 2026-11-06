@@ -73,6 +73,7 @@ function loadPushReworkChanges() {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
@@ -188,6 +189,7 @@ function loadPushReworkChangesForAction(mocks) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
