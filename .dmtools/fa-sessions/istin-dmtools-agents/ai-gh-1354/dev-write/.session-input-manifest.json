@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-06T10:04:29.815Z",
+  "ticketKey": "gh-1354",
+  "headSha": "50bdc7e2c796e3939c6c39c6336b0a429ec0050b",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:63560868be9b84f4",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:3b753c6043bf0998",
+      "size": 12312
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:5f22c2efd7568fe3",
+      "size": 5381
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:b0297b4fbbf44e05",
+      "size": 3330
+    },
+    "request.md": {
+      "hash": "fnv1a64:b811e89575ba6c01",
+      "size": 3997
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:4e2d7695619f4fc3",
+      "size": 899
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:440941dfc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:272c6cea50be00dc",
+      "size": 4114
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:b811e89575ba6c01",
+      "size": 3997
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs60dXY7",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/tcDifferentialDispatcher.js:638",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `routeOne` has no `ACTION_DIFFERENTIAL` branch — the hardened re-request verdict lands in the red-on-old lane**\n\n`triageDifferentialOutcome` was deliberately hardened in this PR (gh-1354): only `green|red` decide — `unavailable`/null/`''` now return `ACTION_DIFFERENTIAL` (\"re-requests the rerun and never decides on incomplete evidence\"). But this dispatcher — the function's only production consumer — was not taught that value: `routeOne` handles BOUNCE/ESCALATE and the new REWORK branch, then falls everything else straight into the red-on-old maintenance route.\n\nIf an `ACTION_DIFFERENTIAL` verdict ever reaches here:\n\n- `maintenanceEntry` stamps `entry.evidence = { differential: 'red' }` — a fabricated record for an outcome that never ran;\n- `routes.maintained` renders the report section \"ran the failing TC on its last-green build and it fails there too — the failure predates the change\" — the exact false claim the hardening exists to make impossible;\n- `dispatchResult` lists the TC in `maintainedTestCases` while the entry verdict (`differential-rerun`) simultaneously re-parks it — the digest then shows both a red-on-old claim and a parked request for the same finding.\n\nToday this is unreachable (`runDifferential` returns only `green|red`; `unavailable` returns earlier), so no live bug — but the contract mismatch sits inside this PR's own two changed files, on the fail-safe property (\"never decides on incomplete evidence\") the PR claims to strengthen. Suggested fix — keep the fail-safe symmetric:\n\n```javascript\nif (verdict.action === tcTriage.ACTION_DIFFERENTIAL) {\n    // the hardened continuation refused to decide — re-park, never a red-on-old claim\n    vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, unavailableBump(request, 'incomplete outcome — re-requesting the rerun'));\n    routes.stalled.push({ tcKey: request.tcKey, detail: 'incomplete differential outcome' });\n    return;\n}\n```"
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60dXa1",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/tcTriage.js:396",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the escalation comment mislabels null-verdict escalations as \"repeated attributed failures\"**\n\n`buildEscalationComment` renders the same template for every escalation:\n\n> 🚨 *Bounce cap reached (gh-1329) — owner escalation* … \"repeated attributed failures (2/2 rounds)\"\n\ngh-1354 adds a second escalation family to this template — `null-ac-verdict-cap-reached` — whose defining fact is the **opposite** of attributed: the loop stopped precisely because attribution never succeeded (no differential evidence, no AC verdict). The owner reading the ticket is told failures were attributed and may go hunting for differential evidence that does not exist (the evidence note carries no `differential` field on the automation-leg path).\n\nSuggest making the template reason-aware, e.g. carry `v.reason` into the bullet (\"null AC verdict — rework/attribution laps exhausted (2/2 rounds)\") or use a \"attribution stalled\" heading when the reason is `null-ac-verdict-cap-reached`. Note the new dispatcher test asserts `'Bounce cap reached'` appears in the comment — update the pinned string in the same change."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60dXdc",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postStoryTestAutomationResults.js:1226",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: pin the F1 route at the automation-leg integration layer, not only at the triage layer**\n\nThe F1 fix's user-visible contract lives in `postStoryTestAutomationResults.js`: a validated own-oracle red on an environment shift must end in `routePathResult` — status `test_maintenance`, the bug untouched, the finding in the ledger digest. This is covered by 22 new cases in `test_tcTriage.js`, but the automation-leg suite (`test_postStoryTestAutomationResults.js`) has no own-oracle triage case: every differential-park and route test there (`gh-1345 differential dispatcher hand-off`, the bounce suite) uses guard roles. `routeVerdict`/`routePathResult` wiring is role-agnostic today, so nothing pins that a role-normalization regression (e.g. `resolveTcRole` demoting OWN) cannot silently re-enter the AC-gated path through the automation leg.\n\nTwo cheap integration cases would close it:\n\n1. validated own-oracle, same build, changed `envFingerprint` → run result status `test_maintenance`, `maintenanceTestCases: ['TS-x']`, no bug move, `environment-shift` finding in the ledger;\n2. validated own-oracle, build changed, no differential outcome → park label `tc_differential_pending` added with the parked request carrying `role: 'own-oracle'` (the field the dispatcher's `dispatcherRoleOf` round-trips — this anchors the full F1/F2 loop end-to-end)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:18411249",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `routeOne` has no `ACTION_DIFFERENTIAL` branch — the hardened re-request verdict lands in the red-on-old lane**\n\n`triageDifferentialOutcome` was deliberately hardened in this PR (gh-1354): only `green|red` decide — `unavailable`/null/`''` now return `ACTION_DIFFERENTIAL` (\"re-requests the rerun and never decides on incomplete evidence\"). But this dispatcher — the function's only production consumer — was not taught that value: `routeOne` handles BOUNCE/ESCALATE and the new REWORK branch, then falls everything else straight into the red-on-old maintenance route.\n\nIf an `ACTION_DIFFERENTIAL` verdict ever reaches here:\n\n- `maintenanceEntry` stamps `entry.evidence = { differential: 'red' }` — a fabricated record for an outcome that never ran;\n- `routes.maintained` renders the report section \"ran the failing TC on its last-green build and it fails there too — the failure predates the change\" — the exact false claim the hardening exists to make impossible;\n- `dispatchResult` lists the TC in `maintainedTestCases` while the entry verdict (`differential-rerun`) simultaneously re-parks it — the digest then shows both a red-on-old claim and a parked request for the same finding.\n\nToday this is unreachable (`runDifferential` returns only `green|red`; `unavailable` returns earlier), so no live bug — but the contract mismatch sits inside this PR's own two changed files, on the fail-safe property (\"never decides on incomplete evidence\") the PR claims to strengthen. Suggested fix — keep the fail-safe symmetric:\n\n```javascript\nif (verdict.action === tcTriage.ACTION_DIFFERENTIAL) {\n    // the hardened continuation refused to decide — re-park, never a red-on-old claim\n    vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, unavailableBump(request, 'incomplete outcome — re-requesting the rerun'));\n    routes.stalled.push({ tcKey: request.tcKey, detail: 'incomplete differential outcome' });\n    return;\n}\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:5fc6a38e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the escalation comment mislabels null-verdict escalations as \"repeated attributed failures\"**\n\n`buildEscalationComment` renders the same template for every escalation:\n\n> 🚨 *Bounce cap reached (gh-1329) — owner escalation* … \"repeated attributed failures (2/2 rounds)\"\n\ngh-1354 adds a second escalation family to this template — `null-ac-verdict-cap-reached` — whose defining fact is the **opposite** of attributed: the loop stopped precisely because attribution never succeeded (no differential evidence, no AC verdict). The owner reading the ticket is told failures were attributed and may go hunting for differential evidence that does not exist (the evidence note carries no `differential` field on the automation-leg path).\n\nSuggest making the template reason-aware, e.g. carry `v.reason` into the bullet (\"null AC verdict — rework/attribution laps exhausted (2/2 rounds)\") or use a \"attribution stalled\" heading when the reason is `null-ac-verdict-cap-reached`. Note the new dispatcher test asserts `'Bounce cap reached'` appears in the comment — update the pinned string in the same change."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:9dc2c59a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: pin the F1 route at the automation-leg integration layer, not only at the triage layer**\n\nThe F1 fix's user-visible contract lives in `postStoryTestAutomationResults.js`: a validated own-oracle red on an environment shift must end in `routePathResult` — status `test_maintenance`, the bug untouched, the finding in the ledger digest. This is covered by 22 new cases in `test_tcTriage.js`, but the automation-leg suite (`test_postStoryTestAutomationResults.js`) has no own-oracle triage case: every differential-park and route test there (`gh-1345 differential dispatcher hand-off`, the bounce suite) uses guard roles. `routeVerdict`/`routePathResult` wiring is role-agnostic today, so nothing pins that a role-normalization regression (e.g. `resolveTcRole` demoting OWN) cannot silently re-enter the AC-gated path through the automation leg.\n\nTwo cheap integration cases would close it:\n\n1. validated own-oracle, same build, changed `envFingerprint` → run result status `test_maintenance`, `maintenanceTestCases: ['TS-x']`, no bug move, `environment-shift` finding in the ledger;\n2. validated own-oracle, build changed, no differential outcome → park label `tc_differential_pending` added with the parked request carrying `role: 'own-oracle'` (the field the dispatcher's `dispatcherRoleOf` round-trips — this anchors the full F1/F2 loop end-to-end)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:70dba404",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The gh-1354 change itself is correct and well-tested — the F1 env-shift and F2 null-verdict-cap routes are pinned by 27 new cases, all targeted suites pass, and the full suite is green except the pre-declared `sessionDelta` IT-1 failure, which was verified to fail identically on `origin/main` (pre-existing, unrelated). One important issue: the dispatcher's `routeOne` was not taught the hardened `ACTION_DIFFERENTIAL` verdict its own triage module now emits.\n\n**Key Issues**:\n- ⚠️ `js/tcDifferentialDispatcher.js:638` — an `ACTION_DIFFERENTIAL` verdict (the new \"never decide on incomplete evidence\" outcome) falls into the red-on-old maintenance lane: fabricated `differential: 'red'` evidence, a false \"fails there too\" report, and a simultaneously parked + maintained finding. Latent only (unreachable with the current `runDifferential` contract), but the mismatch is inside this PR's own changed files — add the defensive re-park branch.\n- 💡 `js/common/tcTriage.js:396` — `buildEscalationComment` tells the owner \"repeated attributed failures\" for the new `null-ac-verdict-cap-reached` escalations, where nothing was ever attributed.\n- 💡 `js/postStoryTestAutomationResults.js:1226` — F1 is pinned at the triage layer only; one automation-leg integration case (own-oracle env shift → `test_maintenance`, own-oracle park carrying `role`) would anchor the dispatcher round-trip end-to-end.\n- Digest (outside this diff — pre-existing, follow-up only): `js/common/tcTriage.js` `buildBounceComment` — the attribution blurb \"the Differential rerun isolated the change range\" also renders for AC-verdict-only bounces (`acceptance-criteria-violated` on the unattributed state — a route this PR codifies) where no differential ever ran.\n\n**Next Steps**:\n1. Add the `ACTION_DIFFERENTIAL` re-park branch in `routeOne` so the dispatcher honors the hardened contract it consumes.\n2. Make the escalation template reason-aware for null-verdict escalations (update the pinned `'Bounce cap reached'` assertion together).\n3. Add the two own-oracle automation-leg integration tests."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    }
+  ]
+}
