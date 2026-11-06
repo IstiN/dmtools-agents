@@ -1,3 +1,17 @@
+// One skip predicate for the general-comments renderer (gh-1387 L1): both
+// machine bookkeeping classes — hidden dmtools: markers AND visible
+// harness notices — drop out of the agent-facing section. Named (and kept
+// out of the renderer) so buildGeneralCommentsSection stays under the
+// crap4js ratchet.
+function machineBookepingBody(body) {
+    return machineNotice.isDmtoolsMarkerBody(body) || machineNotice.isMachineNoticeBody(body);
+}
+
+/** The comment's login, or 'unknown' when the payload shape is odd. */
+function authorOf(comment) {
+    return (comment && comment.user && comment.user.login) ? comment.user.login : 'unknown';
+}
+
 /**
  * githubReviewFetch.js — the GitHub review-discussion fetch/render blocks
  * shared by js/common/scm.js (github provider fetchDiscussions) and
@@ -93,11 +107,9 @@ function buildGeneralCommentsSection(comments) {
     var kept = 0;
     comments.forEach(function(comment) {
         var body = (comment && comment.body) || '';
-        if (machineNotice.isDmtoolsMarkerBody(body)) return;
-        if (machineNotice.isMachineNoticeBody(body)) return;
-        var author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
+        if (machineBookepingBody(body)) return;
         var date = comment.created_at ? comment.created_at.substring(0, 10) : '';
-        section += '**' + author + '** (' + date + '):\n\n';
+        section += '**' + authorOf(comment) + '** (' + date + '):\n\n';
         section += body.trim() + '\n\n---\n\n';
         kept++;
     });
