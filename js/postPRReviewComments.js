@@ -14,7 +14,15 @@
  * functions invoked by action() in the same order as before the flattening.
  */
 
-const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
+const {
+    LABELS,
+    STATUSES,
+    resolveStatuses,
+    countReworkRounds,
+    maxAutoReworkRoundsOf,
+    checkAutoReworkBudget,
+    stampReworkRound
+} = require('./config.js');
 var scmModule = require('./common/scm.js');
 var trackersModule = require('./common/trackers.js');
 var autoStart = require('./common/autoStart.js');
@@ -2256,6 +2264,16 @@ function triggerConfiguredRework(ctx) {
     }
 }
 
+// Jira review<->rework loop cap (live: 22 alternating review/rework runs on one Jira ticket, every
+// rework resolved all threads and each new review found fresh suggestions).
+// Each auto-started rework stamps rework-round-N on the ticket AFTER the
+// configured workflow is actually triggered (so transient trigger skips like
+// global workflow cap or an active duplicate run do not consume rounds);
+// once maxAutoReworkRounds (default 3) rounds are spent the ticket gets
+// needs-human and no further rework is chained. Removing the labels is a
+// human decision that resets the budget.
+var reworkRoundOf = countReworkRounds;
+
 function startConfiguredRework(ctx, params) {
     if (!autoStartReworkConfigured(ctx.customParams)) return false;
     // Skip if ticket already has pr_approved label (merge in progress)
@@ -2263,7 +2281,19 @@ function startConfiguredRework(ctx, params) {
         console.log('ℹ️ autoStartRework: skipped — ticket has pr_approved label');
         return false;
     }
-    return triggerConfiguredRework(ctx);
+    // customParams.maxAutoReworkRounds caps the auto-rework loop.
+    var nextRound = checkAutoReworkBudget({
+        ticket: params.ticket,
+        customParams: ctx.customParams,
+        tracker: ctx.tracker,
+        ticketKey: ctx.ticketKey
+    });
+    if (nextRound === null) return null;
+    var triggered = triggerConfiguredRework(ctx);
+    if (triggered) {
+        stampReworkRound(ctx.tracker, ctx.ticketKey, nextRound);
+    }
+    return triggered;
 }
 
 function shouldRunReworkLeg(isApproved, pr, repoInfo) {
@@ -2287,7 +2317,10 @@ function runReworkLeg(ctx, params, pr, repoInfo, isApproved) {
             'on a terminal PR: sm_story_rework_triggered/agent:rework skipped');
         return;
     }
-    if (!startConfiguredRework(ctx, params)) {
+    var started = startConfiguredRework(ctx, params);
+    // null = capped / needs-human: no rework at all, not even the SM fallback.
+    if (started === null) return;
+    if (!started) {
         markForSmStoryRework(ctx.tracker, ctx.ticketKey);
         autoStart.triggerSmIfIdle({ config: ctx.config, customParams: ctx.customParams, scm: ctx.scm });
     }
@@ -2643,6 +2676,7 @@ function action(params) {
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
+        reworkRoundOf: reworkRoundOf,
         action,
         resolveCustomParams,
         isLinePresentInDiff,
@@ -2700,6 +2734,8 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveBitriseBranch,
         resolveTestCasesGeneratorRepo,
         hasLabel,
+        reworkRoundOf,
+        maxAutoReworkRoundsOf,
         ticketLabels,
         scmProviderOf,
         deriveProjectKey,

@@ -8,6 +8,7 @@ Reviews a Story bulk test automation PR (`test/{STORY_KEY}`) against the Story's
 - `checkOpenPR` — verifies an open story test PR exists.
 - `autoStartMerge` / `autoStartMergeConfigFile` — triggers `story_test_automation_merge` when approved.
 - `autoStartRework` / `autoStartReworkConfigFile` — triggers `story_test_automation_rework` when changes are requested.
+- `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
 
 _Human doc: [`agents/docs/agents/pr_story_test_automation_review.md`](agents/docs/agents/pr_story_test_automation_review.md)_
 
@@ -70,6 +71,7 @@ _Post Story Test Automation Review Comments Action_
   - `formalGithubReview`
   - `importantBlocksApproval`
   - `localTeammate`
+  - `maxAutoReworkRounds`
   - `maxReviewThreadsBeforeForceApprove`
   - `onApproved`
   - `projectKey`
@@ -106,6 +108,7 @@ _Post Story Test Automation Review Comments Action_
 - `dryRun` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
+- `maxAutoReworkRounds` _(used by JS action)_
 - `onApproved` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `reviewPolicy` _(used by JS action)_

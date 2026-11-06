@@ -59,6 +59,7 @@
  */
 'use strict';
 
+var configModule = require('./config.js');
 var configLoader = require('./configLoader.js');
 // gh-828 (hoisted, never lazy — the gh-823 pack-require rule): the
 // post-APPROVE thread-resolution leg classifies threads through the
@@ -135,15 +136,10 @@ function decideEngineSkip(has, activeRunForIssue) {
     return null;
 }
 
-// Highest rework-round label, 0 when none — mirrors ai-teammate.yml
-// MAX_AUTO_REWORK_ROUNDS bookkeeping.
+// Highest rework-round label, 0 when none — canonical in config.js, shared
+// with Jira autoStartRework and ai-teammate.yml MAX_AUTO_REWORK_ROUNDS.
 function countReworkRounds(labels) {
-    var rounds = 0;
-    labels.forEach(function (l) {
-        var m = /^rework-round-(\d+)$/.exec(l);
-        if (m) rounds = Math.max(rounds, parseInt(m[1], 10));
-    });
-    return rounds;
+    return configModule.countReworkRounds(labels);
 }
 
 // No open PR and nothing merged for this issue yet: re-fire the dead

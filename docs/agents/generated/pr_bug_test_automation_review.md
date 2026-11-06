@@ -8,6 +8,7 @@ Reviews the bulk test automation PR for a Bug (`test/{BUG_KEY}`), checking that 
 - `checkOpenPR` — requires an open bug test PR.
 - `autoStartMerge` / `autoStartMergeConfigFile` — dispatches `bug_test_automation_merge` on `APPROVE`.
 - `autoStartRework` / `autoStartReworkConfigFile` — dispatches `bug_test_automation_rework` on `REQUEST_CHANGES`.
+- `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
 
 _Human doc: [`agents/docs/agents/pr_bug_test_automation_review.md`](agents/docs/agents/pr_bug_test_automation_review.md)_
 
@@ -70,6 +71,7 @@ _Post Story Test Automation Review Comments Action_
   - `formalGithubReview`
   - `importantBlocksApproval`
   - `localTeammate`
+  - `maxAutoReworkRounds`
   - `maxReviewThreadsBeforeForceApprove`
   - `onApproved`
   - `projectKey`
@@ -106,6 +108,7 @@ _Post Story Test Automation Review Comments Action_
 - `dryRun` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
+- `maxAutoReworkRounds` _(used by JS action)_
 - `onApproved` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `reviewPolicy` _(used by JS action)_
