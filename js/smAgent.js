@@ -191,6 +191,10 @@ var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 // escalation packet carries its census: the per-round new-identity series
 // (the convergence signal) and BLOCKING withdrawal reasons.
 var findingRegistryModule = require('./common/findingRegistry.js');
+// gh-1369 (hoisted, never lazy — the gh-823 pack-require rule): the
+// terminal-PR guard — a MERGED/CLOSED PR exits every rework-arming and
+// reconcile writer BEFORE it stamps agent:rework or reconciles labels.
+var prTerminalStateModule = require('./common/prTerminalState.js');
 // gh-1114 (hoisted, never lazy — the gh-823 pack-require rule): the SM tick
 // layering — the sm_github.json rule-id → layer map (L0 hygiene → L5 close),
 // the L2 verdict-action set the movedThisTick guard defers, and the
@@ -2036,6 +2040,24 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // latch before labeling; a leg already flying owns the threads,
             // and re-arming it stacked 9 arms / 8 dead legs on fa #1428.
             if (consultReworkLatch(key, ticket, effectiveRepoInfo).latched) continue;
+            // gh-1369 terminal-PR guard: a MERGED or CLOSED PR is terminal —
+            // no leg can change it, so arming rework on it only stamps
+            // "needs rework" onto shipped code (live PR #1368: merged with a
+            // clean APPROVE census, the review's 6 non-gating threads stayed
+            // open, and this path stamped agent:rework + armed a leg against
+            // the merged head). The probe runs BEFORE every write below —
+            // red-gate marker reads, cap escalations, the arm itself — and
+            // the SAME probe feeds reworkArmGate (no double github_get_pr
+            // read). Fail-open: a probe without state keeps the legacy arm
+            // semantics (unknown is not terminal).
+            var terminalProbe = prHeadAndLabels(effectiveRepoInfo, ticket.prNumber);
+            if (terminalProbe &&
+                prTerminalStateModule.isTerminalPrState(terminalProbe.state, terminalProbe.merged)) {
+                console.log('  ⏭️  ' + key + ' PR #' + ticket.prNumber + ' is ' +
+                    (terminalProbe.state || 'TERMINAL') + ' — terminal: rework never arms' +
+                    ' on a merged/closed PR (gh-1369)');
+                continue;
+            }
             // gh-917: the red-gate rule (rule.redHeadGated —
             // rework-on-red-gate-unlatched) arms rework on ANY machine-
             // authored red head, FIRST VALIDATION included — the same arm
@@ -2103,9 +2125,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // verdict with only suggestion-tier threads keeps the
                 // approval and does NOT arm rework (that was the #1428
                 // coexistence). Fail-open: no records / broken read → arm
-                // as before (pre-gh-807 PRs).
+                // as before (pre-gh-807 PRs). The gh-1369 terminal probe above
+                // is passed as probeOverride — one github_get_pr read serves
+                // both guards.
                 var armGate = reworkArmGate(effectiveRepoInfo, ticket,
-                    verdictMachineLogins(effectiveConfig));
+                    verdictMachineLogins(effectiveConfig), terminalProbe);
                 if (!armGate.arm) {
                     console.log('  ⏭️  ' + key + ' rework arm withheld — APPROVE verdict on head ' +
                         armGate.headShort + ' is authoritative (gh-807: suggestions do not trigger rework)');
@@ -6381,7 +6405,13 @@ function prHeadAndLabels(repoInfo, prNumber) {
         if (!pr || pr.message || !pr.head || !pr.head.sha) return null;
         return {
             headSha: pr.head.sha,
-            labels: (pr.labels || []).map(function(l) { return (l && l.name) || l; })
+            labels: (pr.labels || []).map(function(l) { return (l && l.name) || l; }),
+            // gh-1369: the terminal-state evidence — REST `state` ('open'/
+            // 'closed') + the authoritative `merged` flag. isTerminalPrState
+            // normalizes/decides; an absent field stays fail-open (not
+            // terminal) so legacy payload shapes keep the legacy semantics.
+            state: prTerminalStateModule.normalizePrState(pr.state),
+            merged: pr.merged === true
         };
     } catch (e) {
         console.warn('  ⚠️ verdict probe: PR read failed (fail-open): ' + (e.message || e));
@@ -6651,12 +6681,23 @@ function restoreReworkArm(key, ticket, rule, repoInfo, effectiveConfig) {
     // head is probed fresh — without it the latch consult short-circuits,
     // the in-flight gate is skipped and the restore marker records
     // 'unknown'. The same probe feeds reworkArmGate below (no double read).
-    var probedHead = null;
-    var head = reworkLatchHeadOf(ticket);
-    if (!head) {
-        probedHead = prHeadAndLabels(repoInfo, prNumber);
-        if (probedHead) head = probedHead.headSha;
+    // gh-1369: the probe is unconditional now — its state fields gate the
+    // sweep itself. A MERGED/CLOSED PR exits BEFORE any restore: re-stamping
+    // agent:rework on shipped code (the #1368 family) is exactly the
+    // false-positive this sweep must not create. Head preference is
+    // unchanged — the latch head still wins when the item carries one; the
+    // probe only fills the head for pr: null items (and its failed read
+    // fails open exactly as before, reworkArmGate probing on its own).
+    var probedHead = prHeadAndLabels(repoInfo, prNumber);
+    if (probedHead &&
+        prTerminalStateModule.isTerminalPrState(probedHead.state, probedHead.merged)) {
+        console.log('  ⏭️  ' + key + ' sweep: PR #' + prNumber + ' is ' +
+            (probedHead.state || 'TERMINAL') + ' — terminal: nothing to restore' +
+            ' (gh-1369)');
+        return false;
     }
+    var head = reworkLatchHeadOf(ticket);
+    if (!head && probedHead) head = probedHead.headSha;
     if (consultReworkLatch(key, ticket, repoInfo, head).latched) return false;
     if (head && hasActiveLegRun(headWorkflowRunsSafe(repoInfo, head),
             reworkLatchModule.DEFAULT_LEG_WORKFLOW)) {
@@ -6776,6 +6817,17 @@ function restoreReworkArm(key, ticket, rule, repoInfo, effectiveConfig) {
 function reconcileReviewVerdicts(repoInfo, ticket, machineLogins) {
     var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
     if (!probe) return false;
+    // gh-1369: a terminal PR exits the reconcile — nothing to rework. The
+    // verdict records belong to a shipped head; stripping pr_approved (a
+    // REQUEST_CHANGES "winner") or scrubbing agent:rework from a merged PR
+    // only rewrites the history of dead state. Same guard family as the
+    // arm_rework / restore sweep terminal exits above.
+    if (prTerminalStateModule.isTerminalPrState(probe.state, probe.merged)) {
+        console.log('  ⏭️  PR #' + ticket.prNumber + ' is ' +
+            (probe.state || 'TERMINAL') + ' — terminal: verdict reconcile exits' +
+            ' (gh-1369)');
+        return false;
+    }
     var records = readVerdictRecords(repoInfo, ticket.prNumber, machineLogins);
     var issueLabels = linkedIssueLabels(repoInfo, ticket.issueNumber);
     var prHasRework = probe.labels.indexOf(reviewVerdictsModule.LABEL_REWORK) !== -1;
