@@ -41,6 +41,14 @@ var REARM_TABLE = [
 
 var MARKER_PREFIX = '<!-- dmtools:naked-pr-rearm ';
 
+// gh-1387 comment-reduction (L2): when the label strip that left the PR
+// naked is itself explained by a gh-840 consumption audit marker on the
+// SAME head, the re-arm comment must not repeat the full consumption
+// story — the consume comment posted seconds earlier already tells it.
+// The marker payload is byte-identical in both variants (the same-head
+// dedup anchor and any future parser read the marker, never the tail).
+var CONSUME_MARKER_RE = /<!-- dmtools:rework-consume (\{[^\n]*?\}) -->/;
+
 function hasAny(labels, wanted) {
     var list = labels || [];
     return wanted.some(function (w) { return list.indexOf(w) !== -1; });
@@ -66,12 +74,15 @@ function rearmLabelFor(issueLabels) {
     return null;
 }
 
-function buildAuditComment(prNumber, issueNumber, label, head) {
+function buildAuditComment(prNumber, issueNumber, label, head, explained) {
     var meta = { pr: prNumber, issue: issueNumber, label: label, head: head || null };
-    return MARKER_PREFIX + JSON.stringify(meta) + ' -->\n' +
-        '🩹 **Naked-PR reconciliation (gh-1097)**: this PR carried no lifecycle labels while ' +
-        'linked issue #' + issueNumber + ' is still in flow — re-armed `' + label + '`. ' +
-        'No dispatch from this sweep; the next SM tick picks it up.';
+    var tail = explained
+        ? '🩹 re-armed `' + label + '` — naked because agent:rework was consumed on this head' +
+          ' (gh-840 audit above); the next SM tick dispatches normally.'
+        : '🩹 **Naked-PR reconciliation (gh-1097)**: this PR carried no lifecycle labels while ' +
+          'linked issue #' + issueNumber + ' is still in flow — re-armed `' + label + '`. ' +
+          'No dispatch from this sweep; the next SM tick picks it up.';
+    return MARKER_PREFIX + JSON.stringify(meta) + ' -->\n' + tail;
 }
 
 function labelNames(raw) {
@@ -118,6 +129,20 @@ function alreadyRearmed(comments, head) {
     return (comments || []).some(function (c) { return markerHead(c) === head; });
 }
 
+// Head sha recorded in one consume-audit marker (gh-840), or null.
+function consumeMarkerHead(comment) {
+    var m = CONSUME_MARKER_RE.exec(String((comment && comment.body) || ''));
+    if (!m) return null;
+    try { return JSON.parse(m[1]).head || null; } catch (e) { return null; }
+}
+
+// True when a gh-840 consumption audit marker for THIS head is on the PR —
+// the nakedness has a same-head consumption story already on the page.
+function isConsumeExplained(comments, head) {
+    if (!head) return false;
+    return (comments || []).some(function (c) { return consumeMarkerHead(c) === head; });
+}
+
 function notYetRearmed(plan, deps) {
     if (!alreadyRearmed(deps.prComments(plan.pr), plan.head)) return true;
     deps.log('  🩹 naked-PR sweep: pr#' + plan.pr + ' already re-armed on head ' + plan.head + ' — skip');
@@ -129,7 +154,9 @@ function applyPlan(plan, deps) {
         (deps.dry ? ' [DRY]' : ''));
     if (deps.dry) return;
     deps.addLabel(plan.pr, plan.label);
-    deps.comment(plan.pr, buildAuditComment(plan.pr, plan.issue, plan.label, plan.head));
+    var explained = typeof deps.prComments === 'function'
+        ? isConsumeExplained(deps.prComments(plan.pr), plan.head) : false;
+    deps.comment(plan.pr, buildAuditComment(plan.pr, plan.issue, plan.label, plan.head, explained));
 }
 
 // deps: { bodyLinker, prComments(n), issueLabels(n), isMachine(pr), addLabel(n,l),
@@ -145,6 +172,8 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         LIFECYCLE_LABELS: LIFECYCLE_LABELS, isNakedPr: isNakedPr, excluded: excluded,
         rearmLabelFor: rearmLabelFor, buildAuditComment: buildAuditComment,
-        linkedIssueOf: linkedIssueOf, markerHead: markerHead, alreadyRearmed: alreadyRearmed, planFor: planFor, sweep: sweep
+        linkedIssueOf: linkedIssueOf, markerHead: markerHead, alreadyRearmed: alreadyRearmed,
+        consumeMarkerHead: consumeMarkerHead, isConsumeExplained: isConsumeExplained,
+        planFor: planFor, applyPlan: applyPlan, sweep: sweep
     };
 }

@@ -451,3 +451,79 @@ suite('machineNotice — hidden dmtools: markers (gh-1097 naked-pr-rearm)', func
         assert.ok(mn.isDmtoolsMarkerBody('  <!-- dmtools:x -->'));
     });
 });
+
+// ── gh-1387 comment-reduction — L1: general-comments section filter ────────
+suite('buildGeneralCommentsSection drops markers AND visible notices (gh-1387 L1)', function() {
+    function comment(body, login, date) {
+        return { user: { login: login || 'dmtools-factory-bot' }, created_at: date || '2026-11-06T06:00:00Z', body: body };
+    }
+    function section(comments) {
+        return githubReviewFetchReal().buildGeneralCommentsSection(comments);
+    }
+    test('hidden dmtools: marker comments stay out of the section', function() {
+        var s = section([comment('<!-- dmtools:rework-consume {"head":"a"} -->\n🏷️ consumed')]);
+        assert.equal(s, null, 'markers-only PR → no empty header');
+    });
+    test('visible machine notices (arm/red/conflict) drop out — gh-808 finish line', function() {
+        var s = section([
+            comment('🧵 Unresolved review threads — rework armed. The rework leg owns open threads.'),
+            comment('🔴 red head 4d6053bfd33f56f0471fec8d4210e56a561d4d39 — red 1/3'),
+            comment('⚠️ Validation CI went red on the head — merge aborted, rework re-queued.'),
+            comment('⚠️ Merge conflict with main — rework re-queued.'),
+            comment('🔄 zombie re-dispatch 4a02f46727ab815075aac4d0ad2cf3c35ee9675d — zombie 1/3 at 2026-11-06T08:28:21.712Z')
+        ]);
+        assert.equal(s, null, 'notices-only PR → null, not a header-only section');
+    });
+    test('review summaries and human comments survive', function() {
+        var s = section([
+            comment('## Automated Code Review — REQUEST_CHANGES\n**Summary**: the guard is well-built.', 'dmtools-factory-bot'),
+            comment('Looks good overall — one question below.', 'human-reviewer'),
+            comment('<!-- dmtools:naked-pr-rearm {"head":"a"} -->\n🩹 re-armed')
+        ]);
+        assert.ok(s.indexOf('## General PR Comments') === 0);
+        assert.ok(s.indexOf('Automated Code Review') !== -1, 'review summary kept');
+        assert.ok(s.indexOf('human-reviewer') !== -1, 'human comment kept');
+        assert.ok(s.indexOf('Naked-PR reconciliation') === -1 && s.indexOf('re-armed') === -1, 'marker-led comment dropped');
+    });
+    test('a notice QUOTED mid-body never drops (anchored-prefix contract holds here too)', function() {
+        var s = section([comment('the bot said "🧵 Unresolved review threads — rework armed." in a thread')]);
+        assert.ok(s !== null && s.indexOf('the bot said') !== -1);
+    });
+});
+
+// ── gh-1387 comment-reduction — L2: repeat-notice suppression helpers ──────
+suite('noticeWithHead / hasSameNotice / shouldPostNotice (gh-1387 L2)', function() {
+    var mn; // fresh module per test
+    function commentsFrom(bodies) {
+        return bodies.map(function (b) { return { body: b }; });
+    }
+    test('noticeWithHead appends the short head token; marker prefix line untouched', function() {
+        mn = loadMachineNotice();
+        var base = '🧵 Unresolved review threads — rework armed. The rework leg owns open threads.';
+        var withHead = mn.noticeWithHead(base, '4d6053bfd33f56f0471fec8d4210e56a561d4d39');
+        assert.ok(withHead.indexOf(base) === 0, 'first line byte-identical (classifier key)');
+        assert.ok(withHead.indexOf('\n(arm head 4d6053b)') !== -1);
+        assert.equal(mn.noticeWithHead(base, null), base, 'headless → unchanged');
+        assert.equal(mn.noticeHeadToken(null), '');
+    });
+    test('shouldPostNotice: same head repeats suppressed, new head or read failure posts', function() {
+        mn = loadMachineNotice();
+        var base = '🧵 Unresolved review threads — rework armed. The rework leg owns open threads.';
+        var first = mn.noticeWithHead(base, '85b6e8d4a2cedad6f9fa8a184d24793d01c129c4');
+        var posted = commentsFrom([first]);
+        assert.equal(mn.shouldPostNotice(posted, first, '85b6e8d4a2cedad6f9fa8a184d24793d01c129c4'), false,
+            'same head + same first line → suppressed');
+        assert.equal(mn.shouldPostNotice(posted, first, '68e0a7b61901cb37fb7fe6599a5305652aa05ff6'), true,
+            'new head → posted');
+        assert.equal(mn.shouldPostNotice([], first, '85b6e8d4a2cedad6f9fa8a184d24793d01c129c4'), true,
+            'empty history (read failure fail-open) → posted');
+        assert.equal(mn.shouldPostNotice(posted, mn.noticeWithHead(base, 'a1261c3bd879297b88e79aa5a0322987535c3c80'), 'a1261c3bd879297b88e79aa5a0322987535c3c80'), true,
+            'same head but different first line (e.g. advanced red count) → posted');
+    });
+    test('hasSameNotice keys on first line + head token, not fuzzy text', function() {
+        mn = loadMachineNotice();
+        var first = mn.noticeWithHead('🧵 Unresolved review threads — rework armed. Body A.', '85b6e8d');
+        assert.equal(mn.hasSameNotice(commentsFrom(['a quote of 🧵 Unresolved review threads — rework armed mid-text (arm head 85b6e8)']), first, '85b6e8d'), false,
+            'mid-body mention is not an anchored match');
+    });
+});

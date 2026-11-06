@@ -10,7 +10,8 @@
  *     census yields null + the conversations-only fallback warning);
  *   logInventoryCounts — the 'Discussions: …' census log line;
  *   buildGeneralCommentsSection — the '## General PR Comments' markdown
- *     renderer (hidden dmtools machine markers skipped).
+ *     renderer (hidden dmtools machine markers AND visible machine-notice
+ *     comments skipped — gh-1248 + the gh-808 finish line, see below).
  *
  * GraalJS-clean (var + plain functions). The github_* globals are
  * dmtools runtime globals, same contract as the former inline copies.
@@ -74,19 +75,33 @@ function logInventoryCounts(inv, rawThreads) {
 
 /**
  * Pure renderer for the '## General PR Comments' section (verbatim shape):
- * hidden `<!-- dmtools:` machine-bookkeeping comments skipped, bodies
- * trimmed, per-comment separator.
+ * bodies trimmed, per-comment separator. Two skip classes (gh-1248 + gh-808
+ * finish line, live PR dmtools-agents#1387 measured ~2 KB of arm/red
+ * boilerplate per review/rework context build):
+ *   1. hidden `<!-- dmtools:` machine-bookkeeping comments
+ *      (machineNotice.isDmtoolsMarkerBody);
+ *   2. visible harness notices — arming/red/park/conflict/rework reports
+ *      (machineNotice.isMachineNoticeBody) — status updates, never review
+ *      feedback; feeding them to the review/rework agent is exactly the
+ *      gh-808 pathology (the agent answering the machine's own boilerplate).
+ * Returns null when EVERY comment was skipped — the callers push the
+ * section only when non-null, so a notices-only PR renders no empty
+ * '## General PR Comments' header.
  */
 function buildGeneralCommentsSection(comments) {
     var section = '## General PR Comments\n\n';
+    var kept = 0;
     comments.forEach(function(comment) {
-        if (machineNotice.isDmtoolsMarkerBody((comment && comment.body) || '')) return;
+        var body = (comment && comment.body) || '';
+        if (machineNotice.isDmtoolsMarkerBody(body)) return;
+        if (machineNotice.isMachineNoticeBody(body)) return;
         var author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
         var date = comment.created_at ? comment.created_at.substring(0, 10) : '';
         section += '**' + author + '** (' + date + '):\n\n';
-        section += (comment.body || '').trim() + '\n\n---\n\n';
+        section += body.trim() + '\n\n---\n\n';
+        kept++;
     });
-    return section;
+    return kept > 0 ? section : null;
 }
 
 module.exports = {

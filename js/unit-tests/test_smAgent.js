@@ -613,6 +613,9 @@ function makeSmAgent(opts) {
             },
             './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {}),
             './common/nakedPrReconcile.js': loadModule('js/common/nakedPrReconcile.js', makeRequire({}), {}),
+            // gh-1387 comment-reduction (L2): repeat-notice suppression for the
+            // arm and red-gate arm notices — the real machineNotice leaf.
+            './common/machineNotice.js': loadModule('js/common/machineNotice.js'),
             // gh-1369: the terminal-PR guard — pure leaf, loaded real.
             './common/prTerminalState.js': loadModule('js/common/prTerminalState.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
