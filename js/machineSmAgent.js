@@ -325,6 +325,45 @@ function firstDispatchIndex(actions) {
 }
 
 /**
+ * gh-1380: the crossing's pre-classifier stamp action for a matched
+ * signature, or null (unrecognized → the analyzer leg handles it).
+ */
+function transientCrossingAction(faState, faCfg) {
+    var stamp = failureAnalyzerModule.transientPreClassifierVerdict(
+        faState.streakSignature, faCfg.transientPatterns, faState.streakCount, faCfg.backoff);
+    if (!stamp) return null;
+    return {
+        type: 'transientVerdict',
+        verdict: stamp,
+        reason: 'known-transient failure signature — pre-classified transient without AI' +
+            (faState.streakSignature ? ' (signature: ' + faState.streakSignature + ')' : '')
+    };
+}
+
+/**
+ * The gh-1366 analyzer divert action — the crossing's dispatch becomes
+ * the analyze leg (the reason string is verbatim gh-1366).
+ */
+function analyzerDivertAction(afterFailures, signature) {
+    return {
+        type: 'dispatch',
+        leg: failureAnalyzerModule.ANALYZE_LEG,
+        reason: 'failure streak of ' + afterFailures + ' identical failures — the analyzer leg ' +
+            'classifies transient vs deterministic before more blind retries' +
+            (signature ? ' (signature: ' + signature + ')' : '')
+    };
+}
+
+/**
+ * Splice ONE replacement in place of the dispatch at `index` — replacing
+ * it (divert / absorb) or riding it through after an inserted stamp.
+ */
+function spliceDispatchAction(actions, index, replacement, replaceDispatch) {
+    var tail = replaceDispatch ? index + 1 : index;
+    return actions.slice(0, index).concat([replacement]).concat(actions.slice(tail));
+}
+
+/**
  * The blind-retry gate (gh-1366 AC1): a re-dispatch decision crossing the
  * afterFailures threshold is diverted to the analyzer leg ONCE — exactly
  * the crossing, so a crashed analyzer (no verdict → nothing consumed)
@@ -352,29 +391,13 @@ function gateBlindRedispatch(actions, state, cfg) {
     }
     var firstDispatch = firstDispatchIndex(actions);
     if (firstDispatch === -1) return actions;
-    var stamp = failureAnalyzerModule.transientPreClassifierVerdict(
-        faState.streakSignature, faCfg.transientPatterns, faState.streakCount, faCfg.backoff);
-    if (stamp) {
-        var stampAction = {
-            type: 'transientVerdict',
-            verdict: stamp,
-            reason: 'known-transient failure signature — pre-classified transient without AI' +
-                (faState.streakSignature ? ' (signature: ' + faState.streakSignature + ')' : '')
-        };
-        if (faCfg.backoff > 1) {
-            return actions.slice(0, firstDispatch).concat([stampAction]).concat(actions.slice(firstDispatch + 1));
-        }
-        return actions.slice(0, firstDispatch).concat([stampAction]).concat(actions.slice(firstDispatch));
+    var stampAction = transientCrossingAction(faState, faCfg);
+    if (stampAction) {
+        return spliceDispatchAction(actions, firstDispatch, stampAction, faCfg.backoff > 1);
     }
     if (faCfg.analyzerEnabled === false) return actions;
-    var diverted = {
-        type: 'dispatch',
-        leg: failureAnalyzerModule.ANALYZE_LEG,
-        reason: 'failure streak of ' + faCfg.afterFailures + ' identical failures — the analyzer leg ' +
-            'classifies transient vs deterministic before more blind retries' +
-            (faState.streakSignature ? ' (signature: ' + faState.streakSignature + ')' : '')
-    };
-    return actions.slice(0, firstDispatch).concat([diverted]).concat(actions.slice(firstDispatch + 1));
+    return spliceDispatchAction(actions, firstDispatch,
+        analyzerDivertAction(faCfg.afterFailures, faState.streakSignature), true);
 }
 
 /**

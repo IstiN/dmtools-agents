@@ -2158,6 +2158,15 @@ suite('machineSm transient pre-classifier — scripted replay (gh-1380)', functi
             agent.gateTransientBackoff(actions, stateWith(stamp1, 4),
                 { failureAnalysis: { enabled: false } }), actions,
             'feature off → no gating');
+        assert.deepEqual(
+            agent.gateTransientBackoff(actions,
+                { issue: { labels: [] } }, cfg), actions,
+            'unavailable failure-analysis state (the gitlab twin shape) → no gating');
+        assert.deepEqual(
+            agent.gateTransientBackoff([{ type: 'label', label: 'needs-human', reason: 'r' }],
+                stateWith(stamp1, 4), cfg),
+            [{ type: 'label', label: 'needs-human', reason: 'r' }],
+            'a pending window with no dispatch to absorb gates nothing');
     });
 
     test('the pre-classifier stamps never pollute the gh-1363 signature history (the streak math stays clean)', function () {

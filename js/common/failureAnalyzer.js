@@ -135,12 +135,26 @@ function backoffOf(block) {
     return block.backoff;
 }
 
+// gh-1380: ONE pattern-list entry validated (a non-empty string that
+// compiles as a regex; the offending index is named). A malformed one is
+// a hard validation error at SM start — the house rule.
+function transientPatternSourceOf(source, index) {
+    if (typeof source !== 'string' || !source.trim()) {
+        throw new Error('machineSm: failureAnalysis.transientPatterns[' + index + '] must be a non-empty regex string, got: ' +
+            JSON.stringify(source));
+    }
+    try { new RegExp(source, 'i'); } catch (eRegex) {
+        throw new Error('machineSm: failureAnalysis.transientPatterns[' + index + '] is not a valid regex (' +
+            eRegex.message + '): ' + JSON.stringify(source));
+    }
+    return source;
+}
+
 // gh-1380: the known-transient pattern list. Absent/null → [] (the
 // pre-classifier is INERT — AC3: an empty or missing list keeps today's
 // routing, every failure goes to the AI analyzer; the defaults above are
 // data a deployment copies in). Present → an array of non-empty regex
-// source strings; each must compile (a malformed one is a hard validation
-// error at SM start — the house rule).
+// source strings, each validated through transientPatternSourceOf.
 function transientPatternsOf(block) {
     if (block.transientPatterns === undefined || block.transientPatterns === null) return [];
     if (!Array.isArray(block.transientPatterns)) {
@@ -149,16 +163,7 @@ function transientPatternsOf(block) {
     }
     var out = [];
     for (var i = 0; i < block.transientPatterns.length; i++) {
-        var source = block.transientPatterns[i];
-        if (typeof source !== 'string' || !source.trim()) {
-            throw new Error('machineSm: failureAnalysis.transientPatterns[' + i + '] must be a non-empty regex string, got: ' +
-                JSON.stringify(source));
-        }
-        try { new RegExp(source, 'i'); } catch (eRegex) {
-            throw new Error('machineSm: failureAnalysis.transientPatterns[' + i + '] is not a valid regex (' +
-                eRegex.message + '): ' + JSON.stringify(source));
-        }
-        out.push(source);
+        out.push(transientPatternSourceOf(block.transientPatterns[i], i));
     }
     return out;
 }
