@@ -634,6 +634,17 @@ function routeOne(request, vars, routes) {
         routes.rework.push(verdict);
         return;
     }
+    if (verdict.action === tcTriage.ACTION_DIFFERENTIAL) {
+        // gh-1354 rework: the hardened continuation refused to decide (the
+        // outcome was not green|red) — re-park, never a red-on-old claim.
+        // Falling through would stamp fabricated `differential: 'red'`
+        // evidence, render the "fails there too" report and park the SAME
+        // finding as maintained — the exact false claim the hardening makes
+        // impossible.
+        vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, unavailableBump(request, 'incomplete outcome — re-requesting the rerun'));
+        routes.stalled.push({ tcKey: request.tcKey, detail: 'incomplete outcome — re-requesting the rerun' });
+        return;
+    }
     vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, maintenanceEntry(request, verdict));
     routes.maintained.push(verdict);
 }

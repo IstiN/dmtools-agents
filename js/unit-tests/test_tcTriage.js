@@ -625,3 +625,53 @@ suite('gh-1354: triageDifferentialOutcome hardened — only green|red decide', f
         assert.equal(v.reason, 'failure-predates-change');
     });
 });
+
+suite('gh-1354 rework: the escalation comment is reason-aware', function() {
+
+    // gh-1354 added a second escalation family to buildEscalationComment —
+    // null-ac-verdict-cap-reached — whose defining fact is the OPPOSITE of
+    // the bounce-cap family: the loop stopped because attribution NEVER
+    // succeeded (no differential evidence, no AC verdict). The owner must
+    // not be told failures were "repeated attributed failures".
+
+    var ownNullVerdictAtCap = {
+        tcKey: 'TS-35',
+        role: triage.ROLE_OWN,
+        validated: true,
+        current: { sha: 'sha-new', envFingerprint: 'env-1' },
+        lastGreen: { sha: 'sha-old', envFingerprint: 'env-1' },
+        acVerdict: null,
+        redRounds: 2,
+        maxReworkRounds: 2
+    };
+
+    test('a null-verdict escalation never claims "repeated attributed failures" — attribution stalled', function() {
+        var v = triage.triageFailure(Object.assign({}, ownNullVerdictAtCap));
+        assert.equal(v.reason, 'null-ac-verdict-cap-reached');
+        var comment = triage.buildEscalationComment([v]);
+        assert.notContains(comment, 'repeated attributed failures',
+            'nothing was ever attributed — the loop stopped for the opposite reason');
+        assert.contains(comment, 'Attribution stalled', 'the stall names its own family');
+        assert.contains(comment, 'null AC verdict', 'the bullet carries the real stopping fact');
+        assert.contains(comment, '2/2 rounds', 'the lap bound is still spelled out');
+    });
+
+    test('a bounce-cap escalation keeps the attributed-failures wording (unchanged family)', function() {
+        var v = triage.triageFailure({
+            tcKey: 'TS-36',
+            role: triage.ROLE_GUARD,
+            validated: true,
+            current: { sha: 'sha-new', envFingerprint: 'env-1' },
+            lastGreen: { sha: 'sha-green', envFingerprint: 'env-1' },
+            differential: 'green',
+            redRounds: 2,
+            maxReworkRounds: 2
+        });
+        assert.equal(v.reason, 'bounce-cap-reached');
+        var comment = triage.buildEscalationComment([v]);
+        assert.contains(comment, 'Bounce cap reached');
+        assert.contains(comment, 'repeated attributed failures');
+        assert.contains(comment, '2/2 rounds');
+        assert.notContains(comment, 'Attribution stalled');
+    });
+});

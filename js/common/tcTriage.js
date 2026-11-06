@@ -476,13 +476,42 @@ function buildTriageComment(routedVerdicts) {
 /**
  * The owner escalation at the bounce cap: says what was observed, that the
  * loop stopped itself, and what a human needs to look at. Async by design.
+ *
+ * Reason-aware (gh-1354 rework): the template serves TWO escalation
+ * families. The bounce cap stopped a loop of ATTRIBUTED failures; the
+ * null-verdict cap (`null-ac-verdict-cap-reached`) stopped a loop where
+ * attribution NEVER succeeded (no differential evidence, no AC verdict) —
+ * the owner-facing fact is the opposite, so each family renders its own
+ * heading and bullet instead of mislabeling one as the other.
  */
+var ESCALATION_NULL_VERDICT_REASON = 'null-ac-verdict-cap-reached';
+
+function isNullVerdictEscalation(v) {
+    return v.reason === ESCALATION_NULL_VERDICT_REASON;
+}
+
+function escalationBullet(v) {
+    var rounds = '(' + v.redRounds + '/' + v.maxReworkRounds + ' rounds)';
+    if (isNullVerdictEscalation(v)) {
+        return '* ' + v.tcKey + ' — null AC verdict — rework/attribution laps exhausted ' + rounds + evidenceNote(v);
+    }
+    return '* ' + v.tcKey + ' — repeated attributed failures ' + rounds + evidenceNote(v);
+}
+
 function buildEscalationComment(escalatedVerdicts) {
-    var lines = ['🚨 *Bounce cap reached (gh-1329) — owner escalation*'];
-    (escalatedVerdicts || []).forEach(function(v) {
-        lines.push('* ' + v.tcKey + ' — repeated attributed failures (' + v.redRounds + '/' + v.maxReworkRounds +
-            ' rounds)' + evidenceNote(v));
-    });
+    var verdicts = escalatedVerdicts || [];
+    var attributed = verdicts.filter(function(v) { return !isNullVerdictEscalation(v); });
+    var stalled = verdicts.filter(function(v) { return isNullVerdictEscalation(v); });
+    var lines = [];
+    if (attributed.length) {
+        lines.push('🚨 *Bounce cap reached (gh-1329) — owner escalation*');
+        attributed.forEach(function(v) { lines.push(escalationBullet(v)); });
+    }
+    if (stalled.length) {
+        if (lines.length) lines.push('');
+        lines.push('🚨 *Attribution stalled (gh-1329) — owner escalation*');
+        stalled.forEach(function(v) { lines.push(escalationBullet(v)); });
+    }
     lines.push('');
     lines.push('The automated bounce loop stopped (no infinite re-fix laps). A human should arbitrate the ' +
         'change range vs the test expectation; the evidence lives in the TC maintenance ledger.');

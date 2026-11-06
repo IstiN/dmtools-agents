@@ -877,7 +877,11 @@ suite('gh-1354: dispatcher own-oracle requests — the AC handoff', function() {
         assert.equal(run.result.action, 'escalated');
         assert.deepEqual(run.jira.moves, [], 'the cap stops the loop — no move');
         var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
-        assert.contains(body, 'Bounce cap reached');
+        // gh-1354 rework: the null-verdict family is reason-aware — nothing
+        // was ever attributed, so the comment says "Attribution stalled",
+        // never "Bounce cap reached".
+        assert.contains(body, 'Attribution stalled');
+        assert.notContains(body, 'repeated attributed failures');
     });
 
     test('AC: own-oracle red routes to maintenance like any red differential', function() {
@@ -982,7 +986,7 @@ suite('gh-1354 rework: the ACTION_DIFFERENTIAL verdict re-parks, never a red-on-
             'the request is re-parked as a differential-rerun finding — the dispatcher retries next tick');
         assert.equal(run.latestLedger.findings[0].verdict, 'differential-rerun');
         assert.notEqual(run.latestLedger.findings[0].verdict, 'maintenance');
-        assert.deepEqual(labelNames(run.jira), ['sm_tc_differential_triggered', 'tc_differential_pending'],
-            'the park label survives — nothing was consumed');
+        assert.deepEqual(run.jira.unlabels, [],
+            'the park label survives — nothing was consumed, the next tick retries');
     });
 });
