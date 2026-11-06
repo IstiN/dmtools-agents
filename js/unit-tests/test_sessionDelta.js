@@ -954,13 +954,90 @@ suite('sessionDelta.resolveDefaultSessionSubpath (gh-1224)', function() {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
+// gh-1385 rework — readEnv / readRuntimeEnv direct unit coverage (crap gate).
+//
+// The AC3 hermeticity change (empty-string overrides blocking every ladder
+// name) removed the last indirect path reaching readRuntimeEnv, dropping its
+// coverage to 0% and tripping the crap ratchet (CC 6, CRAP 42 > 8). These
+// tests exercise the env ladder directly: the Node process.env branch, the
+// QuickJS/java-bridge branch (mocked global — hit and null fall-through), and
+// the readEnv override precedence (override wins, empty string blocks, miss
+// falls through).
+// ════════════════════════════════════════════════════════════════════════════
+
+suite('sessionDelta — readEnv/readRuntimeEnv ladder (gh-1385 rework: crap gate)', function() {
+
+    test('exports readEnv and readRuntimeEnv — the crap gate needs direct unit coverage', function() {
+        assert.equal(typeof sessionDelta.readRuntimeEnv, 'function');
+        assert.equal(typeof sessionDelta.readEnv, 'function');
+    });
+});
+
+var _sdHasNodeProcess_ = (function() {
+    try {
+        return typeof process !== 'undefined' && !!(process.versions && process.versions.node);
+    } catch (e) { return false; }
+})();
+
+if (_sdHasNodeProcess_) {
+    suite('sessionDelta — readRuntimeEnv engine branches (gh-1385 rework: crap gate)', function() {
+
+        test('Node branch: process.env hit returns the value, miss returns empty string', function() {
+            // no `java` global under node — the java-bridge try must throw and be swallowed
+            assert.equal(typeof java, 'undefined');
+            process.env.SD_GH1385_PROBE = 'runtime-value';
+            try {
+                assert.equal(sessionDelta.readRuntimeEnv('SD_GH1385_PROBE'), 'runtime-value');
+                assert.equal(sessionDelta.readRuntimeEnv('SD_GH1385_PROBE_MISSING'), '');
+            } finally {
+                delete process.env.SD_GH1385_PROBE;
+            }
+        });
+
+        test('java-bridge branch: a bridge value wins over process.env; a null bridge answer falls through', function() {
+            var prevJava = global.java;
+            global.java = { lang: { System: { getenv: function(name) {
+                return name === 'SD_GH1385_JAVA_SET' ? 'from-java' : null;
+            } } } };
+            process.env.SD_GH1385_JAVA_SET = 'from-node';
+            process.env.SD_GH1385_JAVA_NULL = 'from-node';
+            try {
+                assert.equal(sessionDelta.readRuntimeEnv('SD_GH1385_JAVA_SET'), 'from-java');
+                assert.equal(sessionDelta.readRuntimeEnv('SD_GH1385_JAVA_NULL'), 'from-node');
+                assert.equal(sessionDelta.readRuntimeEnv('SD_GH1385_JAVA_NEITHER'), '');
+            } finally {
+                if (prevJava === undefined) { delete global.java; } else { global.java = prevJava; }
+                delete process.env.SD_GH1385_JAVA_SET;
+                delete process.env.SD_GH1385_JAVA_NULL;
+            }
+        });
+
+        test('readEnv ladder: override map wins, empty string blocks, miss falls through to readRuntimeEnv', function() {
+            process.env.SD_GH1385_FALLBACK = 'runtime-value';
+            try {
+                assert.equal(sessionDelta.readEnv('SD_GH1385_FALLBACK', { env: { SD_GH1385_FALLBACK: 'override' } }), 'override');
+                assert.equal(sessionDelta.readEnv('SD_GH1385_FALLBACK', { env: {} }), 'runtime-value');
+                assert.equal(sessionDelta.readEnv('SD_GH1385_FALLBACK', { env: { SD_GH1385_FALLBACK: '' } }), '');
+                assert.equal(sessionDelta.readEnv('SD_GH1385_FALLBACK', { env: { SD_GH1385_FALLBACK: null } }), '');
+                assert.equal(sessionDelta.readEnv('SD_GH1385_FALLBACK'), 'runtime-value');
+                assert.equal(sessionDelta.readEnv('SD_GH1385_FALLBACK', null), 'runtime-value');
+            } finally {
+                delete process.env.SD_GH1385_FALLBACK;
+            }
+        });
+    });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // gh-1385 — quota-aware provider queue ordering (scripts/providers/fa.sh).
 //
 // Offline fixture probes (AC1): a fake curl on PATH serves per-key fixture
 // payloads — 200 healthy / 200 exhausted / 500 no-plan / 401 / timeout /
 // shape-changed — and logs every invocation, so NO test ever hits the live
-// endpoint. A live IT (AC2) runs only when real creds are present in the
-// environment, otherwise it reports QUOTA_LIVE_SKIPPED.
+// endpoint. The API key is handed to the fake curl via stdin config, never
+// argv. A live IT (AC2) is OPT-IN: it runs only with FA_QUOTA_LIVE_IT=on,
+// otherwise it reports QUOTA_LIVE_SKIPPED — runner creds in the environment
+// must not turn the shared suite into live HTTP (gh-1385 rework).
 // ════════════════════════════════════════════════════════════════════════════
 
 var _sdFaQuotaSharedBash_ = [
@@ -978,8 +1055,9 @@ var _sdFaQuotaSharedBash_ = [
     'cat > "$FX/shape-changed.json" << "JSONEOF"',
     '{"code":200,"success":true,"data":{"level":"max"}}',
     'JSONEOF',
-    'export FAKE_FIXTURES="$FX" FAKE_CURL_LOG="$TMP/calls.log"',
-    ': > "$FAKE_CURL_LOG"'
+    'export FAKE_FIXTURES="$FX" FAKE_CURL_LOG="$TMP/calls.log" FAKE_CURL_ARGV_LOG="$TMP/curl-argv.log"',
+    ': > "$FAKE_CURL_LOG"',
+    ': > "$FAKE_CURL_ARGV_LOG"'
 ];
 
 if (_sdCanBash_) {
@@ -996,12 +1074,15 @@ if (_sdCanBash_) {
                     'cat > "$BIN/curl" << "CUREOF"',
                     '#!/bin/bash',
                     'LOG="${FAKE_CURL_LOG:?}"',
-                    'KEY=""; prev=""; maxt=""',
-                    'for a in "$@"; do',
-                    ' if [ "$prev" = "-H" ]; then KEY="${a#Authorization: Bearer }"; fi',
-                    ' if [ "$prev" = "-m" ]; then maxt="$a"; fi',
-                    ' prev="$a"',
+                    'printf "%s\\n" "$*" >> "${FAKE_CURL_ARGV_LOG:?}"',
+                    'KEY=""; maxt=""',
+                    'while [ $# -gt 0 ]; do',
+                    ' if [ "$1" = "-m" ]; then maxt="$2"; fi',
+                    ' shift',
                     'done',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\"}"',
                     'case "$maxt" in "" | *[!0-9]*) exit 3 ;; esac',
                     '[ "$maxt" -ge 1 ] && [ "$maxt" -le 10 ] || exit 3',
                     '[ -n "$KEY" ] || exit 2',
@@ -1028,6 +1109,9 @@ if (_sdCanBash_) {
                     'grep -q "queue re-ordered by remaining z.ai quota" "$TMP/stderr.log" || { echo "NO_REORDER_LOG"; exit 1; }',
                     'if grep -q "$K_HEALTHY" "$TMP/stderr.log"; then echo "KEY_VALUE_LEAK"; exit 1; fi',
                     'if grep -q "Bearer" "$TMP/stderr.log"; then echo "BEARER_LEAK"; exit 1; fi',
+                    '# the key must ride curl stdin config (-K -), never argv (ps/proc cmdline exposure)',
+                    'if grep -q "Bearer" "$FAKE_CURL_ARGV_LOG"; then echo "KEY_IN_ARGV"; exit 1; fi',
+                    'if grep -q -e "$K_HEALTHY" -e "$K_AUTH" "$FAKE_CURL_ARGV_LOG"; then echo "KEY_VALUE_IN_ARGV"; exit 1; fi',
                     'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
                     '# healthy first; unknown (500 / timeout / shape) keep static slots; exhausted (0) + 401 at the END',
                     '[ "$ORDER" = "ZAI_CODE_KEY-ZAI_CODE_KEY_2-ZAI_CODE_KEY_4-ZAI_CODE_KEY_5-ZAI_CODE_KEY_1-ZAI_CODE_KEY_3-" ] || { echo "ORDER=$ORDER"; exit 1; }',
@@ -1057,11 +1141,9 @@ if (_sdCanBash_) {
                     'cat > "$BIN/curl" << "CUREOF"',
                     '#!/bin/bash',
                     'LOG="${FAKE_CURL_LOG:?}"',
-                    'KEY=""; prev=""',
-                    'for a in "$@"; do',
-                    ' if [ "$prev" = "-H" ]; then KEY="${a#Authorization: Bearer }"; fi',
-                    ' prev="$a"',
-                    'done',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\"}"',
                     '[ -n "$KEY" ] || exit 2',
                     'printf "%s\\n" "$KEY" >> "$LOG"',
                     'cat "$FAKE_FIXTURES/equal.json"; printf "\\n200"',
@@ -1150,14 +1232,101 @@ if (_sdCanBash_) {
             assert.contains(out, 'QUOTA_NOCURL_OK', 'no-curl test failed: ' + out);
         });
 
-        test('IT-2e (live IT): real endpoint re-orders when two keys have different remaining (skipped without creds)', function() {
+        test('IT-2f (bash): a non-api.z.ai baseUrl (china-platform host) is never probed — zero calls for its key, static slot kept', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaSharedBash_).concat([
+                    'K_CN="zt-cn-host-01"; K_ZAI="zt-global-02"',
+                    'export K_CN K_ZAI',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'LOG="${FAKE_CURL_LOG:?}"',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\"}"',
+                    '[ -n "$KEY" ] || exit 2',
+                    'printf "%s\\n" "$KEY" >> "$LOG"',
+                    'cat "$FAKE_FIXTURES/healthy.json"; printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\",\\"baseUrl\\":\\"https://api.z.ai.cn/api/coding/paas/v4\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}}]"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'export ZAI_CODE_KEY="$K_CN" ZAI_CODE_KEY_1="$K_ZAI"',
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    'exec 2> "$TMP/stderr.log"',
+                    '_fa_resolve_env',
+                    '# the china-platform key must never reach the global endpoint (host-boundary guard)',
+                    '[ ! grep -q "$K_CN" "$FAKE_CURL_LOG" ] || { echo "CN_KEY_PROBED"; exit 1; }',
+                    'CALLS="$(wc -l < "$FAKE_CURL_LOG" | tr -d " ")"',
+                    '[ "$CALLS" = "1" ] || { echo "CALLS=$CALLS"; exit 1; }',
+                    '# the canonical entry is probed healthy -> primary; the china entry keeps its static slot ("not-probed")',
+                    'grep -q "not-probed" "$TMP/stderr.log" || { echo "NO_NOT_PROBED_WHY"; exit 1; }',
+                    'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER" = "ZAI_CODE_KEY_1-ZAI_CODE_KEY-" ] || { echo "ORDER=$ORDER"; exit 1; }',
+                    '[ "$FA_PROVIDER_TYPE" = "zai" ]',
+                    'echo "QUOTA_HOST_BOUNDARY_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_HOST_BOUNDARY_OK', 'host-boundary test failed: ' + out);
+        });
+
+        test('IT-2g (bash): aggregate probe budget stops the fan-out — unprobed keys keep static slots, leg still resolves', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaSharedBash_).concat([
+                    'K_EXHAUSTED="zt-budget-exh-01"; K_A="zt-budget-a-02"; K_B="zt-budget-b-03"; K_C="zt-budget-c-04"',
+                    'export K_EXHAUSTED K_A K_B K_C',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'LOG="${FAKE_CURL_LOG:?}"',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\"}"',
+                    'printf "%s\\n" "$KEY" >> "$LOG"',
+                    'sleep 1',
+                    'if [ "$KEY" = "$K_EXHAUSTED" ]; then cat "$FAKE_FIXTURES/exhausted.json"; else cat "$FAKE_FIXTURES/healthy.json"; fi',
+                    'printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_2\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_3\\"}}]"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'export ZAI_CODE_KEY="$K_EXHAUSTED" ZAI_CODE_KEY_1="$K_A" ZAI_CODE_KEY_2="$K_B" ZAI_CODE_KEY_3="$K_C"',
+                    '# budget knob (default 10 s) — 600 ms so the 1 s fake curl exhausts it after the FIRST probe',
+                    'export FA_QUOTA_PROBE_BUDGET_MS=600',
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    'exec 2> "$TMP/stderr.log"',
+                    '_fa_resolve_env',
+                    '# one real probe only; keys 2-4 are skipped by the budget and keep their static slots',
+                    'CALLS="$(wc -l < "$FAKE_CURL_LOG" | tr -d " ")"',
+                    '[ "$CALLS" = "1" ] || { echo "CALLS=$CALLS"; exit 1; }',
+                    'grep -q "probe-budget" "$TMP/stderr.log" || { echo "NO_BUDGET_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    'grep -q "exhausted" "$TMP/stderr.log" || { echo "NO_EXHAUSTED_WHY"; exit 1; }',
+                    'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '# probed exhausted key demoted to the END; probe-budget keys keep static order',
+                    '[ "$ORDER" = "ZAI_CODE_KEY_1-ZAI_CODE_KEY_2-ZAI_CODE_KEY_3-ZAI_CODE_KEY-" ] || { echo "ORDER=$ORDER"; exit 1; }',
+                    '[ "$FA_PROVIDER_TYPE" = "zai" ]',
+                    'echo "QUOTA_BUDGET_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_BUDGET_OK', 'probe-budget test failed: ' + out);
+        });
+
+        test('IT-2e (live IT, opt-in FA_QUOTA_LIVE_IT=on): real endpoint re-orders when two keys have different remaining (skipped otherwise)', function() {
             var out = cli_execute_command({
                 command: [
                     'bash -c \'set -euo pipefail',
                     'REPO_ROOT="$(pwd)"',
                     'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG FA_PROVIDERS_QUEUE FA_QUOTA_PROBE',
                     'unset ZAI_CODE_KEY_2 ZAI_CODE_KEY_3 ZAI_CODE_KEY_4 ZAI_CODE_KEY_5 ENV_VAR_DEV_QUEUE',
-                    'if [ -z "${ZAI_CODE_KEY:-}" ] || [ -z "${ZAI_CODE_KEY_1:-}" ]; then echo "QUOTA_LIVE_SKIPPED"; exit 0; fi',
+                    '# opt-in gate (gh-1385 rework): exported runner creds must NOT turn the shared suite',
+                    '# into live third-party HTTP on every run — the offline matrix pins the logic.',
+                    'if [ "${FA_QUOTA_LIVE_IT:-off}" != "on" ]; then echo "QUOTA_LIVE_SKIPPED"; exit 0; fi',
                     'TMP="$(mktemp -d)"',
                     'trap "rm -rf \\"$TMP\\"" EXIT',
                     'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}}]"',
