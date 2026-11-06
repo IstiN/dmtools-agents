@@ -35,6 +35,12 @@ var reviewPolicyModule = require('./common/reviewPolicy.js');
 // inlineComments already carry path/severity/claim, so registering the round
 // mechanically costs no extra agent work.
 var findingRegistry = require('./common/findingRegistry.js');
+// gh-1381 follow-up: the review lane joins the gh-1087 quota circuit-breaker —
+// classifyFailure over the leg's fa trace tail parks the provider_quota lane
+// (shouldSkipForQuotaPark skips re-derivation; the probe/human lifts) instead
+// of the silent trigger-clear retry loop (live: flutter_agent_harness #2059,
+// 14+ identical review legs against a provider storm, 2026-11-06).
+var quotaBreakerModule = require('./common/quotaCircuitBreaker.js');
 var reviewSpecClaims = require('./common/reviewSpecClaims.js');
 var reviewHelpers = require('./postStoryTestAutomationReviewHelpers.js');
 // The runtime's input folder name for a ticket (input/gh-N for a GitHub key): the Java runtime
@@ -309,9 +315,76 @@ function runResumeAttempt(ticketKey) {
     }
 }
 
+/**
+ * gh-1381 follow-up: classify the review leg's fa trace tail (FA_LOG_FILE —
+ * the factory exports .dmtools/fa-trace.log for every leg). Returns the
+ * classification ONLY for kind 'quota_exhausted' (a "Provider chain
+ * exhausted" tail — gh-1087 vocabulary, exactly the flutter_agent_harness
+ * #2059 loop signature) AND 'provider_transient' outages (gh-1121: a
+ * 429-led exhausted chain — the same storm, one classifier). Both mean the
+ * environment cannot serve this leg now → park; transient/null without the
+ * chain tail keeps the existing missing-output retry semantics.
+ */
+function reviewProviderParkOf() {
+    var logPath = process.env.FA_LOG_FILE;
+    if (!logPath) return null;
+    try {
+        // Lazy builtin require — module hoisting (pack closure) applies to
+        // repo modules, not node builtins.
+        var fs = require('fs');
+        var content = fs.readFileSync(logPath, 'utf8');
+        var tail = content.length > 400 ? content.slice(-400) : content;
+        var cls = quotaBreakerModule.classifyFailure(tail);
+        return (cls && (cls.kind === 'quota_exhausted' || cls.kind === 'provider_transient')) ? cls : null;
+    } catch (e) {
+        console.warn('Could not read the fa trace tail for quota classification:', e);
+        return null;
+    }
+}
+
+/**
+ * gh-1087 AC2 twin for the review lane: park the ticket's lane — park
+ * comment + provider_quota label — then throw the marked error so the run
+ * concludes RED (dead-letter contract, same as parkQuotaExhaustedDevelopment
+ * in developTicketAndCreatePR.js). The SM's shouldSkipForQuotaPark then
+ * skips every dispatch lane for this ticket until the probe cadence or a
+ * human lifts the park.
+ */
+function parkReviewProviderQuota(params, tracker, classification) {
+    var ticketKey = params.ticket.key;
+    var jobParams = (params && params.jobParams) || {};
+    var parkLabel = quotaBreakerModule.parkLabelOf(jobParams);
+    var everyN = quotaBreakerModule.probeEveryOf(jobParams);
+    var mm = commentMarkup.forTicket(ticketKey);
+    try {
+        tracker.postComment(ticketKey, quotaBreakerModule.parkComment(mm, classification, parkLabel, everyN));
+    } catch (e) {
+        console.warn('Could not post the provider-quota park comment:', e);
+    }
+    try {
+        tracker.addLabel(ticketKey, parkLabel);
+        console.log('🅿️  Added quota park label', parkLabel, 'to', ticketKey);
+    } catch (e) {
+        console.warn('Failed to add quota park label ' + parkLabel + ':', e);
+    }
+    var err = new Error('Provider chain exhausted — ' + ticketKey + ' was parked with label ' + parkLabel +
+        ' instead of retried (gh-1087; review lane wired by the gh-1381 follow-up)');
+    err.quotaPark = true;
+    throw err;
+}
+
 function handleMissingReviewData(params, config, customParams, tracker) {
     var ticketKey = params.ticket.key;
     console.error('Failed to read pr_review.json after resume attempt');
+
+    // gh-1381 follow-up: a provider-chain death explains the empty verdict
+    // file — park the lane (gh-1087) instead of clearing the trigger for an
+    // identical retry. parkReviewProviderQuota throws (RED dead-letter), so
+    // non-provider misses fall through to the existing flow unchanged.
+    var providerPark = reviewProviderParkOf();
+    if (providerPark) {
+        parkReviewProviderQuota(params, tracker, providerPark);
+    }
 
     postMissingOutputComment(tracker, ticketKey);
     removeSmLabelAfterMissingOutput(tracker, ticketKey, customParams);
@@ -2606,6 +2679,8 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action,
         resolveCustomParams,
+        reviewProviderParkOf,
+        parkReviewProviderQuota,
         isLinePresentInDiff,
         countReviewThreads,
         postInlineComment,

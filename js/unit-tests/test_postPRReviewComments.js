@@ -215,6 +215,8 @@ function prReviewRequireMap(overrides) {
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
         './common/reviewPolicy.js': loadReviewPolicyModule(),
+        './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
+        'fs': require('fs'),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
             './machineAuthor.js': machineAuthorReal(),
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
@@ -516,7 +518,8 @@ suite('postPRReviewComments', function() {
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
                     './common/reviewPolicy.js': loadReviewPolicyModule(),
-                    './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
+                    './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
+        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
@@ -771,7 +774,8 @@ suite('postPRReviewComments', function() {
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
                     './common/reviewPolicy.js': loadReviewPolicyModule(),
-                    './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
+                    './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
+        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
@@ -1085,7 +1089,8 @@ suite('postPRReviewComments', function() {
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/reviewPolicy.js': loadReviewPolicyModule(),
-            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
+        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
@@ -1517,7 +1522,8 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/reviewPolicy.js': loadReviewPolicyModule(),
-            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
+        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
@@ -2367,7 +2373,8 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/reviewPolicy.js': loadReviewPolicyModule(),
-            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
+        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
                 './machineAuthor.js': machineAuthorReal(),
                 './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
                     makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
@@ -2463,6 +2470,7 @@ function gh926ResumeRequire(opts) {
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
         './common/reviewPolicy.js': loadReviewPolicyModule(),
+        './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
         './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
@@ -2814,7 +2822,8 @@ function loadForPrSearch(foundPr) {
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/reviewPolicy.js': loadReviewPolicyModule(),
-            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
+        './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
@@ -3798,5 +3807,79 @@ suite('postPRReviewComments — census normalization + nit plumbing (gh-1350)', 
         assert.equal(mod.hasAnyOpenIssue({ digest: 5 }), false);
         assert.equal(mod.hasAnyOpenIssue({}), false);
         assert.equal(mod.hasAnyOpenIssue(null), false);
+    });
+
+    // ── gh-1381 follow-up: the review lane joins the gh-1087 quota breaker ──
+    test('reviewProviderParkOf: chain-exhausted trace tail → quota_exhausted', function() {
+        var mod = loadPostPRReviewComments();
+        var fs = require('fs');
+        var path = '/tmp/fah-test-fa-trace-' + Date.now() + '.log';
+        fs.writeFileSync(path, 'normal lines\n' +
+            'error: Provider chain exhausted: 2 of 2 chain model(s) failed after 6 attempt(s) over 113s ' +
+            '(waited 2s on rate limits). Attempts: zai/glm-5.3-flash: Provider call failed after 4 attempt(s) ' +
+            'over 16s - the endpoint kept failing. Attempts: 429: Rate limit reached. Try again later.\n');
+        process.env.FA_LOG_FILE = path;
+        try {
+            var cls = mod.reviewProviderParkOf();
+            assert.equal(cls && cls.kind, 'provider_transient',
+                'a 429-led exhausted chain is a provider_transient outage (gh-1121)');
+        } finally {
+            delete process.env.FA_LOG_FILE;
+            fs.unlinkSync(path);
+        }
+        var quotaPath = '/tmp/fah-test-fa-trace-quota-' + Date.now() + '.log';
+        fs.writeFileSync(quotaPath, 'Provider chain exhausted — attempts: 403 weekly usage limit reached\n');
+        process.env.FA_LOG_FILE = quotaPath;
+        try {
+            var qcls = mod.reviewProviderParkOf();
+            assert.equal(qcls && qcls.kind, 'quota_exhausted', 'quota-vocabulary chain → quota_exhausted');
+        } finally {
+            delete process.env.FA_LOG_FILE;
+            fs.unlinkSync(quotaPath);
+        }
+    });
+
+    test('reviewProviderParkOf: neutral tail / missing file / no env → null', function() {
+        var mod = loadPostPRReviewComments();
+        var fs = require('fs');
+        var path = '/tmp/fah-test-fa-trace-neutral-' + Date.now() + '.log';
+        fs.writeFileSync(path, 'the review is proceeding normally, nothing to see');
+        process.env.FA_LOG_FILE = path;
+        try {
+            assert.equal(mod.reviewProviderParkOf(), null, 'neutral tail classifies null');
+        } finally {
+            delete process.env.FA_LOG_FILE;
+            fs.unlinkSync(path);
+        }
+        process.env.FA_LOG_FILE = '/tmp/fah-does-not-exist-' + Date.now() + '.log';
+        try {
+            assert.equal(mod.reviewProviderParkOf(), null, 'unreadable log → null (fail-open)');
+        } finally {
+            delete process.env.FA_LOG_FILE;
+        }
+        assert.equal(mod.reviewProviderParkOf(), null, 'no FA_LOG_FILE → null');
+    });
+
+    test('parkReviewProviderQuota: park comment + provider_quota label + RED marked error', function() {
+        var mod = loadPostPRReviewComments();
+        var posted = [], labeled = [];
+        var tracker = {
+            postComment: function(key, body) { posted.push([key, body]); },
+            addLabel: function(key, label) { labeled.push([key, label]); }
+        };
+        var params = { ticket: { key: 'PROJ-9' }, jobParams: {} };
+        var thrown = null;
+        try {
+            mod.parkReviewProviderQuota(params, tracker, { kind: 'quota_exhausted', providers: ['zai/glm-5.3-flash'] });
+        } catch (e) {
+            thrown = e;
+        }
+        assert.ok(thrown, 'the park concludes RED (dead-letter)');
+        assert.equal(thrown.quotaPark, true, 'the error carries the quotaPark marker');
+        assert.equal(labeled[0][0], 'PROJ-9');
+        assert.equal(labeled[0][1], 'provider_quota');
+        assert.equal(posted.length, 1, 'exactly one park comment');
+        assert.ok(posted[0][1].indexOf('provider_quota') !== -1 || posted[0][1].indexOf('quota') !== -1,
+            'the park comment names the quota park');
     });
 });
