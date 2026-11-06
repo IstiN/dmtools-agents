@@ -4678,6 +4678,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     } catch (e9) { cLinkedOpen = false; }
                 }
 
+                // gh-1369: the SAME github_get_pr read that resolved the
+                // linked issue carries the terminal-state evidence — a PR
+                // that merged while its listing still said open+DIRTY (the
+                // #1368 listing/action race) exits here, BEFORE the gh-683
+                // self-heal arm, the marker and the report. Fail-open: a
+                // payload without state keeps the legacy arm semantics.
+                if (cIsMachinePr &&
+                    prTerminalStateModule.isTerminalPrState(bodyObj.state, bodyObj.merged)) {
+                    console.log('  ⏭️  ' + key + ' PR #' + ticket.prNumber + ' is terminal (merged/closed) — ' +
+                        'conflict rework never arms on shipped code (gh-1369)');
+                    processedKeys.push(key);
+                    continue;
+                }
+
                 if (alreadyReported) {
                     // gh-683 bug C self-heal: the marker is once-per-head
                     // pacing for the REPORT, not proof the re-arm landed. A
@@ -5106,6 +5120,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         var bm = /(?:^|\/)gh-(\d+)$/i.exec(String(ticket.branch));
                         if (bm) linked = parseInt(bm[1], 10);
                     }
+                    // gh-1369: the SAME github_get_pr read above carries the
+                    // terminal-state evidence — a PR that merged while
+                    // validation stayed red (the #1368 race) must not
+                    // re-arm rework on the merged head below. Fail-open:
+                    // prObj without state keeps the legacy arm semantics.
+                    var fvPrTerminal = prTerminalStateModule.isTerminalPrState(prObj.state, prObj.merged);
                 }
                 // pr_approved is STICKY (owner rule 2026-09: no re-review
                 // after the first approval — review tokens are the budget).
@@ -5210,14 +5230,21 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                            : ''))
                     : null;
                 var report = (isMachinePr
-                    ? ((reworkEmptyCapped
+                    ? (fvPrTerminal
+                        // gh-1369: on a terminal PR the report stays truthful —
+                        // no "merge aborted / re-queued" promise, no linked-issue
+                        // re-arm claim; the red is recorded, the arm is skipped.
+                        ? '⚠️ Validation CI went red on the head, but this PR is already ' +
+                          'MERGED/CLOSED — terminal (gh-1369): nothing to rework, the rework ' +
+                          'arm is skipped (validation red on shipped code never re-queues rework).'
+                        : (reworkEmptyCapped
                         ? '⚠️ Validation CI went red on the head AGAIN — and the last ' +
                           emptyLaps + ' rework laps left the head `' + failHead + '` unchanged ' +
                           '(empty laps: the leg closes itself successful without pushing a fix). ' +
                           'The rework arm is WITHHELD — a human owns this PR from here.'
                         : '⚠️ Validation CI went red on the head — merge aborted, rework re-queued.' +
                           (linked ? ' (linked issue #' + linked + ' re-armed)' : '') +
-                          ' (approval latch kept — no re-review after fixes)'))
+                          ' (approval latch kept — no re-review after fixes)')))
                     : ('⚠️ Validation CI went red on the head. Guest PR: rebase onto main and push — ' +
                        'validation re-runs automatically; auto-rework is reserved for the machine ' +
                        'account (gh-757). Your push clears the validation_failed park via the ' +

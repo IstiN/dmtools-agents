@@ -3800,3 +3800,136 @@ suite('postPRReviewComments — census normalization + nit plumbing (gh-1350)', 
         assert.equal(mod.hasAnyOpenIssue(null), false);
     });
 });
+
+suite('postPRReviewComments — gh-1369 terminal-PR guard on the rework arms', function() {
+
+    // Harness: github_get_pr serves prPayload (the FRESH probe at re-arm
+    // time — the PR search at leg start may have listed the PR open, the
+    // #1368 race). triggerSmIfIdle is captured so both rework-arm paths
+    // (the label stamp AND the SM kick) are observable.
+    function runReworkLegHarness(prPayload) {
+        var labels = [];
+        var smIdleCalls = 0;
+        var fileRead = function() { return null; };
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': prReviewOutputFiles(fileRead),
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() { smIdleCalls += 1; }
+                }
+            })),
+            {
+                file_read: fileRead,
+                github_get_pr: function() {
+                    if (typeof prPayload === 'function') return prPayload();
+                    return JSON.stringify(prPayload);
+                }
+            }
+        );
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var ctx = { tracker: tracker, ticketKey: 'PROJ-1', scm: {}, config: {} };
+        var pr = { number: 10, url: 'https://example.com/pr/10', branch: 'ai/gh-1',
+                   author: 'ai-teammate' };
+        return {
+            mod: mod, labels: labels, tracker: tracker, ctx: ctx, pr: pr,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            smIdleCalls: function() { return smIdleCalls; }
+        };
+    }
+
+    test('runReworkLeg — a MERGED PR is never marked for rework (no labels, no SM kick)', function() {
+        var h = runReworkLegHarness({ number: 10, state: 'closed', merged: true, body: '' });
+        h.mod.runReworkLeg(h.ctx, {}, h.pr, h.repoInfo, false);
+
+        assert.deepEqual(h.labels, [],
+            'no sm_story_rework_triggered / agent:rework on a merged PR');
+        assert.equal(h.smIdleCalls(), 0, 'no SM trigger');
+    });
+
+    test('runReworkLeg — a CLOSED (not merged) PR is terminal too', function() {
+        var h = runReworkLegHarness({ number: 10, state: 'closed', merged: false, body: '' });
+        h.mod.runReworkLeg(h.ctx, {}, h.pr, h.repoInfo, false);
+
+        assert.deepEqual(h.labels, [], 'no rework labels on a closed PR');
+        assert.equal(h.smIdleCalls(), 0, 'no SM trigger');
+    });
+
+    test('runReworkLeg — an OPEN PR keeps the legacy arm (labels + SM kick, regression)', function() {
+        var h = runReworkLegHarness({ number: 10, state: 'open', merged: false, body: '' });
+        h.mod.runReworkLeg(h.ctx, {}, h.pr, h.repoInfo, false);
+
+        assert.deepEqual(h.labels, ['sm_story_rework_triggered', 'agent:rework'],
+            'both labels land on an open PR');
+        assert.equal(h.smIdleCalls(), 1, 'SM kicked');
+    });
+
+    test('runReworkLeg — a probe failure fails OPEN (legacy arm semantics)', function() {
+        var h = runReworkLegHarness(function() { throw new Error('github_get_pr failed'); });
+        h.mod.runReworkLeg(h.ctx, {}, h.pr, h.repoInfo, false);
+
+        assert.deepEqual(h.labels, ['sm_story_rework_triggered', 'agent:rework'],
+            'fail-open: unknown terminality keeps the legacy arm');
+    });
+
+    // finishPRAnchoredReview: the REQUEST_CHANGES verdict re-arms
+    // agent:rework on the linked issue — a flying review leg concluding
+    // after the merge must not stamp a terminal PR.
+    function anchoredHarness(prPayload) {
+        var added = [];
+        var removed = [];
+        var fileRead = function() { return null; };
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': prReviewOutputFiles(fileRead)
+            })),
+            {
+                file_read: fileRead,
+                github_get_pr: function() {
+                    if (typeof prPayload === 'function') return prPayload();
+                    return JSON.stringify(prPayload);
+                }
+            }
+        );
+        var scm = {
+            addLabel: function(num, label) { added.push({ num: num, label: label }); },
+            removeLabel: function(num, label) { removed.push({ num: num, label: label }); }
+        };
+        var ctx = { scm: scm, machineAuthor: 'ai-teammate' };
+        var pr = { number: 1940, author: 'ai-teammate', branch: 'ai/gh-1931' };
+        return { mod: mod, added: added, removed: removed, ctx: ctx, pr: pr,
+                 repoInfo: { owner: 'acme', repo: 'widget' } };
+    }
+
+    test('finishPRAnchoredReview — REQUEST_CHANGES on a MERGED PR never re-arms the linked issue', function() {
+        var h = anchoredHarness({ number: 1940, state: 'closed', merged: true,
+                                  body: 'Closes #1931', head: { ref: 'ai/gh-1931' } });
+        h.mod.finishPRAnchoredReview(h.ctx, h.pr, h.repoInfo, false, 'REQUEST_CHANGES');
+
+        assert.ok(!h.added.some(function(c) { return c.label === 'agent:rework'; }),
+            'no agent:rework re-arm on a merged PR');
+    });
+
+    test('finishPRAnchoredReview — REQUEST_CHANGES on an OPEN PR still re-arms (regression)', function() {
+        var h = anchoredHarness({ number: 1940, state: 'open', merged: false,
+                                  body: 'Closes #1931', head: { ref: 'ai/gh-1931' } });
+        h.mod.finishPRAnchoredReview(h.ctx, h.pr, h.repoInfo, false, 'REQUEST_CHANGES');
+
+        assert.ok(h.added.some(function(c) {
+            return c.num === 1931 && c.label === 'agent:rework';
+        }), 'the linked-issue re-arm lands on an open PR');
+    });
+
+    test('finishPRAnchoredReview — a probe failure keeps the legacy outcome (quiet no-write, no crash)', function() {
+        // Legacy: the linked-issue lookup rides the same github_get_pr read;
+        // when it throws, rearmReworkOnLinkedIssue catches and NO re-arm
+        // write happens. The guard's fail-open keeps exactly that outcome.
+        var h = anchoredHarness(function() { throw new Error('github_get_pr failed'); });
+        h.mod.finishPRAnchoredReview(h.ctx, h.pr, h.repoInfo, false, 'REQUEST_CHANGES');
+
+        assert.ok(!h.added.some(function(c) { return c.label === 'agent:rework'; }),
+            'legacy: the lookup failure already suppressed the write quietly');
+    });
+});

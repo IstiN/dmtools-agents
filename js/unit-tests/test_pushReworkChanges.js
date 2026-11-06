@@ -3084,6 +3084,82 @@ suite('pushReworkChanges completion-tail helpers (gh-969 CRAP split)', function(
         assert.equal(comments.length, 1, 'not sticky — no notice');
     });
 
+    test('rearmNoopRework — a MERGED PR is never re-armed (fresh probe at re-arm time)', function() {
+        var labels = [], comments = [];
+        var loaded = loadTail({
+            github_get_pr: function() {
+                return JSON.stringify({ number: 123, state: 'closed', merged: true });
+            }
+        });
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        loaded.mod.rearmNoopRework(scm, tracker, prMock(), 'PROJ-123', { owner: 'acme', repo: 'widget' });
+
+        assert.equal(labels.length, 0, 'no agent:rework on a merged PR');
+        assert.equal(comments.length, 0, 'no no-op rework comment on a merged PR');
+    });
+
+    test('rearmNoopRework — a CLOSED (not merged) PR is terminal too', function() {
+        var labels = [], comments = [];
+        var loaded = loadTail({
+            github_get_pr: function() {
+                return JSON.stringify({ number: 123, state: 'closed', merged: false });
+            }
+        });
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        loaded.mod.rearmNoopRework(scm, tracker, prMock(), 'PROJ-123', { owner: 'acme', repo: 'widget' });
+
+        assert.equal(labels.length, 0, 'no agent:rework on a closed PR');
+        assert.equal(comments.length, 0, 'no comment on a closed PR');
+    });
+
+    test('rearmNoopRework — an OPEN PR re-arms exactly as before (regression)', function() {
+        var labels = [], comments = [];
+        var loaded = loadTail({
+            github_get_pr: function() {
+                return JSON.stringify({ number: 123, state: 'open', merged: false });
+            }
+        });
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        loaded.mod.rearmNoopRework(scm, tracker, prMock(), 'PROJ-123', { owner: 'acme', repo: 'widget' });
+
+        assert.deepEqual(labels, ['agent:rework'], 'the re-arm lands on an open PR');
+        assert.equal(comments.length, 1, 'the no-op comment posts');
+    });
+
+    test('rearmNoopRework — probe failure fails OPEN (legacy re-arm semantics)', function() {
+        var labels = [], comments = [];
+        var loaded = loadTail({
+            github_get_pr: function() { throw new Error('github_get_pr failed'); }
+        });
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        loaded.mod.rearmNoopRework(scm, tracker, prMock(), 'PROJ-123', { owner: 'acme', repo: 'widget' });
+
+        assert.deepEqual(labels, ['agent:rework'], 'fail-open: unknown terminality keeps the re-arm');
+        assert.equal(comments.length, 1);
+    });
+
+    test('noopLapDecisions — repoInfo reaches the guard: merged probe suppresses, resolutions path unaffected', function() {
+        var labels = [], comments = [];
+        var loaded = loadTail({
+            github_get_pr: function() {
+                return JSON.stringify({ number: 123, state: 'closed', merged: true });
+            }
+        });
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        loaded.mod.noopLapDecisions(scm, tracker, prMock(), 'PROJ-123', false, false, 0,
+            { owner: 'acme', repo: 'widget' });
+        assert.equal(labels.length, 0, 'terminal probe suppresses the re-arm through noopLapDecisions');
+
+        loaded.mod.noopLapDecisions(scm, tracker, prMock(), 'PROJ-123', false, false, 3,
+            { owner: 'acme', repo: 'widget' });
+        assert.equal(labels.length, 0, 'resolved laps still suppress on their own');
+    });
+
     test('clearAiReviewedLatch — no fresh review wanted is a quiet no-op (no github_remove_label global in the harness)', function() {
         var loaded = loadTail();
         // must not throw even with a null repoInfo and no global stub

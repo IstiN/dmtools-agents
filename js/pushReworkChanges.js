@@ -35,6 +35,10 @@ var reworkLoopGuard = require('./common/reworkLoopGuard.js');
 // rework cycle may close.
 var ciViolations = require('./common/ciViolations.js');
 var toolchainSummary = require('./common/toolchainSummary.js');
+// gh-1369 (hoisted, never lazy — the gh-823 pack-require rule): the
+// terminal-PR guard — a MERGED/CLOSED PR exits the no-op re-arm BEFORE it
+// re-stamps agent:rework on shipped code.
+var prTerminalStateModule = require('./common/prTerminalState.js');
 
 // ── gh-957: lap audit (loop guard) + audit-resolve support ──────────────────
 //
@@ -2390,7 +2394,36 @@ function latchGateOpen(stickyApproved, freshReviewWanted, pr) {
     return !!(!stickyApproved && !freshReviewWanted && pr && pr.number);
 }
 
-function rearmNoopRework(scm, tracker, pr, ticketKey) {
+// gh-1369: fresh terminal-PR probe for the no-op re-arm. The PR object came
+// from an OPEN-PR listing sampled at leg start — #1368 merged 48s before its
+// stamp, so the listing's "open" is exactly the stale evidence the guard
+// must not trust. github_get_pr is read at re-arm time instead. Fail-open:
+// a failed/absent probe (no repoInfo, legacy bridge without the tool, read
+// error, payload without state) is NOT terminal — the legacy re-arm keeps
+// firing, an unknown state never disarms a working path.
+function freshTerminalPrState(repoInfo, prNumber) {
+    try {
+        if (!repoInfo || !prNumber || typeof github_get_pr !== 'function') return false;
+        var raw = github_get_pr({
+            workspace: repoInfo.owner, repository: repoInfo.repo, pullRequestId: prNumber
+        });
+        var prObj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+        return prTerminalStateModule.isTerminalPrState(prObj.state, prObj.merged);
+    } catch (e) {
+        console.warn('⚠️ terminal-PR probe failed (fail-open): ' + (e.message || e));
+        return false;
+    }
+}
+
+function rearmNoopRework(scm, tracker, pr, ticketKey, repoInfo) {
+    // gh-1369: a rework lap concluding no-op on a PR that merged mid-leg
+    // must not re-arm agent:rework — the next tick would dispatch another
+    // dead leg against shipped code.
+    if (freshTerminalPrState(repoInfo, pr && pr.number)) {
+        console.log('⏭️ No-op re-arm skipped — PR #' + (pr && pr.number) +
+            ' is merged/closed (gh-1369): nothing to rework on shipped code');
+        return;
+    }
     try {
         tracker.addLabel(ticketKey, 'agent:rework');
         console.log('✅ No-op rework: verdict head unchanged — agent:rework re-armed on ' + ticketKey);
@@ -2406,10 +2439,10 @@ function rearmNoopRework(scm, tracker, pr, ticketKey) {
     }
 }
 
-function noopLapDecisions(scm, tracker, pr, ticketKey, stickyApproved, freshReviewWanted, resolvedCount) {
+function noopLapDecisions(scm, tracker, pr, ticketKey, stickyApproved, freshReviewWanted, resolvedCount, repoInfo) {
     if (!latchGateOpen(stickyApproved, freshReviewWanted, pr)) return;
     if (resolvedCount === 0) {
-        rearmNoopRework(scm, tracker, pr, ticketKey);
+        rearmNoopRework(scm, tracker, pr, ticketKey, repoInfo);
         return;
     }
     console.log('ℹ️ No-op push but ' + resolvedCount + ' thread(s) resolved this lap (gh-957 audit-resolve)' +
@@ -2978,7 +3011,7 @@ function completeReworkLeg(params, setup, tracker, branchName, codeChangesCommit
     var stickyApproved = prHasApproved(pr, actualParams.ticket || (params.jobParams && params.jobParams.ticket));
     var freshReviewWanted = !stickyApproved && headMovedSinceLastReview(scm, pr);
     stickyApprovalNotice(scm, pr, stickyApproved);
-    noopLapDecisions(scm, tracker, pr, ticketKey, stickyApproved, freshReviewWanted, lapResolutions.resolved);
+    noopLapDecisions(scm, tracker, pr, ticketKey, stickyApproved, freshReviewWanted, lapResolutions.resolved, repoInfo);
     clearAiReviewedLatch(pr, freshReviewWanted, repoInfo);
 
     runAutoStartReview(scm, config, ticketKey, params, actualParams, setup.customParams, freshReviewWanted, stickyApproved);
