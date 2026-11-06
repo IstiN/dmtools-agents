@@ -1571,7 +1571,7 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         return '⚠️ severity: IMPORTANT — ' + claim;
     }
 
-    test('backstop replay: 2 machine ⚠️ threads → ONE digest, both resolved defered, merge proceeds', function () {
+    test('backstop replay: 2 machine ⚠️ threads → ONE digest, both resolved deferred, merge proceeds', function () {
         var fx = fixture({
             labels: ['pr_approved', 'ai_validating'],
             threadsByNumber: { 42: [
@@ -1585,7 +1585,7 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.debtIssues.length, 1, 'exactly ONE digest issue per PR');
         assert.equal(fx.calls.debtIssues[0].title, '[debt] PR #42');
         assert.equal(fx.calls.threadResolves.length, 2, 'both counted threads resolve');
-        assert.contains(fx.calls.threadReplies[0].text, 'defered: #501');
+        assert.contains(fx.calls.threadReplies[0].text, 'deferred: #501');
         assert.equal(fx.calls.merges.length, 1, 'the squash-merge still happens');
     });
 

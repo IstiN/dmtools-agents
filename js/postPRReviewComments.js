@@ -43,6 +43,10 @@ var findingRegistry = require('./common/findingRegistry.js');
 var quotaBreakerModule = require('./common/quotaCircuitBreaker.js');
 var reviewSpecClaims = require('./common/reviewSpecClaims.js');
 var reviewHelpers = require('./postStoryTestAutomationReviewHelpers.js');
+// gh-1369 (hoisted, never lazy — the gh-823 pack-require rule): the
+// terminal-PR guard — a MERGED/CLOSED PR never re-enters the rework loop
+// (the review-leg verdict stamp and the auto-started rework arm).
+var prTerminalStateModule = require('./common/prTerminalState.js');
 // The runtime's input folder name for a ticket (input/gh-N for a GitHub key): the Java runtime
 // passes params.inputFolderPath to pre-CLI actions only, so a post-action derives it.
 var ticketKeyShapes = require('./common/ticketKeyShapes.js');
@@ -2092,6 +2096,23 @@ function fetchPullRequestObject(repoInfo, prNumber) {
     return typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
 }
 
+// gh-1369: fresh terminal-PR probe for the review-leg rework arms. The PR
+// was matched via an OPEN-PR search at leg start — a leg in flight at merge
+// time (#1368: merged 48s before its stamp) must not stamp agent:rework on
+// shipped code. The probe re-reads github_get_pr at ARM time. Fail-open: a
+// missing repo/PR number, a legacy bridge without the tool, or a failed
+// read is NOT terminal — the legacy arm semantics keep firing.
+function prIsTerminal(repoInfo, prNumber) {
+    try {
+        if (!repoInfo || !prNumber || typeof github_get_pr !== 'function') return false;
+        var prObj = fetchPullRequestObject(repoInfo, prNumber);
+        return prTerminalStateModule.isTerminalPrState(prObj.state, prObj.merged);
+    } catch (e) {
+        console.warn('⚠️ terminal-PR probe failed (fail-open): ' + (e.message || e));
+        return false;
+    }
+}
+
 function parseBranchIssueNumber(branch) {
     var m = /(^|[^a-z0-9])gh-0*(\d+)([^0-9]|$)/i.exec(String(orEmpty(branch)));
     return m ? parseInt(m[2], 10) : null;
@@ -2157,7 +2178,16 @@ function finishPRAnchoredReview(ctx, pr, repoInfo, isApproved, recommendation) {
     // Consume the on-demand trigger so the label never loops.
     removePRLabelQuietly(ctx.scm, pr.number, 'agent:review', 'No agent:review label to remove from PR #' + pr.number);
     if (!isApproved) {
-        rearmLinkedIssueRework(ctx, pr, repoInfo);
+        // gh-1369: a review leg in flight at merge time concluding
+        // REQUEST_CHANGES must not re-arm agent:rework on the now-terminal
+        // PR's linked issue (the rework-on-label dispatch would hit shipped
+        // code). Fail-open: an unknown state keeps the legacy re-arm.
+        if (prIsTerminal(repoInfo, pr.number)) {
+            console.log('⏭️ PR #' + pr.number + ' is merged/closed (gh-1369) — linked-issue ' +
+                'agent:rework re-arm skipped: nothing to rework on shipped code');
+        } else {
+            rearmLinkedIssueRework(ctx, pr, repoInfo);
+        }
     } else {
         cleanLinkedIssueArmsOnApproval(ctx, pr, repoInfo);
     }
@@ -2321,6 +2351,15 @@ function shouldRunReworkLeg(isApproved, pr, repoInfo) {
  */
 function runReworkLeg(ctx, params, pr, repoInfo, isApproved) {
     if (!shouldRunReworkLeg(isApproved, pr, repoInfo)) return;
+    // gh-1369: a review leg concluding after the merge must not arm rework
+    // on shipped code — the terminal probe runs FRESH at arm time (the PR
+    // search above listed the PR open at leg start; #1368 merged 48s before
+    // its stamp). Fail-open: an unknown state keeps the legacy arm.
+    if (prIsTerminal(repoInfo, pr.number)) {
+        console.log('⏭️ PR #' + pr.number + ' is merged/closed (gh-1369) — rework never arms ' +
+            'on a terminal PR: sm_story_rework_triggered/agent:rework skipped');
+        return;
+    }
     if (!startConfiguredRework(ctx, params)) {
         markForSmStoryRework(ctx.tracker, ctx.ticketKey);
         autoStart.triggerSmIfIdle({ config: ctx.config, customParams: ctx.customParams, scm: ctx.scm });
@@ -2730,6 +2769,7 @@ if (typeof module !== 'undefined' && module.exports) {
         stripLinkedIssueArmLabels,
         cleanLinkedIssueArmsOnApproval,
         finishPRAnchoredReview,
+        runReworkLeg,
         resolveWipLabel,
         buildBitriseEnvVars,
         resolveBitriseBranch,

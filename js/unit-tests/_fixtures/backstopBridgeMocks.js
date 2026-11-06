@@ -1,8 +1,10 @@
 /**
  * Shared merge-backstop bridge mocks (gh-1370 rework).
  *
- * backstopBridgeMocks lived duplicated byte-for-byte in test_mergeBot.js
- * and test_mergeTrigger.js, and gh-1370 had to extend BOTH copies with the
+ * backstopBridgeMocks lived duplicated in test_mergeBot.js
+ * and test_mergeTrigger.js — near-identical only (5 differing lines: the
+ * two builders' lead comments plus mergeBot's extra github_search_issues
+ * slot), and gh-1370 had to extend BOTH copies with the
  * exact same resolveFailIds branch — the classic parallel-edit cost of
  * duplicated fixtures (miss one copy and the two suites silently diverge
  * in failure-injection capability). This module owns the builder in

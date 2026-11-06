@@ -12,7 +12,7 @@
  *                       triage-resolve with ack").
  *   duplicate: #n     — the finding identity already exists (the gh-1332
  *                       registry's F<n> or another thread).
- *   defered: <id>     — deferred to the review-side debt ledger (the ONLY
+ *   deferred: <id>    — deferred to the review-side debt ledger (the ONLY
  *                       deferred path — per-finding deferral is banned);
  *                       <id> is the ledger finding identity the consumer
  *                       appended.
@@ -31,14 +31,14 @@
 var reviewVerdicts = require('./reviewVerdicts.js');
 var reviewPolicy = require('./reviewPolicy.js');
 
-// The four machine-parsed dispositions. The epic's spelling is `defered`
-// (one r) — it is the canonical form and the only one the parser admits.
-var TAGS = ['fixed', 'wontfix', 'duplicate', 'defered'];
+// The four machine-parsed dispositions. The canonical spelling is `deferred`
+// (two r's) — the only form the parser admits.
+var TAGS = ['fixed', 'wontfix', 'duplicate', 'deferred'];
 
 // The ack tag line: opens its line (boundary-disciplined so reviewer prose
 // mentioning "fixed: never" mid-sentence is not a disposition), tag word,
 // colon, value. The value runs to the end of the line.
-var TAG_LINE_RE = /(?:^|\n)[ \t]*(fixed|wontfix|duplicate|defered)[ \t]*:[ \t]*([^\n]*)/i;
+var TAG_LINE_RE = /(?:^|\n)[ \t]*(fixed|wontfix|duplicate|deferred)[ \t]*:[ \t]*([^\n]*)/i;
 
 // The default wontfix reason — never empty (a reasonless closure is the
 // gh-1332 invariant-3 sin in miniature).
@@ -96,7 +96,7 @@ function buildThreadAckReply(disposition) {
     var tier = disposition.tier ? String(disposition.tier) : 'unclassified';
     var lead = '\uD83E\uDD16 triage closure (gh-1352) \u2014 ' + tier +
         ' thread resolved per the APPROVE verdict and the review policy';
-    if (disposition.tag === 'defered') {
+    if (disposition.tag === 'deferred') {
         lead += '; the finding lives in the review debt ledger (batched sweep PR)';
     } else if (disposition.tag === 'wontfix') {
         lead += '; the policy does not require a fix for this tier';
@@ -115,7 +115,7 @@ function buildThreadAckReply(disposition) {
  *                    left unresolved (resolve failure); they close as
  *                    `fixed: <ref>`.
  *   allowDefer     — the review-side ledger accepts a new finding here;
- *                    mandatory-fix tiers then close as `defered` (the
+ *                    mandatory-fix tiers then close as `deferred` (the
  *                    executor appends the finding and stamps its id).
  *
  * Decision order (pinned):
@@ -123,7 +123,7 @@ function buildThreadAckReply(disposition) {
  *   2. fixed evidence → `fixed: <ref>`;
  *   3. fix never/opportunistic (and unclassified threads — the gh-828
  *      non-blocking parity) → `wontfix: <reason>`;
- *   4. fix mandatory + deferral available → `defered` (defer: true — the
+ *   4. fix mandatory + deferral available → `deferred` (defer: true — the
  *      executor fills the ledger id);
  *   5. otherwise → null (needs fix-or-defer; the caller counts the skip).
  */
@@ -180,7 +180,7 @@ function dispositionForThread(thread, policy, opts) {
     }
 
     if (o.allowDefer) {
-        return { tag: 'defered', value: null, defer: true, tier: tier.tierKey };
+        return { tag: 'deferred', value: null, defer: true, tier: tier.tierKey };
     }
     return null;
 }

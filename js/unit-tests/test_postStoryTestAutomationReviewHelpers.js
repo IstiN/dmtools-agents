@@ -31,6 +31,7 @@ function loadPrReviewComments() {
         './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
         './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
         './config.js': configModule,
+        './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
         'config': configModule,
         './common/scm.js': { createScm: function() { return {}; } },
         './common/trackers.js': { createTracker: function() { return {}; }, extractTicketKey: function() { return null; } },

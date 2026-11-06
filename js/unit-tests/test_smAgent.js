@@ -420,7 +420,11 @@ function makeSmAgent(opts) {
 
     // gh-1101 follow-up: opts.github.prAfterRefresh = the PR payload once
     // a silent-update clone ran (the fresh-sha reset's head-moved check).
+    // opts.github.prLookupError = make github_get_pr THROW (the gh-1369
+    // probe-failure replays: transport/auth/timeout failures the smAgent
+    // guards must fail open on) — mirrors issueLookupError above.
     function getPrMock() {
+        if (opts.github.prLookupError) throw new Error(opts.github.prLookupError);
         return JSON.stringify(mockPrPayload(opts.github, capturedCliCommands));
     }
 
@@ -609,6 +613,8 @@ function makeSmAgent(opts) {
             },
             './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {}),
             './common/nakedPrReconcile.js': loadModule('js/common/nakedPrReconcile.js', makeRequire({}), {}),
+            // gh-1369: the terminal-PR guard — pure leaf, loaded real.
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
             './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
             './common/planAdvance.js': loadModule('js/common/planAdvance.js', makeRequire({
@@ -18405,5 +18411,508 @@ suite('sm.json: TC differential dispatcher rule (gh-1345)', function() {
             'the postJSAction points at the dispatcher script');
         assert.contains(cfg.params.metadata.descriptionPath, 'tc_differential_dispatcher',
             'the agent doc travels with the config');
+    });
+});
+
+// ── gh-1369: terminal-PR guard on the rework-arming + reconcile paths ────────
+//
+// Live dmtools-agents PR #1368 (2026-11-05): merged at 06:03:24Z with a clean
+// APPROVE census, but the review left 6 open (non-gating) suggestion threads.
+// GitHub does not auto-resolve threads on merge, so at 06:04:12 the SM's
+// rework-arming watcher (rework-unresolved-threads → arm_rework) stamped
+// agent:rework on the MERGED PR and posted "🧵 Unresolved review threads —
+// rework armed…" — a rework leg against shipped code. The fix: every writer
+// of machine rework state (arm_rework, the gh-840 restore sweep, the gh-807
+// verdict reconcile) probes the PR state first and exits on a terminal
+// (merged/closed) PR — nothing to rework.
+suite('smAgent: arm_rework terminal-PR guard (gh-1369)', function () {
+
+    var THREADS_RULE = {
+        description: 'unresolved review threads on a machine-authored reviewed PR -> arm agent:rework',
+        source: 'github',
+        query: { type: 'pr', labels: ['ai_pr_reviewed'],
+                 notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'],
+                 prMachineAuthor: true, threadsResolved: false, draft: false },
+        localAction: 'arm_rework',
+        limit: 5,
+        id: 'rework-unresolved-threads'
+    };
+
+    var HEAD = 'b368b368b368b368b368b368b368b368b368b368';
+
+    function threadsItem(n, prState, merged) {
+        return { key: 'pr-' + n, labels: ['ai_pr_reviewed'], issueNumber: null,
+                 prNumber: n, draft: false, headSha: HEAD,
+                 pr: { number: n, state: prState, merged: merged,
+                       checks: 'green', mergeState: 'CLEAN', mergeable: true } };
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    // The #1368 replay: the merged PR still carries ai_pr_reviewed + 6 open
+    // threads (GitHub does not auto-resolve), so the watcher query matches.
+    function mergedReplay(prState, merged) {
+        return makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [threadsItem(1368, prState, merged)],
+                pr: { number: 1368, state: prState, merged: merged,
+                      body: 'Closes #1367', head: { sha: HEAD } },
+                prComments: []
+            }
+        }));
+    }
+
+    test('AC1 — merged PR with open threads: the watcher runs but NEVER stamps agent:rework, never comments, never dispatches', function () {
+        var sm = mergedReplay('closed', true);
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents',
+            machineAuthor: 'ai-teammate', rules: [THREADS_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework stamp on a MERGED PR');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no "rework armed" comment on a MERGED PR');
+        assert.equal(sm.capturedTriggers.length, 0, 'no rework dispatch');
+    });
+
+    test('AC2 — CLOSED (not merged) PR: same terminal silence', function () {
+        var sm = mergedReplay('closed', false);
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents',
+            machineAuthor: 'ai-teammate', rules: [THREADS_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework stamp on a CLOSED PR');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no comment on a CLOSED PR');
+        assert.equal(sm.capturedTriggers.length, 0, 'no rework dispatch');
+    });
+
+    test('AC3 — OPEN PR regression: threads arm exactly as before', function () {
+        var sm = mergedReplay('open', false);
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents',
+            machineAuthor: 'ai-teammate', rules: [THREADS_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the arm lands on the open PR');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 1368);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.equal(sm.capturedPrComments.length, 1, 'the explanatory comment lands');
+        assert.contains(sm.capturedPrComments[0].body, 'Unresolved review threads');
+        assert.equal(sm.capturedTriggers.length, 0,
+            'arm_rework still never dispatches — rework-on-label owns it');
+    });
+
+    test('the red-gate variant (redHeadGated) also exits on a merged PR — no marker, no cap escalation', function () {
+        // A merged PR can still match the red-gate query (checks stayed red at
+        // merge time). The terminal guard must precede the red-gate budget so
+        // a dead head neither arms NOR spends escalation bookkeeping.
+        var redRule = {
+            description: 'red pre-merge gate -> arm agent:rework',
+            source: 'github',
+            query: { type: 'pr', checks: ['red'], notLabels: ['agent:rework', 'ai_validating'],
+                     prMachineAuthor: true, draft: false },
+            localAction: 'arm_rework',
+            redHeadGated: true,
+            limit: 1,
+            id: 'rework-on-red-gate-unlatched'
+        };
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [{ key: 'pr-1369', labels: [], issueNumber: null,
+                          prNumber: 1369, draft: false, headSha: HEAD,
+                          pr: { number: 1369, state: 'closed', merged: true,
+                                checks: 'red', mergeState: 'CLEAN', mergeable: true } }],
+                pr: { number: 1369, state: 'closed', merged: true,
+                      body: 'Closes #1360', head: { sha: HEAD } },
+                prComments: [
+                    { body: '\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 1/3' },
+                    { body: '\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 2/3' },
+                    { body: '\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 3/3' }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents',
+            machineAuthor: 'ai-teammate', rules: [redRule] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm on the merged head');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no red-head marker AND no cap escalation on a merged PR');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+
+    test('a probe WITHOUT state (legacy payload shape) fails open — arming unchanged', function () {
+        // PRs whose github_get_pr payload carries no state field (older
+        // bridges, partial mocks) keep the pre-gh-1369 behavior.
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [{ key: 'pr-1370', labels: ['ai_pr_reviewed'], issueNumber: null,
+                          prNumber: 1370, draft: false, headSha: HEAD,
+                          pr: { number: 1370, checks: 'green',
+                                mergeState: 'BLOCKED', mergeable: false } }],
+                pr: { number: 1370, body: 'Closes #1371', head: { sha: HEAD } },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents',
+            machineAuthor: 'ai-teammate', rules: [THREADS_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'fail-open: the arm fires as before');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+    });
+});
+
+suite('smAgent: restore_rework_arm terminal-PR guard (gh-1369)', function () {
+
+    var RESTORE_PREFIX = '<!-- dmtools:rework-restore ';
+    var CONSUME_PREFIX = '<!-- dmtools:rework-consume ';
+    var SUFFIX = ' -->';
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function consumeComment(path, at) {
+        return { body: CONSUME_PREFIX + JSON.stringify({ path: path, head: HEAD, at: at }) + SUFFIX,
+                 user: { login: 'ai-teammate' } };
+    }
+
+    function threadNode(author, resolved) {
+        return { id: 'thread-1', isResolved: !!resolved,
+                 comments: { nodes: [{ databaseId: 1, author: { login: author }, body: '🚨 BLOCKING: normTokenRow drops cacheRead' }] } };
+    }
+
+    function sweepRule() {
+        return {
+            description: 'gh-840 consumed-without-work sweep',
+            source: 'github',
+            query: { type: 'pr', notLabels: ['agent:rework'], threadsResolved: false, prMachineAuthor: true },
+            localAction: 'restore_rework_arm',
+            staleMinutes: 30,
+            limit: 5,
+            id: 'rework-arm-restore'
+        };
+    }
+
+    test('a MERGED PR with a stale consumption + open machine threads is NEVER restored', function () {
+        // The #1368 family: the PR merged while agent:rework was consumed;
+        // the gh-840 sweep matches (consumption evidence + open machine
+        // threads + quiet past stale) and would re-stamp agent:rework on
+        // shipped code. Terminal PRs exit the sweep.
+        var threads = { data: { repository: { pullRequest: { reviewThreads: {
+            nodes: [threadNode('ai-teammate', false), threadNode('ai-teammate', false),
+                    threadNode('ai-teammate', false), threadNode('ai-teammate', false)] } } } } };
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
+            github: {
+                items: [{ key: 'pr-826', labels: ['ai_pr_reviewed'], issueNumber: 825,
+                          prNumber: 826, draft: false, author: 'ai-teammate',
+                          pr: { number: 826, state: 'closed', merged: true, checks: 'green',
+                                mergeState: 'CLEAN', mergeable: true, headSha: HEAD } }],
+                pr: { number: 826, state: 'closed', merged: true, head: { sha: HEAD },
+                      labels: [{ name: 'ai_pr_reviewed' }], body: 'Fixes #825' },
+                prComments: [consumeComment('cross-anchor', '2026-10-10T10:00:00.000Z')],
+                workflowApiRuns: []
+            },
+            extraMocks: { github_get_pr_review_threads: function () { return JSON.stringify(threads); } }
+        });
+        sm.action(baseParams('epam', 'dmtools-agents', [sweepRule()], { machineAuthor: 'ai-teammate' }));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework restore on a MERGED PR');
+        assert.equal(sm.capturedPrComments.filter(function (c) {
+            return c.body.indexOf(RESTORE_PREFIX) !== -1;
+        }).length, 0, 'no restore bookkeeping marker on a MERGED PR');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+});
+
+suite('smAgent: reconcile_verdicts terminal-PR guard (gh-1369)', function () {
+
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function verdictMarker(head, verdict, at, blocking) {
+        return { user: { login: 'ai-teammate' },
+            body: '<!-- dmtools:review-verdict ' + JSON.stringify({
+            head: head, verdict: verdict, blocking: blocking || 0,
+            important: 0, suggestions: 0, at: at, source: 'pr_review.json'
+        }) + ' -->' };
+    }
+
+    test('a MERGED PR with contradictory verdict records exits the reconcile — no label churn, no comment', function () {
+        // Newest record is REQUEST_CHANGES, so on an open PR the reconcile
+        // would strip pr_approved. On a MERGED PR there is nothing to rework:
+        // the reconcile must exit before touching the labels (shipped code
+        // keeps its history intact).
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1368', labels: ['pr_approved', 'ai_pr_reviewed'], issueNumber: null, prNumber: 1368 }
+                ],
+                pr: { number: 1368, state: 'closed', merged: true, head: { sha: HEAD },
+                      labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    verdictMarker(HEAD, 'APPROVE', '2026-11-05T06:01:59.000Z'),
+                    verdictMarker(HEAD, 'REQUEST_CHANGES', '2026-11-05T06:02:30.000Z')
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }], { machineAuthor: 'ai-teammate' }));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'a terminal PR exits the reconcile — no loser-label strip');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no reconciliation comment on a terminal PR');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'reconciliation never arms');
+    });
+
+    test('AC2 parity — a CLOSED (not merged) PR exits the reconcile too (no label churn, no comment)', function () {
+        // A closed PR can be REOPENED; the reconcile deliberately exits in
+        // that window (the next tick after reopen self-heals). This pins
+        // the writer-level behavior at parity with the arm side (whose AC2
+        // replays closed-not-merged) and guards the guard against a
+        // refactor that special-cases `merged` only.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1369', labels: ['pr_approved', 'ai_pr_reviewed'], issueNumber: null, prNumber: 1369 }
+                ],
+                pr: { number: 1369, state: 'closed', merged: false, head: { sha: HEAD },
+                      labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    verdictMarker(HEAD, 'APPROVE', '2026-11-05T06:01:59.000Z'),
+                    verdictMarker(HEAD, 'REQUEST_CHANGES', '2026-11-05T06:02:30.000Z')
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }], { machineAuthor: 'ai-teammate' }));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'a CLOSED (not merged) PR exits the reconcile — no loser-label strip');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no reconciliation comment on a CLOSED PR');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'reconciliation never arms');
+    });
+});
+
+// ── gh-1369 rework: the sibling agent:rework writers ─────────────────────────
+//
+// Review thread PRRT_kwDORYAuYs60aHw4: the terminal guard shipped on the
+// three ticket-named paths (arm_rework, the gh-840 restore sweep, the gh-807
+// verdict reconcile), but `agent:rework` has more machine writers that ignore
+// merge state: the conflict_rework arms (the gh-683 self-heal + the main
+// arm/PR-anchored dispatch) and the fail_validation re-arms (linked-issue +
+// PR-anchored). A PR that merged mid-window (the #1368 listing/action race)
+// still matches these rules' queries on the next tick and gets agent:rework
+// stamped on shipped code. Every writer now probes terminal state BEFORE any
+// write; an unknown/absent state stays fail-open (legacy semantics).
+suite('smAgent: conflict_rework + fail_validation terminal-PR guard (gh-1369 rework)', function () {
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    var CONFLICT_RULE = {
+        description: 'merge conflict with main -> conflict rework',
+        source: 'github',
+        query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+        localAction: 'conflict_rework', limit: 1, id: 'conflict-rework'
+    };
+
+    var FAIL_RULE = {
+        description: 'validation red -> fail_validation',
+        source: 'github',
+        query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
+        localAction: 'fail_validation', limit: 1, id: 'fail-validation'
+    };
+
+    function conflictReplay(prState, prMerged) {
+        return makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [{ key: 'pr-95', labels: [], issueNumber: null, prNumber: 95,
+                          draft: false, branch: 'ai/gh-1074', author: 'ai-teammate',
+                          headSha: 'deadbee',
+                          pr: { number: 95, state: prState, merged: prMerged,
+                                mergeState: 'DIRTY', headSha: 'deadbee' } }],
+                pr: { number: 95, state: prState, merged: prMerged,
+                      labels: [], body: 'Fixes #1074' },
+                issue: { number: 1074, state: 'open' },
+                prComments: []
+            }
+        }));
+    }
+
+    test('conflict_rework — a MERGED PR with a stale DIRTY listing never arms, never posts the marker', function () {
+        var sm = conflictReplay('closed', true);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [CONFLICT_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework label on a merged PR (neither the self-heal nor the main arm)');
+        assert.equal(sm.capturedTriggers.length, 0, 'no PR-anchored conflict dispatch');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no conflict marker/report on a merged PR');
+    });
+
+    test('conflict_rework — a CLOSED (not merged) PR is terminal too', function () {
+        var sm = conflictReplay('closed', false);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [CONFLICT_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no agent:rework label on a closed PR');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker/report');
+    });
+
+    test('conflict_rework — an OPEN PR keeps the legacy arm (re-arm lands on the OPEN linked issue)', function () {
+        var sm = conflictReplay('open', false);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [CONFLICT_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the issue re-arm lands on an open PR');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 1074);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.equal(sm.capturedTriggers.length, 0, 'OPEN linked issue — no PR-anchored dispatch');
+    });
+
+    function failReplay(prState, prMerged) {
+        return makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [{ key: 'pr-72', labels: ['pr_approved', 'ai_validating'], issueNumber: null,
+                          prNumber: 72, draft: false, author: 'ai-teammate', headSha: 'sha72',
+                          pr: { number: 72, state: prState, merged: prMerged,
+                                headSha: 'sha72', checks: 'red' } }],
+                pr: { number: 72, state: prState, merged: prMerged,
+                      labels: ['pr_approved', 'ai_validating'], body: 'Fixes #503 — boot cost' },
+                prComments: []
+            }
+        }));
+    }
+
+    test('fail_validation — a MERGED PR never re-arms rework (neither the linked issue nor the PR)', function () {
+        var sm = failReplay('closed', true);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [FAIL_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework anywhere on a merged PR');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.number === 503; }),
+            'the linked issue is NOT re-armed');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.number === 72; }),
+            'the PR is NOT PR-anchored-armed');
+        assert.ok(sm.capturedPrComments.length >= 1, 'the red report still posts');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('gh-1369') !== -1,
+            'the report names the terminal skip instead of promising a re-queue');
+    });
+
+    test('fail_validation — a CLOSED (not merged) PR never re-arms either', function () {
+        var sm = failReplay('closed', false);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [FAIL_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no agent:rework on a closed PR');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+
+    test('fail_validation — an OPEN PR keeps the legacy re-arm on the linked issue (regression)', function () {
+        var sm = failReplay('open', false);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [FAIL_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the re-arm lands on an open PR');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 503, 'linked-issue carrier');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('rework re-queued') !== -1,
+            'the open-PR report keeps the re-queued wording');
+    });
+
+    test('fail_validation — a probe WITHOUT state (legacy payload) fails open and re-arms as before', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [{ key: 'pr-74', labels: ['pr_approved', 'ai_validating'], issueNumber: null,
+                          prNumber: 74, draft: false, author: 'ai-teammate', headSha: 'sha74',
+                          pr: { number: 74, headSha: 'sha74', checks: 'red' } }],
+                pr: { number: 74, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #505' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [FAIL_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'fail-open: the re-arm fires as before');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 505);
+    });
+
+    // gh-1369 rework round 2 (thread PRRT_kwDORYAuYs60bFZ0 / PRRT_kwDORYAuYs60bFcR):
+    // the inline guards dereference the var-hoisted bodyObj/prObj OUTSIDE their
+    // try — a github_get_pr THROW (transport/auth/timeout — the reason the
+    // catch exists) must degrade to the pre-rework graceful path (linked stays
+    // null → branch fallback → legacy arm), never a TypeError that aborts the
+    // item's whole handling for the tick.
+    test('conflict_rework — a github_get_pr READ FAILURE fails open: the legacy re-arm still lands (no TypeError abort)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                prLookupError: 'transport down',
+                items: [{ key: 'pr-95', labels: [], issueNumber: null, prNumber: 95,
+                          draft: false, branch: 'ai/gh-1074', author: 'ai-teammate',
+                          headSha: 'deadbee',
+                          pr: { number: 95, state: 'open', merged: false,
+                                mergeState: 'DIRTY', headSha: 'deadbee' } }],
+                issue: { number: 1074, state: 'open' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [CONFLICT_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1,
+            'fail-open: the branch-fallback re-arm still lands on the linked OPEN issue');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 1074);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.equal(sm.capturedTriggers.length, 0, 'no PR-anchored dispatch on the linked path');
+    });
+
+    test('fail_validation — a github_get_pr READ FAILURE fails open: the legacy re-arm + red report still land (no TypeError abort)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                prLookupError: 'transport down',
+                items: [{ key: 'pr-72', labels: ['pr_approved', 'ai_validating'], issueNumber: null,
+                          prNumber: 72, draft: false, branch: 'ai/gh-503', author: 'ai-teammate',
+                          headSha: 'sha72',
+                          pr: { number: 72, state: 'open', merged: false,
+                                headSha: 'sha72', checks: 'red' } }],
+                pr: { number: 72, state: 'open', merged: false,
+                      labels: ['pr_approved', 'ai_validating'] },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [FAIL_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1,
+            'fail-open: the legacy re-arm still lands despite the probe failure');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 503, 'linked-issue carrier (branch gh-503 fallback)');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.ok(sm.capturedPrComments.length >= 1, 'the red report still posts');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('rework re-queued') !== -1,
+            'the report keeps the legacy re-queued wording (not the terminal skip)');
     });
 });
