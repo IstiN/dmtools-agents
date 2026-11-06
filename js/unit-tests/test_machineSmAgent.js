@@ -1907,3 +1907,267 @@ suite('machineSm failure analyzer — scripted replay (gh-1366)', function () {
             'a present confidence still renders in the audit reason');
     });
 });
+
+// -------------------------------------------------------------------------
+// gh-1380 — the deterministic transient pre-classifier, scripted SM replay.
+// Known provider signatures (429 / rate-limit / 5xx / timeout / conn
+// refused) are classified by PURE LOGIC at the threshold crossing: the SM
+// stamps the transient verdict itself (zero AI calls), the retry rides
+// through (or waits out the `backoff` window), and the AI analyzer leg is
+// dispatched ONLY for unrecognized signatures. Same in-memory forge as the
+// gh-1366 replay above.
+// -------------------------------------------------------------------------
+
+suite('machineSm transient pre-classifier — scripted replay (gh-1380)', function () {
+
+    var LFR = lfrModule();
+    var FA = faShared();
+    var RATE_PATTERNS = ['\\b429\\b', 'rate limit'];
+    var STORM_SIG = { workflow: 'ai-teammate.yml', step: 'Development Setup', message: '429: Rate limit reached' };
+    var GIT_SIG = { workflow: 'ai-teammate.yml', step: 'Checkout tracked artifacts', message: 'git state dirty: HEAD detached' };
+
+    function stormFailures(n, provider, count) {
+        for (var i = 0; i < count; i++) {
+            provider.addComments(n, [failureNotice(LFR, STORM_SIG.workflow, STORM_SIG.step, STORM_SIG.message)]);
+        }
+    }
+
+    function gitStateFailures(n, provider, count) {
+        for (var i = 0; i < count; i++) {
+            provider.addComments(n, [failureNotice(LFR, GIT_SIG.workflow, GIT_SIG.step, GIT_SIG.message)]);
+        }
+    }
+
+    // The SM's own pre-classifier verdict stamps posted for one issue.
+    function preClassifierStamps(provider, n) {
+        return provider.store.commentsPosted.filter(function (c) {
+            return c[0] === n && c[1].indexOf('<!-- dmtools:failure-verdict ') === 0;
+        });
+    }
+
+    function parseStamp(body) {
+        var parsed = FA.parseFailureVerdicts([{ user: { login: 'ai-teammate' }, body: body }],
+            { authorLogins: ['ai-teammate'] });
+        assert.equal(parsed.length, 1, 'the SM stamp parses under the machine-identity gate');
+        return parsed[0];
+    }
+
+    function freshAgent() {
+        return loadModule('js/machineSmAgent.js',
+            makeRequire(agentModuleMap({}, { provider: scriptedProvider() })), {
+                cli_execute_command: function () { return '{}'; }
+            });
+    }
+
+    test('AC1: four identical 429 failures pre-classify transient — the retry rides through, NO analyzer leg, the counter resets', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(201, ['agent:dev']);
+        stormFailures(201, holder.provider, 4);
+
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS }));
+        assert.deepEqual(legsDispatched(holder.provider, 201), ['dev'],
+            'the retry dispatch rides through — zero AI: no analyzer leg dispatched');
+        var stamps = preClassifierStamps(holder.provider, 201);
+        assert.equal(stamps.length, 1, 'exactly one pre-classifier verdict stamp');
+        var verdict = parseStamp(stamps[0][1]);
+        assert.equal(verdict.classification, 'transient');
+        assert.equal(verdict.source, FA.TRANSIENT_SOURCE);
+        assert.equal(verdict.analyzedAtCount, 4, 'the stamp consumes the streak prefix — the counter resets');
+        assert.equal(holder.provider.store.labels.filter(function (l) { return l[0] === 201; }).length, 0,
+            'a transient classification never parks');
+
+        // A success posts nothing (the gh-1366 AC2 convention) — the
+        // consumed prefix alone keeps the arithmetic honest: the next tick
+        // is blind retry, no stamp, no analyzer.
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS }));
+        assert.deepEqual(legsDispatched(holder.provider, 201), ['dev', 'dev'],
+            'retries continue below the new threshold — no re-stamp, no analyzer');
+
+        // Four MORE identical failures rebuild the streak (8 − 4 = 4): the
+        // pre-classifier stamps the fresh crossing — still zero analyzer
+        // dispatches for a known-transient signature.
+        stormFailures(201, holder.provider, 4);
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS }));
+        assert.deepEqual(legsDispatched(holder.provider, 201), ['dev', 'dev', 'dev'],
+            'the analyzer never fires for a known-transient signature');
+        var stamps2 = preClassifierStamps(holder.provider, 201);
+        assert.equal(stamps2.length, 2, 'the new crossing stamps again');
+        assert.equal(parseStamp(stamps2[1][1]).analyzedAtCount, 8, 'the fresh crossing consumes the deeper streak');
+    });
+
+    test('backoff > 1 multiplies the retry interval — the SM absorbs ticks before the retry resumes', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(202, ['agent:dev']);
+        stormFailures(202, holder.provider, 4);
+
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, backoff: 3 }));
+        assert.deepEqual(legsDispatched(holder.provider, 202), [],
+            'the classification tick IS backoff tick 1 — no dispatch yet');
+        assert.equal(preClassifierStamps(holder.provider, 202).length, 1, 'the stamp opens the window');
+
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, backoff: 3 }));
+        assert.deepEqual(legsDispatched(holder.provider, 202), [], 'tick 2 of 3 absorbed');
+        assert.equal(preClassifierStamps(holder.provider, 202).length, 2, 'each absorbed tick re-stamps its count');
+
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, backoff: 3 }));
+        assert.deepEqual(legsDispatched(holder.provider, 202), ['dev'],
+            'tick 3 of 3 — the window is served, the retry resumes');
+        assert.equal(preClassifierStamps(holder.provider, 202).length, 2, 'no extra stamp on the resume tick');
+
+        // The retry leg fails again (the 5th failure): the stamp no longer
+        // matches the streak depth — the window cannot gate a live episode.
+        stormFailures(202, holder.provider, 1);
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, backoff: 3 }));
+        assert.deepEqual(legsDispatched(holder.provider, 202), ['dev', 'dev'],
+            'normal cadence resumes after the window');
+    });
+
+    test('AC2: an unknown-signature streak dispatches the AI analyzer exactly as today', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(203, ['agent:dev']);
+        gitStateFailures(203, holder.provider, 4);
+
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS }));
+        assert.deepEqual(legsDispatched(holder.provider, 203), ['analyze'],
+            'no pattern match → the AI analyzer leg dispatches (gh-136 semantics verbatim)');
+        assert.equal(preClassifierStamps(holder.provider, 203).length, 0,
+            'no pre-classifier stamp for the unrecognized signature');
+    });
+
+    test('AC3: an empty or missing pattern list routes every failure to the AI analyzer (today preserved)', function () {
+        var variants = [undefined, []];
+        for (var v = 0; v < variants.length; v++) {
+            var holder = { provider: scriptedProvider() };
+            holder.provider.addIssue(204, ['agent:dev']);
+            stormFailures(204, holder.provider, 4);
+            var cfg = { afterFailures: 4 };
+            if (variants[v] !== undefined) cfg.transientPatterns = variants[v];
+            faTick(holder, faJobParams(cfg));
+            assert.deepEqual(legsDispatched(holder.provider, 204), ['analyze'],
+                'no configured patterns → the 429 storm still routes to the analyzer');
+            assert.equal(preClassifierStamps(holder.provider, 204).length, 0,
+                'and no pre-classifier stamp exists');
+        }
+    });
+
+    test('AC5: patterns are config data — a deployment pattern classifies without any code change', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(205, ['agent:dev']);
+        gitStateFailures(205, holder.provider, 4);
+
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: ['git state dirty'] }));
+        assert.deepEqual(legsDispatched(holder.provider, 205), ['dev'],
+            'the deployment\'s own pattern pre-classifies the streak');
+        assert.equal(preClassifierStamps(holder.provider, 205).length, 1);
+        assert.equal(parseStamp(preClassifierStamps(holder.provider, 205)[0][1]).classification, 'transient');
+    });
+
+    test('analyzerEnabled: false — the pre-classifier + backoff run, the AI analyzer leg never dispatches (no AI anywhere)', function () {
+        var matched = { provider: scriptedProvider() };
+        matched.provider.addIssue(206, ['agent:dev']);
+        stormFailures(206, matched.provider, 4);
+        faTick(matched, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, analyzerEnabled: false }));
+        assert.deepEqual(legsDispatched(matched.provider, 206), ['dev'],
+            'a matched transient stamps + rides through');
+        assert.equal(preClassifierStamps(matched.provider, 206).length, 1, 'the deterministic classification still stamps');
+
+        var unmatched = { provider: scriptedProvider() };
+        unmatched.provider.addIssue(207, ['agent:dev']);
+        gitStateFailures(207, unmatched.provider, 4);
+        faTick(unmatched, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, analyzerEnabled: false }));
+        assert.deepEqual(legsDispatched(unmatched.provider, 207), ['dev'],
+            'an unmatched failure blind-retries — the analyzer diversion is off');
+        assert.equal(preClassifierStamps(unmatched.provider, 207).length, 0);
+    });
+
+    test('gateBlindRedispatch (surgical): the pre-classifier classifies at the crossing; the analyzer divert stays verbatim', function () {
+        var agent = freshAgent();
+        var rateSig = LFR.failureSignature(STORM_SIG);
+        var gitSig = LFR.failureSignature(GIT_SIG);
+        function stateWithSig(sig, count) {
+            return {
+                issue: { labels: [] },
+                failureAnalysis: {
+                    available: true, streakSignature: sig, streakCount: count,
+                    verdicts: [], parkMarkers: []
+                }
+            };
+        }
+        var dispatchActions = [{ type: 'dispatch', leg: 'dev', reason: 'r' }];
+        var cfg = { failureAnalysis: { enabled: true, afterFailures: 4, backoff: 1,
+            transientPatterns: RATE_PATTERNS, analyzerEnabled: true } };
+
+        var stamped = agent.gateBlindRedispatch(dispatchActions, stateWithSig(rateSig, 4), cfg);
+        assert.deepEqual(stamped.map(function (a) { return a.type; }), ['transientVerdict', 'dispatch'],
+            'the stamp lands before the riding retry dispatch');
+        assert.equal(stamped[1].leg, 'dev', 'the retry leg is untouched');
+
+        var backedOff = agent.gateBlindRedispatch(dispatchActions, stateWithSig(rateSig, 4),
+            { failureAnalysis: { enabled: true, afterFailures: 4, backoff: 3,
+                transientPatterns: RATE_PATTERNS, analyzerEnabled: true } });
+        assert.deepEqual(backedOff.map(function (a) { return a.type; }), ['transientVerdict'],
+            'backoff > 1 absorbs the classification tick — no dispatch at all');
+        assert.equal(backedOff[0].verdict.ticksSoFar, 1, 'the classification tick is backoff tick 1');
+
+        var diverted = agent.gateBlindRedispatch(dispatchActions, stateWithSig(gitSig, 4), cfg);
+        assert.deepEqual(diverted.map(function (a) { return a.type; }), ['dispatch']);
+        assert.equal(diverted[0].leg, 'analyze', 'the unknown signature still diverts to the analyzer (gh-136 verbatim)');
+        assert.equal(diverted[0].type, 'dispatch', 'the divert replaces the dispatch in place');
+
+        var noAi = agent.gateBlindRedispatch(dispatchActions, stateWithSig(gitSig, 4),
+            { failureAnalysis: { enabled: true, afterFailures: 4, transientPatterns: RATE_PATTERNS, analyzerEnabled: false } });
+        assert.deepEqual(noAi, dispatchActions, 'analyzer off + unmatched → untouched blind retry (no AI anywhere)');
+
+        var escalationOnly = [{ type: 'label', label: 'needs-human', reason: 'rounds exhausted' }];
+        assert.deepEqual(
+            agent.gateBlindRedispatch(escalationOnly, stateWithSig(rateSig, 4), cfg), escalationOnly,
+            'no dispatch to classify or divert → escalations ride untouched');
+    });
+
+    test('gateTransientBackoff (surgical): a pending window absorbs the dispatch into the tick stamp; other actions ride', function () {
+        var agent = freshAgent();
+        var sig = LFR.failureSignature(STORM_SIG);
+        function stateWith(stampVerdict, streak) {
+            return {
+                issue: { labels: [] },
+                failureAnalysis: {
+                    available: true, streakSignature: sig, streakCount: streak,
+                    verdicts: stampVerdict ? [stampVerdict] : [], parkMarkers: []
+                }
+            };
+        }
+        var stamp1 = {
+            signature: sig, classification: 'transient', source: FA.TRANSIENT_SOURCE,
+            analyzedAtCount: 4, backoffTicks: 3, ticksSoFar: 1, at: '2026-11-06T10:00:00.000Z'
+        };
+        var cfg = { failureAnalysis: { enabled: true, backoff: 3, transientPatterns: RATE_PATTERNS } };
+        var actions = [{ type: 'dispatch', leg: 'dev', reason: 'r' }, { type: 'label', label: 'x', reason: 'y' }];
+
+        var gated = agent.gateTransientBackoff(actions, stateWith(stamp1, 4), cfg);
+        assert.equal(gated.length, 2, 'same action count — the dispatch is replaced, not dropped');
+        assert.equal(gated[0].type, 'transientVerdict', 'the dispatch is absorbed into the tick stamp');
+        assert.equal(gated[0].verdict.ticksSoFar, 2, 'the absorbed tick advances the window counter');
+        assert.equal(gated[0].verdict.analyzedAtCount, 4, 'the consumed prefix stays stable mid-window');
+        assert.equal(gated[1].type, 'label', 'non-dispatch actions ride untouched');
+
+        assert.deepEqual(agent.gateTransientBackoff(actions, stateWith(stamp1, 5), cfg), actions,
+            'a new failure since the stamp closes the window — actions unchanged');
+        assert.deepEqual(agent.gateTransientBackoff(actions, stateWith(null, 4), cfg), actions,
+            'no stamp → no window');
+        assert.deepEqual(
+            agent.gateTransientBackoff(actions, stateWith(stamp1, 4),
+                { failureAnalysis: { enabled: false } }), actions,
+            'feature off → no gating');
+    });
+
+    test('the pre-classifier stamps never pollute the gh-1363 signature history (the streak math stays clean)', function () {
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(208, ['agent:dev']);
+        stormFailures(208, holder.provider, 4);
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, backoff: 3 }));
+        faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, backoff: 3 }));
+        var bodies = holder.provider.store.comments[208].map(function (c) { return c.body; });
+        assert.equal(FA.failureStreak(bodies), null,
+            'the stamp comments carry no failure-signature line — the loop arithmetic is untouched by its own markers');
+    });
+});
