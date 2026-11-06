@@ -1,0 +1,855 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/smAgent.js",
+    "jobParams": {
+      "maxTriggeredWorkflows": 3,
+      "validationConcurrency": 3,
+      "validationConcurrencyQueueWatermark": 3,
+      "smGuestTransplant": {},
+      "rules": [
+        {
+          "description": "GitLab SM rule: rerun-cancelled-checks",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating",
+              "ai_validated"
+            ],
+            "notLabels": [
+              "agent:rework"
+            ],
+            "notMergeState": [
+              "BEHIND",
+              "DIRTY"
+            ],
+            "notMachine": true,
+            "draft": false
+          },
+          "localAction": "rerun_cancelled_checks",
+          "requiredContexts": [
+            "static",
+            "gate",
+            "agents-gate"
+          ],
+          "limit": 2,
+          "id": "rerun-cancelled-checks"
+        },
+        {
+          "description": "GitLab SM rule: rerun-any-cancelled-checks",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating",
+              "ai_validated"
+            ],
+            "notLabels": [
+              "agent:rework"
+            ],
+            "notMergeState": [
+              "BEHIND",
+              "DIRTY"
+            ],
+            "prMachineAuthor": true,
+            "draft": false
+          },
+          "localAction": "rerun_cancelled_checks",
+          "anyCancelled": true,
+          "limit": 2,
+          "id": "rerun-any-cancelled-checks"
+        },
+        {
+          "id": "reconcile-rework-vs-approval",
+          "description": "GitLab SM rule: reconcile-rework-vs-approval",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "agent:rework"
+            ],
+            "latestVerdict": [
+              "APPROVE"
+            ],
+            "draft": false
+          },
+          "localAction": "reconcile_verdicts",
+          "limit": 10
+        },
+        {
+          "id": "reconcile-issue-rework-vs-approval",
+          "description": "GitLab SM rule: reconcile-issue-rework-vs-approval",
+          "source": "gitlab",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "agent:rework"
+            ],
+            "prState": "OPEN",
+            "latestVerdict": [
+              "APPROVE"
+            ]
+          },
+          "localAction": "reconcile_verdicts",
+          "limit": 10
+        },
+        {
+          "id": "reconcile-approval-vs-changes",
+          "description": "GitLab SM rule: reconcile-approval-vs-changes",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "pr_approved"
+            ],
+            "latestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ],
+            "draft": false
+          },
+          "localAction": "reconcile_verdicts",
+          "limit": 10
+        },
+        {
+          "description": "GitLab SM rule: unarm-stale-validation",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "mergeState": [
+              "BEHIND"
+            ],
+            "draft": false
+          },
+          "localAction": "unarm_validation",
+          "limit": 1,
+          "id": "unarm-stale-validation"
+        },
+        {
+          "description": "GitLab SM rule: silent-update-behind",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "notLabels": [
+              "ai_validating"
+            ],
+            "mergeState": [
+              "BEHIND"
+            ],
+            "draft": false
+          },
+          "localAction": "update_branch",
+          "limit": 10,
+          "id": "silent-update-behind"
+        },
+        {
+          "description": "GitLab SM rule: park-reset",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "validation_failed"
+            ],
+            "notLabels": [
+              "ai_validating",
+              "blocked"
+            ],
+            "draft": false
+          },
+          "localAction": "update_branch",
+          "limit": 10,
+          "id": "park-reset"
+        },
+        {
+          "description": "GitLab SM rule: merge-validated",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "checks": "green",
+            "mergeState": "CLEAN",
+            "notLatestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ]
+          },
+          "localAction": "merge_pr",
+          "limit": 1,
+          "id": "merge-validated"
+        },
+        {
+          "description": "GitLab SM rule: merge-validated-guest",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating",
+              "pr_approved"
+            ],
+            "checks": [
+              "none",
+              "pending"
+            ],
+            "mergeState": "CLEAN",
+            "notMachine": true,
+            "notLatestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ],
+            "draft": false
+          },
+          "localAction": "merge_pr",
+          "guestZeroFailing": true,
+          "limit": 1,
+          "id": "merge-validated-guest"
+        },
+        {
+          "description": "GitLab SM rule: fail-validation",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "checks": "red"
+          },
+          "localAction": "fail_validation",
+          "limit": 10,
+          "id": "fail-validation"
+        },
+        {
+          "description": "GitLab SM rule: rework-on-red-gate-unlatched",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "checks": [
+              "red"
+            ],
+            "notLabels": [
+              "ai_validating",
+              "validation_failed",
+              "agent:rework",
+              "chore:pin"
+            ],
+            "prMachineAuthor": true,
+            "notMergeState": [
+              "BEHIND",
+              "DIRTY"
+            ],
+            "draft": false
+          },
+          "localAction": "arm_rework",
+          "redHeadGated": true,
+          "limit": 1,
+          "id": "rework-on-red-gate-unlatched"
+        },
+        {
+          "description": "GitLab SM rule: rework-on-validation-failed",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "validation_failed"
+            ],
+            "notLabels": [
+              "agent:rework",
+              "ai_validating"
+            ],
+            "checks": [
+              "red"
+            ],
+            "prMachineAuthor": true,
+            "draft": false
+          },
+          "localAction": "arm_rework",
+          "limit": 1,
+          "id": "rework-on-validation-failed"
+        },
+        {
+          "description": "GitLab SM rule: sweep-stale-validating",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "notMergeState": [
+              "BEHIND"
+            ],
+            "draft": false
+          },
+          "localAction": "sweep_stale_validation",
+          "staleMinutes": 15,
+          "limit": 10,
+          "id": "sweep-stale-validating"
+        },
+        {
+          "description": "GitLab SM rule: validate-armed",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "pr_approved"
+            ],
+            "notLabels": [
+              "ai_validating",
+              "validation_failed",
+              "rework-loop-escalated"
+            ],
+            "notMergeState": [
+              "BEHIND",
+              "DIRTY"
+            ],
+            "draft": false,
+            "mutex": "ai_validating",
+            "mutexAmong": [
+              "pr_approved"
+            ],
+            "notLatestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ]
+          },
+          "localAction": "validate_pr",
+          "skipIfValidatedHead": true,
+          "redHeadSkip": true,
+          "limit": 1,
+          "id": "validate-armed",
+          "deferRedHead": true
+        },
+        {
+          "description": "GitLab SM rule: revalidate-armed",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "pr_approved",
+              "ai_validating"
+            ],
+            "notMergeState": [
+              "BEHIND",
+              "DIRTY"
+            ],
+            "checks": [
+              "none",
+              "pending"
+            ],
+            "draft": false,
+            "mutex": "ai_validating",
+            "mutexAmong": [
+              "pr_approved"
+            ],
+            "mutexExcludeSelf": true,
+            "notLatestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ]
+          },
+          "localAction": "validate_pr",
+          "limit": 1,
+          "id": "revalidate-armed"
+        },
+        {
+          "description": "GitLab SM rule: revalidate-armed-green",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "pr_approved",
+              "ai_validating"
+            ],
+            "notMergeState": [
+              "BEHIND",
+              "DIRTY",
+              "CLEAN"
+            ],
+            "checks": [
+              "green"
+            ],
+            "draft": false,
+            "mutex": "ai_validating",
+            "mutexAmong": [
+              "pr_approved"
+            ],
+            "mutexExcludeSelf": true,
+            "notLatestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ]
+          },
+          "localAction": "validate_pr",
+          "limit": 1,
+          "id": "revalidate-armed-green",
+          "skipIfGreenCi": true
+        },
+        {
+          "description": "GitLab SM rule: validate-fresh",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "checks": [
+              "none",
+              "pending"
+            ],
+            "notLabels": [
+              "ai_validating",
+              "pr_approved",
+              "chore:pin"
+            ],
+            "notMergeState": "BEHIND",
+            "draft": false
+          },
+          "localAction": "validate_pr",
+          "limit": 1,
+          "id": "validate-fresh"
+        },
+        {
+          "description": "GitLab SM rule: validate-fresh-masked-green",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "checks": "green",
+            "notLabels": [
+              "ai_validating",
+              "pr_approved",
+              "chore:pin",
+              "validation_failed"
+            ],
+            "notMergeState": [
+              "BEHIND",
+              "DIRTY"
+            ],
+            "mergeStateLatch": {
+              "CLEAN": [
+                "ai_developed"
+              ]
+            },
+            "draft": false
+          },
+          "localAction": "validate_pr",
+          "skipIfGreenCi": true,
+          "limit": 1,
+          "id": "validate-fresh-masked-green"
+        },
+        {
+          "description": "GitLab SM rule: validated-green",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "notLabels": [
+              "pr_approved"
+            ],
+            "checks": "green"
+          },
+          "localAction": "complete_validation",
+          "limit": 10,
+          "id": "validated-green"
+        },
+        {
+          "id": "guest-transplant",
+          "source": "gitlab",
+          "guestTransplant": true,
+          "description": "GitLab SM rule: guest-transplant",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "po_accept"
+            ],
+            "notLabels": [
+              "agent:rework"
+            ],
+            "notMachine": true,
+            "crossRepo": true,
+            "draft": false,
+            "allowBlockedItems": true
+          },
+          "localAction": "transplant_guest_pr",
+          "limit": 1
+        },
+        {
+          "description": "GitLab SM rule: conflict-rework",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "mergeState": [
+              "DIRTY"
+            ],
+            "draft": false
+          },
+          "localAction": "conflict_rework",
+          "limit": 5,
+          "id": "conflict-rework"
+        },
+        {
+          "description": "GitLab SM rule: rework-on-red-ci",
+          "source": "gitlab",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "agent:rework"
+            ],
+            "notPrLabels": [
+              "agent:rework"
+            ],
+            "prMachineAuthor": true
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "{issueNumber}",
+            "leg": "rework",
+            "reason": "sm: agent:rework (red CI or review CHANGES)"
+          },
+          "limit": 1,
+          "id": "rework-on-red-ci",
+          "workflowRef": "{branch}"
+        },
+        {
+          "description": "GitLab SM rule: rework-on-label",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "agent:rework"
+            ]
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "",
+            "leg": "rework",
+            "reason": "sm: agent:rework label on the PR (manual rework request)",
+            "pr": "{prNumber}"
+          },
+          "consumeLabels": [
+            "agent:rework"
+          ],
+          "limit": 1,
+          "id": "rework-on-label",
+          "workflowRef": "{branch}"
+        },
+        {
+          "description": "GitLab SM rule: rework-arm-restore",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "notLabels": [
+              "agent:rework"
+            ],
+            "threadsResolved": false,
+            "prMachineAuthor": true
+          },
+          "localAction": "restore_rework_arm",
+          "staleMinutes": 30,
+          "limit": 5,
+          "id": "rework-arm-restore"
+        },
+        {
+          "id": "dev-on-assignment",
+          "description": "GitLab SM rule: dev-on-assignment",
+          "source": "gitlab",
+          "query": {
+            "type": "issue",
+            "assignee": "{machineAuthor}",
+            "noOpenPr": true,
+            "notLabels": [
+              "ai_developed",
+              "ai_pr_reviewed",
+              "pr_approved",
+              "ai_planned",
+              "ai_intake",
+              "agent:rework",
+              "agent:skip",
+              "status:Blocked"
+            ]
+          },
+          "consumeLabels": [
+            "agent:review"
+          ],
+          "inputs": {
+            "issue": "{issueNumber}",
+            "leg": "dev",
+            "reason": "sm: assigned issue never picked up a dev leg (derive gap gh-944)"
+          },
+          "workflowFile": "ai-teammate.yml",
+          "limit": 3
+        },
+        {
+          "id": "develop-done",
+          "source": "gitlab",
+          "description": "GitLab SM rule: develop-done",
+          "query": {
+            "type": "issue",
+            "notLabels": [
+              "ai_developed",
+              "agent:rework"
+            ],
+            "prState": "OPEN",
+            "prChecks": "green",
+            "prMachineAuthor": true
+          },
+          "localAction": "mark_developed"
+        },
+        {
+          "description": "GitLab SM rule: review-after-dev",
+          "source": "gitlab",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "ai_developed"
+            ],
+            "notLabels": [
+              "agent:rework"
+            ],
+            "notPrLabels": [
+              "ai_pr_reviewed",
+              "pr_approved"
+            ],
+            "prLabels": [
+              "ai_validated"
+            ]
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "{issueNumber}",
+            "leg": "review",
+            "reason": "sm: green PR awaits review"
+          },
+          "limit": 10,
+          "id": "review-after-dev",
+          "workflowRef": "{branch}"
+        },
+        {
+          "description": "GitLab SM rule: review-external-once",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "notLabels": [
+              "ai_pr_reviewed",
+              "agent:review",
+              "pr_approved"
+            ],
+            "checks": "green",
+            "draft": false,
+            "notMachine": true
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "",
+            "leg": "review",
+            "reason": "sm: external PR green - one-time review",
+            "pr": "{prNumber}"
+          },
+          "limit": 1,
+          "id": "review-external-once"
+        },
+        {
+          "description": "GitLab SM rule: review-machine-unlinked",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validated"
+            ],
+            "notLabels": [
+              "ai_pr_reviewed",
+              "pr_approved",
+              "agent:review",
+              "ai_validating"
+            ],
+            "checks": [
+              "green",
+              "none"
+            ],
+            "prMachineAuthor": true,
+            "draft": false
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "",
+            "leg": "review",
+            "reason": "sm: machine PR validated but issue loop never armed a review - one-time review",
+            "pr": "{prNumber}"
+          },
+          "limit": 1,
+          "id": "review-machine-unlinked",
+          "workflowRef": "{branch}"
+        },
+        {
+          "description": "GitLab SM rule: review-stale-verdict",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "notLabels": [
+              "agent:review",
+              "agent:rework",
+              "ai_validating",
+              "pr_approved"
+            ],
+            "checks": "green",
+            "draft": false,
+            "reviewStale": true
+          },
+          "localAction": "arm_review",
+          "limit": 5,
+          "id": "review-stale-verdict",
+          "workflowRef": "{branch}"
+        },
+        {
+          "description": "GitLab SM rule: review-threads-resolved",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_pr_reviewed"
+            ],
+            "notLabels": [
+              "agent:review",
+              "ai_validating",
+              "pr_approved"
+            ],
+            "checks": "green",
+            "draft": false,
+            "threadsResolved": true,
+            "staleVerdict": true
+          },
+          "localAction": "arm_review",
+          "limit": 5,
+          "id": "review-threads-resolved",
+          "workflowRef": "{branch}"
+        },
+        {
+          "description": "GitLab SM rule: review-stale-verdict-unchecked",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validated",
+              "ai_pr_reviewed"
+            ],
+            "notLabels": [
+              "agent:review",
+              "ai_validating",
+              "pr_approved"
+            ],
+            "checks": "none",
+            "draft": false,
+            "staleVerdict": true,
+            "threadsResolved": true
+          },
+          "localAction": "arm_review",
+          "limit": 5,
+          "id": "review-stale-verdict-unchecked",
+          "workflowRef": "{branch}"
+        },
+        {
+          "description": "GitLab SM rule: rework-unresolved-threads",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_pr_reviewed"
+            ],
+            "notLabels": [
+              "agent:rework",
+              "agent:review",
+              "ai_validating",
+              "validation_failed"
+            ],
+            "prMachineAuthor": true,
+            "threadsResolved": false,
+            "draft": false
+          },
+          "localAction": "arm_rework",
+          "limit": 5,
+          "id": "rework-unresolved-threads"
+        },
+        {
+          "description": "GitLab SM rule: review-on-label",
+          "source": "gitlab",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "agent:review"
+            ]
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "",
+            "leg": "review",
+            "reason": "sm: agent:review label on PR",
+            "pr": "{prNumber}"
+          },
+          "limit": 1,
+          "id": "review-on-label",
+          "workflowRef": "{branch}"
+        },
+        {
+          "description": "GitLab SM rule: review-on-issue-label",
+          "source": "gitlab",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "agent:review"
+            ],
+            "notLabels": [
+              "agent:rework"
+            ],
+            "notPrLabels": [
+              "agent:review",
+              "pr_approved"
+            ],
+            "prState": "open",
+            "draft": false
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "{issueNumber}",
+            "leg": "review",
+            "reason": "sm: agent:review label on issue"
+          },
+          "limit": 1,
+          "id": "review-on-issue-label",
+          "workflowRef": "{branch}"
+        },
+        {
+          "description": "GitLab SM rule: close-on-merge",
+          "source": "gitlab",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "ai_developed"
+            ],
+            "prState": "MERGED"
+          },
+          "localAction": "close_issue",
+          "limit": 5,
+          "id": "close-on-merge"
+        },
+        {
+          "description": "GitLab SM rule: plan-advance",
+          "source": "gitlab",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "ai_planned"
+            ]
+          },
+          "localAction": "advance_plan",
+          "limit": 10,
+          "id": "plan-advance"
+        }
+      ],
+      "scm": {
+        "provider": "gitlab"
+      }
+    }
+  }
+}
