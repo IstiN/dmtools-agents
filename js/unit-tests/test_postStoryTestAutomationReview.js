@@ -93,6 +93,7 @@ var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({
             './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
             './config.js': configModule,
             './common/machineAuthor.js': machineAuthorModule,
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/scm.js': { createScm: function() { return scmMock; } },
             './common/autoStart.js': {
                 triggerConfiguredWorkflowForTicket: function() { return false; },
