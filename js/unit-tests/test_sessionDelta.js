@@ -983,13 +983,16 @@ if (_sdHasNodeProcess_) {
     suite('sessionDelta — readRuntimeEnv engine branches (gh-1385 rework: crap gate)', function() {
 
         test('Node branch: process.env hit returns the value, miss returns empty string', function() {
-            // no `java` global under node — the java-bridge try must throw and be swallowed
-            assert.equal(typeof java, 'undefined');
+            // remove the harness java stub — readRuntimeEnv must swallow the
+            // resulting ReferenceError and fall through to process.env
+            var prevJava = global.java;
+            delete global.java;
             process.env.SD_GH1385_PROBE = 'runtime-value';
             try {
                 assert.equal(sessionDelta.readRuntimeEnv('SD_GH1385_PROBE'), 'runtime-value');
                 assert.equal(sessionDelta.readRuntimeEnv('SD_GH1385_PROBE_MISSING'), '');
             } finally {
+                if (prevJava === undefined) { delete global.java; } else { global.java = prevJava; }
                 delete process.env.SD_GH1385_PROBE;
             }
         });
@@ -1082,7 +1085,7 @@ if (_sdCanBash_) {
                     'done',
                     'IFS= read -r CFG || true',
                     'KEY="${CFG#*Bearer }"',
-                    'KEY="${KEY%\"}"',
+                    'KEY="${KEY%\\"}"',
                     'case "$maxt" in "" | *[!0-9]*) exit 3 ;; esac',
                     '[ "$maxt" -ge 1 ] && [ "$maxt" -le 10 ] || exit 3',
                     '[ -n "$KEY" ] || exit 2',
@@ -1143,7 +1146,7 @@ if (_sdCanBash_) {
                     'LOG="${FAKE_CURL_LOG:?}"',
                     'IFS= read -r CFG || true',
                     'KEY="${CFG#*Bearer }"',
-                    'KEY="${KEY%\"}"',
+                    'KEY="${KEY%\\"}"',
                     '[ -n "$KEY" ] || exit 2',
                     'printf "%s\\n" "$KEY" >> "$LOG"',
                     'cat "$FAKE_FIXTURES/equal.json"; printf "\\n200"',
@@ -1245,7 +1248,7 @@ if (_sdCanBash_) {
                     'LOG="${FAKE_CURL_LOG:?}"',
                     'IFS= read -r CFG || true',
                     'KEY="${CFG#*Bearer }"',
-                    'KEY="${KEY%\"}"',
+                    'KEY="${KEY%\\"}"',
                     '[ -n "$KEY" ] || exit 2',
                     'printf "%s\\n" "$KEY" >> "$LOG"',
                     'cat "$FAKE_FIXTURES/healthy.json"; printf "\\n200"',
@@ -1259,7 +1262,7 @@ if (_sdCanBash_) {
                     'exec 2> "$TMP/stderr.log"',
                     '_fa_resolve_env',
                     '# the china-platform key must never reach the global endpoint (host-boundary guard)',
-                    '[ ! grep -q "$K_CN" "$FAKE_CURL_LOG" ] || { echo "CN_KEY_PROBED"; exit 1; }',
+                    'if grep -q "$K_CN" "$FAKE_CURL_LOG"; then echo "CN_KEY_PROBED"; exit 1; fi',
                     'CALLS="$(wc -l < "$FAKE_CURL_LOG" | tr -d " ")"',
                     '[ "$CALLS" = "1" ] || { echo "CALLS=$CALLS"; exit 1; }',
                     '# the canonical entry is probed healthy -> primary; the china entry keeps its static slot ("not-probed")',
@@ -1286,7 +1289,7 @@ if (_sdCanBash_) {
                     'LOG="${FAKE_CURL_LOG:?}"',
                     'IFS= read -r CFG || true',
                     'KEY="${CFG#*Bearer }"',
-                    'KEY="${KEY%\"}"',
+                    'KEY="${KEY%\\"}"',
                     'printf "%s\\n" "$KEY" >> "$LOG"',
                     'sleep 1',
                     'if [ "$KEY" = "$K_EXHAUSTED" ]; then cat "$FAKE_FIXTURES/exhausted.json"; else cat "$FAKE_FIXTURES/healthy.json"; fi',

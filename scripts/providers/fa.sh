@@ -184,7 +184,15 @@ _fa_append_fallback_keys() {
 # skips probing entirely; default ON, zai entries only — other providers are
 # never probed. One HTTP call per distinct key per resolution, single
 # attempt, short timeout (no retry storms). Entries whose baseUrl leaves
-# api.z.ai (e.g. china-platform keys) are not probed — out of scope.
+# api.z.ai (e.g. china-platform keys) are not probed — out of scope (the
+# host check is boundary-exact: only https://api.z.ai or https://api.z.ai/
+# prefixed baseUrls are probed, never api.z.ai.cn or other siblings).
+# The whole probe step runs under an aggregate per-leg budget (default 10 s,
+# override with FA_QUOTA_PROBE_BUDGET_MS, clamped to 500 ms..120 s) — once
+# spent, unprobed keys keep their static slot ("probe-budget"), so a slow or
+# unreachable endpoint costs every leg at most the budget, not N x timeout.
+# The API key is handed to curl via a stdin config (-K -), never as an argv
+# element, so it cannot leak through ps//proc cmdline.
 _fa_order_queue_by_quota() {
   [ -n "${FA_PROVIDERS_QUEUE:-}" ] || return 0
   case "$(printf '%s' "${FA_QUOTA_PROBE:-on}" | tr '[:upper:]' '[:lower:]')" in
@@ -203,6 +211,9 @@ _fa_order_queue_by_quota() {
     if (!Array.isArray(arr) || arr.length === 0) process.exit(0);
     const ENDPOINT = "https://api.z.ai/api/monitor/usage/quota/limit";
     const PROBE_TIMEOUT_S = 5;
+    const BUDGET_RAW = parseInt(process.env.FA_QUOTA_PROBE_BUDGET_MS || "", 10);
+    const BUDGET_MS = isFinite(BUDGET_RAW) && BUDGET_RAW >= 500 ? Math.min(BUDGET_RAW, 120000) : 10000;
+    const startedAt = Date.now();
     const cache = new Map();
     const keyOf = (entry) => {
       const cfg = entry && entry.provider_config;
@@ -227,10 +238,17 @@ _fa_order_queue_by_quota() {
     };
     const probe = (key) => {
       let out = null;
+      let errWhy = "timeout";
       try {
-        out = cp.execFileSync("curl", ["-sS", "-m", String(PROBE_TIMEOUT_S), "-H", "Authorization: Bearer " + key, "-w", "\n%{http_code}", ENDPOINT], { encoding: "utf8", timeout: (PROBE_TIMEOUT_S + 2) * 1000, stdio: ["ignore", "pipe", "pipe"] });
-      } catch (e) { out = null; }
-      if (out === null) return { group: 2, score: null, why: "timeout" };
+        out = cp.execFileSync("curl", ["-sS", "-m", String(PROBE_TIMEOUT_S), "-K", "-", "-w", "\n%{http_code}", ENDPOINT], { encoding: "utf8", timeout: (PROBE_TIMEOUT_S + 2) * 1000, input: "header = \"Authorization: Bearer " + key + "\"\n", stdio: ["pipe", "pipe", "pipe"] });
+      } catch (e) {
+        out = null;
+        if (e && (e.killed || e.signal)) errWhy = "timeout";
+        else if (e && e.status === 28) errWhy = "timeout";
+        else if (e && typeof e.status === "number" && e.status > 0) errWhy = "curl-exit " + e.status;
+        else errWhy = "timeout";
+      }
+      if (out === null) return { group: 2, score: null, why: errWhy };
       const nl = out.lastIndexOf("\n");
       const status = parseInt(out.slice(nl + 1).trim(), 10);
       const body = out.slice(0, nl);
@@ -250,11 +268,19 @@ _fa_order_queue_by_quota() {
     const decorated = arr.map((entry, idx) => {
       const cfg = entry && entry.provider_config;
       const baseUrl = cfg ? (cfg.baseUrl || "") : "";
-      const sameHost = !baseUrl || baseUrl.indexOf("https://api.z.ai") === 0;
+      const sameHost = !baseUrl ||
+        baseUrl === "https://api.z.ai" ||
+        baseUrl.indexOf("https://api.z.ai/") === 0;
       const key = entry && entry.provider_type === "zai" && sameHost ? keyOf(entry) : null;
       let cls = { group: 2, score: null, why: "not-probed" };
       if (key) {
-        if (!cache.has(key)) cache.set(key, probe(key));
+        if (!cache.has(key)) {
+          if (Date.now() - startedAt >= BUDGET_MS) {
+            cache.set(key, { group: 2, score: null, why: "probe-budget" });
+          } else {
+            cache.set(key, probe(key));
+          }
+        }
         cls = cache.get(key);
       }
       const ref = (cfg && (cfg.apiKeyEnv || cfg.apiKeyEnvVar)) || ("#" + idx);
