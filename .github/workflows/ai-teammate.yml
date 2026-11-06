@@ -293,8 +293,7 @@ jobs:
       machine-author: 'ai-teammate'
       # gh-1381: provider key slot 1 lands in the leg env as ZAI_CODE_KEY_1 —
       # the fa provider resolver auto-appends it as a failover queue entry
-      # (same provider + model as the primary ZAI_CODE_KEY entry). The VALUE
-      # is the repo secret CUSTOM_PROVIDER_KEY1 (secrets: inherit passes it).
+      # (same provider + model as the primary ZAI_CODE_KEY entry).
       CUSTOM_PROVIDER_KEY1_NAME: 'ZAI_CODE_KEY_1'
       leg: ${{ github.event.inputs.leg || '' }}
       reason: ${{ github.event.inputs.reason || github.event_name }}
@@ -306,4 +305,16 @@ jobs:
       # ubuntu-24.04 are unaffected. Owner decision: CI checks stay on slim,
       # ai-teammate legs move to ubuntu-latest until slim is healthy again.
       runner: 'ubuntu-latest'
-    secrets: inherit
+    # Explicit secret mapping (replaces `secrets: inherit`, gh-1381): deployment
+    # secrets use provider-tagged names — CUSTOM_PROVIDER_<PROVIDER>_KEY_<N> — so
+    # multi-provider setups stay readable. The factory's generic slots receive the
+    # values; the NAME inputs above name the env var each lands as in the leg.
+    secrets:
+      SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+      ZAI_CODE_KEY: ${{ secrets.ZAI_CODE_KEY }}
+      KIMI_REVIEW_KEY: ${{ secrets.KIMI_REVIEW_KEY }}
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+      ENV_VAR_DEV_QUEUE: ${{ secrets.ENV_VAR_DEV_QUEUE || vars.ENV_VAR_DEV_QUEUE }}
+      ENV_VAR_REVIEW_QUEUE: ${{ secrets.ENV_VAR_REVIEW_QUEUE || vars.ENV_VAR_REVIEW_QUEUE }}
+      CUSTOM_PROVIDER_KEY1: ${{ secrets.CUSTOM_PROVIDER_ZAI_KEY_1 }}
