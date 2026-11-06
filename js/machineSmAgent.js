@@ -44,14 +44,31 @@
  *                       consecutive same-signature failures before the
  *                       analyzer dispatches (default 4); blockedLabel:
  *                       the park label (default 'sm:leg-blocked');
- *                       backoff: retry-interval multiplier reserved knob
- *                       (default 1 = off) }. Malformed → hard validation
- *                       error at SM start. On the failure path the SM
- *                       dispatches the `analyze` leg at the exact
- *                       threshold crossing; a deterministic-infra verdict
- *                       parks the issue (label + ONE diagnostic comment)
- *                       until the label is removed or the issue is
- *                       re-assigned.
+ *                       backoff: the transient-retry interval multiplier
+ *                       (integer >= 1, default 1 = off) — gh-1380 makes
+ *                       it real: after a pre-classified transient crossing
+ *                       the SM absorbs backoff-1 further SM ticks before
+ *                       the retry leg dispatches; transientPatterns
+ *                       (gh-1380): regex source strings matched
+ *                       case-insensitively against the gh-1363-normalized
+ *                       signature — a streak matching ANY of them is
+ *                       classified transient by the deterministic
+ *                       pre-classifier (zero AI calls; the consumed
+ *                       counter resets like a gh-1366 transient verdict;
+ *                       MISSING/EMPTY → every failure routes to the AI
+ *                       analyzer; defaults exported as
+ *                       failureAnalyzer.DEFAULT_TRANSIENT_PATTERNS);
+ *                       analyzerEnabled (gh-1380, default true): false
+ *                       turns the AI analyzer leg off — the
+ *                       pre-classifier + backoff still run (no AI
+ *                       anywhere) }. Malformed → hard validation error at
+ *                       SM start. On the failure path the SM classifies
+ *                       known-transient signatures itself and dispatches
+ *                       the `analyze` leg only for unrecognized ones at
+ *                       the exact threshold crossing; a deterministic-infra
+ *                       verdict parks the issue (label + ONE diagnostic
+ *                       comment) until the label is removed or the issue
+ *                       is re-assigned.
  *
  * Decision core (decideActions) is pure and unit-tested; all GitHub I/O
  * goes through `gh` via cli_execute_command and is injectable/mocks-able
@@ -297,11 +314,32 @@ function failureAnalysisGate(state, cfg) {
 }
 
 /**
+ * gh-1380: the index of the FIRST dispatch action, or -1. The gates that
+ * divert, stamp, or absorb a retry all key on it.
+ */
+function firstDispatchIndex(actions) {
+    for (var i = 0; i < actions.length; i++) {
+        if (actions[i].type === 'dispatch') return i;
+    }
+    return -1;
+}
+
+/**
  * The blind-retry gate (gh-1366 AC1): a re-dispatch decision crossing the
  * afterFailures threshold is diverted to the analyzer leg ONCE — exactly
  * the crossing, so a crashed analyzer (no verdict → nothing consumed)
  * moves the streak past the threshold and blind retries continue (AC5).
  * Only dispatch actions divert; escalations (needs-human labels) ride on.
+ *
+ * gh-1380: the deterministic transient pre-classifier runs FIRST at the
+ * crossing — pure logic, zero AI. A signature matching any configured
+ * `transientPatterns` regex is classified BY THE SM ITSELF: the verdict
+ * stamp lands (the audit trail + the consumption discount that resets the
+ * effective counter, gh-1366 transient semantics) and the retry dispatch
+ * rides through — or, with backoff > 1, waits out the window (the
+ * classification tick IS backoff tick 1; see gateTransientBackoff).
+ * Unrecognized signatures divert to the analyzer leg exactly as today —
+ * unless analyzerEnabled is false (no AI anywhere: plain blind retry).
  */
 function gateBlindRedispatch(actions, state, cfg) {
     if (!failureAnalysisEnabledOf(cfg)) return actions;
@@ -312,18 +350,60 @@ function gateBlindRedispatch(actions, state, cfg) {
     if (!failureAnalyzerModule.analysisDue(faState.streakCount, consumed, faCfg.afterFailures)) {
         return actions;
     }
-    for (var i = 0; i < actions.length; i++) {
-        if (actions[i].type !== 'dispatch') continue;
-        var diverted = {
-            type: 'dispatch',
-            leg: failureAnalyzerModule.ANALYZE_LEG,
-            reason: 'failure streak of ' + faCfg.afterFailures + ' identical failures — the analyzer leg ' +
-                'classifies transient vs deterministic before more blind retries' +
+    var firstDispatch = firstDispatchIndex(actions);
+    if (firstDispatch === -1) return actions;
+    var stamp = failureAnalyzerModule.transientPreClassifierVerdict(
+        faState.streakSignature, faCfg.transientPatterns, faState.streakCount, faCfg.backoff);
+    if (stamp) {
+        var stampAction = {
+            type: 'transientVerdict',
+            verdict: stamp,
+            reason: 'known-transient failure signature — pre-classified transient without AI' +
                 (faState.streakSignature ? ' (signature: ' + faState.streakSignature + ')' : '')
         };
-        return actions.slice(0, i).concat([diverted]).concat(actions.slice(i + 1));
+        if (faCfg.backoff > 1) {
+            return actions.slice(0, firstDispatch).concat([stampAction]).concat(actions.slice(firstDispatch + 1));
+        }
+        return actions.slice(0, firstDispatch).concat([stampAction]).concat(actions.slice(firstDispatch));
     }
-    return actions;
+    if (faCfg.analyzerEnabled === false) return actions;
+    var diverted = {
+        type: 'dispatch',
+        leg: failureAnalyzerModule.ANALYZE_LEG,
+        reason: 'failure streak of ' + faCfg.afterFailures + ' identical failures — the analyzer leg ' +
+            'classifies transient vs deterministic before more blind retries' +
+            (faState.streakSignature ? ' (signature: ' + faState.streakSignature + ')' : '')
+    };
+    return actions.slice(0, firstDispatch).concat([diverted]).concat(actions.slice(firstDispatch + 1));
+}
+
+/**
+ * gh-1380: the transient-backoff gate. While the latest same-signature
+ * pre-classifier stamp carries an OPEN backoff window (ticks still to
+ * absorb, no new failure since the stamp — the stamp consumed that streak
+ * depth), dispatch actions are replaced by the tick re-stamp: the retry
+ * interval is multiplied by failureAnalysis.backoff. Non-dispatch actions
+ * (labels, merges, escalations) ride through untouched; the window can
+ * only ever pace the retry, never stop the loop (a stamp-less or served
+ * window leaves the actions verbatim).
+ */
+function gateTransientBackoff(actions, state, cfg) {
+    if (!failureAnalysisEnabledOf(cfg)) return actions;
+    var faState = failureAnalysisStateOf(state);
+    if (!faState) return actions;
+    var pending = failureAnalyzerModule.pendingTransientBackoff(
+        faState.verdicts, faState.streakSignature, faState.streakCount);
+    if (!pending) return actions;
+    var firstDispatch = firstDispatchIndex(actions);
+    if (firstDispatch === -1) return actions;
+    var tickAction = {
+        type: 'transientVerdict',
+        verdict: failureAnalyzerModule.backoffTickVerdictRecord(pending),
+        reason: 'transient backoff window open — absorbing tick ' + (pending.ticksSoFar + 1) +
+            ' of ' + pending.backoffTicks + ' before the retry resumes' +
+            (faState.streakSignature ? ' (signature: ' + faState.streakSignature + ')' : '')
+    };
+    return actions.slice(0, firstDispatch).concat([tickAction]).concat(actions.slice(firstDispatch + 1));
 }
 
 function decideActions(state, cfg) {
@@ -344,7 +424,7 @@ function decideActions(state, cfg) {
     var reworkExhausted = rounds >= maxRounds;
 
     var pr = state.pr;
-    if (!pr) return gateBlindRedispatch(decideNoPrActions(has), state, cfg);
+    if (!pr) return gateTransientBackoff(gateBlindRedispatch(decideNoPrActions(has), state, cfg), state, cfg);
 
     if (pr.state !== 'OPEN') return decideClosedPrActions(pr);
 
@@ -353,7 +433,7 @@ function decideActions(state, cfg) {
     }
 
     if (pr.checkConclusion === 'red') {
-        return gateBlindRedispatch(decideRedPrActions(pr, has, reworkExhausted, rounds), state, cfg);
+        return gateTransientBackoff(gateBlindRedispatch(decideRedPrActions(pr, has, reworkExhausted, rounds), state, cfg), state, cfg);
     }
 
     // ── green below ──────────────────────────────────────────────────────────
@@ -403,6 +483,14 @@ var ACTION_EXECUTORS = {
     // latch that actually stops re-dispatch) + the ONE diagnostic comment.
     park: function (provider, action, issue, cfg) {
         return applyFailurePark(provider, issue, action, cfg);
+    },
+    // gh-1380: the SM's own pre-classifier verdict stamp — the machine
+    // marker that classifies a known-transient streak without any AI call
+    // (the audit trail + the consumption discount + the backoff tick
+    // counter). Rides the same failure-verdict protocol as the analyzer.
+    transientVerdict: function (provider, action, issue) {
+        return provider.postIssueComment(issue.number,
+            failureAnalyzerModule.buildFailureVerdictComment(action.verdict));
     }
 };
 
@@ -1084,6 +1172,8 @@ if (typeof module !== 'undefined' && module.exports) {
         // surgical unit tests).
         failureAnalysisGate: failureAnalysisGate,
         gateBlindRedispatch: gateBlindRedispatch,
+        // gh-1380: the transient-backoff gate (surgical unit tests).
+        gateTransientBackoff: gateTransientBackoff,
         applyFailurePark: applyFailurePark
     };
 }

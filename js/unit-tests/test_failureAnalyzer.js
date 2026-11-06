@@ -670,12 +670,14 @@ suite('transient backoff window math (gh-1380)', function () {
     });
 
     test('the window stays open while ticks remain: k=3 → stamp ticks 1..2, dispatch on tick 3', function () {
-        assert.ok(fa.pendingTransientBackoff([stamp(1, 3, 4)], SIG, 4), 'after the classification stamp tick 2 is pending');
-        assert.ok(fa.pendingTransientBackoff([stamp(2, 3, 4)], SIG, 4), 'after tick 2 the window still holds');
+        assert.ok(fa.pendingTransientBackoff([stamp(1, 3, 4)], SIG, 4),
+            'after the classification stamp tick 2 is pending');
+        assert.equal(fa.pendingTransientBackoff([stamp(2, 3, 4)], SIG, 4), null,
+            'after tick 2 the absorbed count reaches the multiplier — tick 3 dispatches');
         assert.equal(fa.pendingTransientBackoff([stamp(2, 3, 4)], SIG, 5), null,
-            '…but a new failure always reopens the gates');
+            '…and a new failure always reopens the gates');
         assert.equal(fa.pendingTransientBackoff([stamp(3, 3, 4)], SIG, 4), null,
-            'the absorbed count reached the multiplier — the retry dispatches');
+            'an over-served window never gates');
     });
 
     test('backoffTickVerdictRecord advances ticksSoFar and keeps the consumed prefix stable', function () {

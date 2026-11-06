@@ -12,6 +12,19 @@
  *
  * This module is the SM-side contract of that analyzer:
  *
+ *   0. pre-classifier (gh-1380) — BEFORE the analyzer dispatch, the SM
+ *      runs the deterministic transient pre-classifier over the streak's
+ *      normalized signature (the issue-01 normalizer, reused): a match on
+ *      any `failureAnalysis.transientPatterns` regex stamps a machine
+ *      transient verdict — the SAME marker protocol, source-tagged
+ *      'transient-preclassifier' — WITHOUT any AI call. The consumed
+ *      prefix resets the counter exactly like a transient analyzer
+ *      verdict, the retry dispatch rides through (or waits out `backoff`
+ *      SM ticks via the backoffTicks/ticksSoFar window), and the AI
+ *      analyzer leg is dispatched ONLY for unrecognized signatures.
+ *      Missing/empty patterns → the classifier is inert (every failure
+ *      routes to the analyzer — AC3); DEFAULT_TRANSIENT_PATTERNS ships
+ *      the common HTTP classes as data to copy per deployment.
  *   1. config — `failureAnalysis` in the SM config. Missing → the feature
  *      is disabled silently (today's blind-retry behavior until the owner
  *      enables it); malformed → a hard validation error at SM start
@@ -62,6 +75,23 @@ var DEFAULT_AFTER_FAILURES = 4;
 var DEFAULT_BLOCKED_LABEL = 'sm:leg-blocked';
 var DEFAULT_BACKOFF = 1;
 
+// gh-1380: the DEFAULT known-transient pattern list — shipped as DATA (one
+// regex source per entry, matched case-insensitively against the gh-1363
+// normalized signature). It is never auto-applied: a deployment opts in by
+// listing patterns in `failureAnalysis.transientPatterns` (missing/empty →
+// the pre-classifier is inert and every failure routes to the AI analyzer,
+// gh-1380 AC3). Copy this list and extend it per deployment.
+var DEFAULT_TRANSIENT_PATTERNS = [
+    '\\b429\\b',                                  // HTTP 429 Too Many Requests
+    'rate limit',                                 // rate-limit phrases
+    'too many requests',
+    'quota',                                      // quota exceeded / exhausted / insufficient
+    '\\b5\\d\\d\\b',                              // 5xx server errors (500..599)
+    'timed out|timeout|etimedout',                // timeouts
+    'connection refused|econnrefused',            // connection refused
+    'connection reset|econnreset'                 // connection reset
+];
+
 function isPlainObject(value) {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -97,11 +127,53 @@ function blockedLabelOf(block) {
 
 function backoffOf(block) {
     if (block.backoff === undefined || block.backoff === null) return DEFAULT_BACKOFF;
-    if (typeof block.backoff !== 'number' || !isFinite(block.backoff) || block.backoff < 1) {
-        throw new Error('machineSm: failureAnalysis.backoff must be a number >= 1 (1 = off), got: ' +
+    if (typeof block.backoff !== 'number' || !isFinite(block.backoff) || block.backoff < 1 ||
+        Math.floor(block.backoff) !== block.backoff) {
+        throw new Error('machineSm: failureAnalysis.backoff must be an integer >= 1 (1 = off), got: ' +
             JSON.stringify(block.backoff));
     }
     return block.backoff;
+}
+
+// gh-1380: the known-transient pattern list. Absent/null → [] (the
+// pre-classifier is INERT — AC3: an empty or missing list keeps today's
+// routing, every failure goes to the AI analyzer; the defaults above are
+// data a deployment copies in). Present → an array of non-empty regex
+// source strings; each must compile (a malformed one is a hard validation
+// error at SM start — the house rule).
+function transientPatternsOf(block) {
+    if (block.transientPatterns === undefined || block.transientPatterns === null) return [];
+    if (!Array.isArray(block.transientPatterns)) {
+        throw new Error('machineSm: failureAnalysis.transientPatterns must be an array of regex strings, got: ' +
+            JSON.stringify(block.transientPatterns));
+    }
+    var out = [];
+    for (var i = 0; i < block.transientPatterns.length; i++) {
+        var source = block.transientPatterns[i];
+        if (typeof source !== 'string' || !source.trim()) {
+            throw new Error('machineSm: failureAnalysis.transientPatterns[' + i + '] must be a non-empty regex string, got: ' +
+                JSON.stringify(source));
+        }
+        try { new RegExp(source, 'i'); } catch (eRegex) {
+            throw new Error('machineSm: failureAnalysis.transientPatterns[' + i + '] is not a valid regex (' +
+                eRegex.message + '): ' + JSON.stringify(source));
+        }
+        out.push(source);
+    }
+    return out;
+}
+
+// gh-1380: the analyzer-leg dispatch knob. False turns OFF only the AI
+// analyzer diversion — the pre-classifier still classifies matched
+// signatures and paces their retries (no AI anywhere). Absent/null → true
+// (the analyzer leg dispatches exactly as gh-1366 shipped it).
+function analyzerEnabledOf(block) {
+    if (block.analyzerEnabled === undefined || block.analyzerEnabled === null) return true;
+    if (typeof block.analyzerEnabled !== 'boolean') {
+        throw new Error('machineSm: failureAnalysis.analyzerEnabled must be a boolean, got: ' +
+            JSON.stringify(block.analyzerEnabled));
+    }
+    return block.analyzerEnabled;
 }
 
 /**
@@ -110,7 +182,10 @@ function backoffOf(block) {
  *   a plain object              → validated + defaulted knobs
  *   anything else               → THROWS (hard validation error at SM start)
  * Knob validation (when present): afterFailures a positive integer,
- * blockedLabel a non-empty string, backoff a number >= 1 (1 = off).
+ * blockedLabel a non-empty string, backoff an integer >= 1 (1 = off),
+ * transientPatterns an array of non-empty compilable regex strings
+ * (missing/empty → [] — the pre-classifier is inert), analyzerEnabled a
+ * boolean (missing → true).
  * Unknown keys are ignored (forward-compatible).
  */
 function resolveFailureAnalysisConfig(block) {
@@ -123,7 +198,9 @@ function resolveFailureAnalysisConfig(block) {
         enabled: true,
         afterFailures: afterFailuresOf(block),
         blockedLabel: blockedLabelOf(block),
-        backoff: backoffOf(block)
+        backoff: backoffOf(block),
+        transientPatterns: transientPatternsOf(block),
+        analyzerEnabled: analyzerEnabledOf(block)
     };
 }
 
@@ -149,6 +226,127 @@ function failureStreak(bodies) {
         signature: signature,
         count: legFailureReport.consecutiveRepeatCount(signature, priors)
     };
+}
+
+// ── the deterministic transient pre-classifier (gh-1380) ─────────────────
+
+var TRANSIENT_SOURCE = 'transient-preclassifier';
+var PRECLASSIFIER_ROOT_CAUSE = 'known-transient failure signature (matched the deployment transientPatterns)';
+
+/**
+ * ONE pattern entry against the signature text. Entries arrive from
+ * config and are validated (compilable, non-empty) at SM start — but a
+ * hand-built config may bypass that, so a non-string entry or a compile
+ * failure fails safe here to no-match: the failure routes to the AI
+ * analyzer, the loop is never wedged by a bad pattern.
+ */
+function transientPatternMatches(source, text) {
+    if (typeof source !== 'string' || !source) return false;
+    var re = null;
+    try { re = new RegExp(source, 'i'); } catch (eRegex) { return false; }
+    return re.test(text);
+}
+
+/**
+ * gh-1380 AC4 — the deterministic transient pre-classifier: a pure
+ * function over the gh-1363-normalized failure signature. True when ANY
+ * configured pattern matches (case-insensitive — machine log text varies
+ * in case). A match IS the diagnosis: known provider signatures need no
+ * AI to be understood.
+ */
+function matchesTransientPattern(signature, patterns) {
+    var text = String(signature == null ? '' : signature);
+    var list = Array.isArray(patterns) ? patterns : [];
+    for (var i = 0; i < list.length; i++) {
+        if (transientPatternMatches(list[i], text)) return true;
+    }
+    return false;
+}
+
+/**
+ * The shared record shaper for the SM's own transient stamps — the
+ * classification stamp at a threshold crossing and the backoff tick
+ * re-stamps share ONE defaults ladder.
+ */
+function transientVerdictRecordOf(signature, analyzedAtCount) {
+    return {
+        signature: signature,
+        classification: 'transient',
+        confidence: 1,
+        suspected_root_cause: PRECLASSIFIER_ROOT_CAUSE,
+        evidence: [],
+        suggested_fix: '',
+        analyzedAtCount: analyzedAtCount,
+        source: TRANSIENT_SOURCE
+    };
+}
+
+/**
+ * The pre-classifier verdict record for one threshold crossing — null
+ * when the signature matches nothing (the AI analyzer leg handles it,
+ * gh-1366 as today). The record rides the SAME failure-verdict marker
+ * protocol: the SM stamps itself (machine-authored, zero AI calls), and
+ * analyzedAtCount consumes the streak prefix exactly like a transient
+ * analyzer verdict — the effective counter resets, and a NEW identical
+ * streak re-triggers classification only after the threshold again.
+ * backoff > 1 additionally opens the retry-backoff window (backoffTicks)
+ * starting at the classification tick (ticksSoFar = 1).
+ */
+function transientPreClassifierVerdict(signature, patterns, streakCount, backoff) {
+    if (!signature || !matchesTransientPattern(signature, patterns)) return null;
+    var record = transientVerdictRecordOf(signature, streakCount);
+    if (backoff > 1) {
+        record.backoffTicks = backoff;
+        record.ticksSoFar = 1;
+    }
+    return record;
+}
+
+/**
+ * The latest trusted PRE-CLASSIFIER verdict for the signature (the SM's
+ * own stamps carry the transient-preclassifier source tag). AI analyzer
+ * verdicts never open a backoff window — gh-1380 paces only the
+ * deterministic path.
+ */
+function latestPreClassifierVerdict(verdicts, signature) {
+    var list = verdicts || [];
+    var latest = null;
+    for (var i = 0; i < list.length; i++) {
+        var v = list[i];
+        if (v && v.signature === signature && v.source === TRANSIENT_SOURCE) latest = v;
+    }
+    return latest;
+}
+
+/**
+ * The still-open retry-backoff window after a pre-classifier stamp:
+ *   - the stamp is the LATEST for the streak signature,
+ *   - it carries a window (positive-integer backoffTicks/ticksSoFar —
+ *     a backoff <= 1 crossing stamps none),
+ *   - no NEW failure arrived since the stamp (the stamp consumed that
+ *     streak depth; a deeper streak means the retry leg already ran),
+ *   - and ticks remain to absorb (the tick this gate evaluates would be
+ *     number ticksSoFar + 1; the dispatch resumes when it reaches
+ *     backoffTicks — `backoff` multiplies the one-tick retry interval).
+ * Returns the pending stamp, or null (no window / expired → dispatch).
+ */
+function pendingTransientBackoff(verdicts, signature, streakCount) {
+    var stamp = latestPreClassifierVerdict(verdicts, signature);
+    if (!stamp || !isPositiveInt(stamp.backoffTicks) || !isPositiveInt(stamp.ticksSoFar)) return null;
+    if (stamp.analyzedAtCount !== streakCount) return null;
+    return (stamp.ticksSoFar + 1 < stamp.backoffTicks) ? stamp : null;
+}
+
+/**
+ * The re-stamp record for one absorbed backoff tick: same consumed
+ * prefix and window, ticksSoFar advanced by one. `at` stays open — the
+ * marker builder stamps the render time.
+ */
+function backoffTickVerdictRecord(stamp) {
+    var record = transientVerdictRecordOf(stamp.signature, stamp.analyzedAtCount);
+    record.backoffTicks = stamp.backoffTicks;
+    record.ticksSoFar = stamp.ticksSoFar + 1;
+    return record;
 }
 
 // ── verdict consumption (gh-1366 AC2) ─────────────────────────────────────
@@ -228,6 +426,10 @@ function verdictPayloadOf(record) {
         evidence: evidenceLinesOf(record.evidence),
         suggested_fix: typeof record.suggested_fix === 'string' ? record.suggested_fix : '',
         analyzedAtCount: isPositiveInt(record.analyzedAtCount) ? record.analyzedAtCount : null,
+        // gh-1380: the pre-classifier's retry-backoff window — absent
+        // (null) on every AI-analyzer verdict and on backoff-off stamps.
+        backoffTicks: isPositiveInt(record.backoffTicks) ? record.backoffTicks : null,
+        ticksSoFar: isPositiveInt(record.ticksSoFar) ? record.ticksSoFar : null,
         at: record.at || null,
         source: record.source || VERDICT_SOURCE
     };
@@ -439,8 +641,10 @@ module.exports = {
     DEFAULT_AFTER_FAILURES: DEFAULT_AFTER_FAILURES,
     DEFAULT_BLOCKED_LABEL: DEFAULT_BLOCKED_LABEL,
     DEFAULT_BACKOFF: DEFAULT_BACKOFF,
+    DEFAULT_TRANSIENT_PATTERNS: DEFAULT_TRANSIENT_PATTERNS,
     CLASSIFICATIONS: CLASSIFICATIONS,
     ANALYZE_LEG: ANALYZE_LEG,
+    TRANSIENT_SOURCE: TRANSIENT_SOURCE,
     VERDICT_MARKER_PREFIX: VERDICT_MARKER_PREFIX,
     VERDICT_MARKER_SUFFIX: VERDICT_MARKER_SUFFIX,
     PARK_MARKER_PREFIX: PARK_MARKER_PREFIX,
@@ -450,6 +654,11 @@ module.exports = {
     consumedCount: consumedCount,
     effectiveStreakCount: effectiveStreakCount,
     analysisDue: analysisDue,
+    matchesTransientPattern: matchesTransientPattern,
+    transientPreClassifierVerdict: transientPreClassifierVerdict,
+    latestPreClassifierVerdict: latestPreClassifierVerdict,
+    pendingTransientBackoff: pendingTransientBackoff,
+    backoffTickVerdictRecord: backoffTickVerdictRecord,
     buildFailureVerdictComment: buildFailureVerdictComment,
     parseFailureVerdicts: parseFailureVerdicts,
     latestVerdictForSignature: latestVerdictForSignature,

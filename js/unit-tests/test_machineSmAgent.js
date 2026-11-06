@@ -2166,8 +2166,13 @@ suite('machineSm transient pre-classifier — scripted replay (gh-1380)', functi
         stormFailures(208, holder.provider, 4);
         faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, backoff: 3 }));
         faTick(holder, faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, backoff: 3 }));
+        var stampBodies = preClassifierStamps(holder.provider, 208).map(function (c) { return c[1]; });
+        assert.ok(stampBodies.length >= 2, 'the replay posted stamps');
+        assert.deepEqual(LFR.parseSignatureLines(stampBodies), [],
+            'the stamp comments carry no failure-signature line');
         var bodies = holder.provider.store.comments[208].map(function (c) { return c.body; });
-        assert.equal(FA.failureStreak(bodies), null,
-            'the stamp comments carry no failure-signature line — the loop arithmetic is untouched by its own markers');
+        var streak = FA.failureStreak(bodies);
+        assert.equal(streak.count, 4, 'the streak is exactly the failure notices — the stamps are invisible to it');
+        assert.equal(streak.signature, LFR.failureSignature(STORM_SIG));
     });
 });
