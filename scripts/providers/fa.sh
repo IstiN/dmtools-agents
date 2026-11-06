@@ -107,6 +107,64 @@ sys.stdout.write(pt + "\n" + json.dumps(cfg, separators=(",", ":")))
   fi
 }
 
+# gh-1381: provider-key failover — auto-append fallback queue entries.
+# For each queue entry whose key env var is E, every set variant E_1..E_5
+# (and E_N_BASE64 twins) is appended as a failover entry cloning the base
+# entry's provider/model with apiKeyEnv swapped to the fallback var.
+# Deployment = add a secret named E_1; no queue-JSON editing. Already-
+# referenced variants are skipped (no duplicates); unset/empty variants are
+# skipped; with node unavailable or nothing appended the queue is returned
+# byte-identical (the pre-gh-1381 behavior).
+_fa_append_fallback_keys() {
+  command -v node >/dev/null 2>&1 || return 0
+  [ -n "${FA_PROVIDERS_QUEUE:-}" ] || return 0
+  local enriched
+  enriched="$(FA_PROVIDERS_QUEUE="${FA_PROVIDERS_QUEUE}" FA_DEFAULT_URLS_JSON="${_FA_DEFAULT_URLS_JSON}" node -e '
+    const fs = require("fs");
+    let raw = process.env.FA_PROVIDERS_QUEUE || "";
+    if (raw.startsWith("@")) raw = fs.readFileSync(raw.slice(1), "utf8");
+    let arr;
+    try { arr = JSON.parse(raw); } catch (e) { process.exit(0); }
+    if (!Array.isArray(arr) || arr.length === 0) process.exit(0);
+    const defaults = JSON.parse(process.env.FA_DEFAULT_URLS_JSON);
+    const refOf = (e) => (e && e.provider_config && (e.provider_config.apiKeyEnv || e.provider_config.apiKeyEnvVar)) || null;
+    const seen = new Set(arr.map(refOf).filter(Boolean));
+    const out = [];
+    const appended = [];
+    for (const entry of arr) {
+      out.push(entry);
+      const k = refOf(entry);
+      if (!k || !entry.provider_type || !entry.provider_config) continue;
+      for (let i = 1; i <= 5; i++) {
+        const fb = k + "_" + i;
+        if (seen.has(fb)) break;
+        if (!process.env[fb] && !process.env[fb + "_BASE64"]) continue;
+        const clone = JSON.parse(JSON.stringify(entry.provider_config));
+        if (clone.apiKeyEnv !== undefined) clone.apiKeyEnv = fb;
+        else if (clone.apiKeyEnvVar !== undefined) clone.apiKeyEnvVar = fb;
+        else clone.apiKeyEnv = fb;
+        if (!clone.baseUrl) {
+          const d = defaults[entry.provider_type];
+          if (!d) continue;
+          clone.baseUrl = d;
+        }
+        const ne = { provider_type: entry.provider_type, provider_config: clone };
+        if (entry.name) ne.name = entry.name + "-" + i;
+        out.push(ne);
+        seen.add(fb);
+        appended.push(fb);
+      }
+    }
+    if (appended.length === 0) process.exit(0);
+    process.stderr.write("[providers/fa.sh] fallback provider keys appended to the queue: " + appended.join(", ") + "\n");
+    process.stdout.write(JSON.stringify(out));
+  ')" || return 0
+  if [ -n "${enriched}" ]; then
+    export FA_PROVIDERS_QUEUE="${enriched}"
+  fi
+  return 0
+}
+
 _fa_resolve_env() {
   if [ -z "${FA_PROVIDER_TYPE:-}" ] && [ -z "${FA_PROVIDERS_QUEUE:-}" ]; then
     echo "Error: FA_PROVIDERS_QUEUE or FA_PROVIDER_TYPE + FA_PROVIDER_CONFIG environment variable is required for fa provider" >&2
@@ -124,6 +182,7 @@ _fa_resolve_env() {
       export FA_PROVIDERS_QUEUE="${resolved_val}"
     fi
 
+    _fa_append_fallback_keys
     if [ -z "${FA_PROVIDER_TYPE:-}" ] || [ -z "${FA_PROVIDER_CONFIG:-}" ]; then
       _fa_derive_from_queue || return 1
     fi

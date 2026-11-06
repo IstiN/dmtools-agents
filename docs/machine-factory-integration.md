@@ -447,6 +447,16 @@ the knob to silence it.
 
 Review queue (provider failover) is configured in the runner's
 `envVariables`: `FA_PROVIDERS_QUEUE="$ENV_VAR_REVIEW_QUEUE"` (where `ENV_VAR_REVIEW_QUEUE='[{"provider_type":"openai-completions","provider_config":{"baseUrl":"https://api.kimi.com/coding/v1","model":"k2p5","apiKeyEnv":"KIMI_CODE_KEY"}},{"provider_type":"zai","provider_config":{"model":"glm-5.3","apiKeyEnv":"ZAI_CODE_KEY"}}]'`)
+
+**Dev-queue key failover (gh-1381):** the same failover works for the dev/rework queue —
+and since gh-1381 `scripts/providers/fa.sh` builds it automatically: for every queue
+entry whose `apiKeyEnv` is `E`, any set environment variable `E_1` .. `E_5` (and
+`E_N_BASE64` twins) is appended as a failover entry cloning that entry's provider and
+model. Deployment is therefore: add a secret named e.g. `ZAI_CODE_KEY_1` (same provider,
+same model, separate account/billing) — no queue-JSON editing. Order is primary first,
+fallbacks in index order; unset/empty variants are skipped; variants already referenced
+by an existing queue entry are not duplicated. The harness walks the enriched queue at
+runtime, so a 429 on the primary key fails over to the fallback key mid-leg.
 — first healthy provider wins.
 
 All runners share the `timerAutoCommitAndSave` WIP timer (5 min commits,
