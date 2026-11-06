@@ -660,6 +660,29 @@ suite('sessionDelta — UT-4 & IT-1: composite resume prompt & bash provider int
         });
         assert.contains(out, 'FA_FALLBACK_IT_OK', 'fa.sh fallback append test failed: ' + out);
     });
+    test('IT-1c (bash): multi-entry queue - per-entry fallbacks in order, dedup-break, per-entry models (gh-1381)', function() {
+        if (!_sdCanBash_) return;
+        var out = cli_execute_command({
+            command: [
+                'bash -c \'set -euo pipefail',
+                'REPO_ROOT="$(pwd)"',
+                'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG',
+                'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"m1\\",\\"apiKeyEnv\\":\\"ONE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"m2\\",\\"apiKeyEnv\\":\\"ONE_KEY_2\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"m3\\",\\"apiKeyEnv\\":\\"SECOND_KEY\\"}}]"',
+                'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                'export ONE_KEY="k-one" ONE_KEY_1="k-one-1" SECOND_KEY="k-two" SECOND_KEY_1="k-two-1"',
+                'unset ONE_KEY_3 SECOND_KEY_2 ZAI_CODE_KEY ZAI_CODE_KEY_1 ZAI_CODE_KEY_2 || true',
+                '_fa_resolve_env',
+                'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"[A-Z_0-9]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                '[ "$ORDER" = "ONE_KEY-ONE_KEY_1-ONE_KEY_2-SECOND_KEY-SECOND_KEY_1-" ]',
+                'MODELS="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"model\\":\\"[a-z0-9]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                '[ "$MODELS" = "m1-m1-m2-m3-m3-" ]',
+                '[ "$FA_PROVIDER_TYPE" = "zai" ]',
+                'echo "IT_1C_OK"\','
+            ].join('\n')
+        });
+        assert.contains(out, 'IT_1C_OK', 'fa.sh multi-entry fallback test failed: ' + out);
+    });
 
     test('covers sessionGroupForConfig, defaultDeltaStorage file_read/file_write/file_list bridges, edited comments, and corrupt JSON on disk', function() {
         assert.equal(sessionDelta.sessionGroupForConfig('agents/story_development.json'), 'dev-write');
