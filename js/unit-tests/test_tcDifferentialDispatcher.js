@@ -822,3 +822,69 @@ suite('tcDifferentialDispatcher: gh-1331 alternation suppression', function() {
         assert.deepEqual(run.jira.moves, [{ key: 'BUG-1', statusName: 'Ready For Development' }]);
     });
 });
+
+// ── gh-1354: own-oracle parked requests — the AC-gated continuation ──────────
+//
+// gh-1354 routes validated own-oracle reds through the mechanical table, so
+// own-oracle TCs park differential requests too. The dispatcher continuation
+// must carry the OWN role through: a green outcome is product-side
+// attribution that hands to the AC re-check (rework) — NOT a guard's
+// un-gated earned bounce.
+
+suite('gh-1354: dispatcher own-oracle requests — the AC handoff', function() {
+
+    var mod = loadDispatcher(fakeShell(), {});
+
+    test('dispatcherVerdict keeps an own-oracle request OFF the guard bounce path', function() {
+        var green = mod.dispatcherVerdict(parkedFinding('TS-7', { role: 'own-oracle' }), 'green', 0, 2);
+        assert.equal(green.action, tcTriage.ACTION_REWORK);
+        assert.equal(green.reason, 'own-oracle-ac-recheck');
+        var red = mod.dispatcherVerdict(parkedFinding('TS-7', { role: 'own-oracle' }), 'red', 0, 2);
+        assert.equal(red.action, tcTriage.ACTION_MAINTENANCE);
+        assert.equal(red.reason, 'failure-predates-change');
+    });
+
+    test('dispatcherVerdict: own-oracle green at the cap escalates (F2 bound)', function() {
+        var v = mod.dispatcherVerdict(parkedFinding('TS-7', { role: 'own-oracle' }), 'green', 2, 2);
+        assert.equal(v.action, tcTriage.ACTION_ESCALATE);
+        assert.equal(v.reason, 'null-ac-verdict-cap-reached');
+    });
+
+    test('AC: own-oracle green hands to the rework lane — no bounce, no bug move, request resolved', function() {
+        var run = runAction(fakeShell({}), [parkedFinding('TS-7', { role: 'own-oracle' })]);
+
+        assert.equal(run.result.success, true);
+        assert.equal(run.result.action, 'rework');
+        assert.deepEqual(run.result.reworkTestCases, ['TS-7']);
+        assert.deepEqual(run.jira.moves, [], 'the AC re-check owns the bounce decision — the bug is untouched');
+
+        // the parked request is consumed: the attribution completed (green on old)
+        assert.equal(tcLedger.differentialRequests(run.latestLedger).length, 0);
+        assert.equal(run.latestLedger.findings.length, 1);
+        assert.equal(run.latestLedger.findings[0].verdict, 'rework');
+        assert.equal(run.latestLedger.findings[0].reason, 'own-oracle-ac-recheck');
+        assert.equal(run.latestLedger.findings[0].evidence.differential, 'green');
+
+        var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
+        assert.contains(body, 'AC re-check');
+        assert.notContains(body, 'failed with a product regression');
+        assert.notContains(body, 'fails there too');
+    });
+
+    test('AC: own-oracle green at the cap escalates instead of another rework lap', function() {
+        var run = runAction(fakeShell({}), [parkedFinding('TS-7', { role: 'own-oracle' })], { redRounds: 2 });
+
+        assert.equal(run.result.action, 'escalated');
+        assert.deepEqual(run.jira.moves, [], 'the cap stops the loop — no move');
+        var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
+        assert.contains(body, 'Bounce cap reached');
+    });
+
+    test('AC: own-oracle red routes to maintenance like any red differential', function() {
+        var run = runAction(fakeShell({ tcFails: true }), [parkedFinding('TS-7', { role: 'own-oracle' })]);
+
+        assert.equal(run.result.action, 'maintained');
+        assert.deepEqual(run.jira.moves, []);
+        assert.equal(run.latestLedger.findings[0].reason, 'failure-predates-change');
+    });
+});

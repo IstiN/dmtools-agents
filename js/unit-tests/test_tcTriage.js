@@ -164,7 +164,10 @@ suite('tcTriage: own-oracle and fresh TC failures — rework first', function() 
         assert.equal(v.action, triage.ACTION_REWORK);
     });
 
-    test('own-oracle red routes to the AC re-check (rework) before any bounce', function() {
+    // gh-1354: a validated own-oracle red takes the mechanical table first —
+    // on a changed build with no differential outcome the honest verdict is
+    // the parked rerun request, not an unattributed rework lap.
+    test('gh-1354: validated own-oracle red on a new build parks the differential rerun before any rework', function() {
         var v = triage.triageFailure({
             tcKey: 'TS-11',
             role: triage.ROLE_OWN,
@@ -172,8 +175,9 @@ suite('tcTriage: own-oracle and fresh TC failures — rework first', function() 
             current: { sha: 'sha-new', envFingerprint: 'env-1' },
             lastGreen: { sha: 'sha-old', envFingerprint: 'env-1' }
         });
-        assert.equal(v.action, triage.ACTION_REWORK);
-        assert.equal(v.reason, 'own-oracle-ac-recheck');
+        assert.equal(v.action, triage.ACTION_DIFFERENTIAL);
+        assert.equal(v.reason, 'rerun-requested-on-last-green-build');
+        assert.ok(v.ledgerEntry);
     });
 
     test('own-oracle red + AC violated -> bounce, bounded by the rework cap', function() {
@@ -395,5 +399,229 @@ suite('tcTriage: triageDifferentialOutcome — the dispatcher continuation', fun
         assert.equal(v.evidence.lastGreenSha, 'sha-green');
         assert.equal(v.evidence.envFingerprint, 'env-1');
         assert.equal(v.evidence.lastGreenEnvFingerprint, 'env-1');
+    });
+});
+
+// ── gh-1354: validated own-oracle reds take the mechanical table first ───────
+//
+// Pre-gh-1354 a validated own-oracle red entered triageAcGated directly:
+// retryGreen, the fingerprint lookup and the differential rerun were never
+// consulted for the bug's own oracle. F1: an environment shift (same build
+// SHA, changed env fingerprint) reworked forever — no AC verdict can express
+// "the world moved". F2: null-verdict rework laps grew redRounds unchecked.
+
+suite('gh-1354: validated own-oracle — the mechanical table first (F1)', function() {
+
+    var ownValidated = {
+        tcKey: 'TS-30',
+        role: triage.ROLE_OWN,
+        validated: true,
+        current: { sha: 'sha-green', envFingerprint: 'env-2' },
+        lastGreen: { sha: 'sha-green', envFingerprint: 'env-1' },
+        maxReworkRounds: 2,
+        redRounds: 0
+    };
+
+    test('AC1: same build + changed env fingerprint -> environment-shift maintenance (no rework, no bounce)', function() {
+        var v = triage.triageFailure(Object.assign({}, ownValidated, { acVerdict: null }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'environment-shift');
+        assert.ok(v.ledgerEntry, 'the environment-shift finding lands in the maintenance ledger');
+    });
+
+    test('AC1: the env-shift route fires even with an AC verdict in hand — mechanical evidence wins', function() {
+        var v = triage.triageFailure(Object.assign({}, ownValidated, { acVerdict: 'violated' }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'environment-shift');
+    });
+
+    test('AC1: the environment-shift reason is reachable with NO acVerdict field at all', function() {
+        var v = triage.triageFailure(Object.assign({}, ownValidated));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'environment-shift');
+    });
+
+    test('same build + both fingerprints proven equal -> flaky-same-build maintenance (the table is mechanical)', function() {
+        var v = triage.triageFailure(Object.assign({}, ownValidated, {
+            current: { sha: 'sha-green', envFingerprint: 'env-1' },
+            lastGreen: { sha: 'sha-green', envFingerprint: 'env-1' }
+        }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'flaky-same-build');
+    });
+
+    test('AC4: retry green on own oracle -> ACTION_NONE, no ledger entry (guards had this; own oracle joins)', function() {
+        var v = triage.triageFailure(Object.assign({}, ownValidated, {
+            current: { sha: 'sha-green', envFingerprint: 'env-1' },
+            lastGreen: { sha: 'sha-green', envFingerprint: 'env-1' },
+            retryGreen: true
+        }));
+        assert.equal(v.action, triage.ACTION_NONE);
+        assert.notOk(v.ledgerEntry);
+    });
+});
+
+suite('gh-1354: validated own-oracle — the unattributed state (F2 cap)', function() {
+
+    var ownBuildChanged = {
+        tcKey: 'TS-31',
+        role: triage.ROLE_OWN,
+        validated: true,
+        current: { sha: 'sha-new', envFingerprint: 'env-1' },
+        lastGreen: { sha: 'sha-old', envFingerprint: 'env-1' },
+        maxReworkRounds: 2
+    };
+
+    test('AC2: null AC verdict at redRounds >= maxReworkRounds -> owner escalation, no further REWORK', function() {
+        var v = triage.triageFailure(Object.assign({}, ownBuildChanged, { acVerdict: null, redRounds: 2 }));
+        assert.equal(v.action, triage.ACTION_ESCALATE);
+        assert.equal(v.reason, 'null-ac-verdict-cap-reached');
+        assert.ok(v.ledgerEntry, 'the escalation carries a ledger entry');
+    });
+
+    test('AC2: below the cap the same shape stays parked (the dispatcher attributes it)', function() {
+        var v = triage.triageFailure(Object.assign({}, ownBuildChanged, { acVerdict: null, redRounds: 1 }));
+        assert.equal(v.action, triage.ACTION_DIFFERENTIAL);
+        assert.equal(v.reason, 'rerun-requested-on-last-green-build');
+    });
+
+    test('AC2: the same-build unproven-fingerprint park is capped too', function() {
+        var unproven = Object.assign({}, ownBuildChanged, {
+            current: { sha: 'sha-old', envFingerprint: null },
+            lastGreen: { sha: 'sha-old', envFingerprint: null },
+            acVerdict: null
+        });
+        assert.equal(triage.triageFailure(Object.assign({}, unproven, { redRounds: 0 })).action, triage.ACTION_DIFFERENTIAL);
+        var atCap = triage.triageFailure(Object.assign({}, unproven, { redRounds: 3 }));
+        assert.equal(atCap.action, triage.ACTION_ESCALATE);
+        assert.equal(atCap.reason, 'null-ac-verdict-cap-reached');
+    });
+
+    test('guards keep parking at the cap — the dispatcher owns their continuation (unchanged)', function() {
+        var v = triage.triageFailure({
+            tcKey: 'TS-32',
+            role: triage.ROLE_GUARD,
+            validated: true,
+            current: { sha: 'sha-new', envFingerprint: 'env-1' },
+            lastGreen: { sha: 'sha-old', envFingerprint: 'env-1' },
+            acVerdict: null,
+            redRounds: 5,
+            maxReworkRounds: 2
+        });
+        assert.equal(v.action, triage.ACTION_DIFFERENTIAL);
+        assert.equal(v.reason, 'rerun-requested-on-last-green-build');
+    });
+});
+
+suite('gh-1354: validated own-oracle — product-side attribution hands to the AC re-check', function() {
+
+    var ownProductSide = {
+        tcKey: 'TS-33',
+        role: triage.ROLE_OWN,
+        validated: true,
+        current: { sha: 'sha-new', envFingerprint: 'env-1' },
+        lastGreen: { sha: 'sha-old', envFingerprint: 'env-1' },
+        differential: 'green',
+        maxReworkRounds: 2
+    };
+
+    test('AC3: differential green + AC violated -> the earned bounce (AC-gated final bounce, evidence intact)', function() {
+        var v = triage.triageFailure(Object.assign({}, ownProductSide, { acVerdict: 'violated', redRounds: 0 }));
+        assert.equal(v.action, triage.ACTION_BOUNCE);
+        assert.equal(v.reason, 'acceptance-criteria-violated');
+        assert.equal(v.evidence.differential, 'green');
+        assert.ok(v.ledgerEntry);
+    });
+
+    test('AC3: differential green + AC violated at the cap -> escalation (the bounce stays bounded)', function() {
+        var v = triage.triageFailure(Object.assign({}, ownProductSide, { acVerdict: 'violated', redRounds: 2 }));
+        assert.equal(v.action, triage.ACTION_ESCALATE);
+        assert.equal(v.reason, 'bounce-cap-reached');
+    });
+
+    test('differential green + AC intact -> the TC misencodes the AC -> maintenance', function() {
+        var v = triage.triageFailure(Object.assign({}, ownProductSide, { acVerdict: 'intact' }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'tc-misencodes-ac');
+    });
+
+    test('differential green + null AC verdict -> the AC re-check rework below the cap', function() {
+        var v = triage.triageFailure(Object.assign({}, ownProductSide, { acVerdict: null, redRounds: 0 }));
+        assert.equal(v.action, triage.ACTION_REWORK);
+        assert.equal(v.reason, 'own-oracle-ac-recheck');
+    });
+
+    test('F2: differential green + null AC verdict at the cap -> escalation, never another REWORK lap', function() {
+        var v = triage.triageFailure(Object.assign({}, ownProductSide, { acVerdict: null, redRounds: 2 }));
+        assert.equal(v.action, triage.ACTION_ESCALATE);
+        assert.equal(v.reason, 'null-ac-verdict-cap-reached');
+    });
+
+    test('AC3: differential red -> failure predates the change -> maintenance (the AC claim cannot outvote evidence)', function() {
+        var v = triage.triageFailure(Object.assign({}, ownProductSide, { differential: 'red', acVerdict: 'violated' }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'failure-predates-change');
+    });
+
+    test('guards keep the direct earned bounce on differential green (unchanged)', function() {
+        var v = triage.triageFailure(Object.assign({}, ownProductSide, {
+            role: triage.ROLE_GUARD, acVerdict: 'violated', redRounds: 0
+        }));
+        assert.equal(v.action, triage.ACTION_BOUNCE);
+        assert.equal(v.reason, 'regression-from-change-range');
+    });
+});
+
+suite('gh-1354: triageDifferentialOutcome hardened — only green|red decide', function() {
+
+    function ownDispatcherInput(overrides) {
+        return Object.assign({
+            tcKey: 'TS-34',
+            role: triage.ROLE_OWN,
+            differential: 'green',
+            redRounds: 0,
+            maxReworkRounds: 2,
+            errorClass: 'assertion',
+            testPath: 'testing/tests/TS-34/test.py'
+        }, overrides || {});
+    }
+
+    test('AC5: own oracle + unavailable -> re-request the rerun, never bounce or rework', function() {
+        var v = triage.triageDifferentialOutcome(ownDispatcherInput({ differential: 'unavailable' }));
+        assert.equal(v.action, triage.ACTION_DIFFERENTIAL);
+        assert.equal(v.reason, 'rerun-requested-on-last-green-build');
+    });
+
+    test('AC5: guard + unavailable -> re-request too (the parked state, not a green)', function() {
+        var v = triage.triageDifferentialOutcome(ownDispatcherInput({
+            role: triage.ROLE_GUARD, differential: 'unavailable'
+        }));
+        assert.equal(v.action, triage.ACTION_DIFFERENTIAL);
+        assert.notEqual(v.action, triage.ACTION_BOUNCE);
+    });
+
+    test('AC5: a missing or empty differential outcome re-requests (multi-value hardening)', function() {
+        assert.equal(triage.triageDifferentialOutcome(ownDispatcherInput({ differential: null })).action, triage.ACTION_DIFFERENTIAL);
+        assert.equal(triage.triageDifferentialOutcome(ownDispatcherInput({ differential: undefined })).action, triage.ACTION_DIFFERENTIAL);
+        assert.equal(triage.triageDifferentialOutcome(ownDispatcherInput({ differential: '' })).action, triage.ACTION_DIFFERENTIAL);
+    });
+
+    test('own oracle + green continuation (dispatcher has no AC verdict) -> rework handoff below the cap', function() {
+        var v = triage.triageDifferentialOutcome(ownDispatcherInput({ differential: 'green' }));
+        assert.equal(v.action, triage.ACTION_REWORK);
+        assert.equal(v.reason, 'own-oracle-ac-recheck');
+        assert.equal(v.evidence.differential, 'green');
+    });
+
+    test('F2: own oracle + green continuation at the cap -> escalation', function() {
+        var v = triage.triageDifferentialOutcome(ownDispatcherInput({ differential: 'green', redRounds: 2 }));
+        assert.equal(v.action, triage.ACTION_ESCALATE);
+        assert.equal(v.reason, 'null-ac-verdict-cap-reached');
+    });
+
+    test('own oracle + red continuation -> maintenance (same as guards)', function() {
+        var v = triage.triageDifferentialOutcome(ownDispatcherInput({ differential: 'red' }));
+        assert.equal(v.action, triage.ACTION_MAINTENANCE);
+        assert.equal(v.reason, 'failure-predates-change');
     });
 });

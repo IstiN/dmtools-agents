@@ -24,6 +24,16 @@
  *   Own oracle rework first, bounce only when the rework leg confirms the
  *              product genuinely violates the AC — bounded by the existing
  *              maxReworkRounds (escalation at the cap, no new counter).
+ *              gh-1354: a VALIDATED own-oracle red takes the mechanical
+ *              table first (retry → fingerprint lookup → differential, the
+ *              same guard-grade triage), and hands to the AC-gated path only
+ *              when attribution says product-side (differential green, or an
+ *              AC verdict already in hand on the unattributed state) — the
+ *              AC-gated bounce is the own oracle's LAST step, not its entry.
+ *              An environment shift (same build, changed env fingerprint)
+ *              lands in maintenance without any AC verdict, and
+ *              null-verdict rework laps escalate at maxReworkRounds instead
+ *              of reworking forever.
  *
  *   Guards     mechanical, no agent judgment in the main path, in order:
  *                1. retry once on the same build (flake filter; green →
@@ -229,34 +239,43 @@ function bounceCapReached(input) {
 // ── the mechanical table ─────────────────────────────────────────────────────
 
 /**
- * Guard triage (§4) — validated guards only; no agent judgment. A SIBLING
- * (a guard verifying another bug) can never turn its mechanical outcomes
- * into THIS bug's bounce/escalation: those belong to the sibling's owner,
- * so they convert to owner-notified maintenance with the evidence intact.
+ * Validated-TC triage (§4) — the mechanical table runs for EVERY validated
+ * TC, guards AND the bug's own oracle alike (gh-1354: pre-gh-1354 a
+ * validated own-oracle red bypassed the whole table and entered the AC-gated
+ * path directly, so an environment shift could only ever rework and
+ * null-verdict laps grew unbounded). No agent judgment in the main path.
+ * A SIBLING (a guard verifying another bug) can never turn its mechanical
+ * outcomes into THIS bug's bounce/escalation: those belong to the sibling's
+ * owner, so they convert to owner-notified maintenance with the evidence
+ * intact.
  */
-function triageValidatedGuard(input) {
+function triageValidatedTc(input) {
     // 1. flake filter: a same-build retry that went green means nothing happened.
     if (input.retryGreen) {
         return verdict(input, ACTION_NONE, 'retry-green-on-same-build', false);
     }
     // 2.+3. fingerprint lookup vs the last green run, then the differential.
     if (sameBuild(input.current, input.lastGreen)) {
-        return triageSameBuildGuard(input);
+        return triageSameBuild(input);
     }
-    return triageBuildChangedGuard(input);
+    return triageBuildChanged(input);
 }
 
 /**
  * Same-build red: a proven environment shift is maintenance; flaky requires
  * BOTH fingerprints (missing evidence never defaults to flaky — the
- * differential rerun must attribute it instead).
+ * differential rerun must attribute it instead). Mechanical evidence beats
+ * an AC claim: the environment-shift and flaky verdicts stand regardless of
+ * any acVerdict in the input (gh-1354 F1 — the environment-shift reason is
+ * reachable without an AC verdict, so the rework leg can express the third
+ * category: the TC is right, the product is right, the world moved).
  */
-function triageSameBuildGuard(input) {
+function triageSameBuild(input) {
     if (envChanged(input.current, input.lastGreen)) {
         return verdict(input, ACTION_MAINTENANCE, 'environment-shift');
     }
     if (fingerprintsUnproven(input.current, input.lastGreen)) {
-        return verdict(input, ACTION_DIFFERENTIAL, 'rerun-requested-on-last-green-build');
+        return triageUnattributed(input);
     }
     return verdict(input, ACTION_MAINTENANCE, 'flaky-same-build');
 }
@@ -264,22 +283,33 @@ function triageSameBuildGuard(input) {
 /**
  * Build changed — the differential rerun attributes it (varies only the
  * build): red there too → failure predates the change → maintenance; green
- * there → EARNED bounce (bounded, escalation at the cap); unavailable →
- * request the rerun, bug parked.
+ * there → product-side attribution → the role-aware green route
+ * (escalation-bounded bounce; own oracle hands to the AC-gated final
+ * bounce); unavailable → request the rerun, bug parked.
  */
-function triageBuildChangedGuard(input) {
+function triageBuildChanged(input) {
     if (input.differential === 'red') {
         return verdict(input, ACTION_MAINTENANCE, 'failure-predates-change');
     }
     if (input.differential === 'green') {
-        return triageDifferentialGreenGuard(input);
+        return triageDifferentialGreen(input);
     }
-    return verdict(input, ACTION_DIFFERENTIAL, 'rerun-requested-on-last-green-build');
+    return triageUnattributed(input);
 }
 
-function triageDifferentialGreenGuard(input) {
+/**
+ * Product-side attribution (the differential passed on the last-green
+ * build): a sibling's regression belongs to its owner (maintenance); an
+ * own-oracle hands to the AC-gated final bounce — the AC verdict decides
+ * bounce vs maintenance vs bounded rework (gh-1354); a guard earns the
+ * direct bounce (bounded, escalation at the cap).
+ */
+function triageDifferentialGreen(input) {
     if (input.role === ROLE_SIBLING) {
         return verdict(input, ACTION_MAINTENANCE, 'sibling-regression-owner-notified');
+    }
+    if (input.role === ROLE_OWN) {
+        return triageAcGated(input);
     }
     if (bounceCapReached(input)) {
         return verdict(input, ACTION_ESCALATE, 'bounce-cap-reached');
@@ -288,25 +318,56 @@ function triageDifferentialGreenGuard(input) {
 }
 
 /**
- * The scripted dispatcher's continuation (gh-1345): a parked differential
- * request has RUN on the last-green build — the outcome decides. Red there
- * → the failure predates the change → maintenance; green → the earned
- * bounce path (sibling-aware, escalation at the cap). This is the honest
- * mechanical continuation of a parked request: re-running triageFailure
- * with the parked evidence would loop (the same-build/unproven case
- * re-requests the differential instead of consuming the outcome).
+ * The unattributed state: the mechanical table has no evidence to decide
+ * (missing fingerprint half, or the build changed with no differential
+ * outcome yet). An own-oracle AC verdict already in hand IS product-side
+ * attribution — the AC-gated path decides (gh-1354). A null verdict is
+ * bounded (gh-1354 F2: at the cap the laps escalate instead of reworking or
+ * re-parking forever); otherwise the scripted differential rerun is
+ * requested and the bug parks.
  */
-function triageDifferentialOutcome(input) {
-    var resolved = input || {};
-    if (resolved.differential === 'red') {
-        return verdict(resolved, ACTION_MAINTENANCE, 'failure-predates-change');
+function triageUnattributed(input) {
+    if (input.role === ROLE_OWN) {
+        if (input.acVerdict === 'violated' || input.acVerdict === 'intact') {
+            return triageAcGated(input);
+        }
+        if (bounceCapReached(input)) {
+            return verdict(input, ACTION_ESCALATE, 'null-ac-verdict-cap-reached');
+        }
     }
-    return triageDifferentialGreenGuard(resolved);
+    return verdict(input, ACTION_DIFFERENTIAL, 'rerun-requested-on-last-green-build');
 }
 
 /**
- * AC-gated path (§2 + §3) — fresh TCs and the bug's own oracle. Bounce only
- * when the rework leg confirms the product violates the AC; bounded.
+ * The scripted dispatcher's continuation (gh-1345): a parked differential
+ * request has RUN on the last-green build — the outcome decides. Red there
+ * → the failure predates the change → maintenance; green → the role-aware
+ * green route (sibling-aware, own-oracle AC handoff, escalation at the
+ * cap). Anything else — the dispatcher's own `unavailable` stall leaking
+ * into the continuation, a null, a typo — RE-REQUESTS the rerun and never
+ * decides on incomplete evidence (gh-1354: the pre-gh-1354 code treated any
+ * non-'red' outcome as green and could bounce on an `unavailable`). This is
+ * the honest mechanical continuation of a parked request: re-running
+ * triageFailure with the parked evidence would loop (the same-build/unproven
+ * case re-requests the differential instead of consuming the outcome).
+ */
+function triageDifferentialOutcome(input) {
+    var resolved = Object.assign({}, input || {}, { validated: true });
+    if (resolved.differential === 'red') {
+        return verdict(resolved, ACTION_MAINTENANCE, 'failure-predates-change');
+    }
+    if (resolved.differential === 'green') {
+        return triageDifferentialGreen(resolved);
+    }
+    return verdict(resolved, ACTION_DIFFERENTIAL, 'rerun-requested-on-last-green-build');
+}
+
+/**
+ * AC-gated path (§2 + §3) — fresh TCs, and the bug's own oracle once the
+ * mechanical table has attributed product-side (gh-1354: via the
+ * differential-green handoff or an AC verdict already in hand on the
+ * unattributed state). Bounce only when the rework leg confirms the product
+ * violates the AC; bounded.
  */
 function triageAcGated(input) {
     if (input.acVerdict === 'violated') {
@@ -327,6 +388,13 @@ function triageAcGated(input) {
     if (!input.validated) {
         return verdict(input, ACTION_REWORK, 'fresh-tc-first-run-validation');
     }
+    // gh-1354 F2: a VALIDATED own-oracle with a persistent null verdict used
+    // to return REWORK at any redRounds — the streak grew unchecked. The
+    // null-verdict rework laps are bounded like every other loop: at the cap
+    // the owner escalates instead of another rework round.
+    if (bounceCapReached(input)) {
+        return verdict(input, ACTION_ESCALATE, 'null-ac-verdict-cap-reached');
+    }
     return verdict(input, ACTION_REWORK, 'own-oracle-ac-recheck');
 }
 
@@ -343,13 +411,19 @@ function triageAcGated(input) {
  *   maxReworkRounds, errorClass, testPath, failedDescriptionFile,
  *   failureSummary
  * }
+ *
+ * gh-1354: every VALIDATED TC goes through the mechanical table first
+ * (retry filter → fingerprint lookup → differential), guards and own
+ * oracles alike — the AC-gated path is the own-oracle's FINAL bounce (after
+ * product-side attribution), not its entry point. Fresh TCs stay
+ * AC-gated from the start (a fresh TC can never bounce by construction).
  */
 function triageFailure(input) {
     var resolved = input || {};
     var role = resolved.role === ROLE_GUARD || resolved.role === ROLE_SIBLING ? resolved.role : ROLE_OWN;
     var normalized = Object.assign({}, resolved, { role: role });
-    if (role !== ROLE_OWN && normalized.validated) {
-        return triageValidatedGuard(normalized);
+    if (normalized.validated) {
+        return triageValidatedTc(normalized);
     }
     return triageAcGated(normalized);
 }
