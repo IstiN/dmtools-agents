@@ -737,4 +737,27 @@ suite('transientPatternMatches regex compilation (gh-1380 review NIT)', function
             'the valid pattern still evaluates after the broken one (memo or not)');
         assert.equal(fa.matchesTransientPattern(SIG, [42, null, '']), false, 'non-string entries stay no-match');
     });
+
+    test('a pattern source named like an Object.prototype key compiles as a REGEX — no TypeError, real match semantics (gh-1380 rework round 2)', function () {
+        // 'constructor' / 'toString' / '__proto__' / 'valueOf' are valid
+        // config patterns (a non-empty string that compiles) — the memo
+        // cache must never hand back an inherited Object.prototype value
+        // instead of a RegExp (that made re.test throw and killed the
+        // whole SM tick).
+        var fa = faShared();
+        var text = "TypeError: Cannot read properties of constructor (reading 'toString')";
+        assert.ok(fa.matchesTransientPattern(text, ['constructor']),
+            "'constructor' compiles and matches the literal word");
+        assert.ok(fa.matchesTransientPattern(text, ['toString']),
+            "'toString' compiles and matches the literal word");
+        assert.ok(fa.matchesTransientPattern(text, ['valueOf', 'constructor']),
+            "'valueOf' first (no match) then 'constructor' — a mixed list stays correct");
+        assert.equal(fa.matchesTransientPattern(SIG, ['__proto__']), false,
+            "'__proto__' compiles as a regex and never throws (no match here)");
+        assert.equal(fa.matchesTransientPattern(SIG, ['hasOwnProperty']), false,
+            "'hasOwnProperty' compiles as a regex, no-match without a throw");
+        // Repeat calls hit the memo — semantics must stay identical.
+        assert.ok(fa.matchesTransientPattern(text, ['constructor']), 'repeat call still matches');
+        assert.equal(fa.matchesTransientPattern(SIG, ['__proto__']), false, 'repeat call still no-throw');
+    });
 });

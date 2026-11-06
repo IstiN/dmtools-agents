@@ -369,7 +369,6 @@ function stampBackoffOf(cfg, backoff) {
     return (backoff > 1 && machineLoginsOf(cfg).length > 0) ? backoff : 1;
 }
 
-
 /**
  * The gh-1366 analyzer divert action — the crossing's dispatch becomes
  * the analyze leg (the reason string is verbatim gh-1366).

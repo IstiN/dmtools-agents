@@ -269,16 +269,27 @@ function transientPatternMatches(source, text) {
 // data, small); a compile failure memoizes null — the fail-safe no-match
 // that routes to the AI analyzer (only a hand-built bypass config can
 // carry an uncompilable entry, and re-deriving null stays harmless).
+// The keys are PREFIXED ('p:' + source): a plain object inherits
+// Object.prototype, so a bare source key collides with inherited keys
+// ('constructor', 'toString', 'valueOf', … — all valid regex strings the
+// config admits) and the lookup would hand back the inherited value
+// instead of a RegExp (re.test then throws and kills the whole SM tick).
+// A bare '__proto__' source is worse still: the assignment would go
+// through the Object.prototype.__proto__ SETTER and corrupt the cache
+// object itself. Prefixed keys are own-only by construction — no
+// inherited key starts with 'p:' and 'p:__proto__' is a plain data
+// property.
 var TRANSIENT_PATTERN_CACHE = {};
 
 function compiledTransientPattern(source) {
     if (typeof source !== 'string' || !source) return null;
-    if (TRANSIENT_PATTERN_CACHE[source] === undefined) {
+    var key = 'p:' + source;
+    if (TRANSIENT_PATTERN_CACHE[key] === undefined) {
         var re = null;
         try { re = new RegExp(source, 'i'); } catch (eRegex) { re = null; }
-        TRANSIENT_PATTERN_CACHE[source] = re;
+        TRANSIENT_PATTERN_CACHE[key] = re;
     }
-    return TRANSIENT_PATTERN_CACHE[source];
+    return TRANSIENT_PATTERN_CACHE[key];
 }
 
 /**
@@ -342,14 +353,27 @@ function transientPreClassifierVerdict(signature, patterns, streakCount, backoff
  * verdicts never open a backoff window — gh-1380 paces only the
  * deterministic path.
  */
-function latestPreClassifierVerdict(verdicts, signature) {
+/**
+ * ONE shared "newest verdict for this signature" scan (the gh-1380
+ * rework de-duplication — the two wrappers below were token-identical
+ * apart from the source filter, the file's first fresh clone over the
+ * duplication ratchet). `source` filters to one marker origin
+ * (transient-preclassifier stamps vs the AI analyzer's); null/absent
+ * accepts any source. Newest = list order (parseFailureVerdicts returns
+ * oldest-first, so the last match wins).
+ */
+function latestVerdictOf(verdicts, signature, source) {
     var list = verdicts || [];
     var latest = null;
     for (var i = 0; i < list.length; i++) {
         var v = list[i];
-        if (v && v.signature === signature && v.source === TRANSIENT_SOURCE) latest = v;
+        if (v && v.signature === signature && (!source || v.source === source)) latest = v;
     }
     return latest;
+}
+
+function latestPreClassifierVerdict(verdicts, signature) {
+    return latestVerdictOf(verdicts, signature, TRANSIENT_SOURCE);
 }
 
 /**
@@ -533,13 +557,7 @@ function parseFailureVerdicts(comments, opts) {
 /** The newest verdict for one signature, or null. Newest = list order
  *  (parseFailureVerdicts returns oldest-first). */
 function latestVerdictForSignature(verdicts, signature) {
-    var list = verdicts || [];
-    var latest = null;
-    for (var i = 0; i < list.length; i++) {
-        var v = list[i];
-        if (v && v.signature === signature) latest = v;
-    }
-    return latest;
+    return latestVerdictOf(verdicts, signature, null);
 }
 
 // ── the park diagnostic (gh-1366 AC3) ─────────────────────────────────────
