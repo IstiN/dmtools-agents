@@ -142,7 +142,7 @@ You may downgrade a **specific** ⚠️ IMPORTANT finding to 💡 SUGGESTION **o
 While the lap fixes its mandatory set (🚨/⚠️), pick up the cheap findings you pass anyway:
 
 - **Eligible:** 💡 SUGGESTION / 🪶 NIT findings in the SAME files your mandatory fixes already touch — you are in the file, the change is doc/test-trivial, and the lap budget allows it: `review_policy.md` carries `opportunisticMaxThreads` (default 8) and `opportunisticSameFilesOnly` (default true). Stay inside both.
-- **Not eligible (leave for triage):** findings in files the mandatory set does not touch, findings needing >trivial edits, and anything non-local to this PR's diff. Skipping them is correct — the machine triage closes non-picked threads with `wontfix`/`defered` dispositions after the lap lands; do NOT force-fix them here.
+- **Not eligible (leave for triage):** findings in files the mandatory set does not touch, findings needing >trivial edits, and anything non-local to this PR's diff. Skipping them is correct — the machine triage closes non-picked threads with `wontfix`/`deferred` dispositions after the lap lands; do NOT force-fix them here.
 - **Bookkeeping:** every picked-up thread still gets its `outputs/review_replies.json` entry; name the fixing commit in the reply so the machine can close it as `fixed: <ref>`. Threads you did not pick up need no reply — triage owns them.
 
 

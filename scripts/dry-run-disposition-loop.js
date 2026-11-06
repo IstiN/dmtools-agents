@@ -224,7 +224,7 @@ function scenarioTriage() {
         provider.tape.resolved.indexOf('RT_h1') === -1);
     var ack = provider.tape.replies[0] && provider.tape.replies[0].text || '';
     check('ack reply carries a machine-parsed disposition tag',
-        /fixed:|wontfix:|duplicate:|defered:/.test(ack), ack.slice(0, 80));
+        /fixed:|wontfix:|duplicate:|deferred:/.test(ack), ack.slice(0, 80));
     var ledgerPost = (provider.tape.posted.join('') || '');
     check('mandatory-fix deferral lives in the review debt ledger (receipt rule)',
         ledgerPost.indexOf('dmtools:review-debt-ledger') !== -1);
@@ -331,10 +331,10 @@ function scenarioCycle() {
     check('every resolved thread carries its machine-parsed tag reply',
         provider.tape.replies.length === 3 &&
         provider.tape.replies.every(function (r) {
-            return /fixed:|wontfix:|duplicate:|defered:/.test(r.text);
+            return /fixed:|wontfix:|duplicate:|deferred:/.test(r.text);
         }));
     console.log('  dispositions: ' + provider.tape.replies.map(function (r) {
-        return r.threadId + '=' + (r.text.match(/(fixed|wontfix|duplicate|defered):/) || [''])[1];
+        return r.threadId + '=' + (r.text.match(/(fixed|wontfix|duplicate|deferred):/) || [''])[1];
     }).join(', '));
     return provider;
 }

@@ -38,7 +38,7 @@
 var mcpParse = require('../common/mcpParse.js');
 
 // gh-1353: the merge backstop rides every squash-merge — and since gh-1370
-// it is a GATE on machine-owned threads: ONE digest issue + `defered`
+// it is a GATE on machine-owned threads: ONE digest issue + `deferred`
 // resolutions for open machine-owned >=IMPORTANT threads, `wontfix`
 // ack-resolutions for the below-threshold ones, and a failed resolution
 // HOLDS the merge (merging with an open machine thread is a policy
@@ -580,15 +580,20 @@ function latchValidated(owner, name, pr, say) {
 /**
  * Squash-merge attempt for an approved head (gh-1040 extraction):
  * gh-1353 merge backstop FIRST — since gh-1370 it GATES the merge on
- * machine-owned threads: >=IMPORTANT threads ride the digest (`defered:`
+ * machine-owned threads: >=IMPORTANT threads ride the digest (`deferred:`
  * resolutions), SUGGESTION/NIT threads resolve WITHOUT a fix (`wontfix`
  * ack tags), human threads stay untouched (branch protection owns them).
  * Then merges through squashMerge (one transparent retry) and logs the
  * caller's merged line on success or the verbatim refusal on failure. A
  * record-keeping OR resolution failure defers the merge — said aloud,
  * acted 0, the queue keeps moving; the retry is the next tick, and a
- * repeat failure keeps saying the deferral (the escalation surface).
- * Returns the acted credit (1 or 0).
+ * repeat failure just keeps saying the deferral: the gate throw is
+ * CAUGHT here, so this funnel's job stays green by design (gh-952
+ * self-heal) — no failure, label or comment fires from this path. The
+ * escalation surface for a persistently failing resolution is the
+ * sibling pr_approved merge sweep (mergeTrigger.js — the factory-
+ * merge-trigger.yml funnel, fired per tick), whose aggregate throw
+ * fails its own job. Returns the acted credit (1 or 0).
  */
 function mergeApprovedHead(run, pr, mergedLine) {
     try {

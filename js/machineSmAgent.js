@@ -211,7 +211,7 @@ function decideApprovedGreenActions(pr) {
         // polish lap dispatches when the census is polish-tier-only
         // (once per head, instability-budgeted), and every machine-owned
         // thread otherwise closes with a machine-parsed disposition tag
-        // under the reviewPolicy — fixed / wontfix / duplicate / defered
+        // under the reviewPolicy — fixed / wontfix / duplicate / deferred
         // (mandatory-fix tiers defer INTO the review debt ledger, so a
         // deferral is never a silent drop). Human threads never resolve
         // here (AC3) — they keep BLOCKED and surface to humans. If
@@ -483,7 +483,7 @@ function ledgerAvailableOn(provider) {
 // Defer ONE machine-owned thread into the review debt ledger (gh-1352):
 // append the finding keyed by the #1332 identity, post the ledger marker +
 // the async digest in ONE comment, and return the stamped finding id —
-// the `defered: <id>` tag value. The ledger core dedups (the same
+// the `deferred: <id>` tag value. The ledger core dedups (the same
 // observation re-raised refreshes occurrences) and reopens swept findings,
 // so a deferral that re-appears never duplicates.
 function deferThreadToLedger(provider, prNumber, thread, tierKey, logins) {
@@ -517,7 +517,7 @@ function deferThreadToLedger(provider, prNumber, thread, tierKey, logins) {
  *   fixed: <ref>      a lap addressed it (opts.fixedThreadIds);
  *   wontfix: <reason> the tier's fix is never/opportunistic (nits by
  *                     default policy);
- *   defered: <id>     the tier's fix is mandatory and the debt ledger is
+ *   deferred: <id>    the tier's fix is mandatory and the debt ledger is
  *                     reachable — the finding lives in the review-side
  *                     ledger (the batched sweep PR owns it);
  *   (skip)            fix mandatory and NO deferral available → the thread
@@ -613,7 +613,7 @@ function resolveSelectedThread(provider, prNumber, t, policy, ledgerOk, logins, 
 // The per-tag triage counters (one shape, two consumers — the no-thread
 // early return and the live tally; `duplicate` rides the audit log too).
 function triageCounters() {
-    return { resolved: 0, fixed: 0, wontfix: 0, duplicate: 0, defered: 0, needsFixOrDefer: 0 };
+    return { resolved: 0, fixed: 0, wontfix: 0, duplicate: 0, deferred: 0, needsFixOrDefer: 0 };
 }
 
 function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
@@ -628,7 +628,7 @@ function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
     });
     console.log('  ✅ resolveSuggestionThreads on PR #' + prNumber + ': resolved ' + out.resolved +
         '/' + gate.sel.resolvable.length + ' machine thread(s) — fixed ' + out.fixed + ', wontfix ' +
-        out.wontfix + ', duplicate ' + out.duplicate + ', defered ' + out.defered +
+        out.wontfix + ', duplicate ' + out.duplicate + ', deferred ' + out.deferred +
         ', needs-fix-or-defer ' + out.needsFixOrDefer);
     return out;
 }

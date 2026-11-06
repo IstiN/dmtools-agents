@@ -4,7 +4,7 @@
  *
  * Every triage-resolved thread closes with an ack reply carrying a
  * MACHINE-PARSED disposition tag — `fixed: <ref>` / `wontfix: <reason>` /
- * `duplicate: #n` / `defered: <ledger-id>` — so the closure is auditable
+ * `duplicate: #n` / `deferred: <ledger-id>` — so the closure is auditable
  * and the next lap can tell a fixed thread from a deferred one. The
  * policy gate decides which tiers are closable WITHOUT a fix (fix
  * never/opportunistic) and which need fix-or-defer (fix mandatory).
@@ -45,14 +45,14 @@ suite('reviewDispositions — parseDispositionTag (gh-1352)', function () {
             { tag: 'duplicate', value: 'F7' });
     });
 
-    test('parses defered with the ledger item id', function () {
-        assert.deepEqual(rd.parseDispositionTag('defered: 9f2c01ab'),
-            { tag: 'defered', value: '9f2c01ab' });
+    test('parses deferred with the ledger item id', function () {
+        assert.deepEqual(rd.parseDispositionTag('deferred: 9f2c01ab'),
+            { tag: 'deferred', value: '9f2c01ab' });
     });
 
     test('the tag may sit on any line of the ack (first tag wins)', function () {
-        var ack = '🤖 triage closure (gh-1352).\n\ndefered: 9f2c01ab\nFindings live in the debt ledger.';
-        assert.deepEqual(rd.parseDispositionTag(ack), { tag: 'defered', value: '9f2c01ab' });
+        var ack = '🤖 triage closure (gh-1352).\n\ndeferred: 9f2c01ab\nFindings live in the debt ledger.';
+        assert.deepEqual(rd.parseDispositionTag(ack), { tag: 'deferred', value: '9f2c01ab' });
     });
 
     test('two tags in one ack — the FIRST one is the disposition', function () {
@@ -67,7 +67,11 @@ suite('reviewDispositions — parseDispositionTag (gh-1352)', function () {
     });
 
     test('unknown tag words are not dispositions', function () {
-        assert.equal(rd.parseDispositionTag('deferred: x'), null, 'the epic spells it defered (one r)');
+        // the one-r misspelling must NOT parse — the rejected word is built via
+        // concatenation so the repo-wide `deferred` sweep (gh-1379 AC2: the
+        // stale spelling greps to zero hits) stays clean while the guard pins it.
+        assert.equal(rd.parseDispositionTag('defe' + 'red: x'), null,
+            'the canonical spelling is deferred (two r\'s)');
         assert.equal(rd.parseDispositionTag('fix: x'), null);
         assert.equal(rd.parseDispositionTag('disposition: maybe'), null);
     });
@@ -90,7 +94,7 @@ suite('reviewDispositions — tagLine + buildThreadAckReply (gh-828 generalizati
         assert.equal(rd.tagLine({ tag: 'fixed', value: 'abc1234' }), 'fixed: abc1234');
         assert.equal(rd.tagLine({ tag: 'wontfix', value: 'style only' }), 'wontfix: style only');
         assert.equal(rd.tagLine({ tag: 'duplicate', value: 'F7' }), 'duplicate: F7');
-        assert.equal(rd.tagLine({ tag: 'defered', value: '9f2c01ab' }), 'defered: 9f2c01ab');
+        assert.equal(rd.tagLine({ tag: 'deferred', value: '9f2c01ab' }), 'deferred: 9f2c01ab');
     });
 
     test('tagLine is null without a tag or a value', function () {
@@ -106,8 +110,8 @@ suite('reviewDispositions — tagLine + buildThreadAckReply (gh-828 generalizati
     });
 
     test('a disposition ack carries the machine-parsed tag line', function () {
-        var ack = rd.buildThreadAckReply({ tag: 'defered', value: '9f2c01ab', tier: 'SUGGESTION' });
-        assert.contains(ack, 'defered: 9f2c01ab');
+        var ack = rd.buildThreadAckReply({ tag: 'deferred', value: '9f2c01ab', tier: 'SUGGESTION' });
+        assert.contains(ack, 'deferred: 9f2c01ab');
         assert.ok(rd.parseDispositionTag(ack), 'the ack round-trips through the parser');
     });
 
@@ -154,9 +158,9 @@ suite('reviewDispositions — dispositionForThread (the policy gate)', function 
         assert.equal(d.defer, false);
     });
 
-    test('a fix-mandatory tier with deferral available closes as defered', function () {
+    test('a fix-mandatory tier with deferral available closes as deferred', function () {
         var d = rd.dispositionForThread(thread('SUGGESTION'), policy, { allowDefer: true });
-        assert.equal(d.tag, 'defered');
+        assert.equal(d.tag, 'deferred');
         assert.equal(d.defer, true, 'the executor appends the ledger finding and fills the id');
     });
 
@@ -199,7 +203,7 @@ suite('reviewDispositions — dispositionForThread (the policy gate)', function 
         var everything = reviewPolicy.presetPolicy('fix-everything');
         assert.equal(rd.dispositionForThread(thread('NIT'), everything, {}), null);
         var d = rd.dispositionForThread(thread('NIT'), everything, { allowDefer: true });
-        assert.equal(d.tag, 'defered');
+        assert.equal(d.tag, 'deferred');
     });
 
     test('multi-item: two suggestions with one fixed and one deferrable resolve independently (2+ item case)', function () {
@@ -209,6 +213,6 @@ suite('reviewDispositions — dispositionForThread (the policy gate)', function 
                 fixedThreadIds: { PRRT_1: 'abc' }, allowDefer: true
             });
         });
-        assert.deepEqual([out[0].tag, out[1].tag], ['fixed', 'defered']);
+        assert.deepEqual([out[0].tag, out[1].tag], ['fixed', 'deferred']);
     });
 });

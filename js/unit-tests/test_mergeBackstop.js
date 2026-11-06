@@ -6,7 +6,7 @@
  * (>=⚠️; 🚨 included). Any count > 0 files ONE digest issue per PR
  * (title `[debt] <PR title>`; the body carries the review-debt-ledger
  * machine marker so the ledger's identity dedup holds), then resolves each
- * counted thread with the canonical `defered: #<digest-issue>` tag.
+ * counted thread with the canonical `deferred: #<digest-issue>` tag.
  * gh-1370 (owner directive): EVERY machine-owned review thread must reach
  * terminal resolution before the merge — SUGGESTION/NIT threads resolve
  * WITHOUT a fix (the machine-parsed `wontfix` ack tag), and a failed
@@ -481,11 +481,11 @@ suite('mergeBackstop — reviewRunRefOf, deferredAck, digest probe', function ()
         assert.contains(ref, 'unknown review run');
     });
 
-    test('the ack carries the canonical machine-parsed defered tag (reviewDispositions.TAGS)', function () {
+    test('the ack carries the canonical machine-parsed deferred tag (reviewDispositions.TAGS)', function () {
         var ack = mergeBackstopMod().deferredAck(512);
-        assert.contains(ack, 'defered: #512');
+        assert.contains(ack, 'deferred: #512');
         assert.deepEqual(reviewDispositionsMod().parseDispositionTag(ack),
-            { tag: 'defered', value: '#512' }, 'the tag round-trips through the part-3 parser');
+            { tag: 'deferred', value: '#512' }, 'the tag round-trips through the part-3 parser');
     });
 
     test('findExistingDigest reuses the open [debt] issue whose ledger marker carries this PR', function () {
@@ -528,7 +528,7 @@ suite('mergeBackstop — reviewRunRefOf, deferredAck, digest probe', function ()
 // ── the orchestrator (scripted io — the acceptance replays) ──────────────────
 
 suite('mergeBackstop — runBackstop (scripted io)', function () {
-    test('AC1 backstop replay: 2 machine ⚠️ threads -> one digest, both resolved defered #digest', function () {
+    test('AC1 backstop replay: 2 machine ⚠️ threads -> one digest, both resolved deferred #digest', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: twoMachineImportantThreads() });
         var out = run(m, f);
@@ -544,9 +544,9 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
             'the resolve rides the full github_resolve_pr_thread schema');
         assert.equal(f.rec.replies.length, 2);
         assert.equal(f.rec.replies[0].inReplyToId, '9001', 'the ack rides the root comment');
-        assert.contains(f.rec.replies[0].text, 'defered: #501');
+        assert.contains(f.rec.replies[0].text, 'deferred: #501');
         assert.deepEqual(reviewDispositionsMod().parseDispositionTag(f.rec.replies[0].text),
-            { tag: 'defered', value: '#501' });
+            { tag: 'deferred', value: '#501' });
         assert.equal(out.ledgerStampPosted, true, 'the refreshed ledger is stamped on the PR');
         assert.equal(f.rec.posts.length, 1, 'one ledger stamp comment');
         var marker = ledgerMarkerOf(f.rec.posts[0].body);
@@ -625,7 +625,7 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.equal(out.digest, 512);
         assert.equal(out.digestReused, true);
         assert.equal(out.resolved, 2);
-        assert.contains(f.rec.replies[0].text, 'defered: #512',
+        assert.contains(f.rec.replies[0].text, 'deferred: #512',
             'the acks point at the existing digest');
     });
 
@@ -813,7 +813,7 @@ suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)'
         assert.contains(m.outcomeLines(out2)[0], 'no unresolved machine-owned');
     });
 
-    test('AC3 no-regression replay: one >=IMPORTANT + nits → digest+defered for the IMPORTANT, wontfix acks for the nits', function () {
+    test('AC3 no-regression replay: one >=IMPORTANT + nits → digest+deferred for the IMPORTANT, wontfix acks for the nits', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: [
             ghThread({ id: 'PRT_1', line: 42 }),
@@ -826,8 +826,8 @@ suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)'
         assert.equal(out.resolved, 1);
         assert.equal(out.ackResolved, 2, 'the two below-threshold threads ack-resolved');
         assert.equal(f.rec.issues.length, 1, 'ONE digest for the >=IMPORTANT thread');
-        assert.contains(f.rec.replies[0].text, 'defered: #501',
-            'the >=IMPORTANT thread keeps its canonical defered tag');
+        assert.contains(f.rec.replies[0].text, 'deferred: #501',
+            'the >=IMPORTANT thread keeps its canonical deferred tag');
         var wontfixReplies = f.rec.replies.filter(function (r) {
             var p = reviewDispositionsMod().parseDispositionTag(r.text);
             return p && p.tag === 'wontfix';
@@ -1055,7 +1055,7 @@ suite('mergeBackstop — gh-1371 review findings', function () {
         assert.equal(marker.findings.length, 2, 'the ledger append consumed that same read');
     });
 
-    test('finding 3: a createIssue response without an issue number throws — no defered tags against a nonexistent digest', function () {
+    test('finding 3: a createIssue response without an issue number throws — no deferred tags against a nonexistent digest', function () {
         var m = mergeBackstopMod();
         ['{}', JSON.stringify({ message: 'Validation Failed' }), JSON.stringify({ number: 0 })]
             .forEach(function (payload) {
@@ -1066,7 +1066,7 @@ suite('mergeBackstop — gh-1371 review findings', function () {
                 assert.ok(threw, 'payload ' + payload + ' never passes as a digest');
                 assert.contains(threw.message, 'no issue number');
                 assert.equal(f.rec.resolves.length, 0, 'no thread resolves without a real digest');
-                assert.equal(f.rec.replies.length, 0, 'no defered tag points at a nonexistent digest');
+                assert.equal(f.rec.replies.length, 0, 'no deferred tag points at a nonexistent digest');
             });
     });
 
@@ -1088,10 +1088,10 @@ suite('mergeBackstop — gh-1371 review findings', function () {
             ] });
         };
         var out = run(m, f);
-        assert.equal(out.digest, 512, 'the defered tags converge on the concurrent digest');
+        assert.equal(out.digest, 512, 'the deferred tags converge on the concurrent digest');
         assert.equal(out.digestReused, true);
         assert.equal(out.digestDuplicate, 501, 'our duplicate is recorded as abandoned');
-        assert.contains(f.rec.replies[0].text, 'defered: #512',
+        assert.contains(f.rec.replies[0].text, 'deferred: #512',
             'no thread points at the abandoned duplicate');
         assert.contains(m.outcomeLines(out)[0], '#501 abandoned',
             'the abandonment is observable in the outcome line');
@@ -1104,7 +1104,7 @@ suite('mergeBackstop — gh-1371 review findings', function () {
         assert.equal(out.digest, 501);
         assert.equal(out.digestReused, false);
         assert.equal(out.digestDuplicate, null, 'our own issue never reads as a concurrent duplicate');
-        assert.contains(f.rec.replies[0].text, 'defered: #501');
+        assert.contains(f.rec.replies[0].text, 'deferred: #501');
     });
 
     test('finding 4: findExistingDigest skips the excluded (own just-filed) number', function () {

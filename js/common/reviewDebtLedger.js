@@ -3,8 +3,8 @@
  * second consumer of the shared ledger+sweep pattern).
  *
  * Scope 2's triage path can close a machine-owned thread WITHOUT a fix by
- * tagging `defered: <id>` (spelled `defered` — one r, the canonical
- * reviewDispositions.TAGS literal; <id> is the stamped ledger finding id)
+ * tagging `deferred: <id>` (the canonical reviewDispositions.TAGS spelling,
+ * two r's; <id> is the stamped ledger finding id)
  * — a fix-worthy observation on code the leg
  * must not touch (not this PR's diff, needs an owner decision, comment-only
  * fix). Those deferrals become finding-level entries HERE so review debt
