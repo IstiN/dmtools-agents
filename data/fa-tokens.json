@@ -1,15 +1,4 @@
 {
-  "pr-1175": [
-    {
-      "leg": "review",
-      "at": "2026-10-22T21:07:34Z",
-      "prompt": 57435,
-      "completion": 12500,
-      "total": 69935,
-      "cacheRead": 908736,
-      "model": "glm-5.3-flash"
-    }
-  ],
   "issue-1185": [
     {
       "leg": "dev",
@@ -2322,6 +2311,17 @@
       "total": 169389,
       "cacheRead": 3373760,
       "model": "glm-5.3-flash"
+    }
+  ],
+  "issue-1379": [
+    {
+      "leg": "dev",
+      "at": "2026-11-06T00:17:17Z",
+      "prompt": 6330,
+      "completion": 0,
+      "total": 6330,
+      "cacheRead": 0,
+      "model": "kimi-for-coding"
     }
   ]
 }
