@@ -18668,4 +18668,192 @@ suite('smAgent: reconcile_verdicts terminal-PR guard (gh-1369)', function () {
             'no reconciliation comment on a terminal PR');
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'reconciliation never arms');
     });
+
+    test('AC2 parity — a CLOSED (not merged) PR exits the reconcile too (no label churn, no comment)', function () {
+        // A closed PR can be REOPENED; the reconcile deliberately exits in
+        // that window (the next tick after reopen self-heals). This pins
+        // the writer-level behavior at parity with the arm side (whose AC2
+        // replays closed-not-merged) and guards the guard against a
+        // refactor that special-cases `merged` only.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1369', labels: ['pr_approved', 'ai_pr_reviewed'], issueNumber: null, prNumber: 1369 }
+                ],
+                pr: { number: 1369, state: 'closed', merged: false, head: { sha: HEAD },
+                      labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    verdictMarker(HEAD, 'APPROVE', '2026-11-05T06:01:59.000Z'),
+                    verdictMarker(HEAD, 'REQUEST_CHANGES', '2026-11-05T06:02:30.000Z')
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }], { machineAuthor: 'ai-teammate' }));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'a CLOSED (not merged) PR exits the reconcile — no loser-label strip');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no reconciliation comment on a CLOSED PR');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'reconciliation never arms');
+    });
+});
+
+// ── gh-1369 rework: the sibling agent:rework writers ─────────────────────────
+//
+// Review thread PRRT_kwDORYAuYs60aHw4: the terminal guard shipped on the
+// three ticket-named paths (arm_rework, the gh-840 restore sweep, the gh-807
+// verdict reconcile), but `agent:rework` has more machine writers that ignore
+// merge state: the conflict_rework arms (the gh-683 self-heal + the main
+// arm/PR-anchored dispatch) and the fail_validation re-arms (linked-issue +
+// PR-anchored). A PR that merged mid-window (the #1368 listing/action race)
+// still matches these rules' queries on the next tick and gets agent:rework
+// stamped on shipped code. Every writer now probes terminal state BEFORE any
+// write; an unknown/absent state stays fail-open (legacy semantics).
+suite('smAgent: conflict_rework + fail_validation terminal-PR guard (gh-1369 rework)', function () {
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    var CONFLICT_RULE = {
+        description: 'merge conflict with main -> conflict rework',
+        source: 'github',
+        query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+        localAction: 'conflict_rework', limit: 1, id: 'conflict-rework'
+    };
+
+    var FAIL_RULE = {
+        description: 'validation red -> fail_validation',
+        source: 'github',
+        query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
+        localAction: 'fail_validation', limit: 1, id: 'fail-validation'
+    };
+
+    function conflictReplay(prState, prMerged) {
+        return makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [{ key: 'pr-95', labels: [], issueNumber: null, prNumber: 95,
+                          draft: false, branch: 'ai/gh-1074', author: 'ai-teammate',
+                          headSha: 'deadbee',
+                          pr: { number: 95, state: prState, merged: prMerged,
+                                mergeState: 'DIRTY', headSha: 'deadbee' } }],
+                pr: { number: 95, state: prState, merged: prMerged,
+                      labels: [], body: 'Fixes #1074' },
+                issue: { number: 1074, state: 'open' },
+                prComments: []
+            }
+        }));
+    }
+
+    test('conflict_rework — a MERGED PR with a stale DIRTY listing never arms, never posts the marker', function () {
+        var sm = conflictReplay('closed', true);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [CONFLICT_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework label on a merged PR (neither the self-heal nor the main arm)');
+        assert.equal(sm.capturedTriggers.length, 0, 'no PR-anchored conflict dispatch');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no conflict marker/report on a merged PR');
+    });
+
+    test('conflict_rework — a CLOSED (not merged) PR is terminal too', function () {
+        var sm = conflictReplay('closed', false);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [CONFLICT_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no agent:rework label on a closed PR');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker/report');
+    });
+
+    test('conflict_rework — an OPEN PR keeps the legacy arm (re-arm lands on the OPEN linked issue)', function () {
+        var sm = conflictReplay('open', false);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [CONFLICT_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the issue re-arm lands on an open PR');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 1074);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.equal(sm.capturedTriggers.length, 0, 'OPEN linked issue — no PR-anchored dispatch');
+    });
+
+    function failReplay(prState, prMerged) {
+        return makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [{ key: 'pr-72', labels: ['pr_approved', 'ai_validating'], issueNumber: null,
+                          prNumber: 72, draft: false, author: 'ai-teammate', headSha: 'sha72',
+                          pr: { number: 72, state: prState, merged: prMerged,
+                                headSha: 'sha72', checks: 'red' } }],
+                pr: { number: 72, state: prState, merged: prMerged,
+                      labels: ['pr_approved', 'ai_validating'], body: 'Fixes #503 — boot cost' },
+                prComments: []
+            }
+        }));
+    }
+
+    test('fail_validation — a MERGED PR never re-arms rework (neither the linked issue nor the PR)', function () {
+        var sm = failReplay('closed', true);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [FAIL_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework anywhere on a merged PR');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.number === 503; }),
+            'the linked issue is NOT re-armed');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.number === 72; }),
+            'the PR is NOT PR-anchored-armed');
+        assert.ok(sm.capturedPrComments.length >= 1, 'the red report still posts');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('gh-1369') !== -1,
+            'the report names the terminal skip instead of promising a re-queue');
+    });
+
+    test('fail_validation — a CLOSED (not merged) PR never re-arms either', function () {
+        var sm = failReplay('closed', false);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [FAIL_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no agent:rework on a closed PR');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+
+    test('fail_validation — an OPEN PR keeps the legacy re-arm on the linked issue (regression)', function () {
+        var sm = failReplay('open', false);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [FAIL_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the re-arm lands on an open PR');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 503, 'linked-issue carrier');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('rework re-queued') !== -1,
+            'the open-PR report keeps the re-queued wording');
+    });
+
+    test('fail_validation — a probe WITHOUT state (legacy payload) fails open and re-arms as before', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [{ key: 'pr-74', labels: ['pr_approved', 'ai_validating'], issueNumber: null,
+                          prNumber: 74, draft: false, author: 'ai-teammate', headSha: 'sha74',
+                          pr: { number: 74, headSha: 'sha74', checks: 'red' } }],
+                pr: { number: 74, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #505' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [FAIL_RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'fail-open: the re-arm fires as before');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 505);
+    });
 });
