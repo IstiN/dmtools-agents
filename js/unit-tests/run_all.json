@@ -44,6 +44,7 @@
         "js/unit-tests/test_reworkLoopGuard.js",
         "js/unit-tests/test_findingRegistry.js",
         "js/unit-tests/test_nakedPrReconcile.js",
+        "js/unit-tests/test_prTerminalState.js",
         "js/unit-tests/test_validationLiveness.js",
         "js/unit-tests/test_checkRunZombies.js",
         "js/unit-tests/test_checkRunStamp.js",

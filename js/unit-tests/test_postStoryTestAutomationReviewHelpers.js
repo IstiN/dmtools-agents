@@ -30,6 +30,7 @@ function loadPrReviewComments() {
     return loadModule('js/postPRReviewComments.js', makeRequire({
         './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
         './config.js': configModule,
+        './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
         'config': configModule,
         './common/scm.js': { createScm: function() { return {}; } },
         './common/trackers.js': { createTracker: function() { return {}; }, extractTicketKey: function() { return null; } },
