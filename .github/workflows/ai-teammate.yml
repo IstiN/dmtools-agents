@@ -291,6 +291,11 @@ jobs:
       # gh-1096: requires the factory-teammate.yml checkout_ref input (awf PR merged first).
       checkout_ref: ${{ github.event.inputs.checkout_ref || '' }}
       machine-author: 'ai-teammate'
+      # gh-1381: provider key slot 1 lands in the leg env as ZAI_CODE_KEY_1 —
+      # the fa provider resolver auto-appends it as a failover queue entry
+      # (same provider + model as the primary ZAI_CODE_KEY entry). The VALUE
+      # is the repo secret CUSTOM_PROVIDER_KEY1 (secrets: inherit passes it).
+      CUSTOM_PROVIDER_KEY1_NAME: 'ZAI_CODE_KEY_1'
       leg: ${{ github.event.inputs.leg || '' }}
       reason: ${{ github.event.inputs.reason || github.event_name }}
       flutter-version: ''  # JS/configs repo — dmtools & fa CLIs are prebuilt; no Flutter toolchain needed
