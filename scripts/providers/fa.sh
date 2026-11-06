@@ -18,6 +18,11 @@
 #   FA_PROVIDER_API_KEY  (optional) convenience: mapped into the env var
 #                        the config's apiKeyEnvVar names — ONLY inside
 #                        the fa subprocess scope
+#   FA_QUOTA_PROBE       (optional, default on) set `off`/`0`/`false` to
+#                        skip the pre-leg z.ai quota probe (gh-1385) that
+#                        re-orders the queue most-unspent-first by each
+#                        key's remaining 5-hour-window quota; any probe
+#                        failure keeps the static order — never fatal
 #
 # Sessions (when agents/setup/fa-session.sh is present, e.g. AI Teammate
 # runs): --session "$FA_SESSION_NAME" --session-root "$FA_SESSION_ROOT"
@@ -165,6 +170,137 @@ _fa_append_fallback_keys() {
   return 0
 }
 
+# gh-1385: quota-aware provider ordering — probe every zai queue entry's key
+# ONCE against the coding-plan quota endpoint and re-order the queue
+# most-unspent-first (score = `remaining` of the rolling 5-hour window — the
+# window provider storms exhaust). Key topology note: entries are keyed by
+# the KEY VALUE, so same-account key sets collapse to one probe and equal
+# scores keep the static order (no churn). Score-0 (exhausted) and 401/403
+# keys move to the END (not dropped — a reset may be nearer than a cold
+# key); every other probe failure (non-200, timeout, unparseable/changed
+# shape, missing curl/node) leaves that entry at its static position and
+# NEVER fails the leg — the endpoint is undocumented, its shape can change
+# without notice. Kill switch: FA_QUOTA_PROBE=off (or 0/false, any case)
+# skips probing entirely; default ON, zai entries only — other providers are
+# never probed. One HTTP call per distinct key per resolution, single
+# attempt, short timeout (no retry storms). Entries whose baseUrl leaves
+# api.z.ai (e.g. china-platform keys) are not probed — out of scope (the
+# host check is boundary-exact: only https://api.z.ai or https://api.z.ai/
+# prefixed baseUrls are probed, never api.z.ai.cn or other siblings).
+# The whole probe step runs under an aggregate per-leg budget (default 10 s,
+# override with FA_QUOTA_PROBE_BUDGET_MS, clamped to 500 ms..120 s) — once
+# spent, unprobed keys keep their static slot ("probe-budget"), so a slow or
+# unreachable endpoint costs every leg at most the budget, not N x timeout.
+# The API key is handed to curl via a stdin config (-K -), never as an argv
+# element, so it cannot leak through ps / /proc cmdline.
+_fa_order_queue_by_quota() {
+  [ -n "${FA_PROVIDERS_QUEUE:-}" ] || return 0
+  case "$(printf '%s' "${FA_QUOTA_PROBE:-on}" | tr '[:upper:]' '[:lower:]')" in
+    off|0|false) return 0 ;;
+  esac
+  command -v node >/dev/null 2>&1 || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local ordered
+  ordered="$(FA_PROVIDERS_QUEUE="${FA_PROVIDERS_QUEUE}" node -e '
+    const fs = require("fs");
+    const cp = require("child_process");
+    let raw = process.env.FA_PROVIDERS_QUEUE || "";
+    if (raw.startsWith("@")) raw = fs.readFileSync(raw.slice(1), "utf8");
+    let arr;
+    try { arr = JSON.parse(raw); } catch (e) { process.exit(0); }
+    if (!Array.isArray(arr) || arr.length === 0) process.exit(0);
+    const ENDPOINT = "https://api.z.ai/api/monitor/usage/quota/limit";
+    const PROBE_TIMEOUT_S = 5;
+    const BUDGET_RAW = parseInt(process.env.FA_QUOTA_PROBE_BUDGET_MS || "", 10);
+    const BUDGET_MS = isFinite(BUDGET_RAW) && BUDGET_RAW >= 500 ? Math.min(BUDGET_RAW, 120000) : 10000;
+    const startedAt = Date.now();
+    const cache = new Map();
+    const keyOf = (entry) => {
+      const cfg = entry && entry.provider_config;
+      if (!cfg) return null;
+      const name = cfg.apiKeyEnv || cfg.apiKeyEnvVar;
+      if (!name) return null;
+      if (process.env[name]) return process.env[name];
+      const b64 = process.env[name + "_BASE64"];
+      if (!b64) return null;
+      try { return Buffer.from(b64, "base64").toString("utf8"); } catch (e) { return null; }
+    };
+    const scoreOf = (limits) => {
+      let win = null;
+      for (const l of limits) { if (l && l.number === 5 && l.unit === 3) { win = l; break; } }
+      if (!win) {
+        const rs = limits.filter(l => l && typeof l.nextResetTime === "number").sort((a, b) => a.nextResetTime - b.nextResetTime);
+        if (rs.length > 0) win = rs[0];
+      }
+      if (!win) { for (const l of limits) { if (l && typeof l.remaining === "number") { win = l; break; } } }
+      if (!win || typeof win.remaining !== "number" || !isFinite(win.remaining)) return null;
+      return win.remaining;
+    };
+    const probe = (key) => {
+      let out = null;
+      let errWhy = "timeout";
+      try {
+        out = cp.execFileSync("curl", ["-sS", "-m", String(PROBE_TIMEOUT_S), "-K", "-", "-w", "\n%{http_code}", ENDPOINT], { encoding: "utf8", timeout: (PROBE_TIMEOUT_S + 2) * 1000, input: "header = \"Authorization: Bearer " + key + "\"\n", stdio: ["pipe", "pipe", "pipe"] });
+      } catch (e) {
+        out = null;
+        if (e && (e.killed || e.signal)) errWhy = "timeout";
+        else if (e && e.status === 28) errWhy = "timeout";
+        else if (e && typeof e.status === "number" && e.status > 0) errWhy = "curl-exit " + e.status;
+        else errWhy = "timeout";
+      }
+      if (out === null) return { group: 2, score: null, why: errWhy };
+      const nl = out.lastIndexOf("\n");
+      const status = parseInt(out.slice(nl + 1).trim(), 10);
+      const body = out.slice(0, nl);
+      if (status === 401 || status === 403) return { group: 3, score: null, why: "unauthorized" };
+      if (status !== 200) return { group: 2, score: null, why: "http " + (isNaN(status) ? "?" : status) };
+      let limits = null;
+      try {
+        const parsed = JSON.parse(body);
+        limits = parsed && parsed.data && Array.isArray(parsed.data.limits) ? parsed.data.limits : null;
+      } catch (e) { limits = null; }
+      if (!limits) return { group: 2, score: null, why: "shape" };
+      const score = scoreOf(limits);
+      if (score === null) return { group: 2, score: null, why: "shape" };
+      if (score > 0) return { group: 1, score: score, why: String(score) };
+      return { group: 3, score: 0, why: "exhausted" };
+    };
+    const decorated = arr.map((entry, idx) => {
+      const cfg = entry && entry.provider_config;
+      const baseUrl = cfg ? (cfg.baseUrl || "") : "";
+      const sameHost = !baseUrl ||
+        baseUrl === "https://api.z.ai" ||
+        baseUrl.indexOf("https://api.z.ai/") === 0;
+      const key = entry && entry.provider_type === "zai" && sameHost ? keyOf(entry) : null;
+      let cls = { group: 2, score: null, why: "not-probed" };
+      if (key) {
+        if (!cache.has(key)) {
+          if (cache.size > 0 && Date.now() - startedAt >= BUDGET_MS) {
+            cache.set(key, { group: 2, score: null, why: "probe-budget" });
+          } else {
+            cache.set(key, probe(key));
+          }
+        }
+        cls = cache.get(key);
+      }
+      const ref = (cfg && (cfg.apiKeyEnv || cfg.apiKeyEnvVar)) || ("#" + idx);
+      return { entry: entry, idx: idx, group: cls.group, score: cls.score, why: cls.why, ref: entry && entry.name ? entry.name : ref };
+    });
+    decorated.sort((a, b) => {
+      if (a.group !== b.group) return a.group - b.group;
+      if (a.group === 1 && a.score !== b.score) return b.score - a.score;
+      return a.idx - b.idx;
+    });
+    if (decorated.every((d, i) => d.idx === i)) process.exit(0);
+    process.stderr.write("[providers/fa.sh] queue re-ordered by remaining z.ai quota (5h window first): " + decorated.map(d => d.ref + "=" + d.why).join(", ") + "\n");
+    process.stdout.write(JSON.stringify(decorated.map(d => d.entry)));
+  ')" || return 0
+  if [ -n "${ordered}" ]; then
+    export FA_PROVIDERS_QUEUE="${ordered}"
+  fi
+  return 0
+}
+
 _fa_resolve_env() {
   if [ -z "${FA_PROVIDER_TYPE:-}" ] && [ -z "${FA_PROVIDERS_QUEUE:-}" ]; then
     echo "Error: FA_PROVIDERS_QUEUE or FA_PROVIDER_TYPE + FA_PROVIDER_CONFIG environment variable is required for fa provider" >&2
@@ -183,6 +319,7 @@ _fa_resolve_env() {
     fi
 
     _fa_append_fallback_keys
+    _fa_order_queue_by_quota
     if [ -z "${FA_PROVIDER_TYPE:-}" ] || [ -z "${FA_PROVIDER_CONFIG:-}" ]; then
       _fa_derive_from_queue || return 1
     fi

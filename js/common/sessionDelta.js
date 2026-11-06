@@ -742,6 +742,8 @@ if (typeof module !== 'undefined' && module.exports) {
         sessionGroupForConfig: sessionGroupForConfig,
         resolveSessionStateDir: resolveSessionStateDir,
         resolveDefaultSessionSubpath: resolveDefaultSessionSubpath,
+        readEnv: readEnv,
+        readRuntimeEnv: readRuntimeEnv,
         hasActiveSessionOnDisk: hasActiveSessionOnDisk,
         defaultDeltaStorage: defaultDeltaStorage,
         parsePrInfoMd: parsePrInfoMd,
