@@ -70,6 +70,7 @@ _Post Story Test Automation Review Comments Action_
   - `formalGithubReview`
   - `importantBlocksApproval`
   - `localTeammate`
+  - `maxAutoReworkRounds`
   - `maxReviewThreadsBeforeForceApprove`
   - `onApproved`
   - `projectKey`
@@ -106,6 +107,7 @@ _Post Story Test Automation Review Comments Action_
 - `dryRun` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
+- `maxAutoReworkRounds` _(used by JS action)_
 - `onApproved` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `reviewPolicy` _(used by JS action)_
