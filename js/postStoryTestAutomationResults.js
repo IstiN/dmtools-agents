@@ -1222,8 +1222,11 @@ function persistBugTestScripts(ctx) {
  * Bug with failed linked TCs — attribute before bouncing (gh-1329):
  *   - the bug's verdict is gated only by its own oracle TC;
  *   - fresh TCs route to rework (a fresh TC cannot bounce by construction);
- *   - validated guards go through the mechanical triage table (retry filter,
- *     fingerprint lookup, differential rerun);
+ *   - validated TCs (guards AND own oracles — gh-1354) go through the
+ *     mechanical triage table first (retry filter, fingerprint lookup,
+ *     differential rerun); an own-oracle hands to the AC re-check only when
+ *     attribution says product-side, and its null-verdict laps escalate at
+ *     the cap instead of reworking forever;
  *   - only an earned bounce (own-oracle AC violated / differential-green
  *     regression) returns the bug to development — bounded, escalation at
  *     the cap;

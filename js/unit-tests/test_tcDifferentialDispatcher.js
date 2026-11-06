@@ -822,3 +822,171 @@ suite('tcDifferentialDispatcher: gh-1331 alternation suppression', function() {
         assert.deepEqual(run.jira.moves, [{ key: 'BUG-1', statusName: 'Ready For Development' }]);
     });
 });
+
+// ── gh-1354: own-oracle parked requests — the AC-gated continuation ──────────
+//
+// gh-1354 routes validated own-oracle reds through the mechanical table, so
+// own-oracle TCs park differential requests too. The dispatcher continuation
+// must carry the OWN role through: a green outcome is product-side
+// attribution that hands to the AC re-check (rework) — NOT a guard's
+// un-gated earned bounce.
+
+suite('gh-1354: dispatcher own-oracle requests — the AC handoff', function() {
+
+    var mod = loadDispatcher(fakeShell(), {});
+
+    test('dispatcherVerdict keeps an own-oracle request OFF the guard bounce path', function() {
+        var green = mod.dispatcherVerdict(parkedFinding('TS-7', { role: 'own-oracle' }), 'green', 0, 2);
+        assert.equal(green.action, tcTriage.ACTION_REWORK);
+        assert.equal(green.reason, 'own-oracle-ac-recheck');
+        var red = mod.dispatcherVerdict(parkedFinding('TS-7', { role: 'own-oracle' }), 'red', 0, 2);
+        assert.equal(red.action, tcTriage.ACTION_MAINTENANCE);
+        assert.equal(red.reason, 'failure-predates-change');
+    });
+
+    test('dispatcherVerdict: own-oracle green at the cap escalates (F2 bound)', function() {
+        var v = mod.dispatcherVerdict(parkedFinding('TS-7', { role: 'own-oracle' }), 'green', 2, 2);
+        assert.equal(v.action, tcTriage.ACTION_ESCALATE);
+        assert.equal(v.reason, 'null-ac-verdict-cap-reached');
+    });
+
+    test('AC: own-oracle green hands to the rework lane — no bounce, no bug move, request resolved', function() {
+        var run = runAction(fakeShell({}), [parkedFinding('TS-7', { role: 'own-oracle' })]);
+
+        assert.equal(run.result.success, true);
+        assert.equal(run.result.action, 'rework');
+        assert.deepEqual(run.result.reworkTestCases, ['TS-7']);
+        assert.deepEqual(run.jira.moves, [], 'the AC re-check owns the bounce decision — the bug is untouched');
+
+        // the parked request is consumed: the attribution completed (green on old)
+        assert.equal(tcLedger.differentialRequests(run.latestLedger).length, 0);
+        assert.equal(run.latestLedger.findings.length, 1);
+        assert.equal(run.latestLedger.findings[0].verdict, 'rework');
+        assert.equal(run.latestLedger.findings[0].reason, 'own-oracle-ac-recheck');
+        assert.equal(run.latestLedger.findings[0].evidence.differential, 'green');
+
+        var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
+        assert.contains(body, 'AC re-check');
+        assert.notContains(body, 'failed with a product regression');
+        assert.notContains(body, 'fails there too');
+    });
+
+    test('AC: own-oracle green at the cap escalates instead of another rework lap', function() {
+        var run = runAction(fakeShell({}), [parkedFinding('TS-7', { role: 'own-oracle' })], { redRounds: 2 });
+
+        assert.equal(run.result.action, 'escalated');
+        assert.deepEqual(run.jira.moves, [], 'the cap stops the loop — no move');
+        var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
+        // gh-1354 rework: the null-verdict family is reason-aware — nothing
+        // was ever attributed, so the comment says "Attribution stalled",
+        // never "Bounce cap reached".
+        assert.contains(body, 'Attribution stalled');
+        assert.notContains(body, 'repeated attributed failures');
+    });
+
+    test('AC: own-oracle red routes to maintenance like any red differential', function() {
+        var run = runAction(fakeShell({ tcFails: true }), [parkedFinding('TS-7', { role: 'own-oracle' })]);
+
+        assert.equal(run.result.action, 'maintained');
+        assert.deepEqual(run.jira.moves, []);
+        assert.equal(run.latestLedger.findings[0].reason, 'failure-predates-change');
+    });
+});
+
+// ── gh-1354 rework: routeOne honors the hardened ACTION_DIFFERENTIAL verdict ──
+//
+// triageDifferentialOutcome is hardened to return ACTION_DIFFERENTIAL for any
+// outcome that is not green|red ("never decide on incomplete evidence") — but
+// routeOne is the verdict's only production consumer. The fail-safe must be
+// symmetric: a verdict that refuses to decide RE-PARKS the request — it must
+// never land in the red-on-old maintenance lane (no fabricated
+// differential:'red' evidence, no "fails there too" report, no
+// maintained + parked double record).
+
+suite('gh-1354 rework: the ACTION_DIFFERENTIAL verdict re-parks, never a red-on-old claim', function() {
+
+    // A triage stub wrapping the real module: the chosen TC's continuation
+    // returns the hardened ACTION_DIFFERENTIAL verdict — the shape an
+    // incomplete outcome (unavailable leaking past the early return, a null,
+    // a typo) produces. Today unreachable through runDifferential (it only
+    // returns green|red); the branch pins the fail-safe contract anyway.
+    function triageWithDifferentialVerdict(tcKey) {
+        var stub = Object.assign({}, tcTriage);
+        stub.triageDifferentialOutcome = function(input) {
+            var v = tcTriage.triageDifferentialOutcome(input);
+            if (String(input.tcKey) === String(tcKey)) {
+                return Object.assign({}, v, {
+                    action: tcTriage.ACTION_DIFFERENTIAL,
+                    reason: 'rerun-requested-on-last-green-build'
+                });
+            }
+            return v;
+        };
+        return stub;
+    }
+
+    function runActionWithTriage(shell, triageStub, findings) {
+        var jira = {
+            jira_get_ticket: function() {
+                return { fields: {
+                    summary: 'Checkout total wrong',
+                    issuetype: { name: 'Bug' },
+                    comment: { comments: ticketComments({ findings: findings }) }
+                } };
+            },
+            jira_move_to_status: function(args) { jira.moves.push(args); },
+            jira_post_comment: function(args) { jira.comments.push(args); },
+            jira_add_label: function(args) { jira.labels.push(args); },
+            jira_remove_label: function(args) { jira.unlabels.push(args); }
+        };
+        jira.moves = []; jira.comments = []; jira.labels = []; jira.unlabels = [];
+        var trackerModule = trackersWith(jira);
+        var mod = loadModule('js/tcDifferentialDispatcher.js', makeRequire(Object.assign({}, {
+            './configLoader.js': makeDefaultConfigLoaderMock({}),
+            './config.js': configModule,
+            './common/trackers.js': trackerModule,
+            './common/tcTriage.js': triageStub,
+            './common/tcMaintenanceLedger.js': tcLedger,
+            './common/tcRunRegistry.js': tcRunRegistry,
+            './common/tcAlternation.js': tcAlternation,
+            './common/bugBookkeeping.js': bugBookkeeping,
+            './common/jobTicketInputs.js': jobTicketInputs
+        })), Object.assign({}, { cli_execute_command: shell }, jira));
+        var result = mod.action(dispatcherParams());
+        var ledgerBodies = jira.comments.map(function(c) { return c.comment; })
+            .filter(function(b) { return String(b).indexOf('<!-- dmtools:tc-maintenance-ledger ') !== -1; });
+        var latestLedger = null;
+        if (ledgerBodies.length) {
+            latestLedger = tcLedger.latestLedger([{ body: ledgerBodies[ledgerBodies.length - 1], user: { login: 'ai-teammate' } }],
+                { authorLogins: ['ai-teammate'] }).ledger;
+        }
+        return { result: result, jira: jira, latestLedger: latestLedger };
+    }
+
+    test('an ACTION_DIFFERENTIAL verdict stalls the request — no maintenance route fires', function() {
+        var run = runActionWithTriage(fakeShell({}), triageWithDifferentialVerdict('TS-7'), [parkedFinding('TS-7')]);
+
+        assert.equal(run.result.success, true);
+        assert.equal(run.result.action, 'stalled', 'the undecided verdict re-parks, it never maintains');
+        assert.deepEqual(run.result.stalledTestCases, ['TS-7']);
+        assert.deepEqual(run.result.maintainedTestCases, [], 'no red-on-old record for an outcome that never ran');
+        assert.deepEqual(run.jira.moves, [], 'the bug state is unchanged');
+
+        var body = run.jira.comments.map(function(c) { return c.comment; }).join('\n');
+        assert.notContains(body, 'fails there too', 'the false "failure predates the change" claim must not render');
+        assert.notContains(body, 'failed with a product regression');
+        assert.contains(body, 'incomplete outcome', 'the stall stays visible in the report');
+    });
+
+    test('the re-parked request keeps its differential verdict and stays parked for the next tick', function() {
+        var run = runActionWithTriage(fakeShell({}), triageWithDifferentialVerdict('TS-7'), [parkedFinding('TS-7')]);
+
+        assert.ok(run.latestLedger, 'the updated ledger marker was posted');
+        assert.equal(tcLedger.differentialRequests(run.latestLedger).length, 1,
+            'the request is re-parked as a differential-rerun finding — the dispatcher retries next tick');
+        assert.equal(run.latestLedger.findings[0].verdict, 'differential-rerun');
+        assert.notEqual(run.latestLedger.findings[0].verdict, 'maintenance');
+        assert.deepEqual(run.jira.unlabels, [],
+            'the park label survives — nothing was consumed, the next tick retries');
+    });
+});
