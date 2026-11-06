@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-06T06:58:16.437Z",
+  "ticketKey": "gh-1369",
+  "headSha": "85b6e8d4a2cedad6f9fa8a184d24793d01c129c4",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:46bcddfa269b1da9",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:76557572d98150e5",
+      "size": 9201
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:090183604f3bcde4",
+      "size": 4219
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:67787339655470f0",
+      "size": 2401
+    },
+    "request.md": {
+      "hash": "fnv1a64:67874c871bc326a8",
+      "size": 2141
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:5913ef1d6ea21be3",
+      "size": 883
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:0b42e543c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:132e5638118f4d4c",
+      "size": 2248
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:67874c871bc326a8",
+      "size": 2141
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs60aHw4",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/smAgent.js:2053",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the gh-1369 pathology stays reachable via sibling `agent:rework` writers — \"no more `agent:rework` stamps on shipped code\" overclaims**\n\nThe terminal guard itself is well-built (pure leaf, fail-open, probe reuse). But `prTerminalState` is referenced **only** in `js/smAgent.js` — the other machine writers of `agent:rework` still ignore merge state, and each is the same defect class the ticket title names (\"Rework-arming stamps agent:rework on already-merged PRs\"):\n\n1. `js/postPRReviewComments.js:122-142` — `markForSmStoryRework` (called from `runReworkLeg` at `:2252`): a review leg in flight at merge time concludes REQUEST_CHANGES and stamps `agent:rework` on the now-merged PR/ticket; `rework-on-label` then dispatches a rework leg against shipped code. This is exactly the \"leg already flying\" race the #1368 family lives in.\n2. `js/pushReworkChanges.js:2393` — `rearmNoopRework`: a rework lap concluding no-op on a PR that merged mid-leg re-arms `agent:rework`; the next tick dispatches another dead leg.\n3. `js/smAgent.js` `fail_validation` re-arm paths (`:468`, `:472`, `:5276`, `:5288`): a PR that merged while validation was red gets re-armed on the merged head on the next tick.\n\nEach site is one `prHeadAndLabels` + `isTerminalPrState` probe away from closed — the helper already exists and is unit-tested.\n\n**Ask**: either extend the terminal guard to these writers in this PR, or narrow the PR-description claim to the three guarded paths and file the follow-up ticket. As written, \"no more `agent:rework` stamps … on shipped code\" reads as a class-level fix that is not one yet."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60aHyb",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/prTerminalState.js:41",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: cross-reference the sibling terminal-state helper `isPrBodyFrozen`**\n\n`js/common/pullRequest.js:203-217` already implements a near-sibling decision — `isPrBodyFrozen`: `merged === true` → frozen; state `closed` / `merged` / `completed` → frozen, plus the merge-queue label check. The two contracts legitimately differ (body-freeze vs rework-terminality; ADO `completed` + merge-queue label vs GitHub-REST terminal-only; freeze-by-default vs fail-open), but nothing in either file says so.\n\nA one-line cross-reference in this module's header, e.g. *\"sibling: `isPrBodyFrozen` in `pullRequest.js` — different contract (body-freeze, ADO `completed`, merge-queue labels); do not unify without reconciling those and the fail-open doctrine\"*, would stop a future dedup pass from silently merging them and flipping one of the semantics (most dangerously, dropping the fail-open behavior the arming paths rely on)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60aH0_",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_smAgent.js:18635",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: add the closed-not-merged replay for `reconcile_verdicts`**\n\nCoverage is uneven across the three guarded writers: the arm suites replay AC1 (merged) **and** AC2 (closed-not-merged), and the unit tests cover `isTerminalPrState('CLOSED', false) === true` — but this reconcile suite replays only `merged: true`.\n\nThe closed-not-merged state is real at the writer level: a closed PR can be reopened, and the reconcile deliberately exits during that window (next tick after reopen self-heals). One more replay with `state: 'closed', merged: false` asserting `capturedPrLabelRemoves.length === 0` + no comment would pin the writer-level behavior at parity with the arm side and guard the guard against a future refactor that special-cases `merged` only."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:f5a8dce9",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the gh-1369 pathology stays reachable via sibling `agent:rework` writers — \"no more `agent:rework` stamps on shipped code\" overclaims**\n\nThe terminal guard itself is well-built (pure leaf, fail-open, probe reuse). But `prTerminalState` is referenced **only** in `js/smAgent.js` — the other machine writers of `agent:rework` still ignore merge state, and each is the same defect class the ticket title names (\"Rework-arming stamps agent:rework on already-merged PRs\"):\n\n1. `js/postPRReviewComments.js:122-142` — `markForSmStoryRework` (called from `runReworkLeg` at `:2252`): a review leg in flight at merge time concludes REQUEST_CHANGES and stamps `agent:rework` on the now-merged PR/ticket; `rework-on-label` then dispatches a rework leg against shipped code. This is exactly the \"leg already flying\" race the #1368 family lives in.\n2. `js/pushReworkChanges.js:2393` — `rearmNoopRework`: a rework lap concluding no-op on a PR that merged mid-leg re-arms `agent:rework`; the next tick dispatches another dead leg.\n3. `js/smAgent.js` `fail_validation` re-arm paths (`:468`, `:472`, `:5276`, `:5288`): a PR that merged while validation was red gets re-armed on the merged head on the next tick.\n\nEach site is one `prHeadAndLabels` + `isTerminalPrState` probe away from closed — the helper already exists and is unit-tested.\n\n**Ask**: either extend the terminal guard to these writers in this PR, or narrow the PR-description claim to the three guarded paths and file the follow-up ticket. As written, \"no more `agent:rework` stamps … on shipped code\" reads as a class-level fix that is not one yet."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:249d60de",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: cross-reference the sibling terminal-state helper `isPrBodyFrozen`**\n\n`js/common/pullRequest.js:203-217` already implements a near-sibling decision — `isPrBodyFrozen`: `merged === true` → frozen; state `closed` / `merged` / `completed` → frozen, plus the merge-queue label check. The two contracts legitimately differ (body-freeze vs rework-terminality; ADO `completed` + merge-queue label vs GitHub-REST terminal-only; freeze-by-default vs fail-open), but nothing in either file says so.\n\nA one-line cross-reference in this module's header, e.g. *\"sibling: `isPrBodyFrozen` in `pullRequest.js` — different contract (body-freeze, ADO `completed`, merge-queue labels); do not unify without reconciling those and the fail-open doctrine\"*, would stop a future dedup pass from silently merging them and flipping one of the semantics (most dangerously, dropping the fail-open behavior the arming paths rely on)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:601212d6",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: add the closed-not-merged replay for `reconcile_verdicts`**\n\nCoverage is uneven across the three guarded writers: the arm suites replay AC1 (merged) **and** AC2 (closed-not-merged), and the unit tests cover `isTerminalPrState('CLOSED', false) === true` — but this reconcile suite replays only `merged: true`.\n\nThe closed-not-merged state is real at the writer level: a closed PR can be reopened, and the reconcile deliberately exits during that window (next tick after reopen self-heals). One more replay with `state: 'closed', merged: false` asserting `capturedPrLabelRemoves.length === 0` + no comment would pin the writer-level behavior at parity with the arm side and guard the guard against a future refactor that special-cases `merged` only."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:ba1cfab6",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The gh-1369 terminal-PR guard is well-built and correctly fixes the thread-watcher stamp on the three ticket-named paths (809 smAgent + 8 prTerminalState + 15 pack-require tests pass). One important issue: the same pathology stays reachable through sibling unguarded `agent:rework` writers (`markForSmStoryRework`, `rearmNoopRework`, `fail_validation` re-arm), so the \"no more `agent:rework` stamps on shipped code\" claim overclaims.\n\n**Key Issues**:\n- ⚠️ `prTerminalState` is referenced only in `js/smAgent.js`; `postPRReviewComments.js` (flying review leg verdict stamp) and `pushReworkChanges.js:2393` (no-op lap re-arm) still stamp `agent:rework` on merged PRs — same defect class, one probe away from closed\n- 💡 Cross-reference the near-sibling `isPrBodyFrozen` (`js/common/pullRequest.js:203`) so a future dedup doesn't unify the two divergent contracts\n- 💡 Add the closed-not-merged replay for `reconcile_verdicts` (arm side has AC2; reconcile side replays merged only)\n\n**Next Steps**:\n1. Extend the terminal guard to the three sibling writers (or narrow the PR claim + file the follow-up)\n2. Add the one-line `isPrBodyFrozen` cross-reference in `prTerminalState.js`\n3. Add the closed-not-merged reconcile replay test"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    }
+  ]
+}
