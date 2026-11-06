@@ -1,23 +1,15 @@
-// One skip predicate for the general-comments renderer (gh-1387 L1): both
-// machine bookkeeping classes — hidden dmtools: markers AND visible
-// harness notices — drop out of the agent-facing section. Named (and kept
-// out of the renderer) so buildGeneralCommentsSection stays under the
-// crap4js ratchet.
-function machineBookepingBody(body) {
-    return machineNotice.isDmtoolsMarkerBody(body) || machineNotice.isMachineNoticeBody(body);
-}
-
-/** The comment's login, or 'unknown' when the payload shape is odd. */
-function authorOf(comment) {
-    return (comment && comment.user && comment.user.login) ? comment.user.login : 'unknown';
-}
-
 /**
  * githubReviewFetch.js — the GitHub review-discussion fetch/render blocks
  * shared by js/common/scm.js (github provider fetchDiscussions) and
  * js/common/githubHelpers.js (fetchDiscussionsAndRawData) (gh-1248 dedup).
  * Both paths ran byte-identical copies of:
  *
+ *   machineBookkeepingBody — the gh-1387 L1 skip predicate for the
+ *     general-comments renderer (both machine bookkeeping classes — hidden
+ *     dmtools: markers AND visible harness notices — drop out of the
+ *     agent-facing section; named so buildGeneralCommentsSection stays
+ *     under the crap4js ratchet);
+ *   authorOf — the comment-login lookup with the unknown-login fallback;
  *   fetchPrConversations / fetchPrReviewThreadsRaw — the dmtools-global
  *     fetch wrappers with their exact call order, log text and fallback
  *     semantics (a failed conversations export yields [], a failed GraphQL
@@ -34,6 +26,23 @@ function authorOf(comment) {
 
 var machineNotice = require('./machineNotice.js');
 var reviewThreadInventory = require('./reviewThreadInventory.js');
+
+// One skip predicate for the general-comments renderer (gh-1387 L1): both
+// machine bookkeeping classes — hidden dmtools: markers AND visible
+// harness notices — drop out of the agent-facing section. Named (and kept
+// out of the renderer) so buildGeneralCommentsSection stays under the
+// crap4js ratchet. NOTE: the directive prologue ends at the use-strict
+// line above — every helper lives BELOW it (a function declaration above
+// the directive would silently deactivate strict mode for the whole
+// module, gh-1392 review).
+function machineBookkeepingBody(body) {
+    return machineNotice.isDmtoolsMarkerBody(body) || machineNotice.isMachineNoticeBody(body);
+}
+
+/** The comment's login, or 'unknown' when the payload shape is odd. */
+function authorOf(comment) {
+    return (comment && comment.user && comment.user.login) ? comment.user.login : 'unknown';
+}
 
 /**
  * The conversations export for a PR; a failed fetch yields [] (warning
@@ -107,7 +116,7 @@ function buildGeneralCommentsSection(comments) {
     var kept = 0;
     comments.forEach(function(comment) {
         var body = (comment && comment.body) || '';
-        if (machineBookepingBody(body)) return;
+        if (machineBookkeepingBody(body)) return;
         var date = comment.created_at ? comment.created_at.substring(0, 10) : '';
         section += '**' + authorOf(comment) + '** (' + date + '):\n\n';
         section += body.trim() + '\n\n---\n\n';

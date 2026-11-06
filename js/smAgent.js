@@ -2239,9 +2239,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // gh-1387 comment-reduction (L2): the arm head keys the repeat
                 // suppression — a re-arm on a head that already carries the
                 // identical notice adds only the label, not a second copy of
-                // the boilerplate. Comment read fails open (post as before).
-                var armNoticeHead = redGateHead ||
-                    ((ticket.pr && ticket.pr.headSha) || ticket.headSha) || null;
+                // the boilerplate. Same expression the gh-957 guard computed
+                // above (noopHead) — reuse it (gh-1392 digest). Comment read fails
+                // open (post as before).
+                var armNoticeHead = noopHead;
                 var armRecentComments = prCommentList(effectiveRepoInfo, ticket.prNumber);
                 if (redGated) {
                     // gh-917 red-gate arm: the comment LEADS with the shared

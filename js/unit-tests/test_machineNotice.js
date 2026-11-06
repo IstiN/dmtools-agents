@@ -527,3 +527,43 @@ suite('noticeWithHead / hasSameNotice / shouldPostNotice (gh-1387 L2)', function
             'mid-body mention is not an anchored match');
     });
 });
+
+// ── gh-1392 review threads 1 + 5: strict-mode prologue + headless red-gate ──
+suite('githubReviewFetch strict prologue + headless red-gate marker (gh-1392 review)', function() {
+    // Review thread 1: the PR put the new helpers above the 'use strict';
+    // directive. A directive prologue is honored only before any statement —
+    // a function declaration above it silently degrades the WHOLE module to
+    // sloppy mode. Pinned structurally: no code statement may precede the
+    // directive (comments/docblock are fine).
+    test("'use strict'; precedes every statement in githubReviewFetch.js", function() {
+        var src = file_read({ path: 'js/common/githubReviewFetch.js' });
+        assert.ok(src, 'source readable');
+        var idx = src.indexOf("'use strict';");
+        assert.ok(idx !== -1, "the module declares 'use strict';");
+        var code = src.substring(0, idx)
+            .replace(/\/\*[\s\S]*?\*\//g, '')   // block comments (module docblock)
+            .replace(/\/\/[^\n]*/g, '');        // line comments
+        assert.equal(code.indexOf('function '), -1,
+            "a function declaration above 'use strict'; terminates the directive prologue — the whole module evaluates in sloppy mode (gh-1392 review thread 1). Move the helpers below the directive + requires.");
+        assert.equal(code.indexOf('require('), -1,
+            'a require call above the directive has the same prologue-terminating effect');
+    });
+
+    // Review thread 5: with no head (armNoticeHead → null) the red-gate arm
+    // body leads with '🔴 Red pre-merge gate on the head…', which matched no
+    // MACHINE_NOTICE_MARKERS entry — the notice passed the gh-808 filter and
+    // leaked verbatim into every review/rework context build.
+    test('the headless red-gate arm wording classifies as a machine notice', function() {
+        var mn = loadMachineNotice();
+        var body = '🔴 Red pre-merge gate on the head with no armed validation — rework armed' +
+            ' (gh-917: first validation included, review or no review). The rework runner pushes a' +
+            ' fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts' +
+            ' on the SAME head the arm is withheld and a human is escalated (no infinite retry).';
+        assert.ok(mn.isMachineNoticeBody(body),
+            'no MACHINE_NOTICE_MARKERS entry matches the bare red-gate wording — it leaks into the agent-facing section (gh-1392 review thread 5)');
+        var s = githubReviewFetchReal().buildGeneralCommentsSection([
+            { user: { login: 'ai-teammate' }, created_at: '2026-11-06T06:00:00Z', body: body }
+        ]);
+        assert.equal(s, null, 'a headless red-gate arm is notices-only → the section renders null');
+    });
+});

@@ -48,7 +48,6 @@ var MARKER_PREFIX = '<!-- dmtools:naked-pr-rearm ';
 // The marker payload is byte-identical in both variants (the same-head
 // dedup anchor and any future parser read the marker, never the tail).
 var CONSUME_MARKER_RE = /<!-- dmtools:rework-consume (\{[^\n]*?\}) -->/;
-
 function hasAny(labels, wanted) {
     var list = labels || [];
     return wanted.some(function (w) { return list.indexOf(w) !== -1; });
@@ -78,7 +77,7 @@ function buildAuditComment(prNumber, issueNumber, label, head, explained) {
     var meta = { pr: prNumber, issue: issueNumber, label: label, head: head || null };
     var tail = explained
         ? '🩹 re-armed `' + label + '` — naked because agent:rework was consumed on this head' +
-          ' (gh-840 audit above); the next SM tick dispatches normally.'
+          ' (gh-840 audit for this head); the next SM tick dispatches normally.'
         : '🩹 **Naked-PR reconciliation (gh-1097)**: this PR carried no lifecycle labels while ' +
           'linked issue #' + issueNumber + ' is still in flow — re-armed `' + label + '`. ' +
           'No dispatch from this sweep; the next SM tick picks it up.';
@@ -133,6 +132,14 @@ function markerHead(comment) {
 }
 
 // Head sha recorded in one consume-audit marker (gh-840), or null.
+// gh-1392 review: unlike reworkConsumption.parseConsumeMarkers, this reader
+// deliberately has NO machineAuthor allowlist — the only thing it gates is
+// the re-arm comment's VISIBLE tail (cosmetic), and the marker payload is
+// byte-identical in both variants. A hand-written marker can reword the
+// human-facing audit line at worst; nothing machine-readable consults this
+// decision (the label still lands, the dedup anchor is the marker payload,
+// and the durable gh-840 sweep re-parses consume markers behind its own
+// allowlist).
 function consumeMarkerHead(comment) {
     var p = markerPayload(comment, CONSUME_MARKER_RE);
     return p ? (p.head || null) : null;
@@ -150,12 +157,16 @@ function alreadyRearmed(comments, head) {
 
 // True when a gh-840 consumption audit marker for THIS head is on the PR —
 // the nakedness has a same-head consumption story already on the page.
+// Deliberately cosmetic + author-agnostic: see consumeMarkerHead above.
 function isConsumeExplained(comments, head) {
     return anyMarkerHeadEquals(comments, head, consumeMarkerHead);
 }
 
 function notYetRearmed(plan, deps) {
-    if (!alreadyRearmed(deps.prComments(plan.pr), plan.head)) return true;
+    // gh-1392 review thread 4: ONE prComments fetch per plan — the same-head
+    // dedup read and applyPlan's consume-explained read share this list.
+    plan.comments = typeof deps.prComments === 'function' ? deps.prComments(plan.pr) : [];
+    if (!alreadyRearmed(plan.comments, plan.head)) return true;
     deps.log('  🩹 naked-PR sweep: pr#' + plan.pr + ' already re-armed on head ' + plan.head + ' — skip');
     return false;
 }
@@ -165,8 +176,12 @@ function applyPlan(plan, deps) {
         (deps.dry ? ' [DRY]' : ''));
     if (deps.dry) return;
     deps.addLabel(plan.pr, plan.label);
-    var explained = typeof deps.prComments === 'function'
-        ? isConsumeExplained(deps.prComments(plan.pr), plan.head) : false;
+    var comments = plan.comments;
+    if (comments === undefined && typeof deps.prComments === 'function') {
+        // Direct applyPlan caller (not driven through sweep) — fetch here.
+        comments = deps.prComments(plan.pr);
+    }
+    var explained = isConsumeExplained(comments, plan.head);
     deps.comment(plan.pr, buildAuditComment(plan.pr, plan.issue, plan.label, plan.head, explained));
 }
 

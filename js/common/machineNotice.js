@@ -48,9 +48,15 @@ var MACHINE_NOTICE_MARKERS = [
     // (gh-1387: was missing here, so it leaked into the general-comments
     // section of every review/rework context build)
     '🔴 red head ',
+    // js/smAgent.js — the red-gate arm notice when the head SHA is unknown
+    // (armNoticeHead → null: redGateLine is null too, so the body LEADS with
+    // the bare wording; gh-1392 review: without this entry the notice passed
+    // the gh-808 filter and leaked into every review/rework context build —
+    // headless notices never dedup, so the filter is the only guard)
+    '🔴 Red pre-merge gate on the head',
     // js/common/validationLiveness.js — zombie re-dispatch audit line, the
     // zombie counter re-reads it from raw comments (gh-1387: same gap as the
-    // red-head line — PR-level bookeeping that leaked into agent context)
+    // red-head line — PR-level bookkeeping that leaked into agent context)
     '🔄 zombie re-dispatch ',
     // js/smAgent.js — guest-PR park notice + human escalation (#701 style)
     '🛑 validation_failed',
@@ -198,7 +204,6 @@ function hasSameNotice(comments, body, head) {
 function shouldPostNotice(comments, body, head) {
     return !hasSameNotice(comments, body, head);
 }
-
 
 module.exports = {
     MACHINE_NOTICE_MARKERS: MACHINE_NOTICE_MARKERS,

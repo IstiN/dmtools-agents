@@ -185,4 +185,24 @@ suite('consume-explained re-arm (gh-1387 L2)', function () {
         assert.ok(sink2.comments[0][1].indexOf('Naked-PR reconciliation (gh-1097)') !== -1,
             'no prComments dep → fail open to the full tail');
     });
+
+    // gh-1392 review thread 4: sweep → notYetRearmed already fetches the PR
+    // comments for the same-head dedup, then applyPlan fetched the identical
+    // list again for isConsumeExplained — two identical API reads per
+    // re-armed PR. The already-read list must be shared (one fetch per plan).
+    test('sweep shares ONE prComments fetch per applied plan', function () {
+        var m = nakedMod();
+        var sink = { labels: [], comments: [], logs: [] };
+        var deps = nakedDeps({ 1369: ['agent:review'] }, sink, false, {
+            10: [{ body: consumeBody('h10') }]
+        });
+        var fetches = 0;
+        var orig = deps.prComments;
+        deps.prComments = function (n) { fetches++; return orig(n); };
+        m.sweep([{ number: 10, labels: [], head: { ref: 'ai/gh-1369', sha: 'h10' }, body: 'closes #1369' }], deps);
+        assert.equal(sink.comments.length, 1, 'plan still applied');
+        assert.ok(sink.comments[0][1].indexOf('gh-840') !== -1, 'explained tail still derived from the same list');
+        assert.equal(fetches, 1,
+            'two identical API reads per re-arm is the finding — the dedup read and the explained-tail read must share one fetch');
+    });
 });
