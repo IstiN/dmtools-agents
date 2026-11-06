@@ -535,6 +535,53 @@ All rules are defined in `sm.json`. The SM agent evaluates them in order on ever
 
 ## Agent Configs
 
+### Deterministic GitLab factory polling
+
+`gitlab_factory_poll.json` is a `JSRunner` entry point (`js/gitlabFactoryPoll.js`),
+not an AI teammate. Caller runners inherit `gitlab_factory_poll@latest` and set
+`params.jobParams`: `mode` (`automatic`, default, or `legacy`), `machine`
+(legacy assignment/author matching), and `baseBranch` (default `main`).
+`bridgePath` optionally overrides `.dmtools/scripts/gitlab-factory-agent.sh`.
+Release packs discover this root config and its JS closure normally.
+The config declares `params.envVariables.CLI_ALLOWED_COMMANDS=bash`. Callers
+must also export `CLI_ALLOWED_COMMANDS=bash` in the polling job environment:
+dmtools 0.1.93 does not propagate JSRunner `envVariables` to the CLI tool's
+allowlist. This is required to invoke the bridge, not an unrestricted shell mode.
+
+The caller supplies the bridge template from `dmtools-agentic-workflows/gitlab`
+and the existing common, job, lifecycle, rework and publish-review helpers.
+The teammate selector is optional (only needed for separate dev/reviewer
+tokens). CI environment and webhook payload access happen in the bridge;
+tokens never enter the JS context. The old poller/intake scripts are not used.
+
+JS owns pagination, webhook guards, intake selection, manual action routing,
+label transitions and legacy merge decisions. The bridge performs one operation
+per invocation, preserving isolated automatic review/rework, development
+publishing, progress updates and token identity selection:
+
+| Bridge action | Arguments / output |
+|---|---|
+| `context` | JSON: `projectId`, `apiUrl`, `pipelineId`, `trigger`, `payload`, `mrIid`, `leg` |
+| `api` | HTTP method, relative API path, optional curl arguments; API response |
+| `api-role` | identity role/runner, then the `api` arguments |
+| `develop` | issue IID, dev runner, `automatic`, base branch; logs followed by `__DMTOOLS_CREATED_MR__<iid>` |
+| `legacy-issue` | issue IID, runner, trigger label (or empty), base branch |
+| `legacy-mr` | MR IID, runner, trigger label |
+| `labels` | MR IID, issue IID (or empty), labels to add, labels to remove |
+| `lifecycle` | MR IID, issue IID (or empty), forced leg (or empty) |
+| `merge` | MR IID; uses the merge/reviewer identity |
+
+Every public invocation returns a final
+`__DMTOOLS_GITLAB_RESULT__{"exitCode":0,"output":"..."}` envelope. JS checks
+that inner exit code even if `cli_execute_command` returns success text.
+`--raw develop-raw` is private to the development progress wrapper.
+Workspace-local bridge scratch files are cleaned and excluded from publishing.
+
+Tests: `dmtools run js/unit-tests/run_gitlabFactoryPoll.json` (also in `run_all`).
+All service calls are mocked. `action(params)` accepts either the JSRunner
+`{jobParams: ...}` wrapper or direct job params; exported `poll(jobParams, io)`
+supports an injected `io.bridge(action, args)` returning the raw action output.
+
 All config files live in the `agents/js/` directory and are consumed by the `ai-teammate.yml` GitHub Actions workflow.
 
 | Config File | Agent Type | Purpose | CLI Prompt | preJS | postJS |

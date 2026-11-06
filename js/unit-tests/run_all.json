@@ -4,6 +4,7 @@
     "jsPath": "js/unit-tests/testRunner.js",
     "jobParams": {
       "testFiles": [
+        "js/unit-tests/test_gitlabFactoryPoll.js",
         "js/unit-tests/test_commentMarkup.js",
         "js/unit-tests/test_aiChat.js",
         "js/unit-tests/test_scmGitlabReview.js",

@@ -1,0 +1,14 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/gitlabFactoryPoll.js",
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "bash"
+    },
+    "jobParams": {
+      "mode": "automatic",
+      "machine": "",
+      "baseBranch": "main"
+    }
+  }
+}
