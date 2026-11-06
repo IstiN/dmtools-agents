@@ -275,7 +275,7 @@ _fa_order_queue_by_quota() {
       let cls = { group: 2, score: null, why: "not-probed" };
       if (key) {
         if (!cache.has(key)) {
-          if (Date.now() - startedAt >= BUDGET_MS) {
+          if (cache.size > 0 && Date.now() - startedAt >= BUDGET_MS) {
             cache.set(key, { group: 2, score: null, why: "probe-budget" });
           } else {
             cache.set(key, probe(key));
