@@ -117,30 +117,41 @@ function headSha(pr) {
 
 var MARKER_RE = /<!-- dmtools:naked-pr-rearm (\{[^\n]*?\}) -->/;
 
-// Head sha recorded in one comment's marker, or null.
-function markerHead(comment) {
-    var m = MARKER_RE.exec(String((comment && comment.body) || ''));
+// Shared marker-payload reader (gh-1387: one body for both marker families —
+// the duplication gate flags look-alike parse blocks). Returns the JSON
+// payload of the first <re> marker in the body, or null (absent/malformed).
+function markerPayload(comment, re) {
+    var m = re.exec(String((comment && comment.body) || ''));
     if (!m) return null;
-    try { return JSON.parse(m[1]).head || null; } catch (e) { return null; }
+    try { return JSON.parse(m[1]) || null; } catch (e) { return null; }
 }
 
-function alreadyRearmed(comments, head) {
-    if (!head) return false;
-    return (comments || []).some(function (c) { return markerHead(c) === head; });
+// Head sha recorded in one comment's re-arm marker, or null.
+function markerHead(comment) {
+    var p = markerPayload(comment, MARKER_RE);
+    return p ? (p.head || null) : null;
 }
 
 // Head sha recorded in one consume-audit marker (gh-840), or null.
 function consumeMarkerHead(comment) {
-    var m = CONSUME_MARKER_RE.exec(String((comment && comment.body) || ''));
-    if (!m) return null;
-    try { return JSON.parse(m[1]).head || null; } catch (e) { return null; }
+    var p = markerPayload(comment, CONSUME_MARKER_RE);
+    return p ? (p.head || null) : null;
+}
+
+// True when a marker of the given family on the PR records THIS head.
+function anyMarkerHeadEquals(comments, head, headOf) {
+    if (!head) return false;
+    return (comments || []).some(function (c) { return headOf(c) === head; });
+}
+
+function alreadyRearmed(comments, head) {
+    return anyMarkerHeadEquals(comments, head, markerHead);
 }
 
 // True when a gh-840 consumption audit marker for THIS head is on the PR —
 // the nakedness has a same-head consumption story already on the page.
 function isConsumeExplained(comments, head) {
-    if (!head) return false;
-    return (comments || []).some(function (c) { return consumeMarkerHead(c) === head; });
+    return anyMarkerHeadEquals(comments, head, consumeMarkerHead);
 }
 
 function notYetRearmed(plan, deps) {
