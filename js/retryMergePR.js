@@ -10,7 +10,7 @@
  *  - Conflict / CI failing    → remove pr_approved label, move ticket to In Rework, post comment
  */
 
-const { LABELS } = require('./config.js');
+const { LABELS, triggerCappedAutoRework } = require('./config.js');
 var scmModule = require('./common/scm.js');
 var prLookup = require('./common/prLookup.js');
 var configLoader = require('./configLoader.js');
@@ -95,28 +95,19 @@ function resolveCustomParams(params, config) {
     return merged;
 }
 
-function triggerAutoStartRework(ticketKey, customParams, config, scm) {
-    if (!customParams || !customParams.autoStartRework || !customParams.autoStartReworkConfigFile) {
-        return false;
-    }
-    try {
-        return autoStart.triggerConfiguredWorkflowForTicket({
-            ticketKey: ticketKey,
-            customParams: customParams,
-            config: config,
-            configFile: customParams.autoStartReworkConfigFile,
-            label: 'pr_rework',
-            scm: scm,
-            stripKeys: [
-                'removeLabel',
-                'autoStartRework',
-                'autoStartReworkConfigFile'
-            ]
-        });
-    } catch (e) {
-        console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
-        return false;
-    }
+function triggerAutoStartRework(ticketKey, customParams, config, scm, ticket) {
+    // customParams.autoStartRework, customParams.autoStartReworkConfigFile,
+    // customParams.maxAutoReworkRounds are read by triggerCappedAutoRework.
+    return triggerCappedAutoRework({
+        autoStart: autoStart,
+        ticketKey: ticketKey,
+        ticket: ticket,
+        customParams: customParams,
+        config: config,
+        scm: scm,
+        tracker: getTracker(),
+        label: 'pr_rework'
+    });
 }
 
 // ── gh-980: pure decision helpers extracted from action() (CRAP 190 → 30) ──
@@ -163,7 +154,7 @@ function escalateToInRework(opts) {
     getTracker().postComment(opts.ticketKey, opts.commentBody);
     getTracker().moveToStatus(opts.ticketKey, opts.config.jira.statuses.IN_REWORK);
     console.log('✅ Ticket moved to In Rework (' + opts.reason + ')');
-    triggerAutoStartRework(opts.ticketKey, opts.customParams, opts.config, opts.scm);
+    triggerAutoStartRework(opts.ticketKey, opts.customParams, opts.config, opts.scm, opts.ticket);
 }
 
 // Cosmetic label strips around a successful merge — each best-effort with
@@ -284,6 +275,7 @@ function handlePreMergeGate(gate) {
         scm: gate.scm,
         prNumber: gate.prNumber,
         ticketKey: gate.ticketKey,
+        ticket: gate.ticket,
         customParams: gate.customParams,
         config: gate.config,
         reason: 'merge conflict',
@@ -325,6 +317,7 @@ function tryMergeAndFinalize(merge) {
             scm: merge.scm,
             prNumber: merge.prNumber,
             ticketKey: merge.ticketKey,
+            ticket: merge.params && merge.params.ticket,
             customParams: merge.customParams,
             config: merge.config,
             reason: reason,
@@ -390,6 +383,7 @@ function action(params) {
             prNumber: prNumber,
             prUrl: prUrl,
             ticketKey: ticketKey,
+            ticket: params.ticket,
             customParams: customParams,
             config: config,
             owner: owner,

@@ -231,8 +231,125 @@ function stageLabel(stageKey) {
         .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
+// ── Rework-round cap helpers (Jira autoStartRework & GitHub machineSm) ──────
+var DEFAULT_MAX_AUTO_REWORK_ROUNDS = 3;
+var NEEDS_HUMAN_LABEL = 'needs-human';
+
+/**
+ * Highest `rework-round-N` label on a ticket/issue (0 when none).
+ * Shared by Jira autoStartRework chains and machineSmAgent.countReworkRounds.
+ */
+function countReworkRounds(labels) {
+    var rounds = 0;
+    (labels || []).forEach(function(l) {
+        var m = /^rework-round-(\d+)$/.exec(l);
+        if (m) rounds = Math.max(rounds, parseInt(m[1], 10));
+    });
+    return rounds;
+}
+
+/**
+ * Resolve `customParams.maxAutoReworkRounds` with a default of 3.
+ * Logs a warning when a non-positive or non-numeric value is configured.
+ */
+function maxAutoReworkRoundsOf(customParams) {
+    if (!customParams || customParams.maxAutoReworkRounds === undefined || customParams.maxAutoReworkRounds === null) {
+        return DEFAULT_MAX_AUTO_REWORK_ROUNDS;
+    }
+    var n = Number(customParams.maxAutoReworkRounds);
+    if (n > 0) return Math.floor(n);
+    console.warn('⚠️ maxAutoReworkRounds must be > 0 (got ' + JSON.stringify(customParams.maxAutoReworkRounds) + ') — falling back to default ' + DEFAULT_MAX_AUTO_REWORK_ROUNDS + '; use autoStartRework: false to disable auto-rework');
+    return DEFAULT_MAX_AUTO_REWORK_ROUNDS;
+}
+
+function ticketLabelList(ticket) {
+    return (ticket && ticket.fields && ticket.fields.labels) || (ticket && ticket.labels) || [];
+}
+
+function addLabelBestEffort(tracker, ticketKey, label) {
+    if (!tracker || !ticketKey) return;
+    try {
+        tracker.addLabel(ticketKey, label);
+    } catch (e) {
+        console.warn('⚠️ Failed to add label ' + label + ':', e.message || e);
+    }
+}
+
+/**
+ * Evaluate the Jira auto-rework round budget before triggering a configured
+ * rework workflow. Returns:
+ *   - null when the ticket already has `needs-human` or the budget is spent
+ *     (stamps `needs-human` on the ticket when newly capped);
+ *   - the next round number (`round + 1`) when within budget.
+ *
+ * Callers may stamp `rework-round-N` either before dispatch (crash-safe) or
+ * after a truthy trigger return via `stampReworkRound` so transient trigger
+ * skips (global workflow cap, active duplicate run) do not consume rounds.
+ */
+function checkAutoReworkBudget(opts) {
+    var s = opts || {};
+    var labels = s.labels || ticketLabelList(s.ticket);
+    if (labels.indexOf(NEEDS_HUMAN_LABEL) !== -1) {
+        console.log('ℹ️ autoStartRework: skipped — ticket has ' + NEEDS_HUMAN_LABEL);
+        return null;
+    }
+    var round = countReworkRounds(labels);
+    var max = maxAutoReworkRoundsOf(s.customParams);
+    if (round >= max) {
+        console.warn('🛑 autoStartRework: capped after ' + round + ' round(s) (max ' + max + ') — labeling ' + NEEDS_HUMAN_LABEL);
+        addLabelBestEffort(s.tracker, s.ticketKey, NEEDS_HUMAN_LABEL);
+        return null;
+    }
+    return round + 1;
+}
+
+function stampReworkRound(tracker, ticketKey, nextRound) {
+    addLabelBestEffort(tracker, ticketKey, 'rework-round-' + nextRound);
+}
+
+function isAutoReworkConfigured(customParams) {
+    return !!(customParams && customParams.autoStartRework && customParams.autoStartReworkConfigFile);
+}
+
+function buildAutoReworkTriggerOptions(s) {
+    var triggerOpts = {
+        ticketKey: s.ticketKey,
+        customParams: s.customParams,
+        config: s.config,
+        configFile: s.customParams.autoStartReworkConfigFile,
+        label: s.label || 'pr_rework',
+        stripKeys: ['removeLabel', 'autoStartRework', 'autoStartReworkConfigFile']
+    };
+    if (s.scm) triggerOpts.scm = s.scm;
+    return triggerOpts;
+}
+
+function triggerCappedAutoRework(opts) {
+    var s = opts || {};
+    if (!isAutoReworkConfigured(s.customParams)) return false;
+    var nextRound = checkAutoReworkBudget(s);
+    if (nextRound === null) return null;
+    try {
+        var triggered = s.autoStart.triggerConfiguredWorkflowForTicket(buildAutoReworkTriggerOptions(s));
+        if (triggered) stampReworkRound(s.tracker, s.ticketKey, nextRound);
+        return triggered;
+    } catch (e) {
+        console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
+        return false;
+    }
+}
+
 module.exports = {
     stageLabel,
+    DEFAULT_MAX_AUTO_REWORK_ROUNDS,
+    NEEDS_HUMAN_LABEL,
+    countReworkRounds,
+    maxAutoReworkRoundsOf,
+    ticketLabelList,
+    addLabelBestEffort,
+    checkAutoReworkBudget,
+    stampReworkRound,
+    triggerCappedAutoRework,
     ISSUE_TYPES,
     STATUSES,
     PRIORITIES,

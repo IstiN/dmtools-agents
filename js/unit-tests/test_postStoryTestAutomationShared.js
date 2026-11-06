@@ -553,4 +553,36 @@ suite('postStoryTestAutomationShared: autoStart trigger parameter order (gh-1246
         var result = loadShared({}).triggerAutoStartReworkWorkflow(throwing, 'TS-1', customParams, {});
         assert.equal(result, false);
     });
+
+    test('triggerAutoStartReworkWorkflow honors reworkBudget (stamps on trigger, returns null when capped)', function() {
+        var recorded = [];
+        var labels = [];
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var customParams = {
+            autoStartRework: true,
+            autoStartReworkConfigFile: 'agents/pr_test_automation_rework.json',
+            maxAutoReworkRounds: 1
+        };
+        var shared = loadShared({});
+        var first = shared.triggerAutoStartReworkWorkflow(
+            recordingAutoStart(recorded), 'TS-1', customParams, {}, {
+                checkAutoReworkBudget: configModule.checkAutoReworkBudget,
+                stampReworkRound: configModule.stampReworkRound,
+                ticket: { fields: { labels: [] } },
+                tracker: tracker
+            });
+        assert.deepEqual(first, { success: true });
+        assert.deepEqual(labels, ['rework-round-1']);
+
+        var capped = shared.triggerAutoStartReworkWorkflow(
+            recordingAutoStart(recorded), 'TS-1', customParams, {}, {
+                checkAutoReworkBudget: configModule.checkAutoReworkBudget,
+                stampReworkRound: configModule.stampReworkRound,
+                ticket: { fields: { labels: ['rework-round-1'] } },
+                tracker: tracker
+            });
+        assert.equal(capped, null);
+        assert.equal(recorded.length, 1, 'second call was capped before dispatch');
+        assert.deepEqual(labels, ['rework-round-1', 'needs-human']);
+    });
 });

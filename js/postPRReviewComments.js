@@ -14,7 +14,15 @@
  * functions invoked by action() in the same order as before the flattening.
  */
 
-const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
+const {
+    LABELS,
+    STATUSES,
+    resolveStatuses,
+    countReworkRounds,
+    maxAutoReworkRoundsOf,
+    checkAutoReworkBudget,
+    stampReworkRound
+} = require('./config.js');
 var scmModule = require('./common/scm.js');
 var trackersModule = require('./common/trackers.js');
 var autoStart = require('./common/autoStart.js');
@@ -2228,48 +2236,13 @@ function triggerConfiguredRework(ctx) {
 
 // Jira review<->rework loop cap (live: 22 alternating review/rework runs on one Jira ticket, every
 // rework resolved all threads and each new review found fresh suggestions).
-// Each auto-started rework stamps rework-round-N on the ticket; once
-// maxAutoReworkRounds (default 3) rounds are spent the ticket gets
+// Each auto-started rework stamps rework-round-N on the ticket AFTER the
+// configured workflow is actually triggered (so transient trigger skips like
+// global workflow cap or an active duplicate run do not consume rounds);
+// once maxAutoReworkRounds (default 3) rounds are spent the ticket gets
 // needs-human and no further rework is chained. Removing the labels is a
 // human decision that resets the budget.
-var DEFAULT_MAX_AUTO_REWORK_ROUNDS = 3;
-var NEEDS_HUMAN_LABEL = 'needs-human';
-
-function reworkRoundOf(labels) {
-    var max = 0;
-    (labels || []).forEach(function(l) {
-        var m = /^rework-round-(\d+)$/.exec(l);
-        if (m) max = Math.max(max, parseInt(m[1], 10));
-    });
-    return max;
-}
-
-function maxAutoReworkRoundsOf(customParams) {
-    var n = customParams && customParams.maxAutoReworkRounds;
-    return n > 0 ? n : DEFAULT_MAX_AUTO_REWORK_ROUNDS;
-}
-
-function addTicketLabel(ctx, label) {
-    try {
-        ctx.tracker.addLabel(ctx.ticketKey, label);
-    } catch (e) {
-        console.warn('⚠️ Failed to add label ' + label + ':', e.message || e);
-    }
-}
-
-// true = budget left (next round label stamped); false = capped (needs-human).
-function claimReworkRound(ctx, params) {
-    var labels = ticketLabels(params.ticket);
-    var round = reworkRoundOf(labels);
-    var max = maxAutoReworkRoundsOf(ctx.customParams);
-    if (round >= max) {
-        console.warn('🛑 autoStartRework: capped after ' + round + ' round(s) (max ' + max + ') — labeling ' + NEEDS_HUMAN_LABEL);
-        addTicketLabel(ctx, NEEDS_HUMAN_LABEL);
-        return false;
-    }
-    addTicketLabel(ctx, 'rework-round-' + (round + 1));
-    return true;
-}
+var reworkRoundOf = countReworkRounds;
 
 function startConfiguredRework(ctx, params) {
     if (!autoStartReworkConfigured(ctx.customParams)) return false;
@@ -2278,12 +2251,19 @@ function startConfiguredRework(ctx, params) {
         console.log('ℹ️ autoStartRework: skipped — ticket has pr_approved label');
         return false;
     }
-    if (hasLabel(ticketLabels(params.ticket), NEEDS_HUMAN_LABEL)) {
-        console.log('ℹ️ autoStartRework: skipped — ticket has ' + NEEDS_HUMAN_LABEL);
-        return null;
+    // customParams.maxAutoReworkRounds caps the auto-rework loop.
+    var nextRound = checkAutoReworkBudget({
+        ticket: params.ticket,
+        customParams: ctx.customParams,
+        tracker: ctx.tracker,
+        ticketKey: ctx.ticketKey
+    });
+    if (nextRound === null) return null;
+    var triggered = triggerConfiguredRework(ctx);
+    if (triggered) {
+        stampReworkRound(ctx.tracker, ctx.ticketKey, nextRound);
     }
-    if (!claimReworkRound(ctx, params)) return null;
-    return triggerConfiguredRework(ctx);
+    return triggered;
 }
 
 function shouldRunReworkLeg(isApproved, pr, repoInfo) {
@@ -2714,6 +2694,8 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveBitriseBranch,
         resolveTestCasesGeneratorRepo,
         hasLabel,
+        reworkRoundOf,
+        maxAutoReworkRoundsOf,
         ticketLabels,
         scmProviderOf,
         deriveProjectKey,

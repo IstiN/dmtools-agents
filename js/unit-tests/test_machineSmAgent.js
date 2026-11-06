@@ -64,6 +64,7 @@ function agentModuleMap(projectConfig, holder) {
     var policy = loadModule('js/common/reviewPolicy.js',
         makeRequire({ './reviewVerdicts.js': rvShared() }), {});
     return {
+        './config.js': configModule,
         './configLoader.js': { loadProjectConfig: function () { return projectConfig || {}; } },
         './common/smProvider.js': { createSmProvider: function () { return holder ? holder.provider : {}; } },
         './common/reviewVerdicts.js': rvShared(),

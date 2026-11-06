@@ -8,6 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `autoStartRework` — when `true`, automatically trigger the rework workflow when the review asks for changes.
 - `autoStartReworkConfigFile` — agent config file used for the auto-started rework workflow.
+- `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
 _Human doc: [`agents/docs/agents/pr_test_automation_review.md`](agents/docs/agents/pr_test_automation_review.md)_
@@ -60,6 +61,7 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
   - `contentOutput.target`
   - `dryRun`
   - `localTeammate`
+  - `maxAutoReworkRounds`
   - `projectKey`
   - `removeLabel`
   - `smFallback`
@@ -84,6 +86,7 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
 - `contentOutput.target` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
+- `maxAutoReworkRounds` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `smFallback` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_

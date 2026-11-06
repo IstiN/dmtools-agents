@@ -1867,7 +1867,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 0, 'SM not triggered when the workflow started');
     });
 
-    test('autoStartRework trigger that does not start falls back to SM rework', function() {
+    test('autoStartRework trigger that does not start falls back to SM rework without burning a round', function() {
         var h = loadReviewActionHarness({
             reviewData: {
                 recommendation: 'REQUEST_CHANGES',
@@ -1885,7 +1885,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
 
         assert.deepEqual(
             h.opsOf('jira.addLabel').map(function(o) { return o.label; }),
-            ['ai_pr_reviewed', 'rework-round-1', 'sm_story_rework_triggered', 'agent:rework']
+            ['ai_pr_reviewed', 'sm_story_rework_triggered', 'agent:rework']
         );
         assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 1);
     });
@@ -1960,6 +1960,15 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         var mod = loadReviewActionHarness({ reviewData: GH926_CLEAN_APPROVE, repoInfo: GH926_REPO, prInfoContent: GH926_PR_INFO_42 }).mod;
         assert.equal(mod.reworkRoundOf(['x', 'rework-round-2', 'rework-round-10', 'rework-round-x']), 10);
         assert.equal(mod.reworkRoundOf([]), 0);
+    });
+
+    test('maxAutoReworkRoundsOf warns and falls back to default 3 on 0 or non-numeric values', function() {
+        var mod = loadReviewActionHarness({ reviewData: GH926_CLEAN_APPROVE, repoInfo: GH926_REPO, prInfoContent: GH926_PR_INFO_42 }).mod;
+        assert.equal(mod.maxAutoReworkRoundsOf({}), 3);
+        assert.equal(mod.maxAutoReworkRoundsOf({ maxAutoReworkRounds: 5 }), 5);
+        assert.equal(mod.maxAutoReworkRoundsOf({ maxAutoReworkRounds: 0 }), 3);
+        assert.equal(mod.maxAutoReworkRoundsOf({ maxAutoReworkRounds: -1 }), 3);
+        assert.equal(mod.maxAutoReworkRoundsOf({ maxAutoReworkRounds: 'invalid' }), 3);
     });
 
     test('WIP label removal is contextId-prefixed when metadata carries contextId', function() {

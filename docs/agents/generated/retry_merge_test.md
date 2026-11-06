@@ -8,6 +8,7 @@ Retries merging an approved single-Test-Case automation pull request (`retryMerg
 - `checkOpenPR` — skips tickets without an open test-case PR.
 - `testCaseMerge` — test-case PR merge configuration overrides.
 - `autoStartRework` / `autoStartReworkConfigFile` — triggers `pr_test_automation_rework` when the test PR cannot be merged cleanly.
+- `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
 
 _Human doc: [`agents/docs/agents/retry_merge_test.md`](agents/docs/agents/retry_merge_test.md)_
 
@@ -53,6 +54,7 @@ _retryMergePR.js_
   - `contentOutput.target`
   - `dryRun`
   - `localTeammate`
+  - `maxAutoReworkRounds`
   - `projectKey`
   - `removeLabel`
   - `smFallback`
@@ -78,6 +80,7 @@ _retryMergePR.js_
 - `contentOutput.target` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
+- `maxAutoReworkRounds` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `smFallback` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_

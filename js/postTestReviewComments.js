@@ -11,7 +11,7 @@
  *   - Moves to In Rework
  */
 
-const { LABELS } = require('./config.js');
+const { LABELS, checkAutoReworkBudget, stampReworkRound } = require('./config.js');
 const gh = require('./common/githubHelpers.js');
 const autoStart = require('./common/autoStart.js');
 const configLoader = require('./configLoader.js');
@@ -305,9 +305,15 @@ function postInlineComment(repoInfo, prNumber, inlineComment) {
     }
 }
 
-function triggerReworkIfConfigured(ticketKey, config, customParams) {
-    // Canonical trigger in postStoryTestAutomationShared.js (gh-1246).
-    return shared.triggerAutoStartReworkWorkflow(autoStart, ticketKey, customParams, config);
+function triggerReworkIfConfigured(ticketKey, config, customParams, ticket, tracker) {
+    // Canonical trigger in postStoryTestAutomationShared.js (gh-1246);
+    // customParams.maxAutoReworkRounds caps the auto-rework loop.
+    return shared.triggerAutoStartReworkWorkflow(autoStart, ticketKey, customParams, config, {
+        checkAutoReworkBudget: checkAutoReworkBudget,
+        stampReworkRound: stampReworkRound,
+        ticket: ticket,
+        tracker: tracker
+    });
 }
 
 function markForSmTestRework(ticketKey, tracker) {
@@ -431,7 +437,7 @@ function postReviewComments(repoInfo, prNumber, reviewData, tracker, ticketKey, 
 // Step 6: on approval the ticket stays in In Review - Passed/Failed until SM
 // merges the PR via the pr_approved flow; on changes-requested it moves to
 // In Rework and triggers the rework continuation.
-function moveTicketAfterReview(ticketKey, isApproved, tracker, jiraConfig, currentStatus, config, customParams) {
+function moveTicketAfterReview(ticketKey, isApproved, tracker, jiraConfig, currentStatus, config, customParams, ticket) {
     if (isApproved) {
         // Ticket stays in In Review - Passed/Failed until SM merges the PR via pr_approved flow
         console.log('✅ Ticket stays in', currentStatus, '— SM will merge and move to final status');
@@ -440,7 +446,10 @@ function moveTicketAfterReview(ticketKey, isApproved, tracker, jiraConfig, curre
         try {
             tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
             console.log('✅ Changes requested — moved', ticketKey, 'to In Rework');
-            if (!triggerReworkIfConfigured(ticketKey, config, customParams)) {
+            var triggered = triggerReworkIfConfigured(ticketKey, config, customParams, ticket, tracker);
+            // null = capped / needs-human: skip the SM fallback too.
+            if (triggered === null) return;
+            if (!triggered) {
                 markForSmTestRework(ticketKey, tracker);
                 autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
             }
@@ -572,7 +581,7 @@ function action(params) {
         }
 
         // Step 6: Move ticket status
-        moveTicketAfterReview(ticketKey, isApproved, tracker, jiraConfig, currentStatus, config, customParams);
+        moveTicketAfterReview(ticketKey, isApproved, tracker, jiraConfig, currentStatus, config, customParams, params.ticket);
 
         // Step 7: Add label + remove WIP
         finalizeReviewLabels(tracker, ticketKey, params);
