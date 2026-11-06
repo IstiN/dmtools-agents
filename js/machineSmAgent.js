@@ -48,7 +48,20 @@
  *                       (integer >= 1, default 1 = off) — gh-1380 makes
  *                       it real: after a pre-classified transient crossing
  *                       the SM absorbs backoff-1 further SM ticks before
- *                       the retry leg dispatches; transientPatterns
+ *                       the retry leg dispatches. MIGRATION: gh-1366
+ *                       accepted any number >= 1 while the knob was
+ *                       reserved — a fractional pre-config (e.g. 2.5) is
+ *                       a hard SM-start error since gh-1380. COMMENT
+ *                       -GROWTH: the window's only state is the SM's own
+ *                       marker comments, so every absorbed tick re-posts
+ *                       one (backoff N ⇒ N-1 extra comments per episode)
+ *                       — keep the multiplier at SM-tick scale, not
+ *                       wall-clock scale. TRUST: the window (and the tick
+ *                       absorption) arms only when the stamp can be
+ *                       trusted back — `machineAuthor` must be configured
+ *                       (the gh-807 fail-closed parse); without it the
+ *                       crossing degrades to the backoff = 1 shape and
+ *                       retries always continue; transientPatterns
  *                       (gh-1380): regex source strings matched
  *                       case-insensitively against the gh-1363-normalized
  *                       signature — a streak matching ANY of them is
