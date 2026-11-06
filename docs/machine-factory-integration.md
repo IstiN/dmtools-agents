@@ -452,13 +452,11 @@ Review queue (provider failover) is configured in the runner's
 and since gh-1381 `scripts/providers/fa.sh` builds it automatically: for every queue
 entry whose `apiKeyEnv` is `E`, any set environment variable `E_1` .. `E_5` (and
 `E_N_BASE64` twins) is appended as a failover entry cloning that entry's provider and
-model. Deployment: create a **provider-tagged** repo secret —
-`CUSTOM_PROVIDER_ZAI_KEY_1` (same provider, same model, separate account/billing) — and
-map it into the factory's generic slot 1 in `.github/workflows/ai-teammate.yml`
-(`CUSTOM_PROVIDER_KEY1: ${{ secrets.CUSTOM_PROVIDER_ZAI_KEY_1 }}` +
-`CUSTOM_PROVIDER_KEY1_NAME: 'ZAI_CODE_KEY_1'`). Naming convention for future keys:
-`CUSTOM_PROVIDER_<PROVIDER>_KEY_<N>` — provider-tagged so multi-provider setups stay
-readable. No queue-JSON editing. Order is primary first,
+model. Deployment: add a repo secret **`ZAI_CODE_KEY_1`** (same provider, same model, separate
+account/billing). The factory workflow passes `ZAI_CODE_KEY_1.._5` through to the job env
+(literal mapping in dmtools-agentic-workflows#86), so the resolver sees it automatically —
+no queue-JSON editing, no stub changes. Up to five fallback keys are supported; slot
+`_2`..`_5` activate the same way when their secrets are added. Order is primary first,
 fallbacks in index order; unset/empty variants are skipped; variants already referenced
 by an existing queue entry are not duplicated. The harness walks the enriched queue at
 runtime, so a 429 on the primary key fails over to the fallback key mid-leg.
