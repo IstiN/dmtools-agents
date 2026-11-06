@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-06T15:04:19.553Z",
+  "ticketKey": "pr-1396",
+  "headSha": "12b4b2e29d26911c4fae51f670a890ab206d7a99",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:b420aed404009b46",
+      "size": 50645
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:b909f4d65095896b",
+      "size": 3957799
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:7831297d3b138f71",
+      "size": 2277
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:4f5d00f1fdd99476",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:888e5813c84ef94c",
+      "size": 16772
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:795a97b38ff56ea3",
+      "size": 7975
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:41ed85245d3e709c",
+      "size": 3074
+    },
+    "request.md": {
+      "hash": "fnv1a64:5a2d60ce86432008",
+      "size": 2732
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:4244e64a0e423792",
+      "size": 1077
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:93eb337cc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:1ad555dbaef0abc7",
+      "size": 2806
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:5a2d60ce86432008",
+      "size": 2732
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs60jbgs",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_sessionDelta.js:309",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: red CI — `crap` ratchet fails on this head (`js/common/sessionDelta.js::readRuntimeEnv` CRAP 42 > 8)**\n\nThe pre-merge gate is red on head `12b4b2e2` (see `ci_failures.md` / the red-head notice): `CRAP ratchet failed: CRAP may only decrease` with `NEW > 8 js/common/sessionDelta.js::readRuntimeEnv: 42` (CC 6, coverage **0.0%** → CRAP = 36 + 6 = 42).\n\n**This PR caused it.** `readRuntimeEnv` (js/common/sessionDelta.js:39) was previously covered *only* through the AC3 test's incomplete env maps: `resolveSessionStateDir({ env: { FA_SESSION_ROOT: … } })` left `COPILOT_HOME`/`KIMI_CODE_HOME`/`CURSOR_SESSION_CACHE_PATH` unpinned, so `readEnv` fell through to `readRuntimeEnv`. This change blocks every ladder name (empty string = override), so no test reaches `readRuntimeEnv` anymore — verified: `prepareLegSessionDelta({})` returns early on `missing inputFolder` before `resolveSessionStateDir`, and the gh-1224 suite pins every ladder name, so 0% is the steady state of this diff.\n\n**Fix in this PR** (test file is already in the diff):\n1. Export `readRuntimeEnv` (and `readEnv`) from `module.exports` in `js/common/sessionDelta.js`, and add direct unit tests covering the Node branch (`process.env` hit / miss → `''`) and the `java`-bridge exception path (mock a throwing global) — CRAP needs ≥ ~95% branch coverage on CC 6 to drop ≤ 8; or\n2. Alternatively make the env source injectable (`readRuntimeEnv(name, env)`) so the ladder is testable without touching the real environment — this also lowers CC and future-proofs the hermeticity pattern you introduced here.\n\nUntil the gate is green, the leg cannot merge."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60jbkN",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "scripts/providers/fa.sh:253",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `sameHost` prefix check matches hosts it must exclude — the documented \"china-platform / non-api.z.ai baseUrl\" contract is violated**\n\nThe code comment (and PR description) promises: *\"Entries whose baseUrl leaves api.z.ai (e.g. china-platform keys) are not probed — out of scope.\"* But the boundary check has no host-boundary guard:\n\n```js\nconst sameHost = !baseUrl || baseUrl.indexOf(\"https://api.z.ai\") === 0;\n```\n\n`indexOf(…) === 0` is a raw string prefix match, so it also matches `https://api.z.ai.cn/...` (verified: `\"https://api.z.ai.cn/api/coding/paas/v4\".indexOf(\"https://api.z.ai\") === 0` → `true`) and any sibling like `https://api.z.ai.something.example.com`. Consequences for such an entry:\n\n1. its key is probed against the **global** `https://api.z.ai/api/monitor/usage/quota/limit` endpoint — a key minted for a different host is sent to a host it was never configured for;\n2. if that probe 401/403s (expected for a foreign-host key), the entry is demoted to **group 3 (END of queue)** — a working key silently loses its primary slot, exactly the misranking this feature exists to prevent.\n\nFix — require the host boundary:\n\n```js\nconst sameHost = !baseUrl ||\n  baseUrl === \"https://api.z.ai\" ||\n  baseUrl.indexOf(\"https://api.z.ai/\") === 0;\n```\n\nThe offline fixtures (IT-2/2b/2c/2d) don't cover a non-canonical zai baseUrl; a small extension of the fake-curl matrix (a `https://api.z.ai.cn` baseUrl entry → assert zero curl calls for it) would pin the contract."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60jboO",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "scripts/providers/fa.sh:205",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: per-leg probe latency is unbounded — N distinct keys × 5–7 s, strictly serial**\n\n`probe()` runs `cp.execFileSync(\"curl\", …)` **synchronously**, one key at a time, each bounded by `-m 5` + a 2 s kill margin. After the gh-1381 expansion this function sees every `_1.._5` fallback variant, so a queue with 6 distinct keys adds up to ~30–42 s to the start of *every* fa leg whenever the endpoint is slow or unreachable (worst realistic case: endpoint outage ⇒ every leg in the factory pays the full serial budget, every leg, all day).\n\nThe single-attempt / `-m 5` / kill-switch design is right — the missing piece is an **aggregate budget**, not a per-call timeout. Two cheap shapes:\n\n- parallelize the probes (`Promise.all` + `cp.execFile`, or a single `curl --parallel --parallel-max 4` invocation over all keys) — same total HTTP fan-out, wall clock drops to ~max(single probe);\n- or gate the whole step with a deadline (e.g. stop probing after 10 s total; unprobed keys keep their static slots — the existing \"unknown\" group semantics already handle that).\n\nEither keeps the \"never fails the leg\" invariant while capping the per-leg tax."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60jbrL",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "scripts/providers/fa.sh:231",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the API key is exposed on the curl command line (process list)**\n\n```js\nout = cp.execFileSync(\"curl\", [\"-sS\", \"-m\", …, \"-H\", \"Authorization: Bearer \" + key, …]);\n```\n\nThe key is passed as an argv element, so for the lifetime of each probe it is world-readable via `ps`/`/proc/<pid>/cmdline` on the runner host. Not logged anywhere (good — IT-2 even asserts no key/Bearer leakage into stderr), but argv is an unnecessary exposure channel that is trivial to close with curl's config-from-stdin, which `execFileSync` supports natively via `input`:\n\n```js\nout = cp.execFileSync(\"curl\", [\"-sS\", \"-m\", String(PROBE_TIMEOUT_S), \"-K\", \"-\", \"-w\", \"\\n%{http_code}\", ENDPOINT],\n  { encoding: \"utf8\", timeout: (PROBE_TIMEOUT_S + 2) * 1000,\n    input: 'header = \"Authorization: Bearer ' + key + '\"\\n',\n    stdio: [\"pipe\", \"pipe\", \"pipe\"] });\n```\n\n(The fake-curl fixtures would need to read the key from stdin instead of `-H` — a two-line change per fixture.)"
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60jbun",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_sessionDelta.js:1160",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: IT-2e performs real HTTP from the shared test suite whenever creds are exported — opt it in instead**\n\nThe skip gate is *credentials presence*:\n\n```bash\nif [ -z \"${ZAI_CODE_KEY:-}\" ] || [ -z \"${ZAI_CODE_KEY_1:-}\" ]; then echo \"QUOTA_LIVE_SKIPPED\"; exit 0; fi\n```\n\nBut per this PR's own notes, runner environments *do* export `ZAI_CODE_KEY`/`ZAI_CODE_KEY_1` (that's exactly why the three pre-existing ITs had to be de-hermetized). On such runners this test now fires live requests at `api.z.ai` on **every** CI run of the shared suite. The oracle itself (`measure.js`) re-probes both keys a second time and compares — a 5-hour-window reset landing between the ordering call and the verification call flips the expected order and yields a spurious red.\n\nHouse rule (AGENTS.md) is hermetic tests; live third-party calls don't belong in the default lane. Suggest gating behind an explicit opt-in (e.g. `if [ \"${FA_QUOTA_LIVE_IT:-off}\" != \"on\" ] … QUOTA_LIVE_SKIPPED`) so the live check runs only when a human asks for it, and CI stays deterministic. The offline fixture matrix (IT-2/2b/2c/2d) already pins the logic; IT-2e then becomes a manual confirmation tool."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:6e4a7f6f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: red CI — `crap` ratchet fails on this head (`js/common/sessionDelta.js::readRuntimeEnv` CRAP 42 > 8)**\n\nThe pre-merge gate is red on head `12b4b2e2` (see `ci_failures.md` / the red-head notice): `CRAP ratchet failed: CRAP may only decrease` with `NEW > 8 js/common/sessionDelta.js::readRuntimeEnv: 42` (CC 6, coverage **0.0%** → CRAP = 36 + 6 = 42).\n\n**This PR caused it.** `readRuntimeEnv` (js/common/sessionDelta.js:39) was previously covered *only* through the AC3 test's incomplete env maps: `resolveSessionStateDir({ env: { FA_SESSION_ROOT: … } })` left `COPILOT_HOME`/`KIMI_CODE_HOME`/`CURSOR_SESSION_CACHE_PATH` unpinned, so `readEnv` fell through to `readRuntimeEnv`. This change blocks every ladder name (empty string = override), so no test reaches `readRuntimeEnv` anymore — verified: `prepareLegSessionDelta({})` returns early on `missing inputFolder` before `resolveSessionStateDir`, and the gh-1224 suite pins every ladder name, so 0% is the steady state of this diff.\n\n**Fix in this PR** (test file is already in the diff):\n1. Export `readRuntimeEnv` (and `readEnv`) from `module.exports` in `js/common/sessionDelta.js`, and add direct unit tests covering the Node branch (`process.env` hit / miss → `''`) and the `java`-bridge exception path (mock a throwing global) — CRAP needs ≥ ~95% branch coverage on CC 6 to drop ≤ 8; or\n2. Alternatively make the env source injectable (`readRuntimeEnv(name, env)`) so the ladder is testable without touching the real environment — this also lowers CC and future-proofs the hermeticity pattern you introduced here.\n\nUntil the gate is green, the leg cannot merge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:2504053b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `sameHost` prefix check matches hosts it must exclude — the documented \"china-platform / non-api.z.ai baseUrl\" contract is violated**\n\nThe code comment (and PR description) promises: *\"Entries whose baseUrl leaves api.z.ai (e.g. china-platform keys) are not probed — out of scope.\"* But the boundary check has no host-boundary guard:\n\n```js\nconst sameHost = !baseUrl || baseUrl.indexOf(\"https://api.z.ai\") === 0;\n```\n\n`indexOf(…) === 0` is a raw string prefix match, so it also matches `https://api.z.ai.cn/...` (verified: `\"https://api.z.ai.cn/api/coding/paas/v4\".indexOf(\"https://api.z.ai\") === 0` → `true`) and any sibling like `https://api.z.ai.something.example.com`. Consequences for such an entry:\n\n1. its key is probed against the **global** `https://api.z.ai/api/monitor/usage/quota/limit` endpoint — a key minted for a different host is sent to a host it was never configured for;\n2. if that probe 401/403s (expected for a foreign-host key), the entry is demoted to **group 3 (END of queue)** — a working key silently loses its primary slot, exactly the misranking this feature exists to prevent.\n\nFix — require the host boundary:\n\n```js\nconst sameHost = !baseUrl ||\n  baseUrl === \"https://api.z.ai\" ||\n  baseUrl.indexOf(\"https://api.z.ai/\") === 0;\n```\n\nThe offline fixtures (IT-2/2b/2c/2d) don't cover a non-canonical zai baseUrl; a small extension of the fake-curl matrix (a `https://api.z.ai.cn` baseUrl entry → assert zero curl calls for it) would pin the contract."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:bcdfa0f5",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: per-leg probe latency is unbounded — N distinct keys × 5–7 s, strictly serial**\n\n`probe()` runs `cp.execFileSync(\"curl\", …)` **synchronously**, one key at a time, each bounded by `-m 5` + a 2 s kill margin. After the gh-1381 expansion this function sees every `_1.._5` fallback variant, so a queue with 6 distinct keys adds up to ~30–42 s to the start of *every* fa leg whenever the endpoint is slow or unreachable (worst realistic case: endpoint outage ⇒ every leg in the factory pays the full serial budget, every leg, all day).\n\nThe single-attempt / `-m 5` / kill-switch design is right — the missing piece is an **aggregate budget**, not a per-call timeout. Two cheap shapes:\n\n- parallelize the probes (`Promise.all` + `cp.execFile`, or a single `curl --parallel --parallel-max 4` invocation over all keys) — same total HTTP fan-out, wall clock drops to ~max(single probe);\n- or gate the whole step with a deadline (e.g. stop probing after 10 s total; unprobed keys keep their static slots — the existing \"unknown\" group semantics already handle that).\n\nEither keeps the \"never fails the leg\" invariant while capping the per-leg tax."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:d0dd1f40",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the API key is exposed on the curl command line (process list)**\n\n```js\nout = cp.execFileSync(\"curl\", [\"-sS\", \"-m\", …, \"-H\", \"Authorization: Bearer \" + key, …]);\n```\n\nThe key is passed as an argv element, so for the lifetime of each probe it is world-readable via `ps`/`/proc/<pid>/cmdline` on the runner host. Not logged anywhere (good — IT-2 even asserts no key/Bearer leakage into stderr), but argv is an unnecessary exposure channel that is trivial to close with curl's config-from-stdin, which `execFileSync` supports natively via `input`:\n\n```js\nout = cp.execFileSync(\"curl\", [\"-sS\", \"-m\", String(PROBE_TIMEOUT_S), \"-K\", \"-\", \"-w\", \"\\n%{http_code}\", ENDPOINT],\n  { encoding: \"utf8\", timeout: (PROBE_TIMEOUT_S + 2) * 1000,\n    input: 'header = \"Authorization: Bearer ' + key + '\"\\n',\n    stdio: [\"pipe\", \"pipe\", \"pipe\"] });\n```\n\n(The fake-curl fixtures would need to read the key from stdin instead of `-H` — a two-line change per fixture.)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:f4ba23b3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: IT-2e performs real HTTP from the shared test suite whenever creds are exported — opt it in instead**\n\nThe skip gate is *credentials presence*:\n\n```bash\nif [ -z \"${ZAI_CODE_KEY:-}\" ] || [ -z \"${ZAI_CODE_KEY_1:-}\" ]; then echo \"QUOTA_LIVE_SKIPPED\"; exit 0; fi\n```\n\nBut per this PR's own notes, runner environments *do* export `ZAI_CODE_KEY`/`ZAI_CODE_KEY_1` (that's exactly why the three pre-existing ITs had to be de-hermetized). On such runners this test now fires live requests at `api.z.ai` on **every** CI run of the shared suite. The oracle itself (`measure.js`) re-probes both keys a second time and compares — a 5-hour-window reset landing between the ordering call and the verification call flips the expected order and yields a spurious red.\n\nHouse rule (AGENTS.md) is hermetic tests; live third-party calls don't belong in the default lane. Suggest gating behind an explicit opt-in (e.g. `if [ \"${FA_QUOTA_LIVE_IT:-off}\" != \"on\" ] … QUOTA_LIVE_SKIPPED`) so the live check runs only when a human asks for it, and CI stays deterministic. The offline fixture matrix (IT-2/2b/2c/2d) already pins the logic; IT-2e then becomes a manual confirmation tool."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:ba25d748",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 12b4b2e29d26911c4fae51f670a890ab206d7a99 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:22354de1",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: Red pre-merge gate blocks merge: the `crap` ratchet fails on head `12b4b2e2` (`js/common/sessionDelta.js::readRuntimeEnv` CRAP 42 > 8) — this PR's test-hermeticity change removed the last coverage path reaching `readRuntimeEnv`. One important correctness issue: the quota probe's `sameHost` check is an unguarded prefix match, so `https://api.z.ai.cn/…` (and any `https://api.z.ai.*` host) *is* probed against the global endpoint and its key demoted on 401, violating the documented \"china-platform keys are not probed\" contract.\n\n**Key Issues**:\n- 🚨 BLOCKING — red `crap` CI gate; `readRuntimeEnv` at 0% coverage (test_sessionDelta.js:309); fix = direct unit tests / injectable env source\n- ⚠️ IMPORTANT — `sameHost` prefix match leaks probes past the api.z.ai boundary (fa.sh:253); verified `\"https://api.z.ai.cn…\".indexOf(\"https://api.z.ai\") === 0`\n- 💡 SUGGESTION — unbounded serial probe latency per leg (fa.sh:205); key visible in curl argv (fa.sh:231); IT-2e fires live HTTP from CI whenever creds are exported (test_sessionDelta.js:1160)\n\n**Digest (below thread cap — informational)**:\n- scripts/providers/fa.sh:236 — every curl/exec failure is labeled `timeout` in the reorder log, even DNS/HTTP-level failures; costs ops debugging accuracy\n- scripts/providers/fa.sh:229 — curl stderr is captured but never surfaced on probe failure (silent-swallow pattern is by design, but a one-line reason log would help)\n\n**Ticket AC check**: all gh-1385 behaviors in the ticket/PR description are implemented and covered by the offline fixture matrix (IT-2/2b/2c/2d: ordering, dedup-by-key-value, kill switch, no-curl, never-fatal, no key leakage into logs — the suite passes locally: 31 passed, 0 failed).\n\n**Next Steps**:\n1. Restore `readRuntimeEnv` coverage (export + unit tests, or injectable env source) to green the `crap` gate\n2. Add the host-boundary guard to `sameHost` and a `https://api.z.ai.cn` fixture case\n3. Optionally adopt the three suggestions (probe parallelism/budget, key via curl stdin config, IT-2e opt-in gate)"
+    }
+  ]
+}
