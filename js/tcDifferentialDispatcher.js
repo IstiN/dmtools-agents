@@ -20,6 +20,9 @@
  *                        request finding reopens as sweep debt);
  *        cap reached  → owner escalation, the loop stops itself;
  *        sibling      → owner-notified maintenance (never THIS bug's bounce);
+ *        own-oracle   → green-on-old hands to the AC re-check (rework, the
+ *                        AC verdict decides the bounce — gh-1354); red is
+ *                        maintenance like any red differential;
  *        unavailable  → stays parked, one explanation comment, the stall
  *                        stays visible in every ledger digest.
  *   4. posts the updated ledger marker (the parked section disappears as the
@@ -249,7 +252,7 @@ function dispatcherInput(request, outcome, redRounds, maxReworkRounds) {
     var evidence = requestEvidence(request);
     return {
         tcKey: request.tcKey,
-        role: request.role === 'sibling-guard' ? tcTriage.ROLE_SIBLING : tcTriage.ROLE_GUARD,
+        role: dispatcherRoleOf(request),
         validated: true,
         current: evidence.current,
         lastGreen: evidence.lastGreen,
@@ -263,10 +266,25 @@ function dispatcherInput(request, outcome, redRounds, maxReworkRounds) {
 }
 
 /**
+ * The parked request's role for the triage continuation. Guards, siblings
+ * and own-oracles park differential requests (gh-1354 routes validated
+ * own-oracle reds through the mechanical table too); the OWN role must
+ * survive the round-trip — a green outcome is product-side attribution that
+ * hands to the AC re-check, never a guard's un-gated earned bounce. A
+ * roleless legacy request defaults to guard.
+ */
+function dispatcherRoleOf(request) {
+    if (request.role === tcTriage.ROLE_SIBLING) return tcTriage.ROLE_SIBLING;
+    if (request.role === tcTriage.ROLE_OWN) return tcTriage.ROLE_OWN;
+    return tcTriage.ROLE_GUARD;
+}
+
+/**
  * The triage verdict for one dispatcher outcome: the parked request's
  * recorded evidence + the scripted run's verdict. Guards and siblings keep
- * their role (a sibling green-on-old never bounces THIS bug); a roleless
- * request defaults to guard (only validated guards ever park a request).
+ * their role (a sibling green-on-old never bounces THIS bug; an own-oracle
+ * green-on-old hands to the AC re-check — gh-1354); a roleless request
+ * defaults to guard (legacy shape).
  */
 function dispatcherVerdict(request, outcome, redRounds, maxReworkRounds) {
     return tcTriage.triageDifferentialOutcome(
@@ -515,6 +533,20 @@ function suppressedBounceSection(routes) {
     return lines.join('\n');
 }
 
+/**
+ * The gh-1354 own-oracle AC handoff section: a green-on-old outcome on the
+ * bug's own oracle is product-side attribution — the TC hands to the AC
+ * re-check (rework) and the AC verdict decides the bounce on the next lap.
+ */
+function reworkHandoffSection(routes) {
+    if (!(routes.rework || []).length) return null;
+    var lines = ['The scripted differential rerun passed on the last-green build — the failure is attributed to the change range; these TCs hand to the AC re-check (rework) before any bounce:'];
+    routes.rework.forEach(function(v) {
+        lines.push('* ' + v.tcKey + ' — ' + v.reason.replace(/-/g, ' '));
+    });
+    return lines.join('\n');
+}
+
 /** One stall line per unavailable attempt (the request stays parked). */
 function stalledSections(routes) {
     return routes.stalled.map(function(s) {
@@ -527,6 +559,8 @@ function buildReportComment(routes, ledger) {
     var sections = conflictSections(routes);
     var suppressed = suppressedBounceSection(routes);
     if (suppressed) sections.push(suppressed);
+    var rework = reworkHandoffSection(routes);
+    if (rework) sections.push(rework);
     if (routes.bounced.length) sections.push(tcTriage.buildBounceComment(routes.bounced));
     if (routes.escalated.length) sections.push(tcTriage.buildEscalationComment(routes.escalated));
     // the maintained template is ONLY for genuine red-on-old findings — a
@@ -553,6 +587,7 @@ function routeNamesOf(routes) {
         [routes.escalated.length, 'escalated'],
         [routes.maintained.length, 'maintained'],
         [routes.stalled.length, 'stalled'],
+        [routes.rework.length, 'rework'],
         [(routes.suppressedBounces || []).length, 'suppressed']
     ].filter(function(present) { return present[0]; }).map(function(present) { return present[1]; });
 }
@@ -587,12 +622,35 @@ function routeOne(request, vars, routes) {
         gateRouteForAlternation(request, vars, routes, verdict);
         return;
     }
+    if (verdict.action === tcTriage.ACTION_REWORK) {
+        // gh-1354: the own-oracle AC handoff — the green outcome completed
+        // the product-side attribution, so the request is consumed and the
+        // TC belongs to the rework lane (the AC re-check decides the bounce
+        // on the next lap). Never a guard's un-gated earned bounce.
+        vars.ledger = tcMaintenanceLedger.resolveFindings(vars.ledger, [request.id], RESOLVE_VIA_GREEN);
+        var handoff = baseLedgerEntry(request, verdict.action, verdict.reason);
+        handoff.evidence = { differential: 'green' };
+        vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, handoff);
+        routes.rework.push(verdict);
+        return;
+    }
+    if (verdict.action === tcTriage.ACTION_DIFFERENTIAL) {
+        // gh-1354 rework: the hardened continuation refused to decide (the
+        // outcome was not green|red) — re-park, never a red-on-old claim.
+        // Falling through would stamp fabricated `differential: 'red'`
+        // evidence, render the "fails there too" report and park the SAME
+        // finding as maintained — the exact false claim the hardening makes
+        // impossible.
+        vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, unavailableBump(request, 'incomplete outcome — re-requesting the rerun'));
+        routes.stalled.push({ tcKey: request.tcKey, detail: 'incomplete outcome — re-requesting the rerun' });
+        return;
+    }
     vars.ledger = tcMaintenanceLedger.appendFinding(vars.ledger, maintenanceEntry(request, verdict));
     routes.maintained.push(verdict);
 }
 
 function dispatchRequests(requests, vars) {
-    var routes = { bounced: [], escalated: [], maintained: [], stalled: [], deferred: 0, conflicts: [], suppressedBounces: [] };
+    var routes = { bounced: [], escalated: [], maintained: [], stalled: [], rework: [], deferred: 0, conflicts: [], suppressedBounces: [] };
     var bounded = requests.slice(0, MAX_DISPATCHES_PER_TICK);
     routes.deferred = requests.length - bounded.length;
     bounded.forEach(function(request) {
@@ -639,7 +697,7 @@ function reportRoutes(tracker, ticketKey, vars, originalLedger, originalRegistry
         tcRunRegistry.buildRegistryMarker(vars.registry), 'TC run registry');
     var hasRoutes = routes.bounced.length || routes.escalated.length ||
         routes.maintained.length || routes.stalled.length || routes.conflicts.length ||
-        routes.suppressedBounces.length;
+        routes.suppressedBounces.length || routes.rework.length;
     if (hasRoutes) {
         postCommentQuietly(tracker, ticketKey, buildReportComment(routes, vars.ledger));
     }
@@ -656,6 +714,9 @@ function dispatchResult(routes, ticketKey, dispatched) {
         maintainedTestCases: routes.maintained.map(function(v) { return v.tcKey; }),
         escalatedTestCases: routes.escalated.map(function(v) { return v.tcKey; }),
         stalledTestCases: routes.stalled.map(function(s) { return s.tcKey; }),
+        // gh-1354: the own-oracle AC handoff is first-class — a green-on-old
+        // on the bug's own oracle is a rework route, never a bounce
+        reworkTestCases: routes.rework.map(function(v) { return v.tcKey; }),
         // gh-1331 review: the new routes are first-class in the payload —
         // downstream consumers tell a suppressed bounce from a genuine
         // red-on-old maintenance route, and fresh pair conflicts are visible.

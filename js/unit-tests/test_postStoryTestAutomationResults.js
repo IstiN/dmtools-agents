@@ -1434,6 +1434,77 @@ suite('postStoryTestAutomationResults: gh-1345 differential dispatcher hand-off'
     });
 });
 
+suite('postStoryTestAutomationResults: gh-1354 own-oracle triage — the automation-leg contract', function() {
+
+    // The F1 route's user-visible contract lives HERE (routeVerdict →
+    // routePathResult): a validated own-oracle red must end in test
+    // maintenance / a parked dispatcher request with the OWN role intact.
+    // Every earlier triage case in this file uses guard roles — these two
+    // cases pin that a role-normalization regression (e.g. resolveTcRole
+    // demoting OWN) cannot silently re-enter the AC-gated path through the
+    // automation leg.
+
+    var OWN_REGISTRY_MARKER_TS152 = REGISTRY_MARKER_TS152.replace('regression-guard', 'own-oracle');
+    var ownTcLedger = loadModule('js/common/tcMaintenanceLedger.js', makeRequire({
+        './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({})),
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
+            './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}))
+        }))
+    }));
+
+    /** The newest posted ledger digest, parsed (machine-author allowlist). */
+    function postedLedgerOf(t) {
+        var markers = t.posted.filter(function(c) {
+            return c.indexOf('<!-- dmtools:tc-maintenance-ledger ') !== -1;
+        });
+        if (!markers.length) return null;
+        return ownTcLedger.latestLedger([{ body: markers[markers.length - 1], user: { login: 'ai-teammate' } }],
+            { authorLogins: ['ai-teammate'] }).ledger;
+    }
+
+    test('AC (F1): validated own-oracle red, same build + changed envFingerprint -> test_maintenance, no bug move', function() {
+        var t = triageModule({
+            comments: [{ body: OWN_REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            cli: function(o) {
+                if (o.command === 'git branch --show-current') return 'test/BUG-150';
+                if (o.command === 'git rev-parse HEAD') return 'sha-green'; // SAME build as last green
+                return '';
+            },
+            resultEntry: Object.assign(guardFailedResult(), { role: 'own-oracle', envFingerprint: 'env-2' })
+        });
+        var result = t.run();
+
+        assert.equal(result.success, true);
+        assert.equal(result.status, 'test_maintenance',
+            'an environment shift is maintenance even on the bug\'s own oracle — no rework, no bounce');
+        assert.deepEqual(result.maintenanceTestCases, ['TS-152']);
+        assert.ok(!t.statusMoves.some(function(m) { return m.key === 'BUG-150'; }),
+            'no bug move — the world moved, not the product');
+        var ledger = postedLedgerOf(t);
+        assert.ok(ledger, 'the ledger digest was posted');
+        assert.equal(ledger.findings[0].reason, 'environment-shift', 'the F1 finding names its route');
+        assert.equal(ledger.findings[0].role, 'own-oracle');
+    });
+
+    test('AC (F1/F2 loop): validated own-oracle, build changed, no differential outcome -> park label + request carries role own-oracle', function() {
+        var t = triageModule({
+            comments: [{ body: OWN_REGISTRY_MARKER_TS152, user: { login: 'ai-teammate' } }],
+            resultEntry: Object.assign(guardFailedResult(), { role: 'own-oracle', differential: null })
+        });
+        var result = t.run();
+
+        assert.equal(result.status, 'test_maintenance');
+        assert.deepEqual(t.labels, [{ key: 'BUG-150', label: 'tc_differential_pending' }],
+            'the scripted dispatcher picks the request up next tick');
+        var ledger = postedLedgerOf(t);
+        assert.ok(ledger, 'the ledger digest was posted');
+        var parked = ledger.findings[0];
+        assert.equal(parked.verdict, 'differential-rerun');
+        assert.equal(parked.role, 'own-oracle',
+            'the role the dispatcher\'s dispatcherRoleOf round-trips — a green outcome must hand to the AC re-check, never an un-gated bounce');
+    });
+});
+
 suite('postStoryTestAutomationResults: gh-1345 machineAuthor deployment guard', function() {
 
     function captureWarnings(run) {
