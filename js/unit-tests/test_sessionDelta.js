@@ -625,6 +625,65 @@ suite('sessionDelta — UT-4 & IT-1: composite resume prompt & bash provider int
         assert.contains(out, 'FA_QUEUE_IT_OK', 'fa.sh queue resolve test failed: ' + out);
     });
 
+    test('IT-1b (bash): fa.sh auto-appends fallback provider keys (<KEY>_1.._5) to the queue (gh-1381)', function() {
+        if (!_sdCanBash_) return;
+        var out = cli_execute_command({
+            command: [
+                'bash -c \'set -euo pipefail',
+                'REPO_ROOT="$(pwd)"',
+                'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG KIMI_KEY',
+                'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-5.3-flash\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}}]"',
+                '# Case A: primary + _1 + _2 set -> both appended in order, same model, catalog baseUrl',
+                'export ZAI_CODE_KEY="primary-key"',
+                'export ZAI_CODE_KEY_1="fallback-1"',
+                'export ZAI_CODE_KEY_2="fallback-2"',
+                'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                '_fa_resolve_env',
+                'printf "%s" "$FA_PROVIDERS_QUEUE" | grep -q "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\""',
+                'printf "%s" "$FA_PROVIDERS_QUEUE" | grep -q "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_2\\""',
+                'printf "%s" "$FA_PROVIDERS_QUEUE" | grep -q "\\"model\\":\\"glm-5.3-flash\\""',
+                'printf "%s" "$FA_PROVIDERS_QUEUE" | grep -q "\\"baseUrl\\":\\"https://api.z.ai/api/coding/paas/v4\\""',
+                '[ "$FA_PROVIDER_TYPE" = "zai" ]',
+                '# Case B: _1 already referenced by an existing entry -> no duplicate append',
+                'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-5.3-flash\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-5.3-flash\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}}]"',
+                'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                '_fa_resolve_env',
+                '[ "$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"" | wc -l | tr -d " ")" = "1" ]',
+                '# Case C: empty _3 skipped, no _N vars at all -> queue byte-identical',
+                'unset ZAI_CODE_KEY ZAI_CODE_KEY_1 ZAI_CODE_KEY_2',
+                'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                '_fa_resolve_env',
+                '[ "$FA_PROVIDERS_QUEUE" = "$ENV_VAR_DEV_QUEUE" ]',
+                'echo "FA_FALLBACK_IT_OK"\'',
+            ].join('\n')
+        });
+        assert.contains(out, 'FA_FALLBACK_IT_OK', 'fa.sh fallback append test failed: ' + out);
+    });
+    test('IT-1c (bash): multi-entry queue - per-entry fallbacks in order, dedup-break, per-entry models (gh-1381)', function() {
+        if (!_sdCanBash_) return;
+        var out = cli_execute_command({
+            command: [
+                'bash -c \'set -euo pipefail',
+                'REPO_ROOT="$(pwd)"',
+                'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG',
+                'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"m1\\",\\"apiKeyEnv\\":\\"ONE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"m2\\",\\"apiKeyEnv\\":\\"ONE_KEY_2\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"m3\\",\\"apiKeyEnv\\":\\"SECOND_KEY\\"}}]"',
+                'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                'export ONE_KEY="k-one" ONE_KEY_1="k-one-1" SECOND_KEY="k-two" SECOND_KEY_1="k-two-1"',
+                'unset ONE_KEY_3 SECOND_KEY_2 ZAI_CODE_KEY ZAI_CODE_KEY_1 ZAI_CODE_KEY_2 || true',
+                '_fa_resolve_env',
+                'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"[A-Z_0-9]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                '[ "$ORDER" = "ONE_KEY-ONE_KEY_1-ONE_KEY_2-SECOND_KEY-SECOND_KEY_1-" ]',
+                'MODELS="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"model\\":\\"[a-z0-9]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                '[ "$MODELS" = "m1-m1-m2-m3-m3-" ]',
+                '[ "$FA_PROVIDER_TYPE" = "zai" ]',
+                'echo "IT_1C_OK"\','
+            ].join('\n')
+        });
+        assert.contains(out, 'IT_1C_OK', 'fa.sh multi-entry fallback test failed: ' + out);
+    });
+
     test('covers sessionGroupForConfig, defaultDeltaStorage file_read/file_write/file_list bridges, edited comments, and corrupt JSON on disk', function() {
         assert.equal(sessionDelta.sessionGroupForConfig('agents/story_development.json'), 'dev-write');
         assert.equal(sessionDelta.sessionGroupForConfig('agents/pr_review.json'), 'dev-review');
