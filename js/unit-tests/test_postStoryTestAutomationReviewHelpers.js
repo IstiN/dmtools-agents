@@ -29,6 +29,7 @@ function loadPrReviewComments() {
     var outputFilesModule = loadModule('js/common/outputFiles.js', makeRequire({}), {});
     return loadModule('js/postPRReviewComments.js', makeRequire({
         './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
+        './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
         './config.js': configModule,
         'config': configModule,
         './common/scm.js': { createScm: function() { return {}; } },

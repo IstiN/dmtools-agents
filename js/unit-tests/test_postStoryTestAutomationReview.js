@@ -91,6 +91,7 @@ var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({
         'js/postPRReviewComments.js',
         makeRequire({
             './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
             './config.js': configModule,
             './common/machineAuthor.js': machineAuthorModule,
             './common/scm.js': { createScm: function() { return scmMock; } },
