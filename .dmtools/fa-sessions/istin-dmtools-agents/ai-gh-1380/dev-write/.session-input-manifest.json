@@ -1,0 +1,365 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-06T12:48:23.327Z",
+  "ticketKey": "gh-1380",
+  "headSha": "eacc8fcd7d81156b8fafac7f90761a51409d8040",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:8cc0c921b09afd84",
+      "size": 103888
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:c048d4b2c4c2dcd6",
+      "size": 7922319
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:02b2c6237a0788d6",
+      "size": 4438
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:45e8cfc2dec3bf51",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:03475fd52b69a729",
+      "size": 38916
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:91f8da4ec84467a6",
+      "size": 10476
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:260071184e049bc5",
+      "size": 2457
+    },
+    "request.md": {
+      "hash": "fnv1a64:2b270aaf98e1baa9",
+      "size": 3641
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:848cf56d8101ec6f",
+      "size": 1139
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:86b1bd57c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:0f6a71066ea77b7b",
+      "size": 3772
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:2b270aaf98e1baa9",
+      "size": 3641
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs60gTvS",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/failureAnalyzer.js:345",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red on head `eacc8fcd` — the duplication ratchet fails on `js/common/failureAnalyzer.js` (both `crap` runs)**\n\nThe CRAP ratchet is green now (`0 regression(s), 0 new over threshold` — the `verdictPayloadOf` fix landed, F1 verified fixed), and unit tests pass — but the job still exits 2 on the **fresh-duplication gate** in both runs ([12:24 run](https://github.com/IstiN/dmtools-agents/actions/runs/42212297477), [12:21 run](https://github.com/IstiN/dmtools-agents/actions/runs/42212108835)):\n\n```text\nfresh duplication: js/common/failureAnalyzer.js 1.67% (not pinned in duplication-baseline.json)\nduplication ratchet: FAIL — 1 fresh, 0 regressed (1 pinned debt files unchanged)\n##[error]Process completed with exit code 2.\n```\n\nReproduced locally with the CI-pinned tool (`IstiN/crap4js@83ee6201`, `duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci`) — the clone is the two \"newest verdict for this signature\" scan loops:\n\n```text\njs/common/failureAnalyzer.js:345: clone: 50 tokens / 6 lines, 2 occurrences:\n  js/common/failureAnalyzer.js:345-350;  js/common/failureAnalyzer.js:535-540\n```\n\n`latestPreClassifierVerdict` (this line, added by this PR) and `latestVerdictForSignature` are token-identical apart from the extra `&& v.source === TRANSIENT_SOURCE` clause. On `origin/main` this file measured **0.00% duplicated** — the PR introduced the file's first clone, and the gate (threshold 1%) fails on any unpinned fresh duplication.\n\nFix: extract one shared scan and keep both wrappers —\n\n```js\nfunction latestVerdictOf(verdicts, signature, source) {\n    var list = verdicts || [];\n    var latest = null;\n    for (var i = 0; i < list.length; i++) {\n        var v = list[i];\n        if (v && v.signature === signature && (!source || v.source === source)) latest = v;\n    }\n    return latest;\n}\n\nfunction latestPreClassifierVerdict(verdicts, signature) {\n    return latestVerdictOf(verdicts, signature, TRANSIENT_SOURCE);\n}\n```\n\n`latestVerdictForSignature` becomes `latestVerdictOf(verdicts, signature, null)`; both call sites and the existing tests keep their semantics (newest match wins, list order). Single loop ⇒ no 50-token clone ⇒ gate green."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60gTxd",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/failureAnalyzer.js:276",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the new regex memo throws `TypeError` (kills the SM tick) for a valid config pattern named like an `Object.prototype` key**\n\n`compiledTransientPattern` caches by `TRANSIENT_PATTERN_CACHE[source] === undefined`. A plain `{}` inherits `Object.prototype`, so a pattern source equal to an inherited own-key (`'constructor'`, `'toString'`, `'valueOf'`, `'hasOwnProperty'`, `'__proto__'`, …) is treated as **already cached**, the inherited value (`Object` function / `Object.prototype`) is returned instead of a RegExp, and `transientPatternMatches`'s `re.test(text)` throws `TypeError: re.test is not a function` — uncaught through `matchesTransientPattern` → `transientPreClassifierVerdict` → `gateBlindRedispatch` → `decideActions`, so the whole SM tick dies.\n\nVerified against this tree (`node -e require('./js/common/failureAnalyzer.js')…`):\n\n```text\npattern=constructor → THROWS: TypeError: re.test is not a function\npattern=__proto__   → THROWS: TypeError: re.test is not a function\npattern=toString    → THROWS: TypeError: re.test is not a function\nconfig validation admits it: [\"constructor\"]\n```\n\n`resolveFailureAnalysisConfig` explicitly **admits** such entries (a non-empty string that compiles as a regex — `'constructor'` compiles fine), so this is a valid-config crash, and the pre-memo code handled it correctly (compiled per call). It also contradicts the fail-safe this function documents (\"the loop is never wedged by a bad pattern\"). A plausible real trigger: matching `…reading 'toString'`-style crash messages with the bare word.\n\nFix: make the cache own-key only —\n\n```js\nvar CACHE = {};\nfunction cachedRe(source) {\n    if (typeof source !== 'string' || !source) return null;\n    if (!Object.prototype.hasOwnProperty.call(CACHE, source)) {\n        var re = null;\n        try { re = new RegExp(source, 'i'); } catch (eRegex) { re = null; }\n        CACHE[source] = re;\n    }\n    return CACHE[source];\n}\n```\n\n(or prefix the keys: `CACHE['p:' + source]`). Please extend the memo test suite with a `'constructor'`/`'toString'` source pinning no-throw + match semantics."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60gTzz",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/machineSmAgent.js:372",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: doubled blank line after `stampBackoffOf`**\n\nThe rework hunk left two consecutive blank lines after the new function's closing brace (this file separates top-level functions with exactly one blank line everywhere else). Collapse to one. Style only — nothing behavioral or documented."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60gd6P",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/failureAnalyzer.js:345",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING (re-raise, registry F6 — head unchanged since round 2): CI red on `eacc8fcd` — the duplication ratchet still fails on `js/common/failureAnalyzer.js`**\n\nNo new commit has landed since round 2 (HEAD is still `eacc8fcd`), and every fact re-verified fresh this run: the CI artifacts still show **2 failed `crap` checks** on `eacc8fcd` — the CRAP ratchet is green (`0 regression(s), 0 new over threshold`) and unit tests pass, but the job exits 2 on the **fresh-duplication gate** in both runs:\n\n```text\nfresh duplication: js/common/failureAnalyzer.js 1.67% (not pinned in duplication-baseline.json)\nduplication ratchet: FAIL — 1 fresh, 0 regressed (1 pinned debt files unchanged)\n##[error]Process completed with exit code 2.\n```\n\nRe-reproduced locally with the CI-pinned tool (`IstiN/crap4js@83ee6201`, `duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci`):\n\n```text\njs/common/failureAnalyzer.js:345: clone: 50 tokens / 6 lines, 2 occurrences:\n  js/common/failureAnalyzer.js:345-350;  js/common/failureAnalyzer.js:535-540\n```\n\nUnchanged diagnosis: `latestPreClassifierVerdict` (this line) and `latestVerdictForSignature` are token-identical apart from the `&& v.source === TRANSIENT_SOURCE` clause; `origin/main` measured 0.00% for this file, so the PR introduced its first clone and the 1% gate fails on any unpinned fresh duplication.\n\nFix (unchanged): extract one shared scan and keep both wrappers —\n\n```js\nfunction latestVerdictOf(verdicts, signature, source) {\n    var list = verdicts || [];\n    var latest = null;\n    for (var i = 0; i < list.length; i++) {\n        var v = list[i];\n        if (v && v.signature === signature && (!source || v.source === source)) latest = v;\n    }\n    return latest;\n}\n\nfunction latestPreClassifierVerdict(verdicts, signature) {\n    return latestVerdictOf(verdicts, signature, TRANSIENT_SOURCE);\n}\n```\n\n`latestVerdictForSignature` becomes `latestVerdictOf(verdicts, signature, null)`; semantics (newest match wins, list order) and the existing tests are preserved. Single loop ⇒ no 50-token clone ⇒ gate green."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60gd80",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/failureAnalyzer.js:276",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT (re-raise, registry F7 — head unchanged since round 2): the regex memo still throws `TypeError` for a valid config pattern named like an `Object.prototype` key**\n\nRe-verified fresh this run against the current tree — `node -e \"require('./js/common/failureAnalyzer.js')\"` with pattern `'constructor'` still throws:\n\n```text\nSTILL THROWS: re.test is not a function\n```\n\nThe defect is unchanged: `compiledTransientPattern` caches by `TRANSIENT_PATTERN_CACHE[source] === undefined`, so a plain `{}` inherits `Object.prototype` and a pattern source equal to an inherited own-key (`'constructor'`, `'toString'`, `'valueOf'`, `'hasOwnProperty'`, `'__proto__'`, …) is treated as already cached — the inherited value (`Object` function / `Object.prototype`) is returned instead of a RegExp, and `transientPatternMatches`'s `re.test(text)` throws. The `TypeError` propagates uncaught through `matchesTransientPattern` → `transientPreClassifierVerdict` → `gateBlindRedispatch` → `decideActions`, so the whole SM tick dies.\n\n`resolveFailureAnalysisConfig` admits such entries (a non-empty string that compiles as a regex — `'constructor'` compiles fine), so this is a valid-config crash; the pre-memo code compiled per call and handled it correctly, and the fail-safe this function documents (\"the loop is never wedged by a bad pattern\") is violated.\n\nFix (unchanged): make the cache own-key only —\n\n```js\nif (!Object.prototype.hasOwnProperty.call(TRANSIENT_PATTERN_CACHE, source)) { … }\n```\n\n(or prefix the keys: `TRANSIENT_PATTERN_CACHE['p:' + source]`), and extend the memo test suite with a `'constructor'`/`'toString'` source pinning no-throw + match semantics."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60gd-8",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/machineSmAgent.js:372",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT (re-raise, registry F8 — head unchanged since round 2): doubled blank line after `stampBackoffOf`**\n\nStill present at `machineSmAgent.js:371-372` — two consecutive blank lines after the function's closing brace; the file separates top-level functions with exactly one blank line everywhere else. Collapse to one. Style only — nothing behavioral or documented."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:20797674",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: doubled blank line after `stampBackoffOf`**\n\nThe rework hunk left two consecutive blank lines after the new function's closing brace (this file separates top-level functions with exactly one blank line everywhere else). Collapse to one. Style only — nothing behavioral or documented."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:d4643ca1",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `backoff > 1` + a deployment without `machineAuthor` wedges the loop — retries never resume**\n\nTrace with `failureAnalysis` enabled, a matched `transientPatterns` signature, `backoff > 1`, and `machineAuthor` unconfigured (→ `machineLogins = []`):\n\n1. At the threshold crossing, `gateBlindRedispatch` **replaces** the dispatch with the stamp (`spliceDispatchAction(actions, firstDispatch, stampAction, faCfg.backoff > 1)` — this line). No retry runs.\n2. The stamp is read back through `collectFailureAnalysisState` → `parseFailureVerdicts(comments, { authorLogins: machineLogins })`. With an empty allowlist NOTHING is trusted (the gh-807 fail-closed rule) → `verdicts` stays `[]` → `consumedCount` = 0.\n3. Next tick: the streak is still 4 (nothing ran, no new failure notice) → `analysisDue(4, 0, 4)` fires again → stamp again, dispatch absorbed again. Forever: one marker comment per tick, unbounded growth, and no leg ever dispatches.\n\nThat violates the invariant this module itself states (\"a broken analyzer must never stop retries\", \"the loop is never wedged\"). Under gh-136 the identical misconfiguration degraded wasteful-but-live — the divert dispatch ran, the streak grew past the threshold, blind retries resumed. gh-1380's backoff path turns the same operator error into a permanent freeze. The scripted replays only cover the trusted case (`faJobParams` hard-codes `machineAuthor: 'ai-teammate,…'`), so nothing pins the untrusted path.\n\nSuggested fail-safe: absorb the dispatch only when the stamp will be trusted back. Cheapest guard: in `gateBlindRedispatch`, replace the dispatch only if `(cfg.machineLogins || []).length > 0` (otherwise insert the stamp *before* the riding dispatch, i.e. the `backoff = 1` shape — classification still lands, retries continue). Alternatively self-trust the SM's own stamps at parse time and document the `machineAuthor` requirement next to the `backoff` knob. Either way, please add a no-`machineAuthor` replay test with `backoff > 1` pinning that retries resume."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:80158d37",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: `backoff` validation now hard-errors on values gh-136 accepted — worth a migration note**\n\ngh-136 validated `backoff` as \"a number >= 1\"; while the knob was reserved, a deployment could legally pre-configure a fractional value (e.g. `2.5`). This PR tightens the contract to \"an integer >= 1\", and the same previously-valid config now throws at SM start (`resolveFailureAnalysisConfig` runs inside `resolveMachineSmConfig`, so the whole SM tick dies). The de-reservation is deliberate and documented in the PR description, but for a knob operators may have pre-configured in good faith, the upgrade fails loudly and entirely.\n\nOptions (any one suffices):\n- a release-note / knob-doc line next to the new message: \"`failureAnalysis.backoff` must now be an integer; fractional values are a hard SM-start error since gh-1380\";\n- or accept-and-floor fractionals with a warning instead of throwing.\n\nPure docs/clarity — no behavior change requested."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:a2b781d0",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: absorbed backoff ticks post one full marker comment per tick — unbounded for large `backoff`**\n\nEach absorbed tick re-posts a complete `dmtools:failure-verdict` marker (`backoffTickVerdictRecord` → the `transientVerdict` executor → a new issue comment): `backoff: 30` ⇒ 29 extra comments per episode, `backoff: 200` ⇒ 199. The stamps are the SM's only window state (stateless persistence via comments), so per-tick stamping is a defensible design — but nothing bounds `backoff`, and the issue timeline becomes marker soup for aggressive values.\n\nConsider either:\n- capping the knob at SM-start validation alongside the integer check (e.g. `backoff` must be `1..30`), or\n- documenting the comment-growth tradeoff next to the knob so operators don't set it to wall-clock-scale numbers expecting a silent window.\n\nBehavior is otherwise correct: the window still only ever paces a retry, never stops the loop."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:84343f2f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: the regex is recompiled on every match call**\n\n`transientPatternMatches` runs `new RegExp(source, 'i')` per pattern per evaluation, although `transientPatternsOf` already proved every entry compiles at SM start. A tiny source→RegExp memo (or pre-compiled entries in the resolved config) would avoid the repeated compile. Negligible at current list sizes and SM tick cadence — style/perf micro-preference only, no behavior change."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:f493573c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **Fixed — `verdictPayloadOf` extracted under the ratchet again (CC 9 → 5).**\n\nThe two `backoffTicks`/`ticksSoFar` ternaries moved into a shared optional-field shaper, exactly as prescribed — `verdictOptionalFieldsOf` now owns the four nullable-field ternaries and `verdictPayloadOf` copies the results explicitly (GraalJS-safe, no spread), so build and parse keep mirroring ONE defaults ladder:\n\n- `js/common/failureAnalyzer.js` — new `verdictOptionalFieldsOf` (CC 5), `verdictPayloadOf` now CC 5 (was 9). At full branch coverage CRAP = CC = 5 ≤ `CRAP_THRESHOLD=8`, so the ratchet goes green (and stays a decrease-only move for anything already in the baseline).\n- Measured with the CI-pinned tool (`IstiN/crap4js@83ee6201`), `--threshold 8`, on the changed tree:\n\n```text\nverdictOptionalFieldsOf   js/common/failureAnalyzer.js   5\nverdictPayloadOf          js/common/failureAnalyzer.js   5\n```\n\nNo behavior change: the build→machine-parse round-trip, the backward-compatible null-window parse of pre-gh-1380 verdicts, and the marker-shape tests all still pass (`run_failureAnalyzer.json` 66 passed, `run_machineSmAgent.json` 105 passed; full suite green — see the PR rework summary). Fixed in commit `eacc8fcd7`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:0fe9e80a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **Fixed — the dispatch is now absorbed only when the stamp can be trusted back; a no-`machineAuthor` replay pins that retries resume.**\n\nImplemented your cheapest guard, slightly sharpened so the degrade is honest down to the stamp itself:\n\n- `js/machineSmAgent.js` — new `stampBackoffOf(cfg, backoff)`: the crossing arms the window (and replaces the dispatch) only when `backoff > 1` **and** `machineLogins` is non-empty (`(cfg.machineLogins || []).length > 0`, the gh-807 fail-closed parse precondition). Without machine logins the crossing degrades to the `backoff = 1` shape: `transientCrossingAction` is built with the de-rated backoff, so the untrusted stamp carries **no** `backoffTicks`/`ticksSoFar` window (it would never be honored), the stamp is *inserted before* the riding dispatch, and the retry always continues — the gh-1366 wasteful-but-live degrade, never a wedge.\n- `gateTransientBackoff` needed no guard: its pending windows can only come from verdicts that already parsed under the same allowlist, so an untrusted deployment can never open one.\n\nTests (TDD, red before the fix):\n\n- Scripted replay `no machineAuthor (untrusted stamps) + backoff > 1 NEVER wedges the loop`: `machineAuthor` deleted from jobParams, 4 identical 429 failures, `backoff: 3` → the crossing stamps AND dispatches `['dev']` on tick 1 (pre-fix this replay returned `[]` forever — the exact wedge you traced), and after a 5th failure the loop stays blind at `['dev','dev']` with no stamp flood.\n- Surgical `without machine logins the crossing degrades to the backoff = 1 shape`: pinns `[label, transientVerdict, dispatch]` (insert, no window fields) vs the trusted cfg's `[label, transientVerdict]` (absorb, `backoffTicks: 3`); the existing trusted absorb case now passes `machineLogins` explicitly so both paths stay pinned.\n\n`run_machineSmAgent.json` 105 passed. Fixed in commit `eacc8fcd7`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:5e2b8485",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **Fixed — migration note added next to the knob (docs only, no behavior change).**\n\nPicked up on this lap (same file as the 🚨 CRAP fix, doc-trivial). The knob now warns the upgrader in both places an operator would look:\n\n- `js/common/failureAnalyzer.js` — comment above `backoffOf`: gh-1366 validated `backoff` as \"a number >= 1\" while the knob was reserved, so a fractional pre-config (e.g. `2.5`) parsed fine back then and is a HARD SM-start error since gh-1380 (the knob counts SM ticks — a fractional tick count is meaningless); check your deployment's `failureAnalysis` block when upgrading.\n- `js/machineSmAgent.js` — the `machineSm` jobParams knob doc carries the same MIGRATION line, so the header an operator reads while tuning the block states it too.\n\nWe kept the hard error rather than accept-and-floor deliberately: a silently floored multiplier would pace a window the operator did not configure. The throw message itself already names the contract (`must be an integer >= 1 (1 = off)`). Fixed in commit `eacc8fcd7`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:4d4d9221",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **Fixed — comment-growth tradeoff documented next to the knob (docs only, no behavior change).**\n\nPicked up on this lap (same file as the ⚠️ wedge fix, doc-trivial). We took your documenting option rather than the cap — the per-tick stamping is the window's only state (stateless persistence via comments), and a hard `1..30` cap would turn a legitimate long-pacing deployment into a config error at SM start:\n\n- `js/common/failureAnalyzer.js` — comment above `backoffOf`: the window's only persistence is the SM's own verdict-marker comments, so every absorbed tick re-posts one full marker (`backoff` N ⇒ N−1 extra comments per episode); keep the multiplier at SM-tick scale (small), not wall-clock scale.\n- `js/machineSmAgent.js` — the `machineSm` knob doc carries the same COMMENT-GROWTH line (`backoff N ⇒ N-1 extra comments per episode`) so the tradeoff is visible where `backoff` is configured.\n\nThe behavior is unchanged and stays correct: the window can only ever pace a retry, never stop the loop. Fixed in commit `eacc8fcd7`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:888432d1",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 **Fixed — a source→RegExp memo now serves the compiled form (picked up on this lap, same file as the 🚨 CRAP fix).**\n\n`js/common/failureAnalyzer.js` — `transientPatternMatches` no longer recompiles per call: a module-level `TRANSIENT_PATTERN_CACHE` maps the pattern source to its compiled `RegExp` (`compiledTransientPattern` compiles once per distinct source, case-insensitive flag unchanged). Bounded by the configured sources (config data, small); a compile failure memoizes `null` — the fail-safe no-match that routes to the AI analyzer is preserved (only a hand-built bypass config can carry an uncompilable entry).\n\nTDD: a new suite pins the behavior with a counting `RegExp` injection — the first evaluation compiles each distinct source exactly once, a repeated evaluation compiles **zero** more (pre-fix this test red: 4 compiles for 2 calls), and a bad source stays a no-match on repeat while valid patterns still evaluate after it (`run_failureAnalyzer.json` 66 passed). Matching semantics are unchanged — the existing per-pattern/non-match/fail-safe tests all pass untouched. CC impact: `compiledTransientPattern` CC 5, `transientPatternMatches` CC 2 — both comfortably under the ratchet. Fixed in commit `eacc8fcd7`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:3ba306ee",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red on head `eacc8fcd` — the duplication ratchet fails on `js/common/failureAnalyzer.js` (both `crap` runs)**\n\nThe CRAP ratchet is green now (`0 regression(s), 0 new over threshold` — the `verdictPayloadOf` fix landed, F1 verified fixed), and unit tests pass — but the job still exits 2 on the **fresh-duplication gate** in both runs ([12:24 run](https://github.com/IstiN/dmtools-agents/actions/runs/42212297477), [12:21 run](https://github.com/IstiN/dmtools-agents/actions/runs/42212108835)):\n\n```text\nfresh duplication: js/common/failureAnalyzer.js 1.67% (not pinned in duplication-baseline.json)\nduplication ratchet: FAIL — 1 fresh, 0 regressed (1 pinned debt files unchanged)\n##[error]Process completed with exit code 2.\n```\n\nReproduced locally with the CI-pinned tool (`IstiN/crap4js@83ee6201`, `duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci`) — the clone is the two \"newest verdict for this signature\" scan loops:\n\n```text\njs/common/failureAnalyzer.js:345: clone: 50 tokens / 6 lines, 2 occurrences:\n  js/common/failureAnalyzer.js:345-350;  js/common/failureAnalyzer.js:535-540\n```\n\n`latestPreClassifierVerdict` (this line, added by this PR) and `latestVerdictForSignature` are token-identical apart from the extra `&& v.source === TRANSIENT_SOURCE` clause. On `origin/main` this file measured **0.00% duplicated** — the PR introduced the file's first clone, and the gate (threshold 1%) fails on any unpinned fresh duplication.\n\nFix: extract one shared scan and keep both wrappers —\n\n```js\nfunction latestVerdictOf(verdicts, signature, source) {\n    var list = verdicts || [];\n    var latest = null;\n    for (var i = 0; i < list.length; i++) {\n        var v = list[i];\n        if (v && v.signature === signature && (!source || v.source === source)) latest = v;\n    }\n    return latest;\n}\n\nfunction latestPreClassifierVerdict(verdicts, signature) {\n    return latestVerdictOf(verdicts, signature, TRANSIENT_SOURCE);\n}\n```\n\n`latestVerdictForSignature` becomes `latestVerdictOf(verdicts, signature, null)`; both call sites and the existing tests keep their semantics (newest match wins, list order). Single loop ⇒ no 50-token clone ⇒ gate green."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:9a39def2",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the new regex memo throws `TypeError` (kills the SM tick) for a valid config pattern named like an `Object.prototype` key**\n\n`compiledTransientPattern` caches by `TRANSIENT_PATTERN_CACHE[source] === undefined`. A plain `{}` inherits `Object.prototype`, so a pattern source equal to an inherited own-key (`'constructor'`, `'toString'`, `'valueOf'`, `'hasOwnProperty'`, `'__proto__'`, …) is treated as **already cached**, the inherited value (`Object` function / `Object.prototype`) is returned instead of a RegExp, and `transientPatternMatches`'s `re.test(text)` throws `TypeError: re.test is not a function` — uncaught through `matchesTransientPattern` → `transientPreClassifierVerdict` → `gateBlindRedispatch` → `decideActions`, so the whole SM tick dies.\n\nVerified against this tree (`node -e require('./js/common/failureAnalyzer.js')…`):\n\n```text\npattern=constructor → THROWS: TypeError: re.test is not a function\npattern=__proto__   → THROWS: TypeError: re.test is not a function\npattern=toString    → THROWS: TypeError: re.test is not a function\nconfig validation admits it: [\"constructor\"]\n```\n\n`resolveFailureAnalysisConfig` explicitly **admits** such entries (a non-empty string that compiles as a regex — `'constructor'` compiles fine), so this is a valid-config crash, and the pre-memo code handled it correctly (compiled per call). It also contradicts the fail-safe this function documents (\"the loop is never wedged by a bad pattern\"). A plausible real trigger: matching `…reading 'toString'`-style crash messages with the bare word.\n\nFix: make the cache own-key only —\n\n```js\nvar CACHE = {};\nfunction cachedRe(source) {\n    if (typeof source !== 'string' || !source) return null;\n    if (!Object.prototype.hasOwnProperty.call(CACHE, source)) {\n        var re = null;\n        try { re = new RegExp(source, 'i'); } catch (eRegex) { re = null; }\n        CACHE[source] = re;\n    }\n    return CACHE[source];\n}\n```\n\n(or prefix the keys: `CACHE['p:' + source]`). Please extend the memo test suite with a `'constructor'`/`'toString'` source pinning no-throw + match semantics."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:8def671d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — CRAP ratchet failure (`crap` check failed on both runs)**\n\nCommit `406e2dc9` fails the `crap` check twice ([run 42212297477](https://github.com/IstiN/dmtools-agents/actions/runs/42212297477/job/127873687256), [run 42212108835](https://github.com/IstiN/dmtools-agents/actions/runs/42212108835/job/127873050000)):\n\n```text\nCRAP ratchet failed: CRAP may only decrease.\nNEW > 8  js/common/failureAnalyzer.js::verdictPayloadOf: 9\n0 regression(s), 1 new over threshold, 0 improvement(s), 0 removed\n```\n\nThe two `backoffTicks`/`ticksSoFar` ternaries added here push `verdictPayloadOf` from CC 7 to CC 9 (CRAP 9 at full branch coverage) — over `CRAP_THRESHOLD=8`, and the ratchet only accepts decreases. The PR's own acceptance line (\"every new function ≤ CRAP threshold 8 at full branch coverage\") is contradicted by this function. Unit tests are green (8978 passed in both runs) — only this complexity gate is red, so merge stays blocked until it passes.\n\nFix: extract the optional/nullable fields into one small shaper so both functions sit at CC ≤ 8 while build and parse keep sharing a single defaults ladder:\n\n```js\nfunction verdictOptionalFieldsOf(record) {\n    return {\n        confidence: typeof record.confidence === 'number' ? record.confidence : null,\n        analyzedAtCount: isPositiveInt(record.analyzedAtCount) ? record.analyzedAtCount : null,\n        // gh-1380: the pre-classifier's retry-backoff window — absent\n        // (null) on every AI-analyzer verdict and on backoff-off stamps.\n        backoffTicks: isPositiveInt(record.backoffTicks) ? record.backoffTicks : null,\n        ticksSoFar: isPositiveInt(record.ticksSoFar) ? record.ticksSoFar : null\n    };\n}\n```\n\nThen keep `verdictPayloadOf` on the plain fields (`signature`, `classification`, `suspected_root_cause`, `evidence`, `suggested_fix`, `at`, `source`) and copy the four optional fields from the helper explicitly (GraalJS-safe: no spread). That drops `verdictPayloadOf` to CC 6 and the helper to CC 5, and the CRAP ratchet goes green again."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:98a2ee66",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING (re-raise, registry F6 — head unchanged since round 2): CI red on `eacc8fcd` — the duplication ratchet still fails on `js/common/failureAnalyzer.js`**\n\nNo new commit has landed since round 2 (HEAD is still `eacc8fcd`), and every fact re-verified fresh this run: the CI artifacts still show **2 failed `crap` checks** on `eacc8fcd` — the CRAP ratchet is green (`0 regression(s), 0 new over threshold`) and unit tests pass, but the job exits 2 on the **fresh-duplication gate** in both runs:\n\n```text\nfresh duplication: js/common/failureAnalyzer.js 1.67% (not pinned in duplication-baseline.json)\nduplication ratchet: FAIL — 1 fresh, 0 regressed (1 pinned debt files unchanged)\n##[error]Process completed with exit code 2.\n```\n\nRe-reproduced locally with the CI-pinned tool (`IstiN/crap4js@83ee6201`, `duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci`):\n\n```text\njs/common/failureAnalyzer.js:345: clone: 50 tokens / 6 lines, 2 occurrences:\n  js/common/failureAnalyzer.js:345-350;  js/common/failureAnalyzer.js:535-540\n```\n\nUnchanged diagnosis: `latestPreClassifierVerdict` (this line) and `latestVerdictForSignature` are token-identical apart from the `&& v.source === TRANSIENT_SOURCE` clause; `origin/main` measured 0.00% for this file, so the PR introduced its first clone and the 1% gate fails on any unpinned fresh duplication.\n\nFix (unchanged): extract one shared scan and keep both wrappers —\n\n```js\nfunction latestVerdictOf(verdicts, signature, source) {\n    var list = verdicts || [];\n    var latest = null;\n    for (var i = 0; i < list.length; i++) {\n        var v = list[i];\n        if (v && v.signature === signature && (!source || v.source === source)) latest = v;\n    }\n    return latest;\n}\n\nfunction latestPreClassifierVerdict(verdicts, signature) {\n    return latestVerdictOf(verdicts, signature, TRANSIENT_SOURCE);\n}\n```\n\n`latestVerdictForSignature` becomes `latestVerdictOf(verdicts, signature, null)`; semantics (newest match wins, list order) and the existing tests are preserved. Single loop ⇒ no 50-token clone ⇒ gate green."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:5dbeb9ef",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT (re-raise, registry F7 — head unchanged since round 2): the regex memo still throws `TypeError` for a valid config pattern named like an `Object.prototype` key**\n\nRe-verified fresh this run against the current tree — `node -e \"require('./js/common/failureAnalyzer.js')\"` with pattern `'constructor'` still throws:\n\n```text\nSTILL THROWS: re.test is not a function\n```\n\nThe defect is unchanged: `compiledTransientPattern` caches by `TRANSIENT_PATTERN_CACHE[source] === undefined`, so a plain `{}` inherits `Object.prototype` and a pattern source equal to an inherited own-key (`'constructor'`, `'toString'`, `'valueOf'`, `'hasOwnProperty'`, `'__proto__'`, …) is treated as already cached — the inherited value (`Object` function / `Object.prototype`) is returned instead of a RegExp, and `transientPatternMatches`'s `re.test(text)` throws. The `TypeError` propagates uncaught through `matchesTransientPattern` → `transientPreClassifierVerdict` → `gateBlindRedispatch` → `decideActions`, so the whole SM tick dies.\n\n`resolveFailureAnalysisConfig` admits such entries (a non-empty string that compiles as a regex — `'constructor'` compiles fine), so this is a valid-config crash; the pre-memo code compiled per call and handled it correctly, and the fail-safe this function documents (\"the loop is never wedged by a bad pattern\") is violated.\n\nFix (unchanged): make the cache own-key only —\n\n```js\nif (!Object.prototype.hasOwnProperty.call(TRANSIENT_PATTERN_CACHE, source)) { … }\n```\n\n(or prefix the keys: `TRANSIENT_PATTERN_CACHE['p:' + source]`), and extend the memo test suite with a `'constructor'`/`'toString'` source pinning no-throw + match semantics."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:6d49e31b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT (re-raise, registry F8 — head unchanged since round 2): doubled blank line after `stampBackoffOf`**\n\nStill present at `machineSmAgent.js:371-372` — two consecutive blank lines after the function's closing brace; the file separates top-level functions with exactly one blank line everywhere else. Collapse to one. Style only — nothing behavioral or documented."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:f37190a3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Validation CI went red on the head — merge aborted, rework re-queued. (linked issue #1380 re-armed) (approval latch kept — no re-review after fixes)\nFailed run: https://github.com/IstiN/dmtools-agents/actions/runs/42212297477\n🔴 red head 406e2dc9317cc88c2e65e0680a452a07f618224a — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:f9812286",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: CI is red — the `crap` ratchet fails on `js/common/failureAnalyzer.js::verdictPayloadOf` (CRAP 9 > threshold 8, both check runs), which blocks merge. One important issue: with `backoff > 1` and no `machineAuthor` configured, the SM's own stamps parse as untrusted, so the threshold crossing re-fires every tick with the retry dispatch absorbed — the loop wedges with zero retries and unbounded marker comments (gh-136's same misconfiguration stayed wasteful-but-live).\n\n**Key Issues**:\n1. 🚨 BLOCKING — crap ratchet: `verdictPayloadOf` CC 9 / CRAP 9 (`comment1.md`) — extract the optional-field shaper\n2. ⚠️ IMPORTANT — untrusted-stamp backoff wedge at `machineSmAgent.js:396` (`comment2.md`) — fail-open when `machineLogins` is empty, add a no-`machineAuthor` replay test\n3. 💡 ×2 — fractional `backoff` now hard-errors at SM start (migration note); absorbed-tick marker comments unbounded for large `backoff`\n4. 🪶 ×1 — regex recompiled per match call\n\n**Next Steps**:\n1. Fix `verdictPayloadOf` complexity to green the `crap` check\n2. Guard the `backoff > 1` dispatch absorption against the untrusted-stamp case\n3. Add the two doc notes; re-run `dmtools run js/unit-tests/run_failureAnalyzer.json` and `run_machineSmAgent.json`\n\nOtherwise solid: AC1–AC5 each pinned by tests (64 + 103 in the two suites; full run 8978 passed), marker protocol reuse is backward-compatible (old verdicts parse with null window fields), GraalJS-clean, no scope creep beyond the four files."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:1ebd5e9e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 406e2dc9317cc88c2e65e0680a452a07f618224a — red 2/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:9c3cd50d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Validation CI went red on the head — merge aborted, rework re-queued. (linked issue #1380 re-armed) (approval latch kept — no re-review after fixes)\nFailed run: https://github.com/IstiN/dmtools-agents/actions/runs/42217096659\n🔴 red head eacc8fcd7d81156b8fafac7f90761a51409d8040 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:75ba0ea8",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES (rework round 2)\n\n**Summary**: All five round-1 findings are fixed and verified (F1 🚨 CRAP ratchet now `0 new over threshold`, F2 ⚠️ wedge guarded by `stampBackoffOf`, F3/F4 💡 doc notes landed, F5 🪶 memo landed; suites green 66 + 105, reproduced locally). But head `eacc8fcd` is red again: the **duplication ratchet** fails on a fresh clone this PR introduced (`failureAnalyzer.js:345-350` ≡ `535-540`, `latestPreClassifierVerdict` vs `latestVerdictForSignature`, 1.67% > 1%) — and the rework's regex memo crashes the SM tick (`TypeError`) on a valid pattern named like an `Object.prototype` key.\n\n**Key Issues**:\n1. 🚨 BLOCKING — CI red: fresh duplication in `failureAnalyzer.js` (both `crap` runs) — extract one shared latest-verdict scan (`comment1.md`)\n2. ⚠️ IMPORTANT — `TRANSIENT_PATTERN_CACHE[source]` inherits `Object.prototype` keys → `re.test` TypeError, tick dies (verified; `comment2.md`)\n3. 🪶 ×1 — doubled blank line after `stampBackoffOf` (`comment3.md`)\n\n**Next Steps**:\n1. De-duplicate the two `latest…` verdict scans to green the dup gate\n2. Own-key guard (or key prefix) in `compiledTransientPattern` + a `'constructor'` no-throw test\n3. Collapse the blank line; re-run the two suites\n\nRegistry: F1–F5 all dispositioned `fixed` with hunks. No downgrade protocol invoked this round."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:6de566f1",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES (round 3 — head unchanged)\n\n**Summary**: No new commit has landed since round 2 (HEAD still `eacc8fcd`), and all three round-2 findings re-verify as still present: F6 🚨 the duplication ratchet still reds both `crap` runs (`failureAnalyzer.js:345-350` ≡ `535-540`, 1.67% > 1%, re-reproduced with the CI-pinned tool), F7 ⚠️ the memo `TypeError` still kills the SM tick for a valid `'constructor'`-style pattern (re-reproduced), F8 🪶 the doubled blank line remains.\n\n**Key Issues**:\n1. 🚨 BLOCKING — dup gate red on `eacc8fcd`: extract one shared `latestVerdictOf` scan (`comment1.md`)\n2. ⚠️ IMPORTANT — own-key guard (or key prefix) in `compiledTransientPattern` + a `'constructor'` no-throw test (`comment2.md`)\n3. 🪶 — collapse the blank line after `stampBackoffOf` (`comment3.md`)\n\n**Next Steps**:\n1. Push the two fixes (dup scan + memo guard); validation re-runs on the new head\n2. Suites stay green (66 + 105 re-confirmed this run)\n\nRegistry: F6/F7/F8 dispositioned `re-introduced` (still present, no fix attempt landed). Round-1 F1–F5 remain fixed on this head (CRAP ratchet `0 new over threshold`, wedge guard in place, doc notes landed, memo landed)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:76f88d82",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head eacc8fcd7d81156b8fafac7f90761a51409d8040 — red 2/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    }
+  ]
+}
