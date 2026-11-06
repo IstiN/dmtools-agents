@@ -125,6 +125,18 @@ function blockedLabelOf(block) {
     return block.blockedLabel.trim();
 }
 
+// gh-1380 rework (review, migration note): gh-1366 validated `backoff` as
+// "a number >= 1" while the knob was still reserved — a fractional
+// pre-config (e.g. 2.5) parsed fine back then and is a HARD SM-start
+// error since gh-1380 (the knob now counts SM ticks; a fractional tick
+// count is meaningless). Check your deployment's failureAnalysis block
+// when upgrading.
+// gh-1380 rework (review, comment-growth note): the backoff window is
+// stateless — its only persistence is the SM's own verdict-marker
+// comments, so EVERY absorbed tick re-posts one full marker comment
+// (backoff N ⇒ N-1 extra comments per episode). Keep the multiplier at
+// SM-tick scale (small); a wall-clock-scale value floods the issue
+// timeline without buying anything a small multiplier would not.
 function backoffOf(block) {
     if (block.backoff === undefined || block.backoff === null) return DEFAULT_BACKOFF;
     if (typeof block.backoff !== 'number' || !isFinite(block.backoff) || block.backoff < 1 ||
@@ -246,10 +258,27 @@ var PRECLASSIFIER_ROOT_CAUSE = 'known-transient failure signature (matched the d
  * analyzer, the loop is never wedged by a bad pattern.
  */
 function transientPatternMatches(source, text) {
-    if (typeof source !== 'string' || !source) return false;
-    var re = null;
-    try { re = new RegExp(source, 'i'); } catch (eRegex) { return false; }
-    return re.test(text);
+    var re = compiledTransientPattern(source);
+    return !!re && re.test(text);
+}
+
+// gh-1380 rework (review NIT): the source → RegExp memo. Config entries
+// are proven compilable at SM start, and `transientPatternMatches` runs
+// per pattern per evaluation — recompiling the same source each call is
+// waste the memo removes. Bounded by the configured sources (config
+// data, small); a compile failure memoizes null — the fail-safe no-match
+// that routes to the AI analyzer (only a hand-built bypass config can
+// carry an uncompilable entry, and re-deriving null stays harmless).
+var TRANSIENT_PATTERN_CACHE = {};
+
+function compiledTransientPattern(source) {
+    if (typeof source !== 'string' || !source) return null;
+    if (TRANSIENT_PATTERN_CACHE[source] === undefined) {
+        var re = null;
+        try { re = new RegExp(source, 'i'); } catch (eRegex) { re = null; }
+        TRANSIENT_PATTERN_CACHE[source] = re;
+    }
+    return TRANSIENT_PATTERN_CACHE[source];
 }
 
 /**
@@ -419,22 +448,38 @@ function evidenceLinesOf(evidence) {
 }
 
 /**
- * The shared payload shaper — build and parse mirror ONE defaults ladder
- * instead of two copies that can drift (the CRAP-lap extraction).
+ * The optional/nullable verdict fields — ONE shaper shared by build and
+ * parse (the CRAP-lap extraction: the four per-field ternaries live here
+ * so both consumers stay under the complexity ratchet while mirroring a
+ * single defaults ladder). GraalJS-safe copy — the callers spread nothing.
  */
-function verdictPayloadOf(record) {
+function verdictOptionalFieldsOf(record) {
     return {
-        signature: record.signature,
-        classification: record.classification,
         confidence: typeof record.confidence === 'number' ? record.confidence : null,
-        suspected_root_cause: typeof record.suspected_root_cause === 'string' ? record.suspected_root_cause : '',
-        evidence: evidenceLinesOf(record.evidence),
-        suggested_fix: typeof record.suggested_fix === 'string' ? record.suggested_fix : '',
         analyzedAtCount: isPositiveInt(record.analyzedAtCount) ? record.analyzedAtCount : null,
         // gh-1380: the pre-classifier's retry-backoff window — absent
         // (null) on every AI-analyzer verdict and on backoff-off stamps.
         backoffTicks: isPositiveInt(record.backoffTicks) ? record.backoffTicks : null,
-        ticksSoFar: isPositiveInt(record.ticksSoFar) ? record.ticksSoFar : null,
+        ticksSoFar: isPositiveInt(record.ticksSoFar) ? record.ticksSoFar : null
+    };
+}
+
+/**
+ * The shared payload shaper — build and parse mirror ONE defaults ladder
+ * instead of two copies that can drift (the CRAP-lap extraction).
+ */
+function verdictPayloadOf(record) {
+    var optional = verdictOptionalFieldsOf(record);
+    return {
+        signature: record.signature,
+        classification: record.classification,
+        confidence: optional.confidence,
+        suspected_root_cause: typeof record.suspected_root_cause === 'string' ? record.suspected_root_cause : '',
+        evidence: evidenceLinesOf(record.evidence),
+        suggested_fix: typeof record.suggested_fix === 'string' ? record.suggested_fix : '',
+        analyzedAtCount: optional.analyzedAtCount,
+        backoffTicks: optional.backoffTicks,
+        ticksSoFar: optional.ticksSoFar,
         at: record.at || null,
         source: record.source || VERDICT_SOURCE
     };

@@ -2103,10 +2103,11 @@ suite('machineSm transient pre-classifier — scripted replay (gh-1380)', functi
         assert.equal(stamped[1].leg, 'dev', 'the retry leg is untouched');
 
         var backedOff = agent.gateBlindRedispatch(dispatchActions, stateWithSig(rateSig, 4),
-            { failureAnalysis: { enabled: true, afterFailures: 4, backoff: 3,
+            { machineLogins: ['ai-teammate'],
+              failureAnalysis: { enabled: true, afterFailures: 4, backoff: 3,
                 transientPatterns: RATE_PATTERNS, analyzerEnabled: true } });
         assert.deepEqual(backedOff.map(function (a) { return a.type; }), ['transientVerdict'],
-            'backoff > 1 absorbs the classification tick — no dispatch at all');
+            'backoff > 1 absorbs the classification tick — no dispatch at all (trusted stamps)');
         assert.equal(backedOff[0].verdict.ticksSoFar, 1, 'the classification tick is backoff tick 1');
 
         var diverted = agent.gateBlindRedispatch(dispatchActions, stateWithSig(gitSig, 4), cfg);
@@ -2183,5 +2184,69 @@ suite('machineSm transient pre-classifier — scripted replay (gh-1380)', functi
         var streak = FA.failureStreak(bodies);
         assert.equal(streak.count, 4, 'the streak is exactly the failure notices — the stamps are invisible to it');
         assert.equal(streak.signature, LFR.failureSignature(STORM_SIG));
+    });
+
+    test('no machineAuthor (untrusted stamps) + backoff > 1 NEVER wedges the loop — the crossing stamps AND the retry dispatches', function () {
+        // The reviewer trace: with an empty machine-identity allowlist the
+        // gh-807 fail-closed parse trusts NOTHING, so an absorbed dispatch
+        // could never resume — the crossing would re-fire every tick with
+        // zero retries ever dispatching. The guard: absorb ONLY when the
+        // stamp can be trusted back; otherwise the backoff = 1 shape rides
+        // (wasteful-but-live — classification lands, retries continue).
+        var jobParams = faJobParams({ afterFailures: 4, transientPatterns: RATE_PATTERNS, backoff: 3 });
+        delete jobParams.machineAuthor; // machineLogins resolves to []
+
+        var holder = { provider: scriptedProvider() };
+        holder.provider.addIssue(209, ['agent:dev']);
+        stormFailures(209, holder.provider, 4);
+
+        faTick(holder, jobParams);
+        assert.deepEqual(legsDispatched(holder.provider, 209), ['dev'],
+            'the dispatch is NOT absorbed — the retry leg resumes (never wedge)');
+        assert.equal(preClassifierStamps(holder.provider, 209).length, 1,
+            'the classification stamp still lands (the audit trail stays honest)');
+        var stamp = parseStamp(preClassifierStamps(holder.provider, 209)[0][1]);
+        assert.equal(stamp.classification, 'transient');
+        assert.equal(stamp.analyzedAtCount, 4, 'the consumed prefix is still stamped');
+
+        // The retry leg fails again (the 5th identical failure): the loop
+        // is blind at the deeper streak — no re-stamp storm, no wedge.
+        stormFailures(209, holder.provider, 1);
+        faTick(holder, jobParams);
+        assert.deepEqual(legsDispatched(holder.provider, 209), ['dev', 'dev'],
+            'past the crossing the loop stays blind — retries always continue');
+        assert.equal(preClassifierStamps(holder.provider, 209).length, 1,
+            'no stamp flood while the streak sits past the consumed depth');
+    });
+
+    test('gateBlindRedispatch (surgical): without machine logins the crossing degrades to the backoff = 1 shape (stamp rides BEFORE the dispatch)', function () {
+        var agent = freshAgent();
+        var rateSig = LFR.failureSignature(STORM_SIG);
+        function stateWithSig(count) {
+            return {
+                issue: { labels: [] },
+                failureAnalysis: {
+                    available: true, streakSignature: rateSig, streakCount: count,
+                    verdicts: [], parkMarkers: []
+                }
+            };
+        }
+        var actions = [{ type: 'label', label: 'agent:dev', reason: 'r' }, { type: 'dispatch', leg: 'dev', reason: 'r' }];
+        var cfg = { machineLogins: [], failureAnalysis: { enabled: true, afterFailures: 4, backoff: 3,
+            transientPatterns: RATE_PATTERNS, analyzerEnabled: true } };
+
+        var degraded = agent.gateBlindRedispatch(actions, stateWithSig(4), cfg);
+        assert.deepEqual(degraded.map(function (a) { return a.type; }), ['label', 'transientVerdict', 'dispatch'],
+            'the stamp is INSERTED before the riding dispatch — nothing absorbed');
+        assert.equal(degraded[2].leg, 'dev', 'the retry dispatch rides through untouched');
+        assert.equal(degraded[1].verdict.backoffTicks, undefined,
+            'the untrusted stamp carries NO backoff window (the backoff = 1 shape)');
+
+        var trusted = agent.gateBlindRedispatch(actions, stateWithSig(4),
+            { machineLogins: ['ai-teammate'], failureAnalysis: cfg.failureAnalysis });
+        assert.deepEqual(trusted.map(function (a) { return a.type; }), ['label', 'transientVerdict'],
+            'same action count — the stamp REPLACES the dispatch');
+        assert.equal(trusted[1].verdict.backoffTicks, 3, 'the trusted stamp opens the window');
+        assert.ok(trusted.indexOf(actions[1]) === -1, 'the dispatch is absorbed into the window');
     });
 });

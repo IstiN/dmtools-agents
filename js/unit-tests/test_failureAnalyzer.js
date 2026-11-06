@@ -702,3 +702,39 @@ suite('transient backoff window math (gh-1380)', function () {
         assert.equal(fa.latestPreClassifierVerdict(null, SIG), null);
     });
 });
+
+suite('transientPatternMatches regex compilation (gh-1380 review NIT)', function () {
+    var SIG = 'wf | Setup | 429 rate limit';
+
+    test('a pattern source compiles ONCE — repeated match calls reuse the compiled memo', function () {
+        var compiles = 0;
+        var RealRegExp = RegExp;
+        function CountingRegExp(pattern, flags) {
+            compiles++;
+            return new RealRegExp(pattern, flags);
+        }
+        var fa = loadModule('js/common/failureAnalyzer.js', makeRequire({
+            './legFailureReport.js': lfrShared(),
+            './reviewVerdicts.js': rvShared()
+        }), { RegExp: CountingRegExp });
+
+        var patterns = ['quota', '\\b429\\b'];
+        assert.ok(fa.matchesTransientPattern(SIG, patterns), 'the first evaluation matches (on the second pattern)');
+        assert.equal(compiles, 2, 'exactly one compile per distinct pattern source');
+
+        assert.ok(fa.matchesTransientPattern(SIG, patterns), 'the second evaluation matches identically');
+        assert.equal(compiles, 2, 'NO recompile on the second evaluation — the memo serves it');
+
+        assert.equal(fa.matchesTransientPattern(SIG, ['timeout']), false, 'a non-matching source still evaluates');
+        assert.equal(compiles, 3, 'a NEW source compiles exactly once');
+    });
+
+    test('the memo keeps the fail-safe: a bad source never throws and never wedges the loop', function () {
+        var fa = faShared();
+        assert.equal(fa.matchesTransientPattern(SIG, ['[unclosed']), false, 'uncompilable → no-match');
+        assert.equal(fa.matchesTransientPattern(SIG, ['[unclosed']), false, 'and stays no-match on repeat');
+        assert.ok(fa.matchesTransientPattern(SIG, ['[unclosed', '\\b429\\b']),
+            'the valid pattern still evaluates after the broken one (memo or not)');
+        assert.equal(fa.matchesTransientPattern(SIG, [42, null, '']), false, 'non-string entries stay no-match');
+    });
+});

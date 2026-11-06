@@ -328,9 +328,9 @@ function firstDispatchIndex(actions) {
  * gh-1380: the crossing's pre-classifier stamp action for a matched
  * signature, or null (unrecognized → the analyzer leg handles it).
  */
-function transientCrossingAction(faState, faCfg) {
+function transientCrossingAction(faState, faCfg, backoff) {
     var stamp = failureAnalyzerModule.transientPreClassifierVerdict(
-        faState.streakSignature, faCfg.transientPatterns, faState.streakCount, faCfg.backoff);
+        faState.streakSignature, faCfg.transientPatterns, faState.streakCount, backoff);
     if (!stamp) return null;
     return {
         type: 'transientVerdict',
@@ -339,6 +339,23 @@ function transientCrossingAction(faState, faCfg) {
             (faState.streakSignature ? ' (signature: ' + faState.streakSignature + ')' : '')
     };
 }
+
+/**
+ * gh-1380 rework (review fail-safe): the crossing stamp is trusted back
+ * ONLY through the machine-identity allowlist (the gh-807 fail-closed
+ * parse — without `machineAuthor` configured, machineLogins is empty and
+ * NOTHING parses as trusted). An absorbed dispatch could then never
+ * resume: the crossing would re-fire every tick and the loop would wedge
+ * with zero retries. So the window (and the dispatch absorption) is
+ * armed only when the stamp can be trusted back; otherwise the crossing
+ * degrades to the backoff = 1 shape — the stamp still lands before the
+ * riding dispatch (classification + audit trail stay honest) and the
+ * retries ALWAYS continue (the gh-1366 wasteful-but-live degrade).
+ */
+function stampBackoffOf(cfg, backoff) {
+    return (backoff > 1 && machineLoginsOf(cfg).length > 0) ? backoff : 1;
+}
+
 
 /**
  * The gh-1366 analyzer divert action — the crossing's dispatch becomes
@@ -391,9 +408,10 @@ function gateBlindRedispatch(actions, state, cfg) {
     }
     var firstDispatch = firstDispatchIndex(actions);
     if (firstDispatch === -1) return actions;
-    var stampAction = transientCrossingAction(faState, faCfg);
+    var backoff = stampBackoffOf(cfg, faCfg.backoff);
+    var stampAction = transientCrossingAction(faState, faCfg, backoff);
     if (stampAction) {
-        return spliceDispatchAction(actions, firstDispatch, stampAction, faCfg.backoff > 1);
+        return spliceDispatchAction(actions, firstDispatch, stampAction, backoff > 1);
     }
     if (faCfg.analyzerEnabled === false) return actions;
     return spliceDispatchAction(actions, firstDispatch,
