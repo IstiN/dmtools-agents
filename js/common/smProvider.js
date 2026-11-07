@@ -26,9 +26,14 @@
  *       checkConclusion: 'red' | 'green' | 'pending' | 'none'.
  *       gh-140: when the PR body reports mergeStateStatus UNSTABLE/FAILED
  *       while the check-runs fold reads green/none, checkConclusion reads
- *       'red' (the bounded red-head flow reacts) and the status carries
- *       trackedVerdict (the pre-reconcile fold) + untrackedFailingChecks
- *       (the registered failing names) + mergeStateStatus (the raw report).
+ *       'red' (the bounded red-head flow reacts) and the status registers
+ *       the FACT (gh-140 rework thread 1): trackedVerdict (the pre-
+ *       reconcile fold) + mergeStateStatus (the raw report) +
+ *       untrackedFailingChecks (STRUCTURALLY [] on this path — the fold
+ *       watches the same rollup a census would walk) + reconcileReason
+ *       (the audit line). The failing check NAMES + failed-run links ride
+ *       the factoryState card audit (checks.untrackedFailing — the
+ *       workflow-runs vantage), not this status.
  *       author: creator login ('' when the API does not expose it) — the
  *       prMachineAuthor gate keys on it.
  *   activeMachineRuns() → [issueNumber, …]
@@ -437,12 +442,13 @@ function _ghPrLabelNames(pr) {
     return (pr.labels || []).map(function (l) { return (l && l.name) || l; });
 }
 
-function _ghBuildPrStatus(pr, rollup, tally, ms, rec) {
+function _ghBuildPrStatus(pr, tracked, ms, rec) {
     // gh-140: the tracked fold (what the check-tracker saw BEFORE the
     // mergeStateStatus reconcile) rides every status — the re-review armers
     // gate on trackedVerdict so an untracked red never freezes them, while
     // the red-head lanes keep reading the effective checkConclusion.
-    var tracked = _ghCheckConclusionLabel(rollup, tally);
+    // (gh-140 rework thread 6: the caller computes the label ONCE and
+    // threads it here — same pure inputs, now structurally identical.)
     var st = {
         state: _ghPrState(pr),
         checkConclusion: rec ? rec.verdict : tracked,
@@ -463,14 +469,18 @@ function _ghBuildPrStatus(pr, rollup, tally, ms, rec) {
         labels: _ghPrLabelNames(pr),
         author: _ghPrAuthor(pr)
     };
-    // gh-140 AC3 — the auditable registration: WHICH checks failed outside
-    // the tracked set + the raw reported value that triggered the
-    // downgrade. Absent entirely when no reconcile applied — trackedVerdict
-    // above is the only always-new field; the reconcile keys never appear
-    // on fully-green or tracked-red payloads (AC2).
+    // gh-140 AC3 — the auditable registration: the FACT that the tracked
+    // set does not cover what GitHub counts. The failing NAMES + failed-run
+    // links ride the factoryState card audit (checks.untrackedFailing — the
+    // workflow-runs vantage); on this status path untrackedFailingChecks is
+    // structurally [] and reconcileReason is the audit line (raw state +
+    // vantage limitation). Absent entirely when no reconcile applied —
+    // trackedVerdict above is the only always-new field; the reconcile keys
+    // never appear on fully-green or tracked-red payloads (AC2).
     if (rec) {
         st.untrackedFailingChecks = rec.untrackedFailingChecks;
         st.mergeStateStatus = rec.rawMergeState;
+        st.reconcileReason = rec.reason;
     }
     return st;
 }

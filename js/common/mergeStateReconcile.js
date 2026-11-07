@@ -11,13 +11,34 @@
  * failure ('green'/'none') but the PR body REPORTS an unstable merge state,
  * the tracked set does not cover what GitHub counts — the verdict downgrades
  * to 'red' (the existing bounded red-head rework flow reacts within one
- * tick) and the actually-failing check names are registered on the status
- * (untrackedFailingChecks — auditable, feeds the state JSON).
+ * tick) and the FACT is registered on the status (gh-140 rework, review
+ * thread 1): the raw reported mergeStateStatus, the untrackedFailingChecks
+ * census and the reconcileReason audit line. On the prStatus wiring the
+ * census is STRUCTURALLY empty — the fold watches the same check-runs
+ * rollup a census would walk, so a censusable failure reddens the fold and
+ * pre-empts the reconcile (the wiring deliberately passes no rollup); the
+ * census capability stays exported for callers holding a rollup from a
+ * different vantage. The failing check NAMES and failed-run links ride the
+ * factoryState card audit (checks.untrackedFailing — the workflow-runs
+ * vantage CAN see what the check-runs rollup cannot).
  *
  *   AC1  green tracked verdict + failing untracked check → red within one
  *        tick (bounded by the existing red-head caps — semantics unchanged)
  *   AC2  fully-green PRs (CLEAN / reported-but-not-unstable) never reconcile
- *   AC3  the failing names ride the status / state JSON (auditable)
+ *   AC3  the status / state JSON registers the FACT (raw state + census +
+ *        reason); the failing names + run links ride the factoryState cards
+ *
+ * Verdict-reader split (gh-140 rework, review thread 2): the RE-REVIEW
+ * armers (review-stale-verdict, review-threads-resolved,
+ * review-external-once) gate on the tracked fold (trackedVerdict) — an
+ * untracked red must freeze the rework flow, not the re-review economy.
+ * Every other effective-verdict reader (fail-validation,
+ * rework-on-red-gate-unlatched, review-machine-unlinked, review-after-dev,
+ * develop-done prChecks) deliberately stays on the POST-reconcile verdict:
+ * the red-head lanes must react to the reconciled red, and
+ * review-machine-unlinked's structural dedup is expressed through the fold
+ * — switching it to the tracked verdict would stack a duplicate review
+ * beside the rework.
  *
  * Pure module — no tool globals, no requires (smProvider requires THIS;
  * the reverse would close a cycle). GraalJS constraints: var, plain
@@ -31,7 +52,12 @@
 // checks; the machine merge lanes treat it as blocked) and FAILED (older
 // GraphQL spelling). BLOCKED is deliberately NOT here: with a green fold a
 // BLOCKED report is the conversation-resolution gate (gh-828), not a check
-// failure — the fold saw no red check to register.
+// failure — the fold saw no red check to register. Residual (named, not
+// closed — gh-140 rework review thread 3): BLOCKED is also GitHub's
+// spelling for a failing or pending REQUIRED check, so a required
+// untracked check under a green fold would strand at the merge refusal
+// with no reconcile and no red-head lap; the remedy is config-first (track
+// the repo's required checks in the SM check-tracker), not this reconcile.
 var UNSTABLE_MERGE_STATES = ['UNSTABLE', 'FAILED'];
 
 // Tracked-verdict labels that mean the fold saw NO failure — only these
@@ -81,8 +107,13 @@ function isBookeepingCheckName(name, prefixes) {
 
 // LATEST check-run per context (#695 branch-protection semantics): newest
 // wins by completed_at, then started_at, then id, then position. Same key
-// order as smProvider.latestCheckRunConclusions — an older FAILURE under a
-// newer SUCCESS is NOT a failure. The comparison lives in small pure helpers
+// order as smAgent's latestCheckRunConclusions (js/smAgent.js — NOT
+// smProvider; the gh-140 rework review's pointer fix: no such symbol lives
+// on smProvider) — an older FAILURE under a newer SUCCESS is NOT a failure.
+// The two walks are deliberate twins until the named follow-up lands:
+// routing smAgent's readers onto THIS walk (the superset — camelCase
+// stamps + databaseId) kills the drift surface; until then this comment is
+// the drift guard. The comparison lives in small pure helpers
 // (conclusionOf/rawTimestampOf/sortTimeOf/idOf/winsLatest) — each stays
 // under the CRAP complexity gate with full branch coverage.
 
@@ -162,17 +193,26 @@ function failingCheckNames(rollup, bookkeepingPrefixes) {
  * downgrade record. Applies ONLY when BOTH hold:
  *   (a) the fold saw no failure ('green' or 'none' — see isReconcilableVerdict),
  *   (b) the PR body REPORTS an unstable merge state (isUnstableMergeState).
- * A no-rollup ('none') + UNSTABLE head reconciles with an EMPTY census: the
- * failing context is invisible to the check-runs API entirely (commit-status
- * spelling) — the mergeStateStatus is the registration (reason names it).
+ * A no-rollup ('none') or rollup-less input reconciles with an EMPTY
+ * census: the failing context is invisible to the check-runs API entirely
+ * (commit-status spelling) — the mergeStateStatus + reason ARE the
+ * registration (the reason names the vantage; the names ride the
+ * factoryState card audit).
  *
- * input : { checkConclusion, rawMergeState, rollup, bookkeepingPrefixes }
+ * input : { checkConclusion, rawMergeState, rollup?, bookkeepingPrefixes? }
+ *   rollup is OPTIONAL — the prStatus wiring deliberately passes NONE: the
+ *   tracked fold watches the same rollup a census would walk, so the census
+ *   there is provably empty (a censusable failure reddens the fold and
+ *   pre-empts the reconcile — same-vantage impossibility). Callers holding
+ *   a DIFFERENT-vantage rollup may pass it and get real names.
  * return: null | {
  *   verdict: 'red',                  — the effective verdict after reconcile
  *   trackedVerdict: 'green'|'none',  — what the tracked fold said (kept)
- *   untrackedFailingChecks: [name],  — the auditable registration (may be [])
+ *   untrackedFailingChecks: [name],  — census of the PASSED rollup ([] when
+ *                                      none was passed — structural)
  *   rawMergeState: 'UNSTABLE',       — the reported value that triggered it
- *   reason: '...'                    — the audit line for logs/state
+ *   reason: '...'                    — the audit line (rides the status as
+ *                                      reconcileReason — gh-140 rework)
  * }
  */
 function reconcileDecision(input) {
@@ -189,7 +229,8 @@ function reconcileDecision(input) {
         rawMergeState: raw,
         reason: 'mergeStateStatus ' + raw +
             ' with a ' + fold + ' tracked verdict — failing checks outside the ' +
-            'tracked set: ' + (failing.length ? failing.join(', ') : '(not in the check-runs rollup)')
+            'tracked set: ' + (failing.length ? failing.join(', ') :
+            '(not visible in the check-runs rollup — the factoryState card audit names the untracked failures)')
     };
 }
 

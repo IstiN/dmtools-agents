@@ -83,6 +83,16 @@ suite('mergeStateReconcile — normalizeMergeStateStatus', function () {
         assert.equal(mrReal().normalizeMergeStateStatus(''), null);
         assert.equal(mrReal().normalizeMergeStateStatus('   '), null);
     });
+
+    // gh-140 rework thread 5 (smProvider._ghRawMergeStateStatus): the shared
+    // normalizer is the ONE spelling chain (trim → uppercase → empty→null,
+    // String-coerced, null/undefined-guarded). smProvider delegates to THIS
+    // export instead of hand-rolling a twin — this pin is the contract the
+    // delegation must preserve (a drift here would change both call sites).
+    test('non-string garbage normalizes via String() — the shared contract every caller delegates to', function () {
+        assert.equal(mrReal().normalizeMergeStateStatus(42), '42');
+        assert.equal(mrReal().normalizeMergeStateStatus(' blocked '), 'BLOCKED');
+    });
 });
 
 suite('mergeStateReconcile — isUnstableMergeState', function () {
@@ -287,7 +297,7 @@ suite('mergeStateReconcile — latestConclusions census mechanics', function () 
 });
 
 suite('mergeStateReconcile — reconcileDecision (the AC matrix)', function () {
-    test('AC1: green tracked fold + UNSTABLE report + untracked failing check → red, names registered', function () {
+    test('census capability: names ride the record when the CALLER feeds a rollup carrying a failure (module-level input — the prStatus wiring cannot produce it, its fold watches the same rollup)', function () {
         var rollup = [cr('Quality / check', 'success'), cr('docs-freshness', 'failure')];
         var d = mrReal().reconcileDecision({
             checkConclusion: 'green', rawMergeState: 'UNSTABLE', rollup: rollup
@@ -342,7 +352,22 @@ suite('mergeStateReconcile — reconcileDecision (the AC matrix)', function () {
         assert.equal(d.verdict, 'red');
         assert.equal(d.trackedVerdict, 'none');
         assert.deepEqual(d.untrackedFailingChecks, []);
-        assert.ok(d.reason.indexOf('not in the check-runs rollup') !== -1);
+        assert.ok(d.reason.indexOf('not visible in the check-runs rollup') !== -1,
+            'the reason names the vantage limitation (the factoryState card audit names the runs)');
+    });
+
+    test('gh-140 rework (status wiring): NO rollup on the input → the reconcile still fires, census structurally []', function () {
+        // The prStatus wiring passes NO rollup: the tracked fold watches the
+        // SAME rollup a census would walk, so a censusable failure would have
+        // reddened the fold and pre-empted the reconcile (the names ride the
+        // factoryState card audit — the workflow-runs vantage). Omitting the
+        // rollup makes the always-empty census STRUCTURAL, not incidental.
+        var d = mrReal().reconcileDecision({
+            checkConclusion: 'green', rawMergeState: 'UNSTABLE'
+        });
+        assert.ok(d, 'the reconcile must fire');
+        assert.deepEqual(d.untrackedFailingChecks, []);
+        assert.ok(d.reason.indexOf('not visible in the check-runs rollup') !== -1);
     });
 
     test('FAILED spelling triggers the same downgrade', function () {
@@ -399,8 +424,15 @@ suite('gh-140 — smProvider prStatus reconcile', function () {
         assert.equal(st.checkConclusion, 'red', 'the effective verdict downgrades');
         assert.equal(st.trackedVerdict, 'green', 'the pre-reconcile fold rides for the re-review armers');
         assert.deepEqual(st.untrackedFailingChecks, [],
-            'the failing context is not in the rollup — the mergeStateStatus is the registration');
+            'structurally empty on the status path — the fold watches the same rollup the census would walk');
         assert.equal(st.mergeStateStatus, 'UNSTABLE');
+        // gh-140 rework (thread 1): the status registers the FACT — the
+        // reconcile reason rides the payload (the audit line: raw state +
+        // vantage limitation). The failing NAMES ride the factoryState cards.
+        assert.ok(st.reconcileReason, 'the reconcile reason rides the status');
+        assert.ok(st.reconcileReason.indexOf('UNSTABLE') !== -1);
+        assert.ok(st.reconcileReason.indexOf('not visible in the check-runs rollup') !== -1,
+            'the reason says the census is empty because of the vantage, not because nothing fails');
     });
 
     test('a failure IN the rollup is no blind spot — the fold already red, no reconcile keys', function () {
@@ -423,6 +455,7 @@ suite('gh-140 — smProvider prStatus reconcile', function () {
         assert.equal(st.trackedVerdict, 'green');
         assert.equal(st.untrackedFailingChecks, undefined);
         assert.equal(st.mergeStateStatus, undefined);
+        assert.equal(st.reconcileReason, undefined, 'no reconcile — no reason key either');
     });
 
     test('BLOCKED + green fold → stays green (the conversation gate owns it)', function () {
@@ -432,6 +465,7 @@ suite('gh-140 — smProvider prStatus reconcile', function () {
         var st = p.prStatus(7);
         assert.equal(st.checkConclusion, 'green');
         assert.equal(st.untrackedFailingChecks, undefined);
+        assert.equal(st.reconcileReason, undefined);
     });
 
     test('a tracked red stays red with no reconcile keys (the fold owns it)', function () {
@@ -443,6 +477,7 @@ suite('gh-140 — smProvider prStatus reconcile', function () {
         assert.equal(st.trackedVerdict, 'red');
         assert.equal(st.untrackedFailingChecks, undefined, 'no reconcile — the red is IN the tracked set');
         assert.equal(st.mergeStateStatus, undefined);
+        assert.equal(st.reconcileReason, undefined);
     });
 
     test('REST coarse fallback: no reported state on the body → no reconcile', function () {
@@ -691,9 +726,19 @@ suite('gh-140 — sm_github.json re-review armer gates', function () {
         return byId;
     }
 
-    test('review-stale-verdict and review-threads-resolved gate on trackedChecks green', function () {
+    test('re-review armers (stale-verdict, threads-resolved) AND the guest lane (review-external-once) gate on trackedChecks green', function () {
+        // gh-140 rework (thread 2): review-external-once is the GUEST lane's
+        // only reacting leg — gating it on the EFFECTIVE verdict strands an
+        // unlatched guest PR whose head carries an untracked failing check
+        // (the gh-1392 freeze shape, one lane over): the red-head rework flow
+        // is machine-author-only, so nothing else arms for guests. It reads
+        // the TRACKED-set verdict like the other re-review armers; its dedup
+        // survives the switch (while its leg runs, the leg's own check run
+        // pendings the fold — trackedVerdict 'pending' — so it stays
+        // excluded), and merge-validated-guest stays gated on the real
+        // mergeability.
         var byId = rulesById();
-        ['review-stale-verdict', 'review-threads-resolved'].forEach(function (id) {
+        ['review-stale-verdict', 'review-threads-resolved', 'review-external-once'].forEach(function (id) {
             var r = byId[id];
             assert.ok(r, id + ' exists');
             assert.deepEqual(r.query.trackedChecks, 'green',
@@ -713,6 +758,25 @@ suite('gh-140 — sm_github.json re-review armer gates', function () {
         assert.ok(r, 'review-stale-verdict-unchecked exists');
         assert.deepEqual(r.query.checks, 'none');
         assert.equal(r.query.trackedChecks, undefined);
+    });
+
+    test('the effective-verdict readers document the deliberate split (non-review lanes stay on the fold)', function () {
+        // gh-140 rework (thread 2, doc gap): review-machine-unlinked's
+        // structural dedup is expressed through the EFFECTIVE fold — a
+        // future green-gate cleanup must not "fix" it onto trackedChecks
+        // (that would re-arm a duplicate review beside the red-head rework).
+        // The deployed rule description says so; the module header carries
+        // the canonical reader-split paragraph.
+        var byId = rulesById();
+        var r = byId['review-machine-unlinked'];
+        assert.ok(r, 'review-machine-unlinked exists');
+        assert.deepEqual(r.query.checks, ['green', 'none'],
+            'still reads the EFFECTIVE verdict (the load-bearing dedup)');
+        assert.equal(r.query.trackedChecks, undefined,
+            'must NOT switch to the tracked verdict — the dedup ordering is deliberate');
+        assert.ok((r.description || '').indexOf('effective verdict') !== -1 &&
+            (r.description || '').indexOf('gh-140') !== -1,
+            'documents why it stays on the effective verdict');
     });
 
     test('the red-head consumers still read the effective verdict', function () {
