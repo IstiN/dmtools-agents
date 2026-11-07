@@ -546,22 +546,27 @@ function _ghPrMaintainerCanModify(pr) {
 // helper fabricates CLEAN/UNKNOWN from the coarse `mergeable` bool when the
 // body carries no verdict — a fabricated verdict must never feed the
 // reconcile (only a REPORTED unstable state may redden a green fold).
+// gh-140 rework (thread 5): the spelling chain is the shared module
+// normalizer — one place defines trim/uppercase/empty→null, so a hardening
+// tweak cannot silently skip this call site.
 function _ghRawMergeStateStatus(pr) {
     if (!pr) return null;
-    var raw = pr.mergeStateStatus || pr.mergeable_state || '';
-    raw = String(raw).trim().toUpperCase();
-    return raw || null;
+    return mergeStateReconcile.normalizeMergeStateStatus(
+        pr.mergeStateStatus || pr.mergeable_state || null);
 }
 
 // gh-140 — the per-tick reconcile the ticket prescribes: the fold the rules
-// read vs the mergeability GitHub itself reports. The failing-check census
-// rides the SAME rollup this job already fetched — not a new probe.
-function _ghReconcileCheckVerdict(rollup, tally, pr) {
+// read vs the mergeability GitHub itself reports. gh-140 rework (threads
+// 1+6): the caller computes the fold label ONCE and threads it here, and
+// the rollup census is deliberately NOT fed in — the fold watches the same
+// rollup a census would walk (a censusable failure reddens the fold and
+// pre-empts the reconcile), so the per-tick census was dead computation and
+// the name-bearing audit lives on the factoryState card path (workflow-runs
+// vantage), not here.
+function _ghReconcileCheckVerdict(tracked, pr) {
     return mergeStateReconcile.reconcileDecision({
-        checkConclusion: _ghCheckConclusionLabel(rollup, tally),
-        rawMergeState: _ghRawMergeStateStatus(pr),
-        rollup: rollup,
-        bookkeepingPrefixes: BOOKKEEPING_CHECK_PREFIXES
+        checkConclusion: tracked,
+        rawMergeState: _ghRawMergeStateStatus(pr)
     });
 }
 
@@ -571,9 +576,10 @@ function computePrStatus(owner, repo, prNumber, resolveBranchHead) {
     })) || {};
     var rollup = _ghFetchRollup(owner, repo, pr);
     var tally = _ghTallyRollup(rollup);
+    var tracked = _ghCheckConclusionLabel(rollup, tally); // computed ONCE (gh-140 rework thread 6)
     var ms = _ghOverrideMergeState(pr, _ghRestMergeState(pr), resolveBranchHead);
-    var rec = _ghReconcileCheckVerdict(rollup, tally, pr);
-    return _ghBuildPrStatus(pr, rollup, tally, ms, rec);
+    var rec = _ghReconcileCheckVerdict(tracked, pr);
+    return _ghBuildPrStatus(pr, tracked, ms, rec);
 }
 
 // ── remaining github method bodies (gh-1009) ──────────────────────────────
