@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-07T04:52:08.331Z",
+  "ticketKey": "pr-1392",
+  "headSha": "7823a4b8f937c53487d20c95e973aa34297ee151",
+  "baseBranch": "main",
+  "reviewDecision": "CHANGES_REQUESTED",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:48cb2592f3303086",
+      "size": 40038
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:3b162ad21b150f5d",
+      "size": 39452
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:e31f23447f072221",
+      "size": 308
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:79e93ee002801f4c",
+      "size": 12306
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:f73d2a71d42fc164",
+      "size": 18434
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:1f675250be69215f",
+      "size": 113
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:bb50fa1a6c66f75e",
+      "size": 3981
+    },
+    "request.md": {
+      "hash": "fnv1a64:4f4dfcbf1bb173fa",
+      "size": 3638
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:b7186b87f4af5158",
+      "size": 756
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:d1d45872c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:060fae76dc9947c3",
+      "size": 3728
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:4f4dfcbf1bb173fa",
+      "size": 3638
+    }
+  },
+  "comments": [
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:a574fa31",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the new helpers silently deactivate `'use strict'` for this whole module**\n\n`machineBokepingBody` and `authorOf` are declared at lines 6–13, **above** the `'use strict';` directive at line 33. A directive prologue is only honored before any *statement* — comments are fine, function declarations are not — so the directive is now an inert string expression and the entire file evaluates in **sloppy mode** (it was strict before this PR). Reproduced mechanically:\n\n```text\n// file with: function a(){...} THEN \"use strict\";\nb(); // assigns an implicit global — no throw, sloppy mode active\n// same code with \"use strict\" first → ReferenceError (strict enforced)\n```\n\nNo behavior changes today (both helpers are pure), but the guard this file documents is silently off for every future edit to this module (an accidental implicit global would no longer throw in the GraalJS engine).\n\n**Fix (one stroke):** move both helpers below the `'use strict';` + requires (and below the module docblock, where the rest of the file lives). Same crap4js-ratchet benefit, correct prologue."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:aba5a58e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the L2 suppression wiring — this PR's core gate — has no unit test**\n\nThe repo rule (\"all new JS logic must be covered by unit tests\") is met for the leaf helpers (`test_machineNotice.js` covers `noticeWithHead` / `shouldPostNotice` / `hasSameNotice`) and for the nakedPrReconcile poster, but the **smAgent wiring** shipped here is untested:\n\n- nothing asserts the posted arm body carries the appended `(arm head xxxxxxx)` line;\n- nothing asserts a same-head repeat posts **no** comment (`capturedPrComments.length === 0`);\n- nothing asserts a new head re-opens posting, or that the suppressed path skips while `armReworkLatch` still fires;\n- the red-gate branch's suppress path (log + skip, marker line not re-posted) is likewise unexercised.\n\nThe existing smAgent assertions are `assert.contains(..., 'Unresolved review threads')` (test_smAgent.js:1082, 18504) — substring checks that pass **with or without** the appended token, so they cannot detect a wiring regression. A wrong gate here (inverted predicate, wrong `armNoticeHead` derivation, argument swap) either re-floods PRs with duplicate notices (the exact gh-1387 pathology) or silently suppresses every arm notice — and only these tests would catch it.\n\n**Suggestion:** seed a prior notice into the `prCommentMock` history and assert (a) first arm → one post whose body ends with the head-token line, (b) second arm on the same head → zero posts, (c) new head → one post — mirroring the two-variant `applyPlan` tests already added for the nakedPrReconcile poster."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:3fe72594",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: `isConsumeExplained` trusts consume markers from any author**\n\n`consumeMarkerHead` parses `<!-- dmtools:rework-consume … -->` from **any** comment, while the gh-840 parser it borrows the format from (`reworkConsumption.parseConsumeMarkers`) machine-gates markers via `machineAuthor` allowlists — its header states the doctrine: \"Markers are trusted only from machine identities … the format is public\".\n\nA hand-written marker for the live head (`{\"head\":\"<sha>\"}`) flips this re-arm's audit tail to *\"naked because agent:rework was consumed on this head (gh-840 audit above)\"* — a specific causal claim an untrusted comment can author into the audit trail. The impact is cosmetic (the marker payload is byte-identical in both variants and the label behavior is unchanged) and the file's pre-existing `alreadyRearmed` shares the no-allowlist model, so this is consistency, not a defect: consider gating the explained-tail decision on the trusted-login allowlist like `parseConsumeMarkers`, or documenting that the decision is deliberately cosmetic."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:fd6164f2",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: `deps.prComments(plan.pr)` is fetched twice per applied plan**\n\n`sweep → notYetRearmed` already fetches the PR comments (`alreadyRearmed(deps.prComments(plan.pr), plan.head)`, line 158), then `applyPlan` fetches the identical list again at line 169 to evaluate `isConsumeExplained`. That is two identical API reads for every re-armed PR — in a repo whose dedup machinery exists precisely to bound redundant reads.\n\nBounded cost (a re-arm happens once per head), so this is polish, not a blocker: thread the already-fetched list through the plan (e.g. `plan.comments` set in `planFor`/`notYetRearmed`) or memoize it on `deps` for the tick, and both readers share one fetch."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:34765da1",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: a headless red-gate arm leaks into the agent-facing section**\n\nWhen `armNoticeHead` resolves to null (`redGateLine` is null too), this body leads with `🔴 Red pre-merge gate on the head…` — which matches **no** `MACHINE_NOTICE_MARKERS` entry (`'🔴 red head '` is lowercase and head-anchored). Two consequences in that state:\n\n1. the notice passes `buildGeneralCommentsSection`'s filter and flows verbatim into every review/rework context build — exactly the leak gh-808/gh-1387 close;\n2. it can never dedup (`noticeHeadToken` → `''`, headless notices are documented never-dedup).\n\nThe precondition is rare (both `ticket.pr.headSha` and `ticket.headSha` missing), so polish only — but it silently breaks the stated invariant exactly when the red-head marker line is absent. A marker entry for the bare red-gate wording, or a fallback marker line when the head is unknown, keeps the invariant unconditional."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:d6be62ba",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: \"bookkeeping\" is misspelled with a single *k* (and single *e*) in both places**\n\n- The helper name `machineBokepingBody` (this line and its call site at line 110) and the comment at `machineNotice.js:53` spell the word as \"bookping\" — the correct English word is \"bookkeeping\" (double *k*): `machineBookeepingBody`.\n- Internal name + comment only, nothing behavioral; an IDE rename keeps the call site and any references in sync (`grep -rn machineBokeping js/` should come back empty after the rename).\n\nBoth spellings are internally consistent within the PR, so this is purely a typo cleanup, not a correctness issue."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:0ff93ec0",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread 1 — `js/common/githubReviewFetch.js:6` — helpers above `'use strict';` (⚠️ IMPORTANT)\n\n**Fixed** in commit `a9c79f5e7`.\n\n- `machineBookkeepingBody` and `authorOf` now live **below** the module docblock, the `'use strict';` directive and the two requires — exactly the prologue this thread asked for. The directive is again the first statement, so the whole module evaluates in strict mode as before this PR.\n- The file head is tidied in the same stroke (digest item 3): the module docblock is back on top and now also lists the two helpers as part of the shared block.\n- A comment at the helper marks the constraint so a future edit does not re-break the prologue.\n\n**Regression pin (TDD, failed before the fix):** `js/unit-tests/test_machineNotice.js`, suite `githubReviewFetch strict prologue + headless red-gate marker (gh-1392 review)` — reads the module source and fails when any `function` declaration or `require(` call precedes the `'use strict';` directive (comments/docblock excluded). It reproduced the finding on the pre-fix head (`expected -1 but got 5`) and passes on `a9c79f5e7`.\n\n`run_machineNotice.json`: 24 passed / 0 failed (was 22 — +2 new tests)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:d3430557",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread 2 — `js/smAgent.js:2245` — L2 suppression wiring untested (⚠️ IMPORTANT)\n\n**Fixed** in commit `a9c79f5e7`: new suite `smAgent: arm notice repeat-suppression wiring (gh-1387 L2 / gh-1392 review)` in `js/unit-tests/test_smAgent.js`, covering every branch this thread named. The tests replay real ticks — the seeded prior notice is the body tick 1 actually posted through `github_create_comment` into the `prCommentMock` history — so the wording is source-authored, not transcribed:\n\n1. **First arm → one post carrying the head-token line.** The posted body's last line is exactly `(arm head a413a41)` and the FIRST line still leads with `🧵 Unresolved review threads — rework armed.` — the marker-prefix classifier key is untouched (this also pins the appended token the existing substring assertions could not see).\n2. **Same-head repeat → zero posts.** Second `sm.action` over the same head with the posted notice already in the comment history asserts `capturedPrComments.length === 0`, the `agent:rework` label still lands (label-only skip), and the skip is logged (`arm notice suppressed`), not silent.\n3. **New head re-opens posting.** Same history, item head moved → exactly one post whose last line carries the NEW head token.\n4. **Red-gate branch suppress path.** An identical red-gate notice already on the PR → zero posts, `red-gate arm notice suppressed` logged, the marker line is not re-posted, the arm label still lands — and `armReworkLatch` still fires, asserted through the tick's published `fa-state.json` snapshot (`reworkInFlight['pr-413@<head>']` present via the statePublish PUT payload). The red count normally advances per arm; the suppress state here is the one where the budget read does not advance, which is exactly when the suppression must win.\n\nAll four pass on `a9c79f5e7`; `run_smAgent.json`: 823 passed / 0 failed (was 819 — +4).\n\nAlso picked up from the review digest while in this block: `armNoticeHead` now reuses the `noopHead` value computed by the gh-957 guard ~80 lines above instead of re-deriving the same expression (digest item 1)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:db8c202b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread 3 — `js/common/nakedPrReconcile.js:169` — `isConsumeExplained` trusts any author (💡 SUGGESTION)\n\n**Addressed by documentation** (the second option this thread offered) in commit `a9c79f5e7`: `consumeMarkerHead` / `isConsumeExplained` now carry the contract in-source — the explained-tail decision is **deliberately cosmetic and author-agnostic**:\n\n- The worst a hand-written marker can do is pick the **short visible tail** over the long one — a wording choice in a human-facing audit line.\n- The marker payload is byte-identical in both variants (pinned by the existing `buildAuditComment` test), the label behavior is unchanged, and the dedup anchor is the marker payload, not the tail.\n- Nothing machine-readable consults this decision: the durable gh-840 sweep re-parses consume markers behind its own `machineAuthor` allowlist (`reworkConsumption.parseConsumeMarkers`), exactly as this thread noted.\n\nGating this read on the trusted-login allowlist was deliberately **not** done: it would thread `machineAuthor` config into a module that is otherwise identity-free (its deps carry no logins today) to protect a cosmetic branch — the allowlist genuinely matters where markers gate state (`gh-840`, verdict reconcile), not where they gate prose.\n\nWhile in the same comment, the tail text no longer assumes the consume comment precedes the re-arm (digest item 2): `(gh-840 audit above)` → `(gh-840 audit for this head)`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:e794f9be",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread 4 — `js/common/nakedPrReconcile.js:169` — `prComments` fetched twice per applied plan (💡 SUGGESTION)\n\n**Fixed** in commit `a9c79f5e7`, using the thread-the-list-through-the-plan option:\n\n- `notYetRearmed` now performs the **single** `deps.prComments(plan.pr)` read and stores it on the plan (`plan.comments`).\n- `applyPlan` consumes `plan.comments` for the `isConsumeExplained` decision instead of re-fetching; a **direct** `applyPlan` caller (not driven through `sweep`) still fetches on demand, and the no-`prComments`-dep fail-open to the full tail is preserved (the existing partial-deps test still passes).\n- Net effect: one identical API read per re-armed PR instead of two.\n\n**Regression pin (TDD, failed before the fix):** `js/unit-tests/test_nakedPrReconcile.js`, test `sweep shares ONE prComments fetch per applied plan` — wraps `deps.prComments` with a counter and asserts exactly **1** fetch for a full sweep that applies a plan (it measured **2** on the pre-fix head: `expected 1 but got 2`).\n\n`run_nakedPrReconcile.json`: 14 passed / 0 failed (was 13 — +1)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:a724da36",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread 5 — `js/smAgent.js:2250` — headless red-gate arm leaks into the agent-facing section (💡 SUGGESTION)\n\n**Fixed** in commit `a9c79f5e7` via the marker-entry option: `MACHINE_NOTICE_MARKERS` (`js/common/machineNotice.js`) gains the bare red-gate wording `'🔴 Red pre-merge gate on the head'`, with a comment explaining why it exists (when `armNoticeHead` → null, `redGateLine` is null too and the body leads with exactly this wording).\n\n- The classifier is an anchored body-start prefix match, so only a notice that genuinely OPENS with the red-gate wording matches — a reviewer quoting it mid-body is unaffected (the pinned quote-test still passes).\n- The stated invariant is now unconditional: the headless red-gate arm is classified as a machine notice and drops out of `buildGeneralCommentsSection`, instead of flowing verbatim into every review/rework context build exactly when the head-anchored `'🔴 red head '` marker line is absent.\n- Headless notices still never dedup (`noticeHeadToken` → `''`) — unchanged documented behavior; the filter is the only guard needed there, and it now covers this wording.\n\n**Regression pin (TDD, failed before the fix):** `js/unit-tests/test_machineNotice.js` — `isMachineNoticeBody(<bare red-gate arm body>)` must be true and a notices-only PR containing it must render `buildGeneralCommentsSection` → `null` (pre-fix it failed: no marker entry matched the wording).\n\n`run_machineNotice.json`: 24 passed / 0 failed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:a0335658",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread 6 — `js/common/machineNotice.js:53` — \"bookeeping\" misspelled (🪶 NIT)\n\n**Fixed** in commit `a9c79f5e7` — picked up alongside the mandatory lap (same file, trivial):\n\n- Helper renamed `machineBokepingBody` → `machineBookkeepingBody` (double *k*, double *e*), definition and call site in `js/common/githubReviewFetch.js`, plus the reference in that file's module docblock.\n- The marker-array comment in `js/common/machineNotice.js` (`PR-level bookeeping that leaked into agent context`) now spells the word correctly.\n\n`grep -rn` over `js/` for the old spelling comes back **empty** — the only `machineB…` identifier remaining in the tree is `machineBookkeepingBody` (3 occurrences, all in `githubReviewFetch.js`: docblock, definition, call site). Internal name + comment only, nothing behavioral, as the thread assessed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:211bc434",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The L1/L2 scope matches #1391 exactly (L3/L4 correctly deferred) and all six listed verification suites pass locally (22/13/31/150/102/819, 0 failures each), including the byte-identical-marker contracts. Two important issues gate approval: the new helpers in `githubReviewFetch.js` silently deactivate the module's `'use strict'` directive (verified mechanically), and the smAgent arm-notice suppression wiring — this PR's core gate — ships with no unit test of its suppress/re-post branches.\n**Key Issues**:\n- ⚠️ `githubReviewFetch.js:6` — function declarations above `'use strict';` (line 33) terminate the directive prologue → whole module now evaluates in sloppy mode.\n- ⚠️ `smAgent.js:2245` — no test asserts the appended `(arm head …)` token, the same-head suppression (zero posts), or the new-head re-open; existing substring assertions cannot catch a wiring regression (duplicate-notice flood or silent notice drop).\n- 💡 Untrusted consume markers gate the \"explained\" re-arm tail; `prComments` fetched twice per applied plan; headless red-gate arm escapes the notice filter; \"bookping\" typo (internal name + comment).\n\n**Digest** (ranked overflow, `path:line — finding`):\n1. `js/smAgent.js:2239 — armNoticeHead re-derives the noopHead expression computed ~80 lines above in the same block; reuse the value`\n2. `js/common/nakedPrReconcile.js:81 — \"gh-840 audit above\" assumes the consume comment precedes the re-arm; ordering is the normal flow but not guaranteed`\n3. `js/common/githubReviewFetch.js:1-14 — helpers sit above the module docblock; relocating them below the directive/docblock fixes the strict-mode issue in one stroke`\n4. `js/common/machineNotice.js:201-202 — double blank line before module.exports`\n**Next Steps**:\n1. Move `machineBokepingBody`/`authorOf` below the `'use strict';` + requires (restores strict mode; also tidies the file head).\n2. Add smAgent wiring tests: first arm posts a body ending with the head-token line; same-head second arm posts nothing; new head posts again (mirror the `applyPlan` two-variant tests).\n3. Optionally: gate `isConsumeExplained` on the trusted-login allowlist (or document it as cosmetic), share one `prComments` fetch per plan, cover the bare red-gate wording, fix the typo.\n\nVerified non-issues: both `buildGeneralCommentsSection` callers null-guard correctly (`scm.js:439`, `githubHelpers.js:462`); the two new markers byte-match their producers (`redHeadMarkerLine`, `validationLiveness`); machine parsers read raw comments, not the filtered section, so suppression never starves them; no secrets/shell interpolation; GraalJS-clean style and hoisted require; no scope creep vs #1391."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-06:0de94bab",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-06",
+      "updatedAt": "2026-11-06",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ silent-update failure — attempt 1 at 2026-11-06T10:32:10.174Z"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:8818d49b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🛑 validation_failed — the current head `bbfa251f4915b18a9cbaf2670ee940de8acff7bf` has failing checks. This GUEST PR is parked: no validation CI is dispatched for it and the merge window skips it until the head changes — ANY push that moves the head (yours, the kicker, a silent main-merge) clears the park via the head-change reset; a genuinely red new head is re-parked one validation cycle later. The failure itself is reported separately. parked-head: bbfa251f4915b18a9cbaf2670ee940de8acff7bf"
+    }
+  ]
+}
