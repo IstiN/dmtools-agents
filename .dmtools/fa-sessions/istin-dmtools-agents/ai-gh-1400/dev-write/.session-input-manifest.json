@@ -1,0 +1,217 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-07T02:53:56.460Z",
+  "ticketKey": "gh-1400",
+  "headSha": "514abaa64a01b8d1c56602f24bd1531c2ea0ea71",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:45f12f96bf6b92d9",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:e2266ebf1e3f30bc",
+      "size": 29399
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:6735c2db276f58f4",
+      "size": 11531
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:76de78d60b54d3cd",
+      "size": 2939
+    },
+    "request.md": {
+      "hash": "fnv1a64:b3abe8223c4ff34b",
+      "size": 2010
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:503baab502b59f3d",
+      "size": 1151
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:cecb500ec9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:0f60792b179c8008",
+      "size": 2081
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:b3abe8223c4ff34b",
+      "size": 2010
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs60xMYb",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeStateReconcile.js:14",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `untrackedFailingChecks` can never carry a name through `computePrStatus` — the \"names ride the status\" contract this PR documents is unreachable in the wiring it ships**\n\nThe module header (this line, plus the smProvider status doc at `smProvider.js:27-31`) and the PR description promise the *status* carries the failing names: *\"the status and the factory-state cards carry `untrackedFailingChecks`/`untrackedFailing` (names + failed-run links)\"*. Through the status path the census is provably always `[]`:\n\n- The reconcile fires only when the tracked fold reads `green`/`none` (`isReconcilableVerdict`).\n- The fold (`_ghCheckOutcome`/`_ghTallyRollup`) reddens on ANY `FAILURE`/`TIMED_OUT` entry of the same rollup the census walks — so whenever the reconcile fires, the census over that same rollup finds nothing: a visible failure would have made the fold `red` (no reconcile), bokeping failures are folded out of both, a commit-status (`state`-spelling) failure pendings the fold (`!c.conclusion` → `'pending'`), and a nameless failure reddens the fold while the census skips it.\n- Verified exhaustively against the real helpers for every rollup shape (visible failure, `timed_out`, bokeping-only, cancelled+green, status-context `FAILURE`, older-failure-under-newer-success, empty): every firing case carries `untrackedFailingChecks: []`. The PR's own live-shape test pins this (`test_mergeStateReconcile.js:391` — \"census empty (invisible to the check-runs API)\"), and the `reason` string therefore always ends in the `(not in the check-runs rollup)` fallback.\n\nConsequences:\n\n1. **Misleading telemetry on exactly the path this PR exists to make diagnosable.** The next freeze will show `untrackedFailingChecks: []`, which reads as \"nothing failing found\" when it means \"invisible from this vantage\". The reason string disambiguates, but the field name, the AC1/AC3 docstring here (`mergeStateReconcile.js:14-15`), the smProvider header (`smProvider.js:27-31`) and the PR description all advertise names on the status.\n2. The per-tick census in `_ghReconcileCheckVerdict` (`failingCheckNames` over every rollup: bokeping folding + latest-per-context sorting) is dead computation on the status path — the name-bearing audit actually lives on the factoryState card path (`untrackedFailing`, which has the runs list).\n3. The AC1 unit test (`test_mergeStateReconcile.js:290`) pins the naming capability with an input the wiring can never produce (`checkConclusion: 'green'` alongside a `failure` IN the rollup) — green-box coverage of an unreachable path.\n\nSuggested fix (docs-only is acceptable): amend the contract so the status registers the **fact** (raw `mergeStateStatus` + empty census + reason) while the failing **names** ride the factory-state cards — i.e. reword `mergeStateReconcile.js:14-15`, the smProvider status doc, and the PR description. Optionally drop the census from the status wiring (don't pass `rollup`) so the payload shape cannot promise names it cannot carry — or rename the field on this path so `[]` can't be misread as \"no untracked failure\"."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60xMZU",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "sm_github.json:697",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: an unlatched GUEST PR with an untracked failing check now has no reacting lane at all — the same freeze shape gh-140 closes, one lane over**\n\nPost-PR (this switch to `trackedChecks`, and its twin on `review-threads-resolved`), the effective verdict of an untracked-failure head reads `red`. That is the intended trigger for the machine's bounded red-head flow — but that flow is machine-author-only, and switching the re-review armers off the effective verdict leaves the guest lane on it while nothing else covers guests:\n\n- `review-external-once` (the guest one-time review, `checks: \"green\"`, `notMachine: true`) no longer arms: an untracked red reddens the effective verdict.\n- `fail-validation` needs the `ai_validating` latch; `rework-on-red-gate-unlatched` is explicitly machine-author-only (\"auto-rework is machine-only, owner rule\"); `review-machine-unlinked` is `prMachineAuthor: true`.\n\nSo for an external PR whose head carries a failing untracked check while unlabeled (e.g. the repo's own `docs-freshness` workflow failing on any head — exactly the gh-1392 red), pre-PR the fold read green and the review armed; post-PR nothing arms: no review, no rework, no park until someone latches it. The PR strands silently until the red clears by luck — the \"no lane reacts\" freeze this very PR was opened to close (gh-140/gh-1392), reintroduced for guests.\n\nSuggested fix: gate `review-external-once` on `trackedChecks: \"green\"` as well (one line). Its dedup survives the switch — while its review leg runs, the leg's own check run pendings the fold, and `trackedVerdict` (the pre-reconcile fold) reads `pending`, so the rule stays excluded; with an untracked red it would arm the review on a head that still cannot merge (mergeStateStatus UNSTABLE keeps `merge-validated-guest` gated), which matches the PR's own economics: \"an untracked red must freeze the rework flow, not the re-review economy\". If deliberately keeping guests frozen is the owner's call, say so in the PR description.\n\nRelated doc gap worth one sentence either way: the other effective-verdict readers (`review-machine-unlinked`, `review-after-dev`, `develop-done` `prChecks`) also now pause on untracked reds until the red-head rework resolves — for `review-machine-unlinked` that ordering is load-bearing (its structural dedup is expressed through the effective fold), so documenting \"non-review lanes deliberately stay on the effective verdict\" stops a future green-gate cleanup from \"fixing\" it into a freeze or a duplicate-review bug."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60xMaN",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeStateReconcile.js:33",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: the BLOCKED exclusion leaves the required-check variant of the same blind spot open**\n\n`mergeStateReconcile.js:32-34` excludes BLOCKED with the rationale *\"with a green fold a BLOCKED report is the conversation-resolution gate (gh-828), not a check failure\"*. That holds for the gh-828 conversation case, but GitHub also reports BLOCKED when a **required** check is failing/pending — and if that required check sits outside the tracked set (commit-status spelling, or a repo workflow the rollup does not surface), the freeze this PR closes recurs in a different spelling:\n\n- fold reads `green`/`none` → reconcile skipped (BLOCKED not in `UNSTABLE_MERGE_STATES`);\n- the effective verdict stays green → `merge-validated` (`checks: \"green\"`) fires → the merge attempt hits GitHub's BLOCKED refusal → no `fail-validation` lane (the fold never reddened) → the head strands exactly like gh-1392, with no rework lap.\n\nIf a BLOCKED + green-fold head with no unresolved conversation is reachable in the deployments this runs on, extending the reconcile (or arming rework off the merge-refusal path) would close the variant; otherwise one line in the module doc naming the residual (\"BLOCKED with a green fold is assumed to be the gh-828 conversation gate; a required untracked check would strand\") prevents the next archaeology session. Deliberate per the docstring — flagging the incomplete rationale, not asking to flip the decision in this PR."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60xMbI",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeStateReconcile.js:84",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: the census's provenance pointer is wrong, and the newest-wins walk now exists in two places**\n\n`mergeStateReconcile.js:84` says *\"Same key order as smProvider.latestCheckRunConclusions\"* — no such symbol exists on smProvider; the function lives at `js/smAgent.js:8048` (`latestCheckRunConclusions` + its `isBookkeepingCheckName` companion, which deliberately imports the canonical prefix list \"so the two verdict readers cannot drift\"). With this PR the latest-per-context walk (completed_at → started_at → id → position, bookkeeping folded out) exists in:\n\n1. `js/smAgent.js:8048` — `latestCheckRunConclusions` / `eachNonBookkeepingConclusion`\n2. this module — `latestConclusions` / `failingCheckNames` (the superset: camelCase stamps + `databaseId`)\n\nThe module is require-free by design (smProvider/factoryState require it — the reverse would cycle), so the clean unification keeps purity AND kills the drift surface: the census already lives in this pure module, so `smAgent.js` could require it instead of owning its own copy (its requires are hoisted top-level, so the gh-823 deferred-require pin stays happy; this module requires nothing back). The new superset semantics (camelCase stamps, `databaseId`) would then back both readers, and the prefix list would come from one place. If that is follow-up-sized for this PR, at least fix the pointer to `js/smAgent.js:8048` so the next reader does not hunt for a symbol that is not there."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60xMcg",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/smProvider.js:541",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: `_ghRawMergeStateStatus` re-implements `normalizeMergeStateStatus`**\n\n`smProvider.js:541-543` hand-rolls the exact chain the new module exports one call away — `mergeStateReconcile.normalizeMergeStateStatus(pr.mergeStateStatus || pr.mergeable_state || null)` (trim → uppercase → empty→null, null/undefined-guarded). This file already requires the module (hoisted per gh-823, cycle-free), so the local copy is a drift surface without an isolation benefit: a future hardening tweak to the shared normalizer (say, rejecting non-string garbage explicitly) would silently skip this call site. Reusing the export keeps the \"never a fabricated verdict\" contract defined in exactly one place."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs60xMdw",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/smProvider.js:445",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: the tracked fold is computed twice per prStatus**\n\n`computePrStatus` evaluates `_ghCheckConclusionLabel(rollup, tally)` once inside `_ghReconcileCheckVerdict` (feeding the reconcile) and again at `smProvider.js:445` in `_ghBuildPrStatus` for `trackedVerdict`. The results are definitionally identical (same pure inputs) — computing it once and threading the label through (or reusing `rec.trackedVerdict` when the reconcile fired) would make that equality structural instead of incidental. Nothing behavioral; readability/economy only."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:0151db15",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `untrackedFailingChecks` can never carry a name through `computePrStatus` — the \"names ride the status\" contract this PR documents is unreachable in the wiring it ships**\n\nThe module header (this line, plus the smProvider status doc at `smProvider.js:27-31`) and the PR description promise the *status* carries the failing names: *\"the status and the factory-state cards carry `untrackedFailingChecks`/`untrackedFailing` (names + failed-run links)\"*. Through the status path the census is provably always `[]`:\n\n- The reconcile fires only when the tracked fold reads `green`/`none` (`isReconcilableVerdict`).\n- The fold (`_ghCheckOutcome`/`_ghTallyRollup`) reddens on ANY `FAILURE`/`TIMED_OUT` entry of the same rollup the census walks — so whenever the reconcile fires, the census over that same rollup finds nothing: a visible failure would have made the fold `red` (no reconcile), bokeping failures are folded out of both, a commit-status (`state`-spelling) failure pendings the fold (`!c.conclusion` → `'pending'`), and a nameless failure reddens the fold while the census skips it.\n- Verified exhaustively against the real helpers for every rollup shape (visible failure, `timed_out`, bokeping-only, cancelled+green, status-context `FAILURE`, older-failure-under-newer-success, empty): every firing case carries `untrackedFailingChecks: []`. The PR's own live-shape test pins this (`test_mergeStateReconcile.js:391` — \"census empty (invisible to the check-runs API)\"), and the `reason` string therefore always ends in the `(not in the check-runs rollup)` fallback.\n\nConsequences:\n\n1. **Misleading telemetry on exactly the path this PR exists to make diagnosable.** The next freeze will show `untrackedFailingChecks: []`, which reads as \"nothing failing found\" when it means \"invisible from this vantage\". The reason string disambiguates, but the field name, the AC1/AC3 docstring here (`mergeStateReconcile.js:14-15`), the smProvider header (`smProvider.js:27-31`) and the PR description all advertise names on the status.\n2. The per-tick census in `_ghReconcileCheckVerdict` (`failingCheckNames` over every rollup: bokeping folding + latest-per-context sorting) is dead computation on the status path — the name-bearing audit actually lives on the factoryState card path (`untrackedFailing`, which has the runs list).\n3. The AC1 unit test (`test_mergeStateReconcile.js:290`) pins the naming capability with an input the wiring can never produce (`checkConclusion: 'green'` alongside a `failure` IN the rollup) — green-box coverage of an unreachable path.\n\nSuggested fix (docs-only is acceptable): amend the contract so the status registers the **fact** (raw `mergeStateStatus` + empty census + reason) while the failing **names** ride the factory-state cards — i.e. reword `mergeStateReconcile.js:14-15`, the smProvider status doc, and the PR description. Optionally drop the census from the status wiring (don't pass `rollup`) so the payload shape cannot promise names it cannot carry — or rename the field on this path so `[]` can't be misread as \"no untracked failure\"."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:ebfd9c1a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: an unlatched GUEST PR with an untracked failing check now has no reacting lane at all — the same freeze shape gh-140 closes, one lane over**\n\nPost-PR (this switch to `trackedChecks`, and its twin on `review-threads-resolved`), the effective verdict of an untracked-failure head reads `red`. That is the intended trigger for the machine's bounded red-head flow — but that flow is machine-author-only, and switching the re-review armers off the effective verdict leaves the guest lane on it while nothing else covers guests:\n\n- `review-external-once` (the guest one-time review, `checks: \"green\"`, `notMachine: true`) no longer arms: an untracked red reddens the effective verdict.\n- `fail-validation` needs the `ai_validating` latch; `rework-on-red-gate-unlatched` is explicitly machine-author-only (\"auto-rework is machine-only, owner rule\"); `review-machine-unlinked` is `prMachineAuthor: true`.\n\nSo for an external PR whose head carries a failing untracked check while unlabeled (e.g. the repo's own `docs-freshness` workflow failing on any head — exactly the gh-1392 red), pre-PR the fold read green and the review armed; post-PR nothing arms: no review, no rework, no park until someone latches it. The PR strands silently until the red clears by luck — the \"no lane reacts\" freeze this very PR was opened to close (gh-140/gh-1392), reintroduced for guests.\n\nSuggested fix: gate `review-external-once` on `trackedChecks: \"green\"` as well (one line). Its dedup survives the switch — while its review leg runs, the leg's own check run pendings the fold, and `trackedVerdict` (the pre-reconcile fold) reads `pending`, so the rule stays excluded; with an untracked red it would arm the review on a head that still cannot merge (mergeStateStatus UNSTABLE keeps `merge-validated-guest` gated), which matches the PR's own economics: \"an untracked red must freeze the rework flow, not the re-review economy\". If deliberately keeping guests frozen is the owner's call, say so in the PR description.\n\nRelated doc gap worth one sentence either way: the other effective-verdict readers (`review-machine-unlinked`, `review-after-dev`, `develop-done` `prChecks`) also now pause on untracked reds until the red-head rework resolves — for `review-machine-unlinked` that ordering is load-bearing (its structural dedup is expressed through the effective fold), so documenting \"non-review lanes deliberately stay on the effective verdict\" stops a future green-gate cleanup from \"fixing\" it into a freeze or a duplicate-review bug."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:e57eee7a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: the BLOCKED exclusion leaves the required-check variant of the same blind spot open**\n\n`mergeStateReconcile.js:32-34` excludes BLOCKED with the rationale *\"with a green fold a BLOCKED report is the conversation-resolution gate (gh-828), not a check failure\"*. That holds for the gh-828 conversation case, but GitHub also reports BLOCKED when a **required** check is failing/pending — and if that required check sits outside the tracked set (commit-status spelling, or a repo workflow the rollup does not surface), the freeze this PR closes recurs in a different spelling:\n\n- fold reads `green`/`none` → reconcile skipped (BLOCKED not in `UNSTABLE_MERGE_STATES`);\n- the effective verdict stays green → `merge-validated` (`checks: \"green\"`) fires → the merge attempt hits GitHub's BLOCKED refusal → no `fail-validation` lane (the fold never reddened) → the head strands exactly like gh-1392, with no rework lap.\n\nIf a BLOCKED + green-fold head with no unresolved conversation is reachable in the deployments this runs on, extending the reconcile (or arming rework off the merge-refusal path) would close the variant; otherwise one line in the module doc naming the residual (\"BLOCKED with a green fold is assumed to be the gh-828 conversation gate; a required untracked check would strand\") prevents the next archaeology session. Deliberate per the docstring — flagging the incomplete rationale, not asking to flip the decision in this PR."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:7192d9a7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: the census's provenance pointer is wrong, and the newest-wins walk now exists in two places**\n\n`mergeStateReconcile.js:84` says *\"Same key order as smProvider.latestCheckRunConclusions\"* — no such symbol exists on smProvider; the function lives at `js/smAgent.js:8048` (`latestCheckRunConclusions` + its `isBookkeepingCheckName` companion, which deliberately imports the canonical prefix list \"so the two verdict readers cannot drift\"). With this PR the latest-per-context walk (completed_at → started_at → id → position, bookkeeping folded out) exists in:\n\n1. `js/smAgent.js:8048` — `latestCheckRunConclusions` / `eachNonBookkeepingConclusion`\n2. this module — `latestConclusions` / `failingCheckNames` (the superset: camelCase stamps + `databaseId`)\n\nThe module is require-free by design (smProvider/factoryState require it — the reverse would cycle), so the clean unification keeps purity AND kills the drift surface: the census already lives in this pure module, so `smAgent.js` could require it instead of owning its own copy (its requires are hoisted top-level, so the gh-823 deferred-require pin stays happy; this module requires nothing back). The new superset semantics (camelCase stamps, `databaseId`) would then back both readers, and the prefix list would come from one place. If that is follow-up-sized for this PR, at least fix the pointer to `js/smAgent.js:8048` so the next reader does not hunt for a symbol that is not there."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:de3c8edb",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: `_ghRawMergeStateStatus` re-implements `normalizeMergeStateStatus`**\n\n`smProvider.js:541-543` hand-rolls the exact chain the new module exports one call away — `mergeStateReconcile.normalizeMergeStateStatus(pr.mergeStateStatus || pr.mergeable_state || null)` (trim → uppercase → empty→null, null/undefined-guarded). This file already requires the module (hoisted per gh-823, cycle-free), so the local copy is a drift surface without an isolation benefit: a future hardening tweak to the shared normalizer (say, rejecting non-string garbage explicitly) would silently skip this call site. Reusing the export keeps the \"never a fabricated verdict\" contract defined in exactly one place."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:1c8a2543",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: the tracked fold is computed twice per prStatus**\n\n`computePrStatus` evaluates `_ghCheckConclusionLabel(rollup, tally)` once inside `_ghReconcileCheckVerdict` (feeding the reconcile) and again at `smProvider.js:445` in `_ghBuildPrStatus` for `trackedVerdict`. The results are definitionally identical (same pure inputs) — computing it once and threading the label through (or reusing `rec.trackedVerdict` when the reconcile fired) would make that equality structural instead of incidental. Nothing behavioral; readability/economy only."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:edb8aeab",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 1ae6f238e46f6dba3aafeadb449d47e9e11c2593 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:1d5a4b2e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1401\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:249010ab",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The gh-140 reconcile works end-to-end (tracked-green fold + reported UNSTABLE/FAILED → effective red → the bounded red-head flow reacts; AC2 payload stability holds; full unit suite passes locally: 9054/9054). Two important issues: the status-path audit overclaims (`untrackedFailingChecks` is provably always `[]` via `computePrStatus` — names only materialize on the factory-state cards), and an unlatched guest PR with an untracked red now has no reacting lane at all (review-external-once gated; guests have no rework lane).\n\n**Key Issues**:\n- ⚠️ `untrackedFailingChecks` can never carry a name via the status path — misleading telemetry + dead per-tick census + an unreachable AC1 fixture (`js/common/mergeStateReconcile.js:14`)\n- ⚠️ Unlatched guest PR with an untracked red: `review-external-once` gated, no guest rework lane → silent strand, the gh-1392 shape one lane over (`sm_github.json:697`)\n- 💡 BLOCKED exclusion leaves the untracked-required-check freeze variant open (`js/common/mergeStateReconcile.js:33`)\n- 💡 `smProvider.latestCheckRunConclusions` cross-reference is wrong (lives in `js/smAgent.js:8048`) — the newest-wins walk is now duplicated (`js/common/mergeStateReconcile.js:84`)\n- 💡 `_ghRawMergeStateStatus` duplicates `normalizeMergeStateStatus` (`js/common/smProvider.js:541`)\n- 🪶 `_ghCheckConclusionLabel` computed twice per prStatus (`js/common/smProvider.js:445`)\n\n**Next Steps**:\n1. Align the AC3 contract with reality: status registers the fact (raw state + reason), names ride the cards — reword the module/PR-description claims, drop or reshape the dead status census\n2. Switch `review-external-once` to `trackedChecks: \"green\"` (or document the deliberate guest freeze) and note the effective-verdict reader split in the PR description\n3. Reuse `normalizeMergeStateStatus`, compute the fold once; consider routing smAgent's census through the pure module"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-07:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-07",
+      "updatedAt": "2026-11-07",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    }
+  ]
+}
