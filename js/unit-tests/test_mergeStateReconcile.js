@@ -253,6 +253,24 @@ suite('mergeStateReconcile — latestConclusions census mechanics', function () 
             'both t=0 — the id tie-break picks the SUCCESS run');
     });
 
+    test('a strictly older arrival never displaces the newer stored run', function () {
+        var rollup = [
+            { name: 'o', conclusion: 'SUCCESS', completed_at: '2026-11-06T10:00:00Z', id: 1 },
+            { name: 'o', conclusion: 'FAILURE', completed_at: '2026-11-06T09:00:00Z', id: 2 }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, null), [],
+            'newest-first rollup — the older FAILURE arrival loses on time');
+    });
+
+    test('same time, a smaller id arriving loses to the stored newer run', function () {
+        var rollup = [
+            { name: 's', conclusion: 'SUCCESS', completed_at: '2026-11-06T09:00:00Z', id: 9 },
+            { name: 's', conclusion: 'FAILURE', completed_at: '2026-11-06T09:00:00Z', id: 5 }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, null), [],
+            't tied — the smaller-id FAILURE arrival loses on id');
+    });
+
     test('an empty bookeeping prefix list falls back to the canonical stamps', function () {
         var rollup = [cr('kicker / wake', 'failure'), cr('real', 'failure')];
         assert.deepEqual(mrReal().failingCheckNames(rollup, []), ['real'],
