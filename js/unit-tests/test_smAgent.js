@@ -615,6 +615,9 @@ function makeSmAgent(opts) {
             },
             './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {}),
             './common/nakedPrReconcile.js': loadModule('js/common/nakedPrReconcile.js', makeRequire({}), {}),
+            // gh-1387 comment-reduction (L2): repeat-notice suppression for the
+            // arm and red-gate arm notices — the real machineNotice leaf.
+            './common/machineNotice.js': loadModule('js/common/machineNotice.js'),
             // gh-1369: the terminal-PR guard — pure leaf, loaded real.
             './common/prTerminalState.js': loadModule('js/common/prTerminalState.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
@@ -18917,5 +18920,178 @@ suite('smAgent: conflict_rework + fail_validation terminal-PR guard (gh-1369 rew
         assert.ok(sm.capturedPrComments.length >= 1, 'the red report still posts');
         assert.ok(sm.capturedPrComments[0].body.indexOf('rework re-queued') !== -1,
             'the report keeps the legacy re-queued wording (not the terminal skip)');
+    });
+});
+
+// ── gh-1387 comment-reduction (L2): arm-notice repeat-suppression WIRING ───
+// gh-1392 review thread 2: the smAgent wiring of noticeWithHead /
+// shouldPostNotice (the PR core gate) shipped with no unit test of its
+// suppress/re-post branches — the leaf helpers are covered in
+// test_machineNotice.js, but nothing pinned the posted arm body, the
+// same-head zero-post repeat, the new-head re-open, the red-gate suppress
+// path, or the latch firing under a suppressed notice. These tests replay
+// real ticks (the seeded prior notice is the body tick 1 actually posted),
+// so the wording is source-authored, not transcribed.
+suite('smAgent: arm notice repeat-suppression wiring (gh-1387 L2 / gh-1392 review)', function () {
+
+    var HEAD = 'a413a413a413a413a413a413a413a413a413a413';
+    var NEWHEAD = 'b414b414b414b414b414b414b414b414b414b414';
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    var THREADS_RULE = {
+        description: 'unresolved review threads on a machine-authored reviewed PR -> arm agent:rework',
+        source: 'github',
+        query: { type: 'pr', labels: ['ai_pr_reviewed'],
+                 notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'],
+                 prMachineAuthor: true, threadsResolved: false, draft: false },
+        localAction: 'arm_rework',
+        limit: 5,
+        id: 'rework-unresolved-threads'
+    };
+
+    var RED_RULE = {
+        description: 'red pre-merge gate on ANY machine-authored PR -> arm agent:rework',
+        source: 'github',
+        query: { type: 'pr', checks: ['red'],
+                 notLabels: ['ai_validating', 'validation_failed', 'agent:rework', 'chore:pin'],
+                 prMachineAuthor: true, notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+        localAction: 'arm_rework',
+        redHeadGated: true,
+        limit: 1,
+        id: 'rework-on-red-gate-unlatched'
+    };
+
+    function threadsItem(prNumber, head) {
+        return { key: 'pr-' + prNumber, labels: ['ai_pr_reviewed'], issueNumber: null,
+                 prNumber: prNumber, draft: false, headSha: head,
+                 pr: { number: prNumber, state: 'OPEN', checks: 'green',
+                       mergeState: 'BLOCKED', mergeable: false } };
+    }
+
+    function redItem(prNumber, head) {
+        return { key: 'pr-' + prNumber, labels: [], issueNumber: null,
+                 prNumber: prNumber, draft: false, headSha: head,
+                 pr: { number: prNumber, state: 'OPEN', checks: 'red',
+                       mergeState: 'BLOCKED', mergeable: false } };
+    }
+
+    function make(opts) {
+        var o = Object.assign(config('epam', 'dmtools-dart'), opts);
+        return makeSmAgent(o);
+    }
+
+    function threadsTick(sm, head) {
+        sm.action(baseParams('epam', 'dmtools-dart', [THREADS_RULE], { machineAuthor: 'ai-teammate' }));
+        return sm;
+    }
+
+    test('first arm posts the notice with the appended head-token line (marker prefix intact)', function () {
+        var sm = make({ github: { items: [threadsItem(1211, HEAD)],
+            pr: { number: 1211, body: 'Closes #1210', head: { sha: HEAD } }, prComments: [] } });
+        threadsTick(sm, HEAD);
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the arm label lands');
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one arm notice');
+        var body = sm.capturedPrComments[0].body;
+        var firstLine = body.split('\n')[0];
+        assert.ok(firstLine.indexOf('🧵 Unresolved review threads — rework armed.') === 0,
+            'the marker-prefix FIRST line is untouched — the classifier key holds, got: ' + firstLine);
+        var lastLine = body.split('\n').pop();
+        assert.equal(lastLine, '(arm head ' + HEAD.substring(0, 7) + ')',
+            'the posted body ends with the head-token line the dedup keys on');
+        assert.equal(sm.capturedTriggers.length, 0, 'arm_rework never dispatches');
+    });
+
+    test('a same-head repeat arm posts NO comment — label only, suppression logged', function () {
+        var sm1 = make({ github: { items: [threadsItem(1211, HEAD)],
+            pr: { number: 1211, body: 'Closes #1210', head: { sha: HEAD } }, prComments: [] } });
+        threadsTick(sm1, HEAD);
+        assert.equal(sm1.capturedPrComments.length, 1, 'first arm posts');
+
+        var sm2 = make({ captureConsole: true, github: { items: [threadsItem(1211, HEAD)],
+            pr: { number: 1211, body: 'Closes #1210', head: { sha: HEAD } },
+            prComments: [{ user: { login: 'ai-teammate' }, body: sm1.capturedPrComments[0].body }] } });
+        threadsTick(sm2, HEAD);
+
+        assert.equal(sm2.capturedPrComments.length, 0,
+            'the identical notice for the SAME head is already on the PR — zero posts');
+        assert.equal(sm2.capturedPrLabelAdds.length, 1, 'the arm itself still lands (label only)');
+        assert.ok(sm2.capturedLogs.some(function (l) {
+            return l.indexOf('arm notice suppressed') !== -1;
+        }), 'the skip is logged, not silent');
+    });
+
+    test('a new head re-opens posting — the fresh notice carries the new head token', function () {
+        var sm1 = make({ github: { items: [threadsItem(1211, HEAD)],
+            pr: { number: 1211, body: 'Closes #1210', head: { sha: HEAD } }, prComments: [] } });
+        threadsTick(sm1, HEAD);
+
+        var sm2 = make({ github: { items: [threadsItem(1211, NEWHEAD)],
+            pr: { number: 1211, body: 'Closes #1210', head: { sha: NEWHEAD } },
+            prComments: [{ user: { login: 'ai-teammate' }, body: sm1.capturedPrComments[0].body }] } });
+        threadsTick(sm2, NEWHEAD);
+
+        assert.equal(sm2.capturedPrComments.length, 1, 'a new head re-opens posting');
+        assert.equal(sm2.capturedPrComments[0].body.split('\n').pop(),
+            '(arm head ' + NEWHEAD.substring(0, 7) + ')',
+            'the fresh notice carries the NEW head token');
+    });
+
+    test('red-gate suppress path: marker line not re-posted, arm + latch still fire', function () {
+        // The red-gate body leads with the red-head marker line whose count
+        // advances per arm, so a same-head repeat normally re-posts (budget
+        // advanced). The suppression fires exactly when the budget read does
+        // NOT advance — modeled here with an uppercase sha the red-marker
+        // parser ([0-9a-f]) cannot key: priorReds stays 0 on both ticks, the
+        // first line is identical, and the second arm must skip the post
+        // while the label and the gh-806 rework latch still land.
+        var UHEAD = 'A413A413A413A413A413A413A413A413A413A413';
+        var SP = { channel: 'release', repo: 'epam/dmtools-dart', asset: 'fa-state.json' };
+        function redTickOpts(prComments, captureConsole) {
+            return { captureConsole: captureConsole === true,
+                github: { items: [redItem(413, UHEAD)],
+                    pr: { number: 413, body: 'Closes #412', head: { sha: UHEAD } },
+                    prComments: prComments,
+                    // keep every publish-block read local (publishTick default)
+                    prList: '[]', workflowApiRuns: [] } };
+        }
+        function redTick(sm) {
+            sm.action(baseParams('epam', 'dmtools-dart', [RED_RULE],
+                { machineAuthor: 'ai-teammate', statePublish: SP }));
+            return sm;
+        }
+
+        var sm1 = redTick(make(redTickOpts([])));
+        assert.equal(sm1.capturedPrComments.length, 1, 'first red-gate arm posts');
+        var posted = sm1.capturedPrComments[0].body;
+        assert.ok(posted.split('\n')[0].indexOf('🔴 red head ' + UHEAD) === 0,
+            'the red-gate notice leads with the shared red-head marker line');
+
+        var sm2 = redTick(make(redTickOpts([{ user: { login: 'ai-teammate' }, body: posted }], true)));
+        assert.equal(sm2.capturedPrComments.length, 0,
+            'the identical red-gate notice for the same head is already posted — zero posts');
+        assert.equal(sm2.capturedPrLabelAdds.length, 1, 'the arm still lands');
+        assert.ok(sm2.capturedLogs.some(function (l) {
+            return l.indexOf('red-gate arm notice suppressed') !== -1;
+        }), 'the red-gate skip is logged, not silent');
+
+        // The suppressed path still fires armReworkLatch — the tick's
+        // published snapshot carries the (pr, head) in-flight key.
+        var putCmd = null;
+        sm2.capturedCliCommands.forEach(function (c) {
+            if (c.command.indexOf('-X PUT repos/epam/dmtools-dart/contents/data/fa-state.json ') !== -1) {
+                putCmd = c.command;
+            }
+        });
+        assert.ok(putCmd, 'the tick published its snapshot');
+        var m = putCmd.match(/printf %s '(.*)' \| base64/);
+        assert.ok(m, 'snapshot payload extractable');
+        var state = JSON.parse(m[1]);
+        assert.ok(state.reworkInFlight && state.reworkInFlight['pr-413@' + UHEAD],
+            'armReworkLatch fired under the suppressed notice — reworkInFlight carries pr-413@<head>');
     });
 });

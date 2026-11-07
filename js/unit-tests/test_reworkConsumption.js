@@ -44,6 +44,19 @@ suite('reworkConsumption — consume-audit marker (gh-840 audit log)', function 
         assert.ok(visible.length <= 3, 'audit is one short line + marker, got ' + visible.length);
     });
 
+    // gh-1387 comment-reduction (L2): the audit's legal boilerplate rode the
+    // visible tail verbatim on every consume (4× on live PR #1387). The
+    // marker is the machine contract; the tail is now one short line.
+    test('gh-1387: consume-audit tail is the one-line form (no repeated legalese)', function () {
+        var body = rc.buildConsumeAuditComment('cross-anchor', 'aaaabbbbccccddddeeeeffff0000111122223333');
+        assert.ok(body.indexOf('The label must come off ONLY') === -1, 'legalese removed from the tail');
+        assert.contains(body, 'gh-840 audit.');
+        var lines = body.split('\n').filter(function (l) { return l.trim(); });
+        assert.equal(lines.length, 2, 'exactly marker + one visible line');
+        assert.ok(lines[1].indexOf('🏷️ agent:rework consumed (path: cross-anchor, head aaaabbb)') === 0,
+            'visible line leads with the short form, got: ' + lines[1]);
+    });
+
     test('buildConsumeAuditComment rejects unknown paths and missing head', function () {
         assert.notOk(rc.buildConsumeAuditComment('sneaky', 'abc1234'), 'unknown path → no comment');
         assert.notOk(rc.buildConsumeAuditComment('dispatch', ''), 'no head → no comment');

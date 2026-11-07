@@ -117,3 +117,92 @@ suite('nakedPrReconcile.sweep (gh-1097)', function () {
         assert.deepEqual(sink.labels, [[10, 'agent:review']]);
     });
 });
+
+// ── gh-1387 comment-reduction (L2): consume-explained re-arm short tail ────
+suite('consume-explained re-arm (gh-1387 L2)', function () {
+    var HEAD = '85b6e8d4a2cedad6f9fa8a184d24793d01c129c4';
+    function consumeBody(head, path) {
+        return '<!-- dmtools:rework-consume ' + JSON.stringify({ path: path || 'cross-anchor', head: head, at: '2026-11-06T07:14:17.465Z' }) +
+            ' -->\n🏷️ agent:rework consumed';
+    }
+
+    test('consumeMarkerHead parses the head out of gh-840 markers only', function () {
+        var m = nakedMod();
+        assert.equal(m.consumeMarkerHead({ body: consumeBody(HEAD) }), HEAD);
+        assert.equal(m.consumeMarkerHead({ body: '<!-- dmtools:naked-pr-rearm {"head":"' + HEAD + '"} -->' }), null);
+        assert.equal(m.consumeMarkerHead({ body: 'no marker' }), null);
+        assert.equal(m.consumeMarkerHead({ body: '<!-- dmtools:rework-consume {broken' }), null);
+    });
+
+    test('isConsumeExplained: same-head consume marker explains the nakedness', function () {
+        var m = nakedMod();
+        assert.equal(m.isConsumeExplained([{ body: consumeBody(HEAD) }], HEAD), true);
+        assert.equal(m.isConsumeExplained([{ body: consumeBody('4d6053bfd33f56f0471fec8d4210e56a561d4d39') }], HEAD), false,
+            'different head is NOT this strip story');
+        assert.equal(m.isConsumeExplained([], HEAD), false);
+        assert.equal(m.isConsumeExplained([{ body: consumeBody(HEAD) }], null), false);
+    });
+
+    test('buildAuditComment: marker identical in both variants; tail differs', function () {
+        var m = nakedMod();
+        var full = m.buildAuditComment(1387, 1369, 'agent:review', HEAD, false);
+        var short = m.buildAuditComment(1387, 1369, 'agent:review', HEAD, true);
+        var markerOf = function (b) { return b.split('-->')[0]; };
+        assert.equal(markerOf(full), markerOf(short), 'dedup anchor + parser payload byte-identical');
+        assert.ok(full.indexOf('Naked-PR reconciliation (gh-1097)') !== -1);
+        assert.ok(short.indexOf('Naked-PR reconciliation') === -1, 'no repeated consumption story');
+        assert.ok(short.indexOf('gh-840') !== -1 && short.indexOf('re-armed `agent:review`') !== -1);
+        var legacy = m.buildAuditComment(1387, 1369, 'agent:review', HEAD);
+        assert.equal(legacy, full, '4-arg call keeps the legacy full tail');
+    });
+
+    test('applyPlan posts the SHORT body when the comments carry a same-head consume marker', function () {
+        var m = nakedMod();
+        var sink = { labels: [], comments: [], logs: [] };
+        var deps = nakedDeps({ 1369: ['agent:review'] }, sink, false, {
+            10: [{ body: consumeBody('h10') }]
+        });
+        m.sweep([{ number: 10, labels: [], head: { ref: 'ai/gh-1369', sha: 'h10' }, body: 'closes #1369' }], deps);
+        assert.equal(sink.comments.length, 1);
+        assert.ok(sink.comments[0][1].indexOf('gh-840') !== -1, 'short explained tail used');
+        assert.ok(sink.comments[0][1].indexOf('Naked-PR reconciliation') === -1);
+    });
+
+    test('applyPlan keeps the full body without a same-head consume marker (direct applyPlan, partial deps)', function () {
+        var m = nakedMod();
+        var sink = { labels: [], comments: [], logs: [] };
+        var deps = nakedDeps({ 1369: ['agent:review'] }, sink, false, {
+            10: [{ body: consumeBody('4d6053bfd33f56f0471fec8d4210e56a561d4d39') }]
+        });
+        m.sweep([{ number: 10, labels: [], head: { ref: 'ai/gh-1369', sha: 'h10' }, body: 'closes #1369' }], deps);
+        assert.equal(sink.comments.length, 1);
+        assert.ok(sink.comments[0][1].indexOf('Naked-PR reconciliation (gh-1097)') !== -1, 'full tail kept');
+        var sink2 = { labels: [], comments: [], logs: [] };
+        var partial = nakedDeps({ 1369: ['agent:review'] }, sink2, false);
+        delete partial.prComments;
+        m.applyPlan({ pr: 10, issue: 1369, label: 'agent:review', head: 'h10' }, partial);
+        assert.deepEqual(sink2.labels, [[10, 'agent:review']]);
+        assert.ok(sink2.comments[0][1].indexOf('Naked-PR reconciliation (gh-1097)') !== -1,
+            'no prComments dep → fail open to the full tail');
+    });
+
+    // gh-1392 review thread 4: sweep → notYetRearmed already fetches the PR
+    // comments for the same-head dedup, then applyPlan fetched the identical
+    // list again for isConsumeExplained — two identical API reads per
+    // re-armed PR. The already-read list must be shared (one fetch per plan).
+    test('sweep shares ONE prComments fetch per applied plan', function () {
+        var m = nakedMod();
+        var sink = { labels: [], comments: [], logs: [] };
+        var deps = nakedDeps({ 1369: ['agent:review'] }, sink, false, {
+            10: [{ body: consumeBody('h10') }]
+        });
+        var fetches = 0;
+        var orig = deps.prComments;
+        deps.prComments = function (n) { fetches++; return orig(n); };
+        m.sweep([{ number: 10, labels: [], head: { ref: 'ai/gh-1369', sha: 'h10' }, body: 'closes #1369' }], deps);
+        assert.equal(sink.comments.length, 1, 'plan still applied');
+        assert.ok(sink.comments[0][1].indexOf('gh-840') !== -1, 'explained tail still derived from the same list');
+        assert.equal(fetches, 1,
+            'two identical API reads per re-arm is the finding — the dedup read and the explained-tail read must share one fetch');
+    });
+});

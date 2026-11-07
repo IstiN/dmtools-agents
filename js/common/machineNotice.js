@@ -43,6 +43,21 @@ var MACHINE_NOTICE_MARKERS = [
     '⚠️ Merge conflict with main',
     // js/smAgent.js — fail_validation reports (all wording variants)
     '⚠️ Validation CI went red on the head',
+    // js/smAgent.js redHeadMarkerLine — the shared red-budget marker line the
+    // next arm + validate-armed redHeadSkip re-read from raw comments
+    // (gh-1387: was missing here, so it leaked into the general-comments
+    // section of every review/rework context build)
+    '🔴 red head ',
+    // js/smAgent.js — the red-gate arm notice when the head SHA is unknown
+    // (armNoticeHead → null: redGateLine is null too, so the body LEADS with
+    // the bare wording; gh-1392 review: without this entry the notice passed
+    // the gh-808 filter and leaked into every review/rework context build —
+    // headless notices never dedup, so the filter is the only guard)
+    '🔴 Red pre-merge gate on the head',
+    // js/common/validationLiveness.js — zombie re-dispatch audit line, the
+    // zombie counter re-reads it from raw comments (gh-1387: same gap as the
+    // red-head line — PR-level bookkeeping that leaked into agent context)
+    '🔄 zombie re-dispatch ',
     // js/smAgent.js — guest-PR park notice + human escalation (#701 style)
     '🛑 validation_failed',
     '🛑 @',
@@ -149,6 +164,46 @@ function isBotAuthor(login) {
     if (BOT_AUTHORS.indexOf(l) !== -1) return true;
     return l.indexOf('[bot]') !== -1;
 }
+// ── gh-1387 comment-reduction (L2): repeat-notice suppression ─────────────
+// The arming/red-gate notices repeat verbatim per rework lap; only the head
+// changes (live: dmtools-agents PR #1387 — two identical 🧵 notices 6 minutes
+// apart). The poster appends a short head line (the MACHINE_NOTICE_MARKERS
+// prefix — the classifier key — stays the FIRST line, so classification is
+// unchanged) and suppresses the post when an identical notice for the SAME
+// head is already on the PR. A new head re-opens posting; a comment-read
+// failure fails open (empty history → post).
+
+/** The short head token appended to a repeatable notice, or '' with no head. */
+function noticeHeadToken(head) {
+    var h = String(head || '');
+    return h ? '(arm head ' + h.substring(0, 7) + ')' : '';
+}
+
+/** A notice body with the head token appended (unchanged when headless). */
+function noticeWithHead(body, head) {
+    var token = noticeHeadToken(head);
+    return token ? String(body) + '\n' + token : body;
+}
+
+/**
+ * True when a comment starting with the SAME first line (the marker prefix)
+ * already carries this head's token — i.e. the identical notice for the same
+ * head is already posted. Headless notices never dedup (nothing to key on).
+ */
+function hasSameNotice(comments, body, head) {
+    var token = noticeHeadToken(head);
+    if (!token) return false;
+    var firstLine = String(body || '').split('\n')[0];
+    return (comments || []).some(function (c) {
+        var b = String((c && c.body) || '');
+        return b.indexOf(firstLine) === 0 && b.indexOf(token) !== -1;
+    });
+}
+
+/** The poster's gate: true when the notice should be posted (fail-open). */
+function shouldPostNotice(comments, body, head) {
+    return !hasSameNotice(comments, body, head);
+}
 
 module.exports = {
     MACHINE_NOTICE_MARKERS: MACHINE_NOTICE_MARKERS,
@@ -158,5 +213,9 @@ module.exports = {
     isMachineNoticeBody: isMachineNoticeBody,
     isDmtoolsMarkerBody: isDmtoolsMarkerBody,
     isMachineNotice: isMachineNotice,
-    isBotAuthor: isBotAuthor
+    isBotAuthor: isBotAuthor,
+    noticeHeadToken: noticeHeadToken,
+    noticeWithHead: noticeWithHead,
+    hasSameNotice: hasSameNotice,
+    shouldPostNotice: shouldPostNotice
 };

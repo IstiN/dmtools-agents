@@ -83,9 +83,7 @@ function buildConsumeAuditComment(path, headSha, atIso) {
     };
     return CONSUME_MARKER_PREFIX + JSON.stringify(payload) + MARKER_SUFFIX + '\n' +
         '🏷️ agent:rework consumed (path: ' + path + ', head ' +
-        String(headSha).substring(0, 7) + ') — gh-840 consumption audit. ' +
-        'The label must come off ONLY via a successful rework close; if no close ' +
-        'follows, the tick sweep re-arms it.';
+        String(headSha).substring(0, 7) + ') — gh-840 audit.';
 }
 
 /**

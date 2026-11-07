@@ -228,6 +228,9 @@ var mutexRegistryModule = require('./common/mutexRegistry.js');
 var githubSourceModule = require('./sm/sources/githubSource.js');
 // gh-1097: post-lane naked-PR reconciliation sweep (label re-arm only).
 var nakedPrReconcileModule = require('./common/nakedPrReconcile.js');
+// gh-1387 comment-reduction (L2): repeat-notice suppression for the arm and
+// red-gate arm notices (same head + same marker prefix already posted → skip).
+var machineNoticeModule = require('./common/machineNotice.js');
 // gh-1028 (hoisted, never lazy — the gh-823 pack-require rule): the
 // branch-keyed in-flight leg probe — an ACTIVE ai-teammate run whose
 // head_branch IS the dispatch branch keeps a second leg off that branch
@@ -2233,21 +2236,48 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     }
                 }
                 githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'agent:rework');
+                // gh-1387 comment-reduction (L2): the arm head keys the repeat
+                // suppression — a re-arm on a head that already carries the
+                // identical notice adds only the label, not a second copy of
+                // the boilerplate. Same expression the gh-957 guard computed
+                // above (noopHead) — reuse it (gh-1392 digest). Comment read fails
+                // open (post as before).
+                var armNoticeHead = noopHead;
+                var armRecentComments = prCommentList(effectiveRepoInfo, ticket.prNumber);
                 if (redGated) {
                     // gh-917 red-gate arm: the comment LEADS with the shared
                     // red-head marker line (the budget the next arm and the
                     // validate-armed redHeadSkip both read), then the reason.
-                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber,
+                    // The red count inside the marker line makes a repeat post
+                    // only when the budget advanced on the same head.
+                    var redGateBody = machineNoticeModule.noticeWithHead(
                         (redGateLine ? redGateLine + '\n' : '') +
                         '\uD83D\uDD34 Red pre-merge gate on the head with no armed validation — rework armed' +
                         ' (gh-917: first validation included, review or no review). The rework runner pushes a' +
                         ' fix and validation re-runs on the new head (validate-fresh). After ' + redGateCap +
                         ' red arming attempts on the SAME head the arm is withheld and a human is escalated' +
-                        ' (no infinite retry).');
+                        ' (no infinite retry).', armNoticeHead);
+                    if (machineNoticeModule.shouldPostNotice(armRecentComments, redGateBody, armNoticeHead)) {
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, redGateBody);
+                    } else {
+                        console.log('  ⏭️  ' + key + ' red-gate arm notice suppressed — identical notice already' +
+                            ' posted on head ' + String(armNoticeHead || '').substring(0, 7) + ' (gh-1387 reduction)');
+                    }
                     console.log('  ✅ ' + key + ' agent:rework armed (red pre-merge gate on PR #' +
                         ticket.prNumber + ', first validation included — gh-917)');
                 } else {
-                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed ' + '(ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: ' + 'agent:rework is armed on this PR and the rework runner will work through the threads and push. ' + 'Validation re-runs automatically afterwards, and once the threads are resolved a fresh ' + 're-review is armed (review-threads-resolved).');
+                    var armNoticeBody = machineNoticeModule.noticeWithHead(
+                        '🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed ' +
+                        '(ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: ' +
+                        'agent:rework is armed on this PR and the rework runner will work through the threads and push. ' +
+                        'Validation re-runs automatically afterwards, and once the threads are resolved a fresh ' +
+                        're-review is armed (review-threads-resolved).', armNoticeHead);
+                    if (machineNoticeModule.shouldPostNotice(armRecentComments, armNoticeBody, armNoticeHead)) {
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, armNoticeBody);
+                    } else {
+                        console.log('  ⏭️  ' + key + ' arm notice suppressed — identical notice already posted' +
+                            ' on arm head ' + String(armNoticeHead || '').substring(0, 7) + ' (gh-1387 reduction)');
+                    }
                     console.log('  ✅ ' + key + ' agent:rework armed (unresolved review threads on PR #' + ticket.prNumber + ')');
                 }
                 armReworkLatch(ticket);
