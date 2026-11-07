@@ -19,12 +19,19 @@ var vlReal = function () {
     return vlReal.mod;
 };
 
+// gh-140: smProvider requires ./mergeStateReconcile.js at LOAD TIME —
+// the real module (never a stub: the reconcile decision must stay real).
+var msrReal = function () {
+    if (!msrReal.mod) msrReal.mod = loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {});
+    return msrReal.mod;
+};
+
 suite('smProvider', function () {
 
     var MOD = 'js/common/smProvider.js';
 
     function loadProvider(provider, mocks) {
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, mocks || {}), mocks || {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, mocks || {}), mocks || {});
         return mod.createSmProvider({
             scm: { provider: provider },
             repository: { owner: 'mygroup', repo: 'my-repo' }
@@ -34,7 +41,7 @@ suite('smProvider', function () {
     // ── shared contract ──────────────────────────────────────────────────────
 
     test('unknown provider is rejected loudly', function () {
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {});
         var threw = false;
         try {
             mod.createSmProvider({ scm: { provider: 'bitbucket' },
@@ -44,7 +51,7 @@ suite('smProvider', function () {
     });
 
     test('missing repository is rejected loudly', function () {
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {});
         var threw = false;
         try { mod.createSmProvider({ scm: { provider: 'github' } }); }
         catch (e) { threw = true; }
@@ -498,7 +505,7 @@ suite('smProvider', function () {
         // gh-1059 rework: ONE exported resolver (smProvider) is consumed by
         // githubSource.js too — these branches are the CRAP-gate coverage
         // the near-duplicate pair used to split between two files.
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {});
         var full = mod.ghPrHeadRepoFull;
         assert.equal(typeof full, 'function',
             'the resolver is exported for the githubSource consumer');
@@ -789,7 +796,7 @@ suite('smProvider', function () {
 
     test('github: preseed openPrs/mergedPrs eliminates the github_list_prs fetch', function () {
         var listCalls = 0;
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
             github_list_prs: function () { listCalls++; return []; },
             github_list_branches: function () { return []; }
         });
@@ -808,7 +815,7 @@ suite('smProvider', function () {
 
     test('github: preseed branchHeads eliminates github_list_branches (deterministic base check)', function () {
         var branchCalls = 0;
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
             github_get_pr: function () {
                 return { state: 'open', mergeable: true, base: { ref: 'main', sha: 'basesha' } };
             },
@@ -826,7 +833,7 @@ suite('smProvider', function () {
 
     test('github: TTL hit across two provider instances (shared per-tick cache)', function () {
         var listCalls = 0;
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
             github_list_prs: function (a) {
                 listCalls++;
                 return a.state === 'open'
@@ -850,7 +857,7 @@ suite('smProvider', function () {
 
     test('github: snapshot(kinds) skips unneeded legs (merged list unused by the PR-rule batch)', function () {
         var listCalls = 0, branchCalls = 0;
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
             github_list_prs: function (args) {
                 listCalls++;
                 return args && args.state === 'merged'
@@ -870,7 +877,7 @@ suite('smProvider', function () {
 
     test('github: cache miss after TTL expiry re-fetches', function () {
         var listCalls = 0;
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
             github_list_prs: function () { listCalls++; return []; }
         });
         var p = mod.createSmProvider({ scm: { provider: 'github' },
@@ -885,7 +892,7 @@ suite('smProvider', function () {
 
     test('github: prStatus memo — same number fetched once per tick, per-number keys, TTL re-fetch', function () {
         var getCalls = 0, checkCalls = 0;
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
             github_get_pr: function () {
                 getCalls++;
                 return { state: 'open', mergeable: true, mergeable_state: 'clean',
@@ -913,7 +920,7 @@ suite('smProvider', function () {
     test('github: prStatus memo rides snapshot/preseed + memoPrStatus write-back (worker round-trip)', function () {
         var getCalls = 0;
         function makeProvider() {
-            var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {
+            var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
                 github_get_pr: function () {
                     getCalls++;
                     return { state: 'open', mergeable: true, mergeable_state: 'clean',
@@ -939,7 +946,7 @@ suite('smProvider', function () {
         // Next batch's worker: fresh module state, rehydrated from preseed
         // — the SAME status comes back with zero new fetches.
         var before = getCalls;
-        var mainMod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {
+        var mainMod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
             github_get_pr: function () { getCalls++; return { state: 'open' }; },
             github_get_commit_check_runs: function () { return { check_runs: [] }; },
             github_list_prs: function () { return []; },
@@ -970,7 +977,7 @@ suite('smProvider: ioCacheDrop (owner directive 2026-10-04 — red yields the sl
         // tick must see the freed mutex — the cached entry is dropped, the
         // next listOpenPrs() re-fetches instead of serving the stale arm.
         var listCalls = 0;
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
             github_list_prs: function () {
                 listCalls++;
                 return JSON.stringify([{ number: listCalls }]); // payload changes per fetch
@@ -997,7 +1004,7 @@ suite('smProvider: ioCacheDrop (owner directive 2026-10-04 — red yields the sl
     });
 
     test('ioCacheDrop is a no-op for absent entries (never throws)', function () {
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {});
         mod._cache.entries = {};
         mod.ioCacheDrop('nobody', 'nowhere', 'openPrs', null); // must not throw
     });
@@ -1018,7 +1025,7 @@ suite('smProvider — gh-807 machine verdict records', function () {
     function loadWith(comments, calls) {
         var rvMod = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
         var mod = loadModule(MOD,
-            makeRequire({ './reviewVerdicts.js': rvMod, './validationLiveness.js': vlReal() }, {}),
+            makeRequire({ './reviewVerdicts.js': rvMod, './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}),
             {
                 github_get_pr_comments: function () {
                     calls.push(1);
@@ -1077,7 +1084,7 @@ suite('smProvider — gh-807 machine verdict records', function () {
     test('probe failure fails open to [] — the guards go inert, never red', function () {
         var rvMod = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
         var mod = loadModule(MOD,
-            makeRequire({ './reviewVerdicts.js': rvMod, './validationLiveness.js': vlReal() }, {}),
+            makeRequire({ './reviewVerdicts.js': rvMod, './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}),
             {
                 github_get_pr_comments: function () { throw new Error('api down'); }
             });
@@ -1119,7 +1126,7 @@ suite('smProvider — gh-828 post-APPROVE thread primitives', function () {
 
     var MOD = 'js/common/smProvider.js';
     function loadProvider(mocks) {
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, mocks || {}), mocks || {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, mocks || {}), mocks || {});
         return mod.createSmProvider({
             scm: { provider: 'github' },
             repository: { owner: 'mygroup', repo: 'my-repo' }
@@ -1200,7 +1207,7 @@ suite('smProvider — gh-1009 CRAP characterization (paths touched by the provid
     }
 
     function loadMod(mocks) {
-        return loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvMod(), './validationLiveness.js': vlReal() }, mocks || {}), mocks || {});
+        return loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvMod(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, mocks || {}), mocks || {});
     }
 
     function loadProvider(provider, mocks) {
@@ -1688,7 +1695,7 @@ suite('smProvider: listOpenPrsLive — gh-1000 phantom-heal probe surface', func
 
     function loadGithub(payloads) {
         var listCalls = 0;
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
             github_list_prs: function (args) {
                 listCalls++;
                 var idx = Math.min(listCalls - 1, payloads.length - 1);
@@ -1748,7 +1755,7 @@ suite('smProvider — gh-1070 maintainer-edits probe resolver', function () {
         // maintainer_can_modify, GraphQL maintainerCanModify — ONE
         // exported resolver (gh-1059 pattern), consumed by githubSource
         // on the PR-list path and by smAgent on the fresh-probe path.
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}), {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {});
         var mcm = mod.ghPrMaintainerCanModify;
         assert.equal(typeof mcm, 'function', 'the resolver is exported for consumers');
         assert.equal(mcm({ maintainer_can_modify: true }), true, 'REST dialect: editable');
@@ -1772,7 +1779,7 @@ suite('smProvider — gh-1221 createSmProvider characterization', function () {
 
     function gh1221Load(mocks) {
         return loadModule(GH1221_MOD,
-            makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, mocks || {}),
+            makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, mocks || {}),
             mocks || {});
     }
 
@@ -1841,7 +1848,7 @@ suite('smProvider — gh-1352 ledger primitives: postPrComment invalidates the p
     // comments. The per-tick memo rides between the provider and the wire.
     function loadLedgerProvider(comments, calls) {
         var mod = loadModule(MOD,
-            makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}),
+            makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}),
             {
                 github_get_pr_comments: function () {
                     calls.fetches++;
@@ -1915,7 +1922,7 @@ suite('smProvider — gh-1366 failure-analyzer issue-comment primitives', functi
 
     function loadIssueProvider(comments, calls) {
         var mod = loadModule(MOD,
-            makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal() }, {}),
+            makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}),
             {
                 github_get_pr_comments: function (args) {
                     calls.fetches.push(args);

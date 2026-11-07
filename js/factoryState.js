@@ -158,6 +158,12 @@ var machineAuthorModule = require('./common/machineAuthor.js');
 // gh-806: the rework in-flight latch rides the snapshot (state.reworkInFlight,
 // factory-data branch) so the NEXT tick's armer consults what THIS tick armed.
 var reworkLatchModule = require('./common/reworkLatch.js');
+// gh-140: the mergeStateStatus reconcile — the card cite is the tracked-tier
+// fold over the runs list; a failing check OUTSIDE the tracked set (the live
+// gh-1392 docs-freshness freeze) never reaches it and the board read success
+// on a head the machine's own merge lanes refuse. Hoisted (gh-823 rule);
+// the module requires nothing back.
+var mergeStateReconcileModule = require('./common/mergeStateReconcile.js');
 
 // Schema 1 lane order (board back-compat; old snapshots on the data branch).
 var LANE_ORDER_V1 = ['validating', 'approved_queue', 'review', 'fresh'];
@@ -967,6 +973,13 @@ function buildFactoryState(input) {
     function verdictFor(sha) {
         return headVerdict(runs, ciWorkflow, sha);
     }
+    // gh-140: open cards reconcile the cite against the PR's real
+    // mergeStateStatus (AC3 registration — see reconcileCardChecks); the
+    // merged lane keeps the plain cite (merged PRs do not re-merge).
+    function checksFor(pr) {
+        return reconcileCardChecks(pr, verdictFor(pr.head && pr.head.sha),
+            runs, ciWorkflow);
+    }
 
     var lanes = {}; LANE_ORDER.forEach(function (l) { lanes[l] = []; });
     var backlog = {}; BACKLOG_BUCKETS.forEach(function (b) { backlog[b] = []; });
@@ -985,7 +998,7 @@ function buildFactoryState(input) {
     sortAndCapBacklog(backlog);
 
     // open PR cards
-    openPrEntries(prs, verdictFor, now, tmap, pix, hasPrev)
+    openPrEntries(prs, checksFor, now, tmap, pix, hasPrev)
         .forEach(function (e) { lanes[e.lane].push(e.card); });
 
     // recently merged PRs (terminal lane) — GitHub fields carry the ends,
@@ -1120,11 +1133,92 @@ function openPrCard(pr, checks, now, tmap, pix, hasPrev) {
 }
 
 /** All open PR cards, sorted by PR number (the same FIFO the mutex uses). */
-function openPrEntries(prs, verdictFor, now, tmap, pix, hasPrev) {
+function openPrEntries(prs, checksFor, now, tmap, pix, hasPrev) {
     return prs.map(function (pr) {
-        return openPrCard(pr, verdictFor(pr.head && pr.head.sha),
+        return openPrCard(pr, checksFor(pr),
             now, tmap, pix, hasPrev);
     }).sort(function (a, b) { return a.card.pr - b.card.pr; });
+}
+
+// gh-140 AC3 — the auditable registration on the card's checks record: a
+// green-ish cite (the tracked-tier fold said success) on a head whose PR
+// body reports mergeStateStatus UNSTABLE/FAILED is NOT mergeable — the
+// failing runs on this head OUTSIDE the tracked set (real, terminal,
+// non-cite — side-run legs excluded) ride `untrackedFailing` with the raw
+// `mergeStateStatus`, so the state JSON names the blind spot. Red cites and
+// clean/unreported merge states pass through untouched (AC2: fully-green
+// cards stay byte-identical).
+// The PR-reported merge state (GraphQL mergeStateStatus or the REST
+// mergeable_state), normalized for the reconcile — null when the body
+// reports nothing (never a fabricated verdict).
+function reportedMergeState(pr) {
+    return mergeStateReconcileModule.normalizeMergeStateStatus(
+        (pr && (pr.mergeStateStatus || pr.mergeable_state)) || null);
+}
+
+// Only a green cite may gain reconcile keys — a red/pending cite already
+// owns the card (the failing check is IN the tracked set). The cite label
+// may ride verdict or conclusion; absent both it is empty → not green.
+function isGreenCite(checks) {
+    var cite = String(checks.verdict || checks.conclusion || '').toLowerCase();
+    return cite === 'success' || cite === 'green';
+}
+
+function reconcileCardChecks(pr, checks, runsList, ciWorkflow) {
+    if (!checks) return checks;
+    var raw = reportedMergeState(pr);
+    if (!mergeStateReconcileModule.isUnstableMergeState(raw)) return checks;
+    if (!isGreenCite(checks)) return checks;
+    var out = Object.assign({}, checks);
+    out.untrackedFailing = failingUntrackedRuns(runsList,
+        pr && pr.head && pr.head.sha, checks.runId, ciWorkflow);
+    out.mergeStateStatus = raw;
+    return out;
+}
+
+// The cite itself is never untracked — it IS the tracked verdict's evidence.
+function isCiteRun(r, citeRunId) {
+    return citeRunId != null && String(r.id) === String(citeRunId);
+}
+
+// Terminal (completed) failure conclusions only — pending and green runs
+// are not failures.
+function isTerminalFailure(r) {
+    if (!r || r.status !== 'completed') return false;
+    var c = String(r.conclusion || '').toLowerCase();
+    return c === 'failure' || c === 'timed_out';
+}
+
+// One failing-run census candidate: the head's runs only, excluding the
+// cite itself, non-terminal runs, and side-run legs (gh-816: evidence,
+// not checks).
+function isUntrackedFailure(r, sha, citeRunId, ciWorkflow) {
+    if (!r || r.head_sha !== sha) return false;
+    if (isCiteRun(r, citeRunId)) return false;
+    if (!isTerminalFailure(r)) return false;
+    return isValidationRun(r, ciWorkflow);
+}
+
+// Workflow-run identity for the card (probe-free: the runs list is already
+// in hand). Missing fields degrade to null for the state JSON.
+function untrackedRunRecord(r) {
+    return {
+        name: r.name || null,
+        workflow: r.path || null,
+        conclusion: String(r.conclusion).toLowerCase(),
+        at: r.created_at || null,
+        url: r.html_url || null
+    };
+}
+
+// The failing-run census for the card: terminal (non-cancelled) runs on the
+// head that concluded failure/timed_out, are REAL validation-scope runs
+// (side-run legs are evidence, not checks — gh-816) and are not the cite
+// itself.
+function failingUntrackedRuns(runsList, sha, citeRunId, ciWorkflow) {
+    return (runsList || []).filter(function (r) {
+        return isUntrackedFailure(r, sha, citeRunId, ciWorkflow);
+    }).map(untrackedRunRecord);
 }
 
 /** merged_recent retention: merged within the last 7d (parseable merged_at). */
@@ -1507,6 +1601,8 @@ module.exports = {
     citeTier: citeTier,
     citeFromPool: citeFromPool,
     headVerdict: headVerdict,
+    reconcileCardChecks: reconcileCardChecks,
+    failingUntrackedRuns: failingUntrackedRuns,
     isTerminalVerdict: isTerminalVerdict,
     isActiveRun: isActiveRun,
     issueEntry: issueEntry,

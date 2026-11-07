@@ -312,6 +312,17 @@ function _checkRollup(pr) {
     return pr ? (pr.checkConclusion || pr.checks) : undefined;
 }
 
+// gh-140: the TRACKED-SET verdict — what the check-tracker's own fold said
+// before the mergeStateStatus reconcile (status.trackedVerdict). Falls back
+// to the effective verdict for stubs that never populate the new field, so
+// `trackedChecks: 'green'` degrades to today's `checks: 'green'` semantics.
+// The re-review armers gate on THIS: an untracked failing check reds the
+// EFFECTIVE verdict (the bounded red-head flow owns it) while the machine's
+// own validation stayed green — exactly the head a re-review may re-enter.
+function _trackedChecksValue(pr) {
+    return pr ? (pr.trackedVerdict || pr.checkConclusion || pr.checks) : undefined;
+}
+
 function _labelListMatch(anyOf, prLs) {
     return anyOf.some(function (l) { return prLs.indexOf(l) !== -1; });
 }
@@ -340,6 +351,10 @@ function _prChecksGuardsFail(q, item) {
     // 'none' or 'pending' — validate-fresh matches both.
     if (q.prChecks && wantList(q.prChecks).indexOf(_checkRollup(item.pr)) === -1) return true;
     if (q.checks && wantList(q.checks).indexOf(_checkRollup(item.pr)) === -1) return true;
+    // gh-140: the tracked-set verdict guard — 'green' here admits heads
+    // whose tracked validation is green even when an untracked failing
+    // check reds the effective verdict (see _trackedChecksValue).
+    if (q.trackedChecks && wantList(q.trackedChecks).indexOf(_trackedChecksValue(item.pr)) === -1) return true;
     return false;
 }
 
@@ -1164,7 +1179,8 @@ function _applyMutexFilter(q, items, provider, repoInfo) {
 function _prStatusFetchNeeded(q) {
     // gh-807: the verdict guards read item.pr.headSha — they need the
     // status fetch too, or item.pr stays null and the guard never resolves.
-    return q.checks || q.mergeState || q.notMergeState ||
+    // gh-140: trackedChecks joins (the tracked-set verdict guard).
+    return q.checks || q.trackedChecks || q.mergeState || q.notMergeState ||
         q.mergeable !== undefined || q.prChecks ||
         q.latestVerdict || q.notLatestVerdict;
 }
