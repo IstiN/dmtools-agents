@@ -1,5 +1,0 @@
-{
-  "version": "latest",
-  "installed_skills": ["dmtools", "jira", "confluence", "github", "gitlab", "figma", "teams", "sharepoint", "ado", "testrail", "xray"],
-  "active_commands": ["/dmtools", "/dmtools-jira", "/dmtools-confluence", "/dmtools-github", "/dmtools-gitlab", "/dmtools-figma", "/dmtools-teams", "/dmtools-sharepoint", "/dmtools-ado", "/dmtools-testrail", "/dmtools-xray"]
-}

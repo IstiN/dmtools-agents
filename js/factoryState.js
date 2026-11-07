@@ -1148,13 +1148,27 @@ function openPrEntries(prs, checksFor, now, tmap, pix, hasPrev) {
 // `mergeStateStatus`, so the state JSON names the blind spot. Red cites and
 // clean/unreported merge states pass through untouched (AC2: fully-green
 // cards stay byte-identical).
+// The PR-reported merge state (GraphQL mergeStateStatus or the REST
+// mergeable_state), normalized for the reconcile — null when the body
+// reports nothing (never a fabricated verdict).
+function reportedMergeState(pr) {
+    return mergeStateReconcileModule.normalizeMergeStateStatus(
+        (pr && (pr.mergeStateStatus || pr.mergeable_state)) || null);
+}
+
+// Only a green cite may gain reconcile keys — a red/pending cite already
+// owns the card (the failing check is IN the tracked set). The cite label
+// may ride verdict or conclusion; absent both it is empty → not green.
+function isGreenCite(checks) {
+    var cite = String(checks.verdict || checks.conclusion || '').toLowerCase();
+    return cite === 'success' || cite === 'green';
+}
+
 function reconcileCardChecks(pr, checks, runsList, ciWorkflow) {
     if (!checks) return checks;
-    var raw = mergeStateReconcileModule.normalizeMergeStateStatus(
-        (pr && (pr.mergeStateStatus || pr.mergeable_state)) || null);
+    var raw = reportedMergeState(pr);
     if (!mergeStateReconcileModule.isUnstableMergeState(raw)) return checks;
-    var cite = String(checks.verdict || checks.conclusion || '').toLowerCase();
-    if (cite !== 'success' && cite !== 'green') return checks;
+    if (!isGreenCite(checks)) return checks;
     var out = Object.assign({}, checks);
     out.untrackedFailing = failingUntrackedRuns(runsList,
         pr && pr.head && pr.head.sha, checks.runId, ciWorkflow);
@@ -1162,28 +1176,49 @@ function reconcileCardChecks(pr, checks, runsList, ciWorkflow) {
     return out;
 }
 
+// The cite itself is never untracked — it IS the tracked verdict's evidence.
+function isCiteRun(r, citeRunId) {
+    return citeRunId != null && String(r.id) === String(citeRunId);
+}
+
+// Terminal (completed) failure conclusions only — pending and green runs
+// are not failures.
+function isTerminalFailure(r) {
+    if (!r || r.status !== 'completed') return false;
+    var c = String(r.conclusion || '').toLowerCase();
+    return c === 'failure' || c === 'timed_out';
+}
+
+// One failing-run census candidate: the head's runs only, excluding the
+// cite itself, non-terminal runs, and side-run legs (gh-816: evidence,
+// not checks).
+function isUntrackedFailure(r, sha, citeRunId, ciWorkflow) {
+    if (!r || r.head_sha !== sha) return false;
+    if (isCiteRun(r, citeRunId)) return false;
+    if (!isTerminalFailure(r)) return false;
+    return isValidationRun(r, ciWorkflow);
+}
+
+// Workflow-run identity for the card (probe-free: the runs list is already
+// in hand). Missing fields degrade to null for the state JSON.
+function untrackedRunRecord(r) {
+    return {
+        name: r.name || null,
+        workflow: r.path || null,
+        conclusion: String(r.conclusion).toLowerCase(),
+        at: r.created_at || null,
+        url: r.html_url || null
+    };
+}
+
 // The failing-run census for the card: terminal (non-cancelled) runs on the
 // head that concluded failure/timed_out, are REAL validation-scope runs
 // (side-run legs are evidence, not checks — gh-816) and are not the cite
-// itself. Workflow-run identity (name/path/conclusion/at/url) — probe-free:
-// the runs list is already in hand.
+// itself.
 function failingUntrackedRuns(runsList, sha, citeRunId, ciWorkflow) {
     return (runsList || []).filter(function (r) {
-        if (!r || r.head_sha !== sha) return false;
-        if (citeRunId != null && String(r.id) === String(citeRunId)) return false;
-        if (r.status !== 'completed') return false;
-        var c = String(r.conclusion || '').toLowerCase();
-        if (c !== 'failure' && c !== 'timed_out') return false;
-        return isValidationRun(r, ciWorkflow);
-    }).map(function (r) {
-        return {
-            name: r.name || null,
-            workflow: r.path || null,
-            conclusion: String(r.conclusion).toLowerCase(),
-            at: r.created_at || null,
-            url: r.html_url || null
-        };
-    });
+        return isUntrackedFailure(r, sha, citeRunId, ciWorkflow);
+    }).map(untrackedRunRecord);
 }
 
 /** merged_recent retention: merged within the last 7d (parseable merged_at). */

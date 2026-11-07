@@ -82,24 +82,58 @@ function isBookeepingCheckName(name, prefixes) {
 // LATEST check-run per context (#695 branch-protection semantics): newest
 // wins by completed_at, then started_at, then id, then position. Same key
 // order as smProvider.latestCheckRunConclusions — an older FAILURE under a
-// newer SUCCESS is NOT a failure.
+// newer SUCCESS is NOT a failure. The comparison lives in small pure helpers
+// (conclusionOf/rawTimestampOf/sortTimeOf/idOf/winsLatest) — each stays
+// under the CRAP complexity gate with full branch coverage.
+
+/** Conclusion of one rollup entry: the check-run conclusion, else the
+ * commit-status state, else null (a pending entry carries neither). */
+function conclusionOf(r) {
+    if (r && r.conclusion) return String(r.conclusion).toUpperCase();
+    if (r && r.state) return String(r.state).toUpperCase();
+    return null;
+}
+
+/** Raw timestamp field of one entry: completion (snake or camel), else
+ * start (snake or camel), else '' — never a fabricated date. */
+function rawTimestampOf(r) {
+    return (r && (r.completed_at || r.completedAt)) ||
+        (r && (r.started_at || r.startedAt)) || '';
+}
+
+/** Sort time of one entry: the parsed completion/start time, 0 when the
+ * entry carries no parsable timestamp (absent or garbage degrades to 0). */
+function sortTimeOf(r) {
+    return Date.parse(rawTimestampOf(r)) || 0;
+}
+
+/** Numeric run id: id, else the GraphQL databaseId, else 0 (no id at all).
+ * Only called for entries that carry a name — r is always an object here. */
+function idOf(r) {
+    if (r.id !== undefined) return Number(r.id) || 0;
+    return Number(r.databaseId) || 0;
+}
+
+/** Newest-wins comparison against the stored latest entry: a later time
+ * wins, then the greater id, then the later arrival position. */
+function winsLatest(t, id, pos, prev) {
+    if (!prev) return true;
+    if (t > prev.t) return true;
+    if (t < prev.t) return false;
+    if (id > prev.id) return true;
+    if (id < prev.id) return false;
+    return pos > prev.pos;
+}
+
 function latestConclusions(rollup) {
     var latest = {};
     (rollup || []).forEach(function (r, pos) {
         var name = r && (r.name || r.context);
         if (!name) return;
-        var concl = r && r.conclusion
-            ? String(r.conclusion).toUpperCase()
-            : (r && r.state ? String(r.state).toUpperCase() : null);
-        var t = Date.parse((r && (r.completed_at || r.completedAt)) ||
-            (r && (r.started_at || r.startedAt)) || '') || 0;
-        var id = Number(r && (r.id !== undefined ? r.id : (r.databaseId || 0))) || 0;
-        var prev = latest[name];
-        if (!prev || t > prev.t ||
-            (t === prev.t && (id > prev.id ||
-                (id === prev.id && pos > prev.pos)))) {
-            latest[name] = { t: t, id: id, pos: pos, concl: concl };
-        }
+        var t = sortTimeOf(r);
+        var id = idOf(r);
+        if (!winsLatest(t, id, pos, latest[name])) return;
+        latest[name] = { t: t, id: id, pos: pos, concl: conclusionOf(r) };
     });
     return latest;
 }

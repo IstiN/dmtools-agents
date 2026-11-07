@@ -180,6 +180,94 @@ suite('mergeStateReconcile — failingCheckNames', function () {
     });
 });
 
+// ── latestConclusions census mechanics (rework gh-140: branch pins) ─────────
+// The freshness comparison (completed_at → started_at → id → position) is
+// the CRAP-heavy core of the census — every tie-break and fallback spelling
+// is pinned here through the public API so the extracted helpers keep the
+// exact semantics.
+
+suite('mergeStateReconcile — latestConclusions census mechanics', function () {
+    test('nameless entries never enter the census (null/undefined/empty name)', function () {
+        var rollup = [null, undefined, {}, { name: '', conclusion: 'failure' }];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, null), []);
+    });
+
+    test('camelCase completedAt rides the same freshness comparison', function () {
+        var rollup = [
+            { name: 'x', conclusion: 'FAILURE', completed_at: '2026-11-06T09:00:00Z', id: 1 },
+            { name: 'x', conclusion: 'SUCCESS', completedAt: '2026-11-06T10:00:00Z', id: 2 }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, null), [],
+            'the camelCase-timestamped run is newest — an older FAILURE is not a failure');
+    });
+
+    test('started_at (snake) and startedAt (camel) break ties when completions are absent', function () {
+        var rollup = [
+            { name: 'x', conclusion: 'FAILURE', started_at: '2026-11-06T09:00:00Z', id: 2 },
+            { name: 'x', conclusion: 'SUCCESS', startedAt: '2026-11-06T10:00:00Z', id: 1 }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, null), [],
+            'the newer startedAt run wins — newest-per-context');
+    });
+
+    test('no timestamps at all → the greater id decides', function () {
+        var rollup = [
+            { name: 'x', conclusion: 'FAILURE', id: 1 },
+            { name: 'x', conclusion: 'SUCCESS', id: 2 }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, null), []);
+    });
+
+    test('same time AND same id → the later arrival position wins', function () {
+        var rollup = [
+            { name: 'y', conclusion: 'SUCCESS', id: 3 },
+            { name: 'y', conclusion: 'FAILURE', id: 3 }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, null), ['y'],
+            'same freshness — the last-seen conclusion is the latest');
+    });
+
+    test('databaseId (GraphQL spelling) counts as the run id', function () {
+        var rollup = [
+            { name: 'w', conclusion: 'FAILURE', completed_at: '2026-11-06T09:00:00Z', id: 5 },
+            { name: 'w', conclusion: 'SUCCESS', completed_at: '2026-11-06T09:00:00Z', databaseId: 9 }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, null), [],
+            'same completion time — the greater databaseId is the newer run');
+    });
+
+    test('same time, same databaseId → position decides (absent id degrades to 0)', function () {
+        var rollup = [
+            { name: 'v', conclusion: 'SUCCESS', completed_at: '2026-11-06T09:00:00Z' },
+            { name: 'v', conclusion: 'FAILURE', completed_at: '2026-11-06T09:00:00Z' }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, null), ['v']);
+    });
+
+    test('unparsable timestamps degrade to 0 — the greater id still decides', function () {
+        var rollup = [
+            { name: 'u', conclusion: 'FAILURE', completed_at: 'not-a-date', id: 1 },
+            { name: 'u', conclusion: 'SUCCESS', completed_at: 'also-garbage', id: 2 }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, null), [],
+            'both t=0 — the id tie-break picks the SUCCESS run');
+    });
+
+    test('an empty bookeeping prefix list falls back to the canonical stamps', function () {
+        var rollup = [cr('kicker / wake', 'failure'), cr('real', 'failure')];
+        assert.deepEqual(mrReal().failingCheckNames(rollup, []), ['real'],
+            '[] degrades to DEFAULT_BOOKKEEPING_PREFIXES, not to "no folding"');
+    });
+
+    test('reconcileDecision with no input at all → null (never reconciles)', function () {
+        assert.equal(mrReal().reconcileDecision(), null);
+    });
+
+    test('no checkConclusion on the input → the fold label is empty → no reconcile', function () {
+        assert.equal(mrReal().reconcileDecision({ rawMergeState: 'UNSTABLE', rollup: [] }), null);
+    });
+});
+
 suite('mergeStateReconcile — reconcileDecision (the AC matrix)', function () {
     test('AC1: green tracked fold + UNSTABLE report + untracked failing check → red, names registered', function () {
         var rollup = [cr('Quality / check', 'success'), cr('docs-freshness', 'failure')];
@@ -420,6 +508,65 @@ suite('gh-140 — factoryState card reconcile', function () {
         var out = mod.failingUntrackedRuns(runs, 'abc123', 42, 'quality.yml');
         assert.equal(out.length, 2);
         assert.deepEqual(out.map(function (r) { return r.name; }), ['docs-freshness', 'crap-gate']);
+    });
+
+    test('a null checks record passes through untouched (nothing to decorate)', function () {
+        var mod = fsReal();
+        var pr = { head: { sha: 'abc123' }, mergeStateStatus: 'UNSTABLE' };
+        assert.equal(mod.reconcileCardChecks(pr, null,
+            [run(99, 'docs-freshness', 'abc123', 'failure')], 'quality.yml'), null);
+    });
+
+    test('the cite can ride checks.conclusion (green spelling) — the reconcile still fires', function () {
+        var mod = fsReal();
+        var checks = { conclusion: 'green', runId: 42 };
+        var pr = { head: { sha: 'abc123' }, mergeStateStatus: 'UNSTABLE' };
+        var out = mod.reconcileCardChecks(pr, checks,
+            [run(99, 'docs-freshness', 'abc123', 'failure')], 'quality.yml');
+        assert.equal(out.mergeStateStatus, 'UNSTABLE');
+        assert.equal(out.untrackedFailing.length, 1);
+    });
+
+    test('no verdict/conclusion on the checks record → no reconcile (empty cite label)', function () {
+        var mod = fsReal();
+        var checks = { runId: 42 };
+        var pr = { head: { sha: 'abc123' }, mergeStateStatus: 'UNSTABLE' };
+        assert.equal(mod.reconcileCardChecks(pr, checks,
+            [run(99, 'docs-freshness', 'abc123', 'failure')], 'quality.yml'), checks);
+    });
+
+    test('failingUntrackedRuns: a null runs list yields an empty census', function () {
+        var mod = fsReal();
+        assert.deepEqual(mod.failingUntrackedRuns(null, 'abc123', 42, 'quality.yml'), []);
+    });
+
+    test('a completed non-failure run on the head is excluded (success is not a failure)', function () {
+        var mod = fsReal();
+        var runs = [
+            run(42, 'Quality', 'abc123', 'success'),
+            run(105, 'lint-gate', 'abc123', 'success'),                 // terminal green on the head — kept out
+            run(99, 'docs-freshness', 'abc123', 'failure')              // kept
+        ];
+        var out = mod.failingUntrackedRuns(runs, 'abc123', 42, 'quality.yml');
+        assert.deepEqual(out.map(function (r) { return r.name; }), ['docs-freshness']);
+    });
+
+    test('a completed run with no conclusion yet is excluded', function () {
+        var mod = fsReal();
+        var bare = { id: 106, name: 'ghost-run', head_sha: 'abc123', status: 'completed', conclusion: null };
+        var runs = [bare, run(99, 'docs-freshness', 'abc123', 'failure')];
+        var out = mod.failingUntrackedRuns(runs, 'abc123', 42, 'quality.yml');
+        assert.deepEqual(out.map(function (r) { return r.name; }), ['docs-freshness']);
+    });
+
+    test('the census record degrades missing fields to null (bare workflow-run shape)', function () {
+        var mod = fsReal();
+        var bare = { id: 107, head_sha: 'abc123', status: 'completed', conclusion: 'failure' };
+        var out = mod.failingUntrackedRuns([bare], 'abc123', null, 'quality.yml');
+        assert.equal(out.length, 1, 'no citeRunId → nothing to exclude');
+        assert.deepEqual(out[0], {
+            name: null, workflow: null, conclusion: 'failure', at: null, url: null
+        });
     });
 });
 

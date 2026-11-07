@@ -1,4 +1,0 @@
-{
-  "version": "latest",
-  "endpoints": [{"name":"dmtools","path":"/dmtools/dmtools"}, {"name":"jira","path":"/dmtools/jira"}, {"name":"confluence","path":"/dmtools/confluence"}, {"name":"github","path":"/dmtools/github"}, {"name":"gitlab","path":"/dmtools/gitlab"}, {"name":"figma","path":"/dmtools/figma"}, {"name":"teams","path":"/dmtools/teams"}, {"name":"sharepoint","path":"/dmtools/sharepoint"}, {"name":"ado","path":"/dmtools/ado"}, {"name":"testrail","path":"/dmtools/testrail"}, {"name":"xray","path":"/dmtools/xray"}]
-}
