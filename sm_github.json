@@ -628,7 +628,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitHub PR: external (non-machine) green PR -> one-time review (PR-anchored; no re-review on later pushes). The machine login is deployment-specific: it arrives via jobParams.machineAuthor / config.machineAuthor (factory-sm input machine-author); with none configured every green PR is reviewable.",
+          "description": "GitHub PR: external (non-machine) green PR -> one-time review (PR-anchored; no re-review on later pushes). The machine login is deployment-specific: it arrives via jobParams.machineAuthor / config.machineAuthor (factory-sm input machine-author); with none configured every green PR is reviewable. gh-140 (rework thread 2): gates on trackedChecks (the tracked-set verdict), NOT the effective fold \u2014 an untracked failing check (mergeStateStatus UNSTABLE, live #1392 docs-freshness) reds the EFFECTIVE verdict while the tracked validation stays green, and this rule is the guest lane's only reacting leg (fail-validation needs the ai_validating latch, rework-on-red-gate-unlatched and review-machine-unlinked are machine-author-only): gating it on the effective verdict would strand an unlatched guest PR with no review, no rework, no park \u2014 the exact freeze gh-140 closes, one lane over. The dedup survives the switch: while its review leg runs, the leg's own check run pendings the fold (trackedVerdict reads 'pending', excluded here) until the runner latches ai_pr_reviewed at the verdict; with an untracked red it arms the review on a head that still cannot merge (mergeStateStatus UNSTABLE keeps merge-validated-guest gated) \u2014 an untracked red must freeze the rework flow, not the re-review economy.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -637,7 +637,7 @@
               "agent:review",
               "pr_approved"
             ],
-            "checks": "green",
+            "trackedChecks": "green",
             "draft": false,
             "notMachine": true
           },
@@ -652,7 +652,7 @@
           "id": "review-external-once"
         },
         {
-          "description": "GitHub PR: MACHINE-authored validated PR whose review loop has no leg — the branch/body carry no OPEN linked issue (fix/*, revert/*, chore/* branches), or the linked issue closed: develop-done only backfills OPEN issues, review-after-dev rides the issue carrier, and review-external-once excludes machine authors — so such a PR starves validated-but-never-reviewed forever (live: fa #1068 validated 19h with zero review legs; #1071/#1075 in the same state, owner order 2026-09-30). PR-anchored one-time review, the machine-author twin of review-external-once. NO checks requirement (review-after-dev economy: the ai_validated latch alone qualifies — silent-update keeps the head fresh, the review covers the current diff, and the final pre-merge validation stays in validate-armed post-approve): a green-gated guard would skip silent-updated heads whose rollup reads 'none' (the exact skip that starved the trio). Dedup is structural, not green-gated: the leg runs on the PR head (workflowRef={branch}) so its check run flips the rollup to 'pending' — excluded here — until the runner latches ai_pr_reviewed at the verdict. prMachineAuthor fails CLOSED when no machineAuthor is configured (no auto legs at all). DIRTY heads are NOT excluded: a conflicted unlinked machine PR has no other path to a verdict (conflict-rework's rework re-arm needs the linked issue), and the merge window keeps it out of merges until CLEAN regardless. limit 1: same pacing as review-external-once; the trio drains over consecutive ticks.",
+          "description": "GitHub PR: MACHINE-authored validated PR whose review loop has no leg — the branch/body carry no OPEN linked issue (fix/*, revert/*, chore/* branches), or the linked issue closed: develop-done only backfills OPEN issues, review-after-dev rides the issue carrier, and review-external-once excludes machine authors — so such a PR starves validated-but-never-reviewed forever (live: fa #1068 validated 19h with zero review legs; #1071/#1075 in the same state, owner order 2026-09-30). PR-anchored one-time review, the machine-author twin of review-external-once. NO checks requirement (review-after-dev economy: the ai_validated latch alone qualifies — silent-update keeps the head fresh, the review covers the current diff, and the final pre-merge validation stays in validate-armed post-approve): a green-gated guard would skip silent-updated heads whose rollup reads 'none' (the exact skip that starved the trio). Dedup is structural, not green-gated: the leg runs on the PR head (workflowRef={branch}) so its check run flips the rollup to 'pending' — excluded here — until the runner latches ai_pr_reviewed at the verdict. prMachineAuthor fails CLOSED when no machineAuthor is configured (no auto legs at all). DIRTY heads are NOT excluded: a conflicted unlinked machine PR has no other path to a verdict (conflict-rework's rework re-arm needs the linked issue), and the merge window keeps it out of merges until CLEAN regardless. limit 1: same pacing as review-external-once; the trio drains over consecutive ticks. gh-140 (rework thread 2, deliberate reader split): this rule keeps reading the EFFECTIVE verdict (checks green/none \u2014 NOT trackedChecks): its structural dedup is expressed through the effective fold, and an untracked failing check reds that fold, so the rule pauses until the red-head rework resolves the head \u2014 switching it to the tracked verdict would admit the head DURING the rework and stack a duplicate review beside it. Non-review lanes (review-after-dev, develop-done prChecks) likewise deliberately stay on the effective verdict \u2014 do not 'fix' them onto trackedChecks.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -684,7 +684,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). agent:rework excluded (#683, 2026-10-04): the ONLY re-review armer that can overlap rework-unresolved-threads (a stale CHANGES_REQUESTED with open threads) — a PR sent to rework must not simultaneously arm a re-review; review-threads-resolved re-arms the review once the threads are resolved. workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
+          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops. gh-140: gates on trackedChecks (the tracked-set verdict), not the effective fold — an untracked failing check (mergeStateStatus UNSTABLE, live #1392 docs-freshness) reds the effective verdict so the red-head flow owns it while the machine validation stays green; a tracked red still blocks. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). agent:rework excluded (#683, 2026-10-04): the ONLY re-review armer that can overlap rework-unresolved-threads (a stale CHANGES_REQUESTED with open threads) — a PR sent to rework must not simultaneously arm a re-review; review-threads-resolved re-arms the review once the threads are resolved. workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -694,7 +694,7 @@
               "ai_validating",
               "pr_approved"
             ],
-            "checks": "green",
+            "trackedChecks": "green",
             "draft": false,
             "reviewStale": true
           },
@@ -704,7 +704,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitHub PR: all review threads resolved + the last verdict is older than the head (fixes landed and the threads were worked through) + green -> re-arm agent:review. Covers PR #676: the rework resolves threads (the CHANGES_REQUESTED verdict dissolves into COMMENTED), so verdict-staleness alone misses it. Convergent: the re-review's verdict lands on the current head and its fresh threads are unresolved until worked. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
+          "description": "GitHub PR: all review threads resolved + the last verdict is older than the head (fixes landed and the threads were worked through) + green -> re-arm agent:review. Covers PR #676: the rework resolves threads (the CHANGES_REQUESTED verdict dissolves into COMMENTED), so verdict-staleness alone misses it. Convergent: the re-review's verdict lands on the current head and its fresh threads are unresolved until worked. gh-140: gates on trackedChecks (the tracked-set verdict), not the effective fold — an untracked failing check reds the effective verdict so the red-head flow owns it; a tracked red still blocks. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -716,7 +716,7 @@
               "ai_validating",
               "pr_approved"
             ],
-            "checks": "green",
+            "trackedChecks": "green",
             "draft": false,
             "threadsResolved": true,
             "staleVerdict": true
