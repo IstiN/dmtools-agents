@@ -24,6 +24,11 @@
  *       MERGED on the branch (close-issue safety net).
  *   prStatus(prNumber) → {state, checkConclusion, mergeState, mergeable, author}
  *       checkConclusion: 'red' | 'green' | 'pending' | 'none'.
+ *       gh-140: when the PR body reports mergeStateStatus UNSTABLE/FAILED
+ *       while the check-runs fold reads green/none, checkConclusion reads
+ *       'red' (the bounded red-head flow reacts) and the status carries
+ *       trackedVerdict (the pre-reconcile fold) + untrackedFailingChecks
+ *       (the registered failing names) + mergeStateStatus (the raw report).
  *       author: creator login ('' when the API does not expose it) — the
  *       prMachineAuthor gate keys on it.
  *   activeMachineRuns() → [issueNumber, …]
@@ -169,6 +174,14 @@ var reviewVerdicts = require('./reviewVerdicts.js');
 // (gh-823): load-time, file-relative — validationLiveness.js ships in
 // every pack that carries smProvider.js.
 var validationLiveness = require('./validationLiveness.js');
+
+// gh-140: the mergeStateStatus reconcile — a tracked-green fold on a head
+// whose PR body reports UNSTABLE/FAILED means the failing check sits
+// OUTSIDE the tracked set (the live gh-1392 docs-freshness freeze). Hoisted
+// like every require (gh-823): load-time, file-relative; the module ships
+// in every pack that carries smProvider.js (dmtools compile discovers it
+// here). THIS module requires it — it must never require us back.
+var mergeStateReconcile = require('./mergeStateReconcile.js');
 
 // ── GitHub provider helpers (gh-1009) ─────────────────────────────────────
 // The githubProvider closure below is an orchestration shell only: every
@@ -424,10 +437,16 @@ function _ghPrLabelNames(pr) {
     return (pr.labels || []).map(function (l) { return (l && l.name) || l; });
 }
 
-function _ghBuildPrStatus(pr, rollup, tally, ms) {
-    return {
+function _ghBuildPrStatus(pr, rollup, tally, ms, rec) {
+    // gh-140: the tracked fold (what the check-tracker saw BEFORE the
+    // mergeStateStatus reconcile) rides every status — the re-review armers
+    // gate on trackedVerdict so an untracked red never freezes them, while
+    // the red-head lanes keep reading the effective checkConclusion.
+    var tracked = _ghCheckConclusionLabel(rollup, tally);
+    var st = {
         state: _ghPrState(pr),
-        checkConclusion: _ghCheckConclusionLabel(rollup, tally),
+        checkConclusion: rec ? rec.verdict : tracked,
+        trackedVerdict: tracked,
         mergeState: ms,
         mergeable: pr.mergeable,
         // Head sha pins the review-verdict comparison: a verdict
@@ -444,6 +463,16 @@ function _ghBuildPrStatus(pr, rollup, tally, ms) {
         labels: _ghPrLabelNames(pr),
         author: _ghPrAuthor(pr)
     };
+    // gh-140 AC3 — the auditable registration: WHICH checks failed outside
+    // the tracked set + the raw reported value that triggered the
+    // downgrade. Absent entirely when no reconcile applied — trackedVerdict
+    // above is the only always-new field; the reconcile keys never appear
+    // on fully-green or tracked-red payloads (AC2).
+    if (rec) {
+        st.untrackedFailingChecks = rec.untrackedFailingChecks;
+        st.mergeStateStatus = rec.rawMergeState;
+    }
+    return st;
 }
 
 // gh-1057: resolve the PR's head repository as an 'owner/repo' full name
@@ -500,6 +529,32 @@ function _ghPrMaintainerCanModify(pr) {
 // resolveBranchHead injects the per-provider branchHead so the merge-state
 // override keeps its deterministic base check; every step is one of the
 // pure helpers above, tested directly through prStatus.)
+
+// gh-140: the PR's REAL reported mergeStateStatus — the REST body spelling
+// (the bridge's mergeStateStatus merge or REST mergeable_state), uppercased,
+// null when the body reports none. Deliberately NOT _ghRestMergeState: that
+// helper fabricates CLEAN/UNKNOWN from the coarse `mergeable` bool when the
+// body carries no verdict — a fabricated verdict must never feed the
+// reconcile (only a REPORTED unstable state may redden a green fold).
+function _ghRawMergeStateStatus(pr) {
+    if (!pr) return null;
+    var raw = pr.mergeStateStatus || pr.mergeable_state || '';
+    raw = String(raw).trim().toUpperCase();
+    return raw || null;
+}
+
+// gh-140 — the per-tick reconcile the ticket prescribes: the fold the rules
+// read vs the mergeability GitHub itself reports. The failing-check census
+// rides the SAME rollup this job already fetched — not a new probe.
+function _ghReconcileCheckVerdict(rollup, tally, pr) {
+    return mergeStateReconcile.reconcileDecision({
+        checkConclusion: _ghCheckConclusionLabel(rollup, tally),
+        rawMergeState: _ghRawMergeStateStatus(pr),
+        rollup: rollup,
+        bookkeepingPrefixes: BOOKKEEPING_CHECK_PREFIXES
+    });
+}
+
 function computePrStatus(owner, repo, prNumber, resolveBranchHead) {
     var pr = parseMcp(github_get_pr({
         workspace: owner, repository: repo, pullRequestId: prNumber
@@ -507,7 +562,8 @@ function computePrStatus(owner, repo, prNumber, resolveBranchHead) {
     var rollup = _ghFetchRollup(owner, repo, pr);
     var tally = _ghTallyRollup(rollup);
     var ms = _ghOverrideMergeState(pr, _ghRestMergeState(pr), resolveBranchHead);
-    return _ghBuildPrStatus(pr, rollup, tally, ms);
+    var rec = _ghReconcileCheckVerdict(rollup, tally, pr);
+    return _ghBuildPrStatus(pr, rollup, tally, ms, rec);
 }
 
 // ── remaining github method bodies (gh-1009) ──────────────────────────────

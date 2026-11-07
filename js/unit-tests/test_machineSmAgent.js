@@ -408,7 +408,8 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         var smMod = loadModule('js/common/smProvider.js',
             makeRequire({
                 './reviewVerdicts.js': rvReal(),
-                './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
+                './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
+                './mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {})
             }),
             {
                 github_get_pr_comments: function () { return JSON.stringify(comments); },

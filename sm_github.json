@@ -684,7 +684,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). agent:rework excluded (#683, 2026-10-04): the ONLY re-review armer that can overlap rework-unresolved-threads (a stale CHANGES_REQUESTED with open threads) — a PR sent to rework must not simultaneously arm a re-review; review-threads-resolved re-arms the review once the threads are resolved. workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
+          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops. gh-140: gates on trackedChecks (the tracked-set verdict), not the effective fold — an untracked failing check (mergeStateStatus UNSTABLE, live #1392 docs-freshness) reds the effective verdict so the red-head flow owns it while the machine validation stays green; a tracked red still blocks. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). agent:rework excluded (#683, 2026-10-04): the ONLY re-review armer that can overlap rework-unresolved-threads (a stale CHANGES_REQUESTED with open threads) — a PR sent to rework must not simultaneously arm a re-review; review-threads-resolved re-arms the review once the threads are resolved. workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -694,7 +694,7 @@
               "ai_validating",
               "pr_approved"
             ],
-            "checks": "green",
+            "trackedChecks": "green",
             "draft": false,
             "reviewStale": true
           },
@@ -704,7 +704,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitHub PR: all review threads resolved + the last verdict is older than the head (fixes landed and the threads were worked through) + green -> re-arm agent:review. Covers PR #676: the rework resolves threads (the CHANGES_REQUESTED verdict dissolves into COMMENTED), so verdict-staleness alone misses it. Convergent: the re-review's verdict lands on the current head and its fresh threads are unresolved until worked. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
+          "description": "GitHub PR: all review threads resolved + the last verdict is older than the head (fixes landed and the threads were worked through) + green -> re-arm agent:review. Covers PR #676: the rework resolves threads (the CHANGES_REQUESTED verdict dissolves into COMMENTED), so verdict-staleness alone misses it. Convergent: the re-review's verdict lands on the current head and its fresh threads are unresolved until worked. gh-140: gates on trackedChecks (the tracked-set verdict), not the effective fold — an untracked failing check reds the effective verdict so the red-head flow owns it; a tracked red still blocks. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -716,7 +716,7 @@
               "ai_validating",
               "pr_approved"
             ],
-            "checks": "green",
+            "trackedChecks": "green",
             "draft": false,
             "threadsResolved": true,
             "staleVerdict": true
