@@ -23,7 +23,8 @@ function smProviderRealForGh1249() {
     if (smProviderRealModCache) return smProviderRealModCache;
     smProviderRealModCache = loadModule('js/common/smProvider.js', makeRequire({
         './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
-        './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
+        './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
+        './mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {})
     }), {});
     return smProviderRealModCache;
 }
@@ -511,7 +512,8 @@ function makeSmAgent(opts) {
         var realProvider = { prStatus: realPrStatus };
         var smProviderRealMod = loadModule('js/common/smProvider.js', makeRequire({
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
-            './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
+            './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
+            './mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {})
         }), {});
         var smProviderStub = { createSmProvider: function () { return realProvider; },
             // gh-1059: pin the REAL shared head-repo resolver (githubSource
@@ -643,7 +645,8 @@ function makeSmAgent(opts) {
             './factoryState.js': loadModule('js/factoryState.js',
                 makeRequire({
                     './common/machineAuthor.js': machineAuthorModule,
-                    './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {})
+                    './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {}),
+                    './common/mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {})
                 }), {}),
         })),
         smMocks

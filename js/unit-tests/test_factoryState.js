@@ -13,7 +13,8 @@ var reworkLatchModule = loadModule('js/common/reworkLatch.js', makeRequire({ './
 var fsModule = loadModule('js/factoryState.js',
     makeRequire({
         './common/machineAuthor.js': machineAuthorModule,
-        './common/reworkLatch.js': reworkLatchModule
+        './common/reworkLatch.js': reworkLatchModule,
+        './common/mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {})
     }), {});
 
 // ── laneOf ───────────────────────────────────────────────────────────────────
