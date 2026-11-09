@@ -58,6 +58,15 @@ function w2LoadPR(rec) {
             './machineAuthor.js': machineAuthorReal(),
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
         }), {}),
+        // gh-1404: the real diff-of-diff module — preparePRForReview's new
+        // top-level require must resolve in this stubbed map too.
+        './common/prNewHunks.js': (function() {
+            var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+            var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': machineAuthor }), {});
+            return loadModule('js/common/prNewHunks.js',
+                makeRequire({ './machineAuthor.js': machineAuthor, './reviewVerdicts.js': reviewVerdicts }), {});
+        })(),
         './common/forkCheckout.js': loadModule('js/common/forkCheckout.js',
             makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js') }))
     }), Object.assign({ config: {} }, rec.mocks));
