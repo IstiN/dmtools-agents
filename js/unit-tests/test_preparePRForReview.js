@@ -20,6 +20,31 @@ function prCommentMarkup() {
         makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 }
 
+// gh-1404: the real diff-of-diff module with its own dependency chain.
+function prNewHunksReal() {
+    var machineAuthor = machineAuthorReal();
+    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthor }), {});
+    return loadModule('js/common/prNewHunks.js',
+        makeRequire({
+            './machineAuthor.js': machineAuthor,
+            './reviewVerdicts.js': reviewVerdicts
+        }), {});
+}
+
+// gh-1404: a real machine verdict-record comment body for one head, authored
+// by the allowlisted machine identity.
+function verdictCommentBody(head, at) {
+    var machineAuthor = machineAuthorReal();
+    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthor }), {});
+    return reviewVerdicts.buildVerdictComment({
+        head: head, verdict: 'REQUEST_CHANGES',
+        blocking: 1, important: 0, suggestions: 0, nits: 0, digest: 0,
+        at: at || '2026-11-08T10:00:00Z', source: 'pr_review.json'
+    });
+}
+
 function prRecorder() {
     return { comments: [], gitOps: [], ghCalls: [], parentCalls: [], configCalls: [] };
 }
@@ -70,6 +95,18 @@ function prGitOpsMocks(opts, record) {
             record.gitOps.push({ fn: 'getPRDiff', baseBranch: baseBranch,
                 headBranch: headBranch, workingDir: workingDir });
             return opts.diffText !== undefined ? opts.diffText : 'diff --git a/x b/x';
+        },
+        // gh-1404: the diff-of-diff for pr_new_hunks.txt (re-review rounds).
+        getDiffBetweenCommits: function(fromSha, toSha, workingDir) {
+            record.gitOps.push({ fn: 'getDiffBetweenCommits', fromSha: fromSha,
+                toSha: toSha, workingDir: workingDir });
+            if (opts.diffBetweenCommitsError) throw opts.diffBetweenCommitsError;
+            return opts.diffBetweenCommits !== undefined ? opts.diffBetweenCommits : '+ rework hunk line';
+        },
+        trimLargeTextForInput: function(content, label, maxChars) {
+            record.gitOps.push({ fn: 'trimLargeTextForInput', label: label,
+                length: content ? content.length : 0 });
+            return content || '';
         },
         writePRContext: function(inputFolder, prDetails, diff, markdown, rawThreads) {
             record.gitOps.push({ fn: 'writePRContext', inputFolder: inputFolder,
@@ -154,6 +191,9 @@ function prLoad(opts) {
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
                 makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
         }), {}),
+        // gh-1404: the real diff-of-diff module — the pr_new_hunks.txt step
+        // reads verdict records through it.
+        './common/prNewHunks.js': prNewHunksReal(),
         // gh-1351: the real reviewPolicy chain — the leg-start validation and
         // the review_policy.md stamp read it.
         './common/reviewPolicy.js': loadModule('js/common/reviewPolicy.js', makeRequire({
@@ -257,6 +297,148 @@ suite('preparePRForReview — gh-1332 finding-registry injection', function() {
         assert.equal(rec.gitOps.filter(function(g) {
             return g.fn === 'writeInputFile' && String(g.path).indexOf('pr_findings.md') !== -1;
         }).length, 0, 'no pr_findings.md write (the gh-1351 review_policy.md stamp is a separate, intended write)');
+    });
+});
+
+// ── gh-1404: the diff-of-diff injection (pr_new_hunks.txt) ───────────────────
+// A re-review round reviews the hunks added since the last reviewed head;
+// unchanged lines are frozen. The step is best-effort end to end: a first
+// round (no verdict record), an unchanged head, a failed diff command or a
+// provider without getPrComments leaves the input exactly as before.
+
+suite('preparePRForReview — gh-1404 diff-of-diff injection (pr_new_hunks.txt)', function() {
+
+    test('a moved head since the last review round injects pr_new_hunks.txt', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            // prDetails head is 'abc123def'; the last reviewed head differs.
+            scm: { getPrComments: function() { return [
+                { body: verdictCommentBody('bbb222ccc333'), user: { login: 'ai-teammate' } }
+            ]; } }
+        });
+
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success, 'the review start still succeeds');
+        var diffCall = rec.gitOps.filter(function(g) { return g.fn === 'getDiffBetweenCommits'; });
+        assert.equal(diffCall.length, 1, 'exactly one diff-of-diff command');
+        assert.equal(diffCall[0].fromSha, 'bbb222ccc333', 'diff FROM the last reviewed head');
+        assert.equal(diffCall[0].toSha, 'abc123def', 'diff TO the current head');
+        var write = rec.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' && g.path === 'input/TS-42/pr_new_hunks.txt';
+        });
+        assert.equal(write.length, 1, 'exactly one pr_new_hunks.txt write');
+        assert.contains(write[0].content, 'bbb222ccc333');
+        assert.contains(write[0].content, '+ rework hunk line');
+        assert.contains(write[0].content, 'frozen');
+    });
+
+    test('no verdict record (first review round) → no pr_new_hunks.txt write', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            scm: { getPrComments: function() { return []; } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'getDiffBetweenCommits' ||
+                (g.fn === 'writeInputFile' && String(g.path).indexOf('pr_new_hunks') !== -1);
+        }).length, 0, 'first round reviews the full diff — no diff-of-diff call, no write');
+    });
+
+    test('re-review at the SAME head → no pr_new_hunks.txt write (everything frozen)', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            scm: { getPrComments: function() { return [
+                { body: verdictCommentBody('abc123def'), user: { login: 'ai-teammate' } }
+            ]; } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'getDiffBetweenCommits' ||
+                (g.fn === 'writeInputFile' && String(g.path).indexOf('pr_new_hunks') !== -1);
+        }).length, 0, 'same head — no new hunks, the full-diff review applies');
+    });
+
+    test('a forged verdict record (non-machine author) → no pr_new_hunks.txt write', function() {
+        var rec = prRecorder();
+        var body = verdictCommentBody('bbb222ccc333');
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            scm: { getPrComments: function() { return [{ body: body, user: { login: 'random-user' } }]; } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'getDiffBetweenCommits' ||
+                (g.fn === 'writeInputFile' && String(g.path).indexOf('pr_new_hunks') !== -1);
+        }).length, 0);
+    });
+
+    test('a failed diff-of-diff command → no write, review start unaffected', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            diffBetweenCommits: '',
+            scm: { getPrComments: function() { return [
+                { body: verdictCommentBody('bbb222ccc333'), user: { login: 'ai-teammate' } }
+            ]; } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success, 'the missing last-reviewed head degrades to the full-diff review');
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' && String(g.path).indexOf('pr_new_hunks') !== -1;
+        }).length, 0);
+    });
+
+    test('comment-read failure is non-fatal', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            scm: { getPrComments: function() { throw new Error('api down'); } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success, 'the injection never breaks review setup');
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' && String(g.path).indexOf('pr_new_hunks') !== -1;
+        }).length, 0);
+    });
+
+    test('a provider without getPrComments skips the injection quietly', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'getDiffBetweenCommits' ||
+                (g.fn === 'writeInputFile' && String(g.path).indexOf('pr_new_hunks') !== -1);
+        }).length, 0);
+    });
+
+    test('a null PR-details head skips the injection quietly', function() {
+        var loaded = prLoad({
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' }
+        });
+        var ctx = {
+            scm: { getPrComments: function() { return []; } },
+            config: { workingDir: '/w' },
+            jp: {},
+            inputFolder: 'input/TS-42'
+        };
+        assert.equal(loaded.module.writeNewHunksContext(ctx, { number: 42, head: { sha: null } }), false);
+        assert.equal(loaded.module.writeNewHunksContext(ctx, null), false);
     });
 });
 

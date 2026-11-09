@@ -153,6 +153,7 @@
         "js/unit-tests/test_prepareBugCreationContext.js",
         "js/unit-tests/test_prepareBugFixBatchContext.js",
         "js/unit-tests/test_prepareDiscoveryContext.js",
+        "js/unit-tests/test_prNewHunks.js",
         "js/unit-tests/test_preparePRForReview.js",
         "js/unit-tests/test_prepareTestPRForReview.js",
         "js/unit-tests/test_publishDiscoveryToConfluence.js",
