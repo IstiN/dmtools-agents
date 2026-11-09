@@ -1,4 +1,5 @@
 /agents
+.DS_Store
 *.token
 dependencies/
 cacheBasicGithub/

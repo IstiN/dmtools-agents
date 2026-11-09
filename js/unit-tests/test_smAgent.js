@@ -150,6 +150,12 @@ function aliasIfMissing(n, alias, source) {
     if (n[alias] === undefined && n[source] !== undefined) n[alias] = n[source];
 }
 
+// The forge a createSmProvider config names (kept outside makeSmAgent — its
+// CRAP budget counts every branch inside the closure).
+function smProviderForgeOf(cfg) {
+    return cfg && cfg.scm && cfg.scm.provider;
+}
+
 function makeSmAgent(opts) {
     opts = opts || {};
 
@@ -170,6 +176,8 @@ function makeSmAgent(opts) {
     var capturedScmConfigs = [];
     var capturedIoCacheDrops = [];
     var capturedLogs = [];
+    var capturedScmLabelOps = [];
+    var capturedSmProviderForges = [];
 
     // ── gh-1200 CRAP refactor: named builder units ──────────────────────────
     // Every branch that used to live in an anonymous closure inside
@@ -341,8 +349,8 @@ function makeSmAgent(opts) {
         replyToThread: function() {},
         resolveThread: function() {},
         mergePr: function() {},
-        addLabel: function() {},
-        removeLabel: function() {},
+        addLabel: function(prId, label) { capturedScmLabelOps.push({ op: 'add', prId: String(prId), label: label }); },
+        removeLabel: function(prId, label) { capturedScmLabelOps.push({ op: 'remove', prId: String(prId), label: label }); },
         fetchDiscussions: function() { return { markdown: '', rawThreads: [] }; },
         listWorkflowRuns: scmListWorkflowRuns,
         getRemoteRepoInfo: function() { return null; }
@@ -658,7 +666,8 @@ function makeSmAgent(opts) {
                 './issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {})
             }), {}),
             './common/smProvider.js': {
-                createSmProvider: function () {
+                createSmProvider: function (cfg) {
+                    capturedSmProviderForges.push(smProviderForgeOf(cfg));
                     return {
                         prStatus: providerPrStatusStub,
                         listOpenPrs: providerListOpenPrsStub
@@ -709,6 +718,8 @@ function makeSmAgent(opts) {
         capturedEnvSets: capturedEnvSets,
         capturedScmConfigs: capturedScmConfigs,
         capturedIoCacheDrops: capturedIoCacheDrops,
+        capturedScmLabelOps: capturedScmLabelOps,
+        capturedSmProviderForges: capturedSmProviderForges,
         capturedFileWrites: capturedFileWrites,
         capturedFileDeletes: capturedFileDeletes,
         capturedLogs: capturedLogs
@@ -10868,6 +10879,106 @@ suite('smAgent: conflict_rework re-arm reliability (gh-683 bug C)', function () 
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'already armed — no duplicate');
         assert.equal(sm.capturedPrComments.length, 0, 'no duplicate marker report');
         assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+});
+
+suite('smAgent: GitLab forge wiring (sm_gitlab.json)', function () {
+
+    var GL_CONFIG = { '../.dmtools/config.js': 'module.exports = { repository: { owner: "acme", repo: "widgets" } };' };
+
+    function gitlabRule(overrides) {
+        var rule = {
+            id: 'review-on-label',
+            description: 'gitlab review on MR label',
+            source: 'gitlab',
+            query: { type: 'pr', labels: ['agent:review'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '', leg: 'review', reason: 'sm: test', pr: '{prNumber}' },
+            consumeLabels: ['agent:review'],
+            limit: 1
+        };
+        Object.keys(overrides || {}).forEach(function (k) { rule[k] = overrides[k]; });
+        return rule;
+    }
+
+    function makeGitlabSm(items, ctxs, githubListCalls) {
+        return makeSmAgent({
+            fileMap: GL_CONFIG,
+            extraMocks: {
+                github_list_prs: function () { githubListCalls.push(1); return '[]'; }
+            },
+            github: {
+                items: function (rule, ctx) { ctxs.push(ctx); return items; },
+                onIssueLookup: function () { throw new Error('github_get_issue on a GitLab tick'); }
+            }
+        });
+    }
+
+    test('jobParams.scm gitlab: query forge, dispatch SCM and probes are GitLab; MR label consumed via SCM', function () {
+        var ctxs = [];
+        var githubListCalls = [];
+        var sm = makeGitlabSm([{ key: 'pr-12', labels: ['agent:review'], issueNumber: null,
+            prNumber: 12, branch: 'feature/x', author: 'someone' }], ctxs, githubListCalls);
+
+        sm.action(baseParams('acme', 'widgets', [gitlabRule()], { scm: { provider: 'gitlab' } }));
+
+        assert.equal(ctxs.length, 1);
+        assert.equal(ctxs[0].scmProvider, 'gitlab', 'the source builds a GitLab provider');
+        assert.equal(sm.capturedTriggers.length, 1, 'dispatched');
+        assert.ok(sm.capturedScmConfigs.length > 0, 'an SCM client was created');
+        sm.capturedScmConfigs.forEach(function (c) {
+            assert.equal(c.scm.provider, 'gitlab', 'every SCM client is GitLab-pinned');
+        });
+        assert.deepEqual(sm.capturedScmLabelOps, [{ op: 'remove', prId: '12', label: 'agent:review' }]);
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'no github label tool');
+        assert.ok(sm.capturedSmProviderForges.length > 0, 'tick probes ran');
+        sm.capturedSmProviderForges.forEach(function (f) {
+            assert.equal(f, 'gitlab', 'probes build GitLab providers');
+        });
+        assert.equal(githubListCalls.length, 0, 'GitHub-only naked-PR sweep skipped');
+    });
+
+    test('a gitlab rule dispatches through GitLab even without the jobParams knob', function () {
+        var ctxs = [];
+        var sm = makeGitlabSm([{ key: 'pr-12', labels: ['agent:review'], issueNumber: null,
+            prNumber: 12, branch: 'feature/x', author: 'someone' }], ctxs, []);
+
+        sm.action(baseParams('acme', 'widgets', [gitlabRule()]));
+
+        assert.equal(ctxs[0].scmProvider, 'gitlab');
+        assert.equal(sm.capturedTriggers.length, 1);
+        var dispatchCfg = sm.capturedScmConfigs[sm.capturedScmConfigs.length - 1];
+        assert.equal(dispatchCfg.scm.provider, 'gitlab');
+    });
+
+    test('issue-carrier label writes are skipped on GitLab — never routed to an MR by iid', function () {
+        var ctxs = [];
+        var sm = makeGitlabSm([{ key: 'gh-7', labels: ['agent:review'], issueNumber: 7, prNumber: 9,
+            branch: 'ai/gh-7', pr: { state: 'OPEN' } }], ctxs, []);
+
+        sm.action(baseParams('acme', 'widgets', [gitlabRule({
+            id: 'review-on-issue-label',
+            query: { type: 'issue', labels: ['agent:review'] },
+            inputs: { issue: '{issueNumber}', leg: 'review', reason: 'sm: test' }
+        })], { scm: { provider: 'gitlab' } }));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'dispatched (issue anchor trusted, no github_get_issue)');
+        assert.equal(JSON.parse(sm.capturedTriggers[0].inputs).issue, '7');
+        assert.deepEqual(sm.capturedScmLabelOps, [], 'no MR label op keyed by the issue iid');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0);
+    });
+
+    test('a GitHub tick is unchanged: github source ctx and probes stay github', function () {
+        var ctxs = [];
+        var sm = makeSmAgent({
+            fileMap: GL_CONFIG,
+            github: { items: function (rule, ctx) { ctxs.push(ctx); return []; } }
+        });
+
+        sm.action(baseParams('acme', 'widgets', [gitlabRule({ source: 'github' })]));
+
+        assert.equal(ctxs[0].scmProvider, 'github');
+        sm.capturedSmProviderForges.forEach(function (f) { assert.equal(f, 'github'); });
     });
 });
 

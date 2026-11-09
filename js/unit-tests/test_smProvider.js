@@ -959,10 +959,85 @@ suite('smProvider', function () {
         assert.equal(getCalls, before, 'no re-fetch after preseed');
     });
 
-    test('gitlab: snapshot/listOpenPrs documented gaps return null', function () {
+    test('gitlab: snapshot stays a documented gap (null preseed)', function () {
         var p = loadProvider('gitlab', {});
         assert.equal(p.snapshot(), null);
-        assert.equal(p.listOpenPrs(), null);
+    });
+
+    test('gitlab: listOpenPrs maps opened MRs to the /pulls item shape, cached per tick', function () {
+        var calls = 0;
+        var p = loadProvider('gitlab', {
+            gitlab_list_mrs: function (a) {
+                calls++;
+                assert.equal(a.state, 'opened');
+                // The bridge returns JSON strings — decoded here.
+                return JSON.stringify([
+                    { iid: 11, title: 'T', description: 'Closes #5', source_branch: 'ai/gh-5',
+                      labels: ['agent:review'], author: { username: 'bot' }, draft: false,
+                      sha: 'abc', source_project_id: 1, target_project_id: 1,
+                      allow_maintainer_to_push: true },
+                    { iid: 12, source_branch: 'fork-x', labels: [], author: { username: 'guest' },
+                      work_in_progress: true, source_project_id: 2, target_project_id: 1 }
+                ]);
+            }
+        });
+        var list = p.listOpenPrs();
+        assert.equal(list.length, 2);
+        assert.equal(list[0].number, 11);
+        assert.equal(list[0].body, 'Closes #5');
+        assert.equal(list[0].head.ref, 'ai/gh-5');
+        assert.equal(list[0].head.repo.full_name, 'mygroup/my-repo', 'same-project MR');
+        assert.deepEqual(list[0].labels, [{ name: 'agent:review' }]);
+        assert.equal(list[0].user.login, 'bot');
+        assert.equal(list[0].maintainer_can_modify, true);
+        assert.equal(list[1].draft, true, 'work_in_progress reads as draft');
+        assert.equal(list[1].head.repo.full_name, null, 'fork MR head path is unresolvable → null');
+        p.listOpenPrs();
+        assert.equal(calls, 1, 'second read hits the per-tick ioCache');
+        assert.equal(p.listOpenPrsLive().length, 2);
+        assert.equal(calls, 2, 'the live read bypasses the cache');
+    });
+
+    test('gitlab: searchOpenIssues filters one cached open-issue page by label or assignee', function () {
+        var calls = 0;
+        var p = loadProvider('gitlab', {
+            gitlab_list_issues: function (a) {
+                calls++;
+                assert.equal(a.state, 'opened');
+                assert.equal(a.perPage, 100);
+                return JSON.stringify([
+                    { iid: 5, labels: ['agent:review'], assignees: [] },
+                    { iid: 7, labels: [], assignees: [{ username: 'bot' }] }
+                ]);
+            }
+        });
+        var byLabel = p.searchOpenIssues({ kind: 'label', label: 'agent:review' }, null);
+        assert.deepEqual(byLabel.map(function (i) { return i.number; }), [5]);
+        var byAssignee = p.searchOpenIssues({ kind: 'assignee' }, 'bot');
+        assert.deepEqual(byAssignee.map(function (i) { return i.number; }), [7]);
+        assert.deepEqual(p.issueLabels(5), ['agent:review']);
+        assert.equal(p.issueLabels(99), null, 'unknown/closed issue → null (tier degrades to medium)');
+        assert.equal(calls, 1, 'one gitlab_list_issues per tick');
+    });
+
+    test('gitlab: findPr/prStatus decode JSON-string bridge payloads', function () {
+        var p = loadProvider('gitlab', {
+            gitlab_list_mrs: function () {
+                return JSON.stringify([{ iid: 11, source_branch: 'ai/gh-5', description: '' }]);
+            },
+            gitlab_get_mr: function () {
+                return JSON.stringify({ state: 'opened', merge_status: 'can_be_merged', has_conflicts: false,
+                                        source_branch: 'ai/gh-5', sha: 'abc', author: { username: 'bot' } });
+            },
+            gitlab_get_mr_pipelines: function () { return JSON.stringify([{ status: 'success' }]); }
+        });
+        assert.deepEqual(p.findPr(5, 'ai/gh-'), { number: 11, state: 'OPEN', branch: 'ai/gh-5' });
+        var st = p.prStatus(11);
+        assert.equal(st.state, 'OPEN', "GitLab 'opened' normalizes to the guard vocabulary");
+        assert.equal(st.checkConclusion, 'green');
+        assert.equal(st.branch, 'ai/gh-5');
+        assert.equal(st.headSha, 'abc');
+        assert.equal(st.author, 'bot');
     });
 
 });
@@ -1666,7 +1741,10 @@ suite('smProvider — gh-1009 CRAP characterization (paths touched by the provid
         ]);
     });
 
-    test('gitlab: closeIssue warns, posts the note when a comment is given, stays non-fatal on note failure', function () {
+    test('gitlab: closeIssue warns and never posts an MR note keyed by the issue iid', function () {
+        // Issue and MR iids are independent sequences on GitLab — a note
+        // posted via gitlab_create_mr_note(pullRequestId: <issue iid>)
+        // would land on an unrelated MR.
         var notes = [];
         var p = loadProvider('gitlab', {
             gitlab_create_mr_note: function (a) { notes.push(a); return 'ok'; }
@@ -1676,16 +1754,7 @@ suite('smProvider — gh-1009 CRAP characterization (paths touched by the provid
         });
         assert.equal(warnings.length, 1);
         assert.contains(warnings[0], 'gitlab close-issue tool not available');
-        assert.deepEqual(notes, [{ workspace: 'mygroup', repository: 'my-repo',
-                                  pullRequestId: '4', text: 'bye' }]);
-        var p2 = loadProvider('gitlab', {
-            gitlab_create_mr_note: function () { throw new Error('boom'); }
-        });
-        warnings = captureWarn(function () {
-            assert.equal(p2.closeIssue(5, 'x'), null);
-        });
-        assert.equal(warnings.length, 2);
-        assert.contains(warnings[1], 'close-issue comment failed');
+        assert.deepEqual(notes, []);
     });
 });
 
