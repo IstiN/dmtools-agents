@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-09T16:43:59.164Z",
+  "ticketKey": "pr-1411",
+  "headSha": "9ddc6b33c91b59dfb016f301c31d302a73b22edd",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:00fe147f590f51de",
+      "size": 52665
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:e2c155c2a7ddf3fb",
+      "size": 4564330
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:e05980d501f37ddd",
+      "size": 2277
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:89d6c73e9f43250f",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:9ff81457083f6427",
+      "size": 16434
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:6967e26ec73a0bd5",
+      "size": 8258
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:0a665157641f31bc",
+      "size": 2492
+    },
+    "request.md": {
+      "hash": "fnv1a64:35b6e5e5d617fa55",
+      "size": 2148
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:53fc0cd38273372d",
+      "size": 1917
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:7770d6f7fd4beca3",
+      "size": 1042
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:9fd3a447c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:ace75ff4ab8e4e29",
+      "size": 2233
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:35b6e5e5d617fa55",
+      "size": 2148
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs61WEkx",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/preparePRForReview.js:325",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI `crap` gate red — CRAP ratchet failed on this PR's own new code**\n\nThe `crap` quality check fails on head commit `9ddc6b33` (exit code 2), and both over-threshold functions are introduced by this PR:\n\n```\nCRAP ratchet failed: CRAP may only decrease.\nNEW > 8  js/preparePRForReview.js::writeNewHunksContext: 11\nNEW > 8  js/unit-tests/test_preparePRForReview.js::prGitOpsMocks: 10\n0 regression(s), 2 new over threshold, 0 improvement(s), 0 removed\n```\n(source: `input/gh-1404/ci_failures_full.log:43838,43871-43874` — CI run 42654806484)\n\n`writeNewHunksContext` (CC 11 at 100% coverage → CRAP 11) accumulates 6 guard clauses + try/catch + the write call in one function. Extract the early exits into small helpers, e.g.:\n\n```javascript\nfunction resolveNewHunksHeads(ctx, prDetails) {\n    var currentHead = prDetails && prDetails.head && prDetails.head.sha;\n    if (!prDetails || !prDetails.number || !currentHead) return null;\n    var comments = prCommentListForRegistry(ctx.scm, prDetails.number);\n    if (comments === null) return null;\n    var lastHead = prNewHunks.lastReviewedHead(comments,\n        { authorLogins: machineAuthorLoginsOf(ctx) });\n    return prNewHunks.headsDiffer(lastHead, currentHead)\n        ? { lastHead: lastHead, currentHead: currentHead } : null;\n}\n```\nleaving `writeNewHunksContext` as resolve → diff → write, each function comfortably under the threshold. `prGitOpsMocks` (CC 10) needs the same treatment — split the gh-1404 `getDiffBetweenCommits`/`trimLargeTextForInput` mock builders out of the shared factory.\n\nPer this PR's own new §5 rule: \"a failing gate is CI breakage (🚨 BLOCKING)\". All 105 new/updated unit tests pass (`run_prNewHunks.json`, `run_preparePRForReview.json`, `run_gitOps.json` — 0 failures locally), so only the ratchet refactoring is needed to green CI."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61WEos",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/gitOps.js:363",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: comment-derived `head` is interpolated into a command string without format validation**\n\n`fromSha`/`toSha` come from the `head` field of machine verdict-record comments, and that field is stored with no shape check — `reviewVerdicts.verdictRecordFromPayload` does `head: String(parsed.head)` with no sha-format validation. `prNewHunks.lastReviewedHead` then returns that string verbatim, and it lands here:\n\n```javascript\nvar result = _runDiffCommand(cmd, 'git diff ' + fromSha + ' ' + toSha);\n```\n\n`getPRDiff` interpolates branch names from **config** (trusted input); this new function interpolates a value that was read back from **PR comment content** at review time. Anyone who can edit the machine's verdict comment (repo write access, or a compromised token writing as the bot) controls the string handed to `cli_execute_command` — the author allowlist validates *who posted* the comment, not the *payload content*, and edits don't change authorship. Defense-in-depth costs one line:\n\n```javascript\nvar SHA_RE = /^[0-9a-fA-F]{7,40}$/;\nif (!SHA_RE.test(String(fromSha)) || !SHA_RE.test(String(toSha))) {\n    console.warn('Diff-of-diff skipped — non-sha head value in verdict record');\n    return '';\n}\n```\n\nGarbage input already degrades safely today (git fails → `''` → full-diff review), so this is pure hardening, not a behavior change — but an unchecked external-derived string in a shell command is exactly what the review checklist's \"is external input validated?\" item exists for."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61WEsD",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/preparePRForReview.js:329",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: second identical `getPrComments` fetch — the comment list is read twice per review round**\n\nIn `action()`, step 6.5 and the new step 6.6 run back-to-back and each fetches the same PR comment list:\n\n```javascript\nwriteFindingRegistryContext(ctx, prOutcome.pr.number);   // step 6.5 → scm.getPrComments(pr.number)\nwriteNewHunksContext(ctx, prDetails);                    // step 6.6 → scm.getPrComments(pr.number) AGAIN\n```\n\n`prCommentListForRegistry(ctx.scm, prNumber)` (js/preparePRForReview.js:282-286) wraps `scm.getPrComments(prNumber)` — a provider API round-trip. Every review round now pays it twice: once to parse registry records, once to parse verdict records — from the identical payload. GitHub/ADO API budget is finite and this leg runs on every lap of the review↔rework machine; it is also a second failure surface for the exact same call.\n\nFetch once and thread it through:\n\n```javascript\nvar comments = prCommentListForRegistry(ctx.scm, prOutcome.pr.number);\nwriteFindingRegistryContext(ctx, prOutcome.pr.number, comments);\nwriteNewHunksContext(ctx, prDetails, comments);\n```\n\nBoth steps already tolerate `comments === null` (skip quietly), so the contract is preserved unchanged. This also reduces `writeNewHunksContext`'s cyclomatic complexity toward the CRAP threshold — it helps fix the blocking ratchet finding at the same time."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61WE0i",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/prNewHunks.js:41",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: `sameHead` hand-copies the prefix-equality rule from `reviewVerdicts.latestVerdictForHead`**\n\nThe doc comment says \"same rule as latestVerdictForHead\" — and it is a byte-for-byte re-implementation of js/common/reviewVerdicts.js:380-382:\n\n```javascript\nif (records[i].head === head ||\n    (head.length >= 7 && records[i].head.indexOf(head) === 0) ||\n    (records[i].head.length >= 7 && head.indexOf(records[i].head) === 0)) {\n```\n\nTwo live copies of a subtle matching rule (`>=7`-char prefix) can drift: if one side later changes the minimum prefix length, the diff-of-diff trigger in `preparePRForReview` (\"heads differ → new hunks file\") and the SM's verdict-for-head matching would disagree — e.g. a verdict recorded as \"reviewed at this head\" that the other component treats as a different head. This repo has already paid exactly this cost once: `dirScopedCmd` was extracted in gh-1248 because \"three byte-identical copies grew here\".\n\nSuggested shape: export the matcher from `reviewVerdicts.js` (where the rule is documented and already characterized by tests) and call it from both places:\n\n```javascript\n// reviewVerdicts.js\nfunction sameHead(a, b) { /* the existing prefix rule */ }\nmodule.exports = { ..., sameHead: sameHead };\n```"
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61WE6C",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/prNewHunks.js:21",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: dead import — `machineAuthor` is required but never used**\n\n`js/common/prNewHunks.js:21` pulls in `machineAuthor`:\n\n```javascript\nvar machineAuthor = require('./machineAuthor.js');\n```\n\nbut nothing in the module references it — the allowlist filtering happens entirely inside `reviewVerdicts.parseVerdictRecords(comments, opts)`, which receives `opts` from the caller. The `require` map in the tests (`test_prNewHunks.js` `prNewHunksDeps`) faithfully injects it, which shows the dead wiring is real, not an oversight in tests.\n\nDrop the import (and the corresponding `makeRequire` entries) or, if the intent was to validate `opts.authorLogins` here, do that — but as written it is unused code. The module header's \"opts carries the machineAuthor allowlist\" comment is fine once the import goes."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:56a3d3ab",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI `crap` gate red — CRAP ratchet failed on this PR's own new code**\n\nThe `crap` quality check fails on head commit `9ddc6b33` (exit code 2), and both over-threshold functions are introduced by this PR:\n\n```\nCRAP ratchet failed: CRAP may only decrease.\nNEW > 8  js/preparePRForReview.js::writeNewHunksContext: 11\nNEW > 8  js/unit-tests/test_preparePRForReview.js::prGitOpsMocks: 10\n0 regression(s), 2 new over threshold, 0 improvement(s), 0 removed\n```\n(source: `input/gh-1404/ci_failures_full.log:43838,43871-43874` — CI run 42654806484)\n\n`writeNewHunksContext` (CC 11 at 100% coverage → CRAP 11) accumulates 6 guard clauses + try/catch + the write call in one function. Extract the early exits into small helpers, e.g.:\n\n```javascript\nfunction resolveNewHunksHeads(ctx, prDetails) {\n    var currentHead = prDetails && prDetails.head && prDetails.head.sha;\n    if (!prDetails || !prDetails.number || !currentHead) return null;\n    var comments = prCommentListForRegistry(ctx.scm, prDetails.number);\n    if (comments === null) return null;\n    var lastHead = prNewHunks.lastReviewedHead(comments,\n        { authorLogins: machineAuthorLoginsOf(ctx) });\n    return prNewHunks.headsDiffer(lastHead, currentHead)\n        ? { lastHead: lastHead, currentHead: currentHead } : null;\n}\n```\nleaving `writeNewHunksContext` as resolve → diff → write, each function comfortably under the threshold. `prGitOpsMocks` (CC 10) needs the same treatment — split the gh-1404 `getDiffBetweenCommits`/`trimLargeTextForInput` mock builders out of the shared factory.\n\nPer this PR's own new §5 rule: \"a failing gate is CI breakage (🚨 BLOCKING)\". All 105 new/updated unit tests pass (`run_prNewHunks.json`, `run_preparePRForReview.json`, `run_gitOps.json` — 0 failures locally), so only the ratchet refactoring is needed to green CI."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:9b611582",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: comment-derived `head` is interpolated into a command string without format validation**\n\n`fromSha`/`toSha` come from the `head` field of machine verdict-record comments, and that field is stored with no shape check — `reviewVerdicts.verdictRecordFromPayload` does `head: String(parsed.head)` with no sha-format validation. `prNewHunks.lastReviewedHead` then returns that string verbatim, and it lands here:\n\n```javascript\nvar result = _runDiffCommand(cmd, 'git diff ' + fromSha + ' ' + toSha);\n```\n\n`getPRDiff` interpolates branch names from **config** (trusted input); this new function interpolates a value that was read back from **PR comment content** at review time. Anyone who can edit the machine's verdict comment (repo write access, or a compromised token writing as the bot) controls the string handed to `cli_execute_command` — the author allowlist validates *who posted* the comment, not the *payload content*, and edits don't change authorship. Defense-in-depth costs one line:\n\n```javascript\nvar SHA_RE = /^[0-9a-fA-F]{7,40}$/;\nif (!SHA_RE.test(String(fromSha)) || !SHA_RE.test(String(toSha))) {\n    console.warn('Diff-of-diff skipped — non-sha head value in verdict record');\n    return '';\n}\n```\n\nGarbage input already degrades safely today (git fails → `''` → full-diff review), so this is pure hardening, not a behavior change — but an unchecked external-derived string in a shell command is exactly what the review checklist's \"is external input validated?\" item exists for."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:2cb75426",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: second identical `getPrComments` fetch — the comment list is read twice per review round**\n\nIn `action()`, step 6.5 and the new step 6.6 run back-to-back and each fetches the same PR comment list:\n\n```javascript\nwriteFindingRegistryContext(ctx, prOutcome.pr.number);   // step 6.5 → scm.getPrComments(pr.number)\nwriteNewHunksContext(ctx, prDetails);                    // step 6.6 → scm.getPrComments(pr.number) AGAIN\n```\n\n`prCommentListForRegistry(ctx.scm, prNumber)` (js/preparePRForReview.js:282-286) wraps `scm.getPrComments(prNumber)` — a provider API round-trip. Every review round now pays it twice: once to parse registry records, once to parse verdict records — from the identical payload. GitHub/ADO API budget is finite and this leg runs on every lap of the review↔rework machine; it is also a second failure surface for the exact same call.\n\nFetch once and thread it through:\n\n```javascript\nvar comments = prCommentListForRegistry(ctx.scm, prOutcome.pr.number);\nwriteFindingRegistryContext(ctx, prOutcome.pr.number, comments);\nwriteNewHunksContext(ctx, prDetails, comments);\n```\n\nBoth steps already tolerate `comments === null` (skip quietly), so the contract is preserved unchanged. This also reduces `writeNewHunksContext`'s cyclomatic complexity toward the CRAP threshold — it helps fix the blocking ratchet finding at the same time."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:8b699a82",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: `sameHead` hand-copies the prefix-equality rule from `reviewVerdicts.latestVerdictForHead`**\n\nThe doc comment says \"same rule as latestVerdictForHead\" — and it is a byte-for-byte re-implementation of js/common/reviewVerdicts.js:380-382:\n\n```javascript\nif (records[i].head === head ||\n    (head.length >= 7 && records[i].head.indexOf(head) === 0) ||\n    (records[i].head.length >= 7 && head.indexOf(records[i].head) === 0)) {\n```\n\nTwo live copies of a subtle matching rule (`>=7`-char prefix) can drift: if one side later changes the minimum prefix length, the diff-of-diff trigger in `preparePRForReview` (\"heads differ → new hunks file\") and the SM's verdict-for-head matching would disagree — e.g. a verdict recorded as \"reviewed at this head\" that the other component treats as a different head. This repo has already paid exactly this cost once: `dirScopedCmd` was extracted in gh-1248 because \"three byte-identical copies grew here\".\n\nSuggested shape: export the matcher from `reviewVerdicts.js` (where the rule is documented and already characterized by tests) and call it from both places:\n\n```javascript\n// reviewVerdicts.js\nfunction sameHead(a, b) { /* the existing prefix rule */ }\nmodule.exports = { ..., sameHead: sameHead };\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:767014fb",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: dead import — `machineAuthor` is required but never used**\n\n`js/common/prNewHunks.js:21` pulls in `machineAuthor`:\n\n```javascript\nvar machineAuthor = require('./machineAuthor.js');\n```\n\nbut nothing in the module references it — the allowlist filtering happens entirely inside `reviewVerdicts.parseVerdictRecords(comments, opts)`, which receives `opts` from the caller. The `require` map in the tests (`test_prNewHunks.js` `prNewHunksDeps`) faithfully injects it, which shows the dead wiring is real, not an oversight in tests.\n\nDrop the import (and the corresponding `makeRequire` entries) or, if the intent was to validate `opts.authorLogins` here, do that — but as written it is unused code. The module header's \"opts carries the machineAuthor allowlist\" comment is fine once the import goes."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:3202a98a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The `crap` CI gate fails on head `9ddc6b33` — this PR adds two functions over the CRAP threshold (`writeNewHunksContext` 11, `prGitOpsMocks` 10; ratchet: \"CRAP may only decrease\", exit 2) — CI breakage blocks merge. Also: a comment-derived `head` sha is interpolated into a git command unvalidated, and the PR comment list is fetched twice per round. The gh-1404 design itself matches the ticket; all 105 new/updated unit tests pass locally.\n\n**Key Issues**:\n- 🚨 `js/preparePRForReview.js:325` — refactor `writeNewHunksContext` (CRAP 11) + `prGitOpsMocks` below threshold 8 (ci_failures_full.log:43871-43874)\n- ⚠️ `js/common/gitOps.js:363` — validate `fromSha`/`toSha` (`/^[0-9a-f]{7,40}$/`) before command interpolation (value read from PR comment content, not config)\n- ⚠️ `js/preparePRForReview.js:329` — step 6.6 re-fetches the same `getPrComments` payload step 6.5 just fetched; fetch once, pass through\n- 💡 `js/common/prNewHunks.js:41` — `sameHead` duplicates `reviewVerdicts.latestVerdictForHead`'s prefix rule (reviewVerdicts.js:380-382); share one matcher\n- 🪶 `js/common/prNewHunks.js:21` — dead `machineAuthor` import\n\n**Digest**: `js/preparePRForReview.js:282` — registry-specific name now serves the verdict-head step · `js/common/prNewHunks.js:27` — header's machineAuthor claim doesn't match the module body.\n\n**Next Steps**:\n1. Refactor the two over-threshold functions until `crap` is green (helper extraction resolves the duplicate fetch too)\n2. Add sha-format validation; export the shared `sameHead` matcher from `reviewVerdicts.js`\n3. Drop the dead import; re-run the three PR verify suites"
+    }
+  ]
+}
