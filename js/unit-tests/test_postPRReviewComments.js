@@ -4283,6 +4283,55 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         assert.ok(!data.inlineComments[0].__filterId, 'filter tags cleaned from the posted payload');
     });
 
+    test('stampOneDemotion — a non-comment-file path is never written (gh-1350 class guard, gh-1403 thread 2)', function() {
+        var writes = [];
+        var foreign = 'docs/agents/pr_review.md';
+        var fileMap = {
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'demote', tier: 'SUGGESTION', reason: 'overstated' }
+            ] }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'docs/agents/pr_review.md': '# pr review\nReadable repo doc the model must never mutate.'
+        };
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                { path: 'b.js', line: 20, severity: 'IMPORTANT', comment: foreign }
+            ]
+        };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome, 'the demote itself still applies');
+        assert.equal(data.inlineComments[0].severity, 'SUGGESTION', 'tier downgraded');
+        assert.equal(writes.filter(function(w) { return w.path === foreign; }).length, 0,
+            'a repo file outside the comment-file layout is NEVER written');
+    });
+
+    test('stampOneDemotion — hostile model-written shapes are refused (nested dir, workflow yaml)', function() {
+        var writes = [];
+        var fileMap = {
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'demote', tier: 'SUGGESTION', reason: 'overstated' }
+            ] }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'sub/dir/note.md': 'nested doc',
+            '.github/workflows/ci.yml': 'name: ci'
+        };
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                { path: 'a.js', line: 10, severity: 'IMPORTANT', comment: 'sub/dir/note.md' },
+                { path: 'b.js', line: 20, severity: 'IMPORTANT', comment: '.github/workflows/ci.yml' }
+            ]
+        };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(writes.filter(function(w) { return w.path === 'sub/dir/note.md'; }).length, 0);
+        assert.equal(writes.filter(function(w) { return w.path === '.github/workflows/ci.yml'; }).length, 0);
+    });
+
     test('action() recomputes the verdict from the FILTERED census — a dropped thread no longer gates approval', function() {
         var writes = [];
         var scmCommentCalls = [];
@@ -4372,6 +4421,216 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         assert.equal(postedGeneral.length, 1, 'the general comment carries the dropped section');
         assert.ok(postedGeneral[0].indexOf('verified wrong against the caller guard') !== -1);
         assert.equal(cliCalls.length, 1, 'exactly one filter CLI run');
+    });
+
+    test('action() reconciles a surviving BLOCK token against a clean post-filter census (gh-1403 thread 3)', function() {
+        var writes = [];
+        var scmCommentCalls = [];
+        var scmAddLabelCalls = [];
+        var cliCalls = [];
+        var fileMap = {
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'BLOCK',
+                issueCounts: { blocking: 1, important: 0, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [
+                    { path: 'a.js', line: 10, severity: 'BLOCKING', body: 'claimed data loss on the empty path' }
+                ],
+                generalComment: 'outputs/pr_review_general.md'
+            }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'drop', reason: 'the caller validates the input — claim wrong' }
+            ] })
+        };
+        var fileRead = mapFileRead(fileMap);
+        var scm = {
+            listPrs: function() { return []; },
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+            addLabel: function(prId, label) { scmAddLabelCalls.push(label); },
+            removeLabel: function() {},
+            fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+            addComment: function(prId, body) { scmCommentCalls.push(body); },
+            addInlineComment: function() {}
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: fileRead });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                },
+                './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({
+                    './reviewPolicy.js': loadReviewPolicyModule(),
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+                }), {})
+            })),
+            {
+                file_read: fileRead,
+                file_write: function(a, b) {
+                    var w = typeof a === 'string' ? { path: a, content: b } : a;
+                    writes.push(w);
+                    fileMap[w.path] = w.content;
+                },
+                cli_execute_command: function(args) { cliCalls.push(args); return 'filter cli ok'; },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function(args) {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-1', fields: { labels: [] } },
+            response: 'Jira review content',
+            inputFolderPath: 'input/PROJ-1',
+            jobParams: {
+                reviewPolicy: JSON.stringify({ verification: 'filter' })
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.recommendation, 'APPROVE',
+            'the filter dropped every gating thread — the pre-filter BLOCK token is advisory, the census wins');
+        assert.ok(scmAddLabelCalls.indexOf('pr_approved') !== -1, 'the reconciled approval flows through');
+        assert.ok(result.filter && result.filter.dropped === 1, 'filter stats ride the result');
+    });
+
+    test('action() — a BLOCK token stands when no filter ran (verification none keeps the invariant)', function() {
+        var scmAddLabelCalls = [];
+        var fileMap = {
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'BLOCK',
+                issueCounts: { blocking: 1, important: 0, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [
+                    { path: 'a.js', line: 10, severity: 'BLOCKING', body: 'real data loss' }
+                ],
+                generalComment: 'outputs/pr_review_general.md'
+            }),
+            'outputs/pr_review_general.md': GENERAL_MD
+        };
+        var fileRead = mapFileRead(fileMap);
+        var scm = {
+            listPrs: function() { return []; },
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+            addLabel: function(prId, label) { scmAddLabelCalls.push(label); },
+            removeLabel: function() {},
+            fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+            addComment: function() {},
+            addInlineComment: function() {}
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: fileRead });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                }
+            })),
+            {
+                file_read: fileRead,
+                file_write: function() {},
+                cli_execute_command: function() { throw new Error('no filter CLI without verification filter'); },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function() {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-1', fields: { labels: [] } },
+            response: 'Jira review content',
+            inputFolderPath: 'input/PROJ-1'
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.recommendation, 'BLOCK',
+            'model BLOCK (security/data-loss) stands untouched without an applied filter');
+        assert.ok(scmAddLabelCalls.indexOf('pr_approved') === -1, 'no approval label');
+    });
+
+    test('action() — a BLOCK token stands when the post-filter census still gates (kept BLOCKING thread)', function() {
+        var fileMap = {
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'BLOCK',
+                issueCounts: { blocking: 2, important: 0, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [
+                    { path: 'a.js', line: 10, severity: 'BLOCKING', body: 'verified data loss — kept' },
+                    { path: 'b.js', line: 20, severity: 'BLOCKING', body: 'overstated claim — dropped' }
+                ],
+                generalComment: 'outputs/pr_review_general.md'
+            }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 1, decision: 'drop', reason: 'guard exists upstream' }
+            ] })
+        };
+        var fileRead = mapFileRead(fileMap);
+        var scm = {
+            listPrs: function() { return []; },
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+            addLabel: function() {},
+            removeLabel: function() {},
+            fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+            addComment: function() {},
+            addInlineComment: function() {}
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: fileRead });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                },
+                './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({
+                    './reviewPolicy.js': loadReviewPolicyModule(),
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+                }), {})
+            })),
+            {
+                file_read: fileRead,
+                file_write: function() {},
+                cli_execute_command: function() { return 'filter cli ok'; },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function() {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-1', fields: { labels: [] } },
+            response: 'Jira review content',
+            inputFolderPath: 'input/PROJ-1',
+            jobParams: {
+                reviewPolicy: JSON.stringify({ verification: 'filter' })
+            }
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.recommendation, 'BLOCK',
+            'blocking evidence remains posted — the BLOCK token is not reconciled away');
     });
 
     test('action() with verification none never invokes the filter CLI (default stays legacy)', function() {

@@ -241,12 +241,23 @@ function readMarkdownFile(filePath, ticketKey, workingDir) {
  * landed with the literal string "outputs/pr_review_general.md" as its body
  * (flutter_agent_harness #720).
  */
+/**
+ * The one model-written-path guard (gh-1350 class): a file reference from
+ * the review model is only trusted in the comment-file layout — a bare
+ * .md name, or outputs/ / pr_review_comments/ prefixed. Every read AND
+ * every write of a model-written file reference goes through this shape
+ * check (gh-1403 review thread 2: the demote stamp wrote `entry.comment`
+ * unguarded — a hallucinated path could append the stamp to any readable
+ * file relative to the runtime cwd, e.g. a repo source file).
+ */
+function isCommentFilePath(value) {
+    return typeof value === 'string' &&
+        /^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(value.trim());
+}
+
 function resolveCommentFileReference(value, ticketKey, workingDir) {
-    if (typeof value !== 'string') return null;
+    if (!isCommentFilePath(value)) return null;
     var trimmed = value.trim();
-    if (!/^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(trimmed)) {
-        return null;
-    }
     var content = readMarkdownFile(trimmed, ticketKey, workingDir);
     return content || null;
 }
@@ -1122,11 +1133,22 @@ function verificationEnabledOf(policy) {
 }
 
 function filterDiffPathOf(params, ticketKey) {
-    // The review leg's diff — params.inputFolderPath when the dispatch
-    // carries it, else the established input/<ticketKey> layout the review
-    // prompt itself names (line ~268).
-    var folder = params && params.inputFolderPath;
-    return (folder ? folder : 'input/' + String(ticketKey || '')) + '/pr_diff.txt';
+    // The review leg's diff: the first input-folder candidate that actually
+    // holds pr_diff.txt. The chain is ticketKeyShapes.inputFolderCandidates
+    // (gh-1403 review thread 1) — params.inputFolderPath when the dispatch
+    // carries it (unwrapping the jobParams wrapper the way
+    // linkedIssuesReport.resolveInputContext does), else the Java-derived
+    // input/<inputFolderNameFor(key)> layout — a composite key
+    // owner/repo#1407 dispatches input/gh-1407, not input/<raw key> — then
+    // the legacy input/<ticketKey>. When no candidate holds the file, the
+    // first candidate is named anyway: fail-open, the same degradation
+    // class as every other filter failure.
+    var actualParams = params && params.inputFolderPath ? params : ((params && params.jobParams) || params || {});
+    var folders = ticketKeyShapes.inputFolderCandidates(actualParams.inputFolderPath, ticketKey);
+    for (var i = 0; i < folders.length; i++) {
+        if (readInputFileOrNull(folders[i] + '/pr_diff.txt')) return folders[i] + '/pr_diff.txt';
+    }
+    return folders[0] + '/pr_diff.txt';
 }
 
 function filterCliCommandOf() {
@@ -1177,7 +1199,7 @@ function readFilterVerdictsRaw(ctx) {
 
 function filterPathOfGeneralComment(reviewData) {
     var path = reviewData && typeof reviewData.generalComment === 'string' ? reviewData.generalComment.trim() : null;
-    if (!path || !/^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(path)) return null;
+    if (!path || !isCommentFilePath(path)) return null;
     return path;
 }
 
@@ -1233,11 +1255,14 @@ function matchingStampTarget(inline, stamp) {
 
 /**
  * One stamp: mark the entry consumed, then append the note to the comment
- * file it references (inline bodies have no file — nothing to write).
+ * file it references (inline bodies have no file — nothing to write). The
+ * model-written path is guarded by the same shape check every other
+ * model-written file reference applies (isCommentFilePath — gh-1403 review
+ * thread 2): a hallucinated `comment` value can never redirect the write.
  */
 function stampOneDemotion(entry, stamp, ctx) {
     entry.__filterNoted = true;
-    if (!entry.comment) return;
+    if (!isCommentFilePath(entry.comment)) return;
     var content = readMarkdownFile(entry.comment, ctx.ticketKey, ctx.workingDir);
     if (content) {
         writeFilterArtifact(entry.comment, content.replace(/\s*$/, '') + '\n' + stamp.note + '\n');
@@ -1824,6 +1849,33 @@ function hasBlockingOrImportant(issueCounts, policy) {
  */
 function machineApprovalFromCensus(recommendation, issueCounts, policy) {
     return reviewPolicyModule.machineApprovalDecision(recommendation, issueCounts, policy);
+}
+
+/**
+ * gh-1403 filter-vs-token reconciliation: when the filter leg APPLIED
+ * changes and the post-filter census gates nothing, a surviving
+ * BLOCK/REQUEST_CHANGES token is advisory exactly the way gh-1351 treats
+ * an APPROVE token — the machine verdict follows the census. The
+ * pre-filter token would otherwise arm a rework lap for findings the
+ * machine itself just re-classified as non-findings (the wasted-lap cost
+ * gh-1403 exists to remove). Without an applied filter nothing
+ * reconciles: a model BLOCK is a security/data-loss classification and is
+ * never silently overridden (reviewPolicy.machineApprovalDecision), and a
+ * census that still gates keeps its non-approve verdict. The
+ * reconciliation is logged through the standard machine-verdict line
+ * (recomputed: true).
+ */
+function reconcileFilterTokenWithCensus(machine, filterOutcome, issueCounts, policy) {
+    if (!filterOutcome) return machine;
+    if (machine.approved) return machine;
+    if (reviewPolicyModule.hasBlockingOrImportant(issueCounts, policy)) return machine;
+    return {
+        approved: true,
+        verdict: 'APPROVE',
+        reason: 'filter applied (gh-1403): post-filter census has no rework-tier threads — advisory ' +
+            machine.verdict + ' token reconciled to the census',
+        recomputed: true
+    };
 }
 
 /**
@@ -2905,6 +2957,10 @@ function action(params) {
         // advisory. Any 🚨/⚠️ (rework-tier) thread open → REQUEST_CHANGES;
         // only 💡/🪶 → APPROVE (suggestion-only cycles converge).
         var machine = machineApprovalFromCensus(recommendation, issueCounts, ctx.reviewPolicy);
+        // gh-1403: a filter round that removed every gating thread makes a
+        // surviving non-approve token advisory — the census wins (logged by
+        // the same machine-verdict line).
+        machine = reconcileFilterTokenWithCensus(machine, filterOutcome, issueCounts, ctx.reviewPolicy);
         var isApproved = machine.approved;
         if (machine.recomputed) {
             console.warn(buildMachineVerdictLog(machine, recommendation));
@@ -2991,6 +3047,8 @@ if (typeof module !== 'undefined' && module.exports) {
         hasAllowApproveWithSuggestions,
         hasBlockingOrImportant,
         machineApprovalFromCensus,
+        reconcileFilterTokenWithCensus,
+        isCommentFilePath,
         buildMachineVerdictLog,
         auditDensityAgainstPolicy,
         prAdditionsOf,

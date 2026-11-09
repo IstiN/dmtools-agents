@@ -33,7 +33,8 @@ Set in the project `.dmtools/config.js` (e.g. `reviewPolicy: { verification: 'fi
   - `demote` — a still-valid finding loses its tier (no longer gates approval), its body is kept and prefixed with the machine-parsed provenance marker `dmtools:demoted-from-BLOCKING` / `dmtools:demoted-from-IMPORTANT`, the thread is resolved.
   - `drop` — a non-finding is removed, its thread resolved.
   - `keep` (default) — the finding posts unchanged. Round-none tiers (🪶 under the default preset) never enter the filter.
-  - Anti-over-suppression guard: when every candidate of a run is dropped/demoted and kept ≪ candidates, a ⚠️ warning is stamped into the review summary — a miscalibrated filter must not silently erase real findings.
+  - Verdict reconciliation: when the filter removed every rework-tier thread, a surviving `BLOCK`/`REQUEST_CHANGES` token is advisory — the machine verdict follows the post-filter census (logged as a machine-enforcement reconciliation). Without an applied filter the token rules stand: a model `BLOCK` is never silently overridden.
+  - Anti-over-suppression guard: when every candidate of a run is dropped or demoted (nothing kept — a fully-demoted round flips every gated finding to non-gating too), a ⚠️ warning is stamped into the review summary — a miscalibrated filter must not silently erase real findings.
 
 **Trial opt-in** (gh-1403): this repository itself opts in via `.dmtools/config.js`; the trial bar is fewer rework laps per PR AND higher precision AND ≈ 0 wrongly-dropped findings. Revert to `none` if the trial fails.
 

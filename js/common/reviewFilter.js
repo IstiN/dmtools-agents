@@ -26,9 +26,10 @@
  *             (threads by severity + the agent's digest lines + one digest
  *             line per dropped candidate). The gh-1351 verdict machinery
  *             then reads the recomputed census unchanged.
- *   stats   — drop rate per round; drop-rate 100% fires the
- *             anti-over-suppression warning: a filter that drops everything
- *             is misconfigured, not a better reviewer.
+ *   stats   — drop rate per round; a round that keeps NOTHING (every
+ *             candidate dropped/demoted) fires the anti-over-suppression
+ *             warning: a filter that suppresses everything is
+ *             misconfigured, not a better reviewer.
  *
  * Pure module — no dmtools globals; JSON-safe data only. Requires hoisted
  * (the gh-823 pack-require rule). Keep it GraalJS-clean (var + plain
@@ -83,15 +84,41 @@ function isFilterableTier(severity, policy) {
 }
 
 /**
+ * The prose severity header the output rules/few-shots teach the finder to
+ * author ('🚨 **BLOCKING: SQL Injection**') — the canonical machine line's
+ * sibling in the wild. The whole first line strips when it HEADS with a
+ * tier word (tier emoji and bold markers optional, colon required): that
+ * line is severity classification (title included), the claim's substance
+ * starts below it. A tier word further down the claim is data, never
+ * protocol — only the head-of-claim line strips (gh-1403 review thread 4).
+ */
+var PROSE_SEVERITY_HEAD_RE = new RegExp(
+    '^[ \\t]*(?:\uD83D\uDEA8|\u26A0\uFE0F?|\uD83D\uDCA1|\uD83E\uDEB6)?[ \\t]*' +
+    '\\*{0,2}(?:BLOCKING|IMPORTANT|SUGGESTION|NIT)\\*{0,2}:[^\\n\\r]*\\r?\\n?',
+    'i');
+
+/**
+ * Strips ONE leading prose severity header line (the few-shots
+ * '[emoji] **TIER: title**' form) from a resolved claim, after the
+ * canonical machine-line strip — head-of-claim only.
+ */
+function stripProseSeverityHead(claim) {
+    return String(claim || '').replace(PROSE_SEVERITY_HEAD_RE, '');
+}
+
+/**
  * The claim a filter candidate carries: the finder's text with the machine
  * severity line stripped (the anchoring/self-preference guard — the filter
  * never sees the finder's severity). resolveClaim mirrors the poster's
  * resolution (inline body, else the referenced comment file) and is
- * injected by the caller, keeping this module free of file access.
+ * injected by the caller, keeping this module free of file access. Both
+ * severity-head forms strip: the canonical 'severity: X —' machine line
+ * AND the prose '[emoji] **TIER: title**' header the agents actually
+ * author.
  */
 function claimOf(inlineComment, resolveClaim) {
     var claim = resolveClaim(inlineComment);
-    return reviewVerdicts.stripLeadingSeverityLine(String(claim || ''));
+    return stripProseSeverityHead(reviewVerdicts.stripLeadingSeverityLine(String(claim || '')));
 }
 
 /**
@@ -491,16 +518,22 @@ function filterStats(candidates, applied) {
 }
 
 /**
- * The anti-over-suppression warning (gh-1403): a filter that drops EVERY
- * candidate is misconfigured, not a better reviewer. Log + stamp signal —
- * never a behavior change. null when the round looks sane.
+ * The anti-over-suppression warning (gh-1403): a round that suppresses
+ * EVERY candidate — all dropped, all demoted, or any split of the two with
+ * nothing kept — is misconfigured, not a better reviewer. A fully-demoted
+ * round flips every gated finding to non-gating too, so it earns the same
+ * "silence is not precision" scrutiny as a full-drop round (gh-1403 review
+ * thread 5). Log + stamp signal — never a behavior change. null when the
+ * round kept something.
  */
 function buildOverSuppressionWarning(stats) {
     if (!stats || stats.candidates === 0) return null;
-    if (stats.dropped < stats.candidates) return null;
-    return '🧯 review filter (gh-1403): drop rate ' + stats.dropped + '/' + stats.candidates +
-        ' (100%) — a filter that drops everything is MISCONFIGURED, not a better reviewer. ' +
-        'Check reviewPolicy.verification on this repo: the trial bar is fewer laps AND kept precision, not silence.';
+    if (stats.kept > 0) return null;
+    if (stats.demoted + stats.dropped < stats.candidates) return null;
+    return '🧯 review filter (gh-1403): ' + stats.dropped + '/' + stats.candidates + ' dropped, ' +
+        stats.demoted + ' demoted — every candidate of the run was suppressed (0 kept). A filter that ' +
+        'suppresses everything is MISCONFIGURED, not a better reviewer. Check reviewPolicy.verification ' +
+        'on this repo: the trial bar is fewer laps AND kept precision, not silence.';
 }
 
 // ── Digest lines + general-comment injection ─────────────────────────────────
@@ -512,13 +545,24 @@ function truncatedClaim(claim) {
 }
 
 /**
+ * The `path` (or `path:line`) fragment of a digest line. A candidate
+ * without a line renders the bare path — never `path:undefined`
+ * (digest-list review note, gh-1403).
+ */
+function droppedLocationOf(entry) {
+    var loc = String((entry && entry.path) || 'unknown path');
+    if (!entry || entry.line === undefined || entry.line === null) return loc;
+    return loc + ':' + entry.line;
+}
+
+/**
  * One digest line per dropped candidate (visible, never a thread) — the
  * anti-over-suppression listing: every drop stays auditable in the general
  * comment.
  */
 function buildDroppedDigestLine(entry) {
-    return '- `' + entry.path + ':' + entry.line + '` — ' + truncatedClaim(entry.claim) +
-        ' — 🧯 filter drop: ' + String(entry.reason || 'no reason given');
+    return '- `' + droppedLocationOf(entry) + '` — ' + truncatedClaim(entry && entry.claim) +
+        ' — 🧯 filter drop: ' + String((entry && entry.reason) || 'no reason given');
 }
 
 function buildDroppedDigestLines(dropped) {
@@ -551,13 +595,21 @@ function buildGeneralCommentInjection(stats, dropped) {
 
 /**
  * The one-line round summary (logs, tracker stamp): candidates → kept /
- * demoted / dropped with the drop-rate percentage.
+ * demoted / dropped with the drop-rate percentage. An incomplete verdict
+ * file names its unaccounted remainder explicitly (riding as keep,
+ * fail-open) — silent under-accounting reads as precision that never
+ * happened (digest-list review note, gh-1403).
  */
 function buildFilterStampLine(stats) {
     var s = stats || filterStats(0, []);
     var percent = Math.round((s.dropRate || 0) * 100);
-    return '🧯 Review filter (gh-1403): ' + s.candidates + ' candidate(s) → kept ' + s.kept +
-        ' · demoted ' + s.demoted + ' · dropped ' + s.dropped + ' (drop rate ' + percent + '%)';
+    var unaccounted = (s.candidates || 0) - ((s.kept || 0) + (s.demoted || 0) + (s.dropped || 0));
+    var line = '🧯 Review filter (gh-1403): ' + s.candidates + ' candidate(s) → kept ' + s.kept +
+        ' · demoted ' + s.demoted + ' · dropped ' + s.dropped;
+    if (unaccounted > 0) {
+        line += ' · unaccounted ' + unaccounted + ' (incomplete verdict file — riding as keep)';
+    }
+    return line + ' (drop rate ' + percent + '%)';
 }
 
 // ── Filter input + prompt builders ───────────────────────────────────────────
@@ -644,6 +696,7 @@ if (typeof module !== 'undefined' && module.exports) {
         DIGEST_CLAIM_MAX: DIGEST_CLAIM_MAX,
         tierRank: tierRank,
         isFilterableTier: isFilterableTier,
+        stripProseSeverityHead: stripProseSeverityHead,
         selectFilterCandidates: selectFilterCandidates,
         parseFilterVerdicts: parseFilterVerdicts,
         demotionNote: demotionNote,
