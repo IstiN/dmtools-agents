@@ -4728,6 +4728,12 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
             'js/postPRReviewComments.js',
             makeRequire(prReviewRequireMap({
                 './common/outputFiles.js': outputFiles,
+                // gh-1408: isolation — this 'verification none' scenario must not
+                // ride the REAL .dmtools/config.js (the shared prReviewRequireMap
+                // wires the real configLoader, whose file_read reads the repo's
+                // live reviewPolicy.verification). Stub it per the AGENTS.md mock
+                // convention: a config-dependent test gets an explicit stub.
+                './configLoader.js': configLoaderStub({}),
                 './common/scm.js': { createScm: function() { return scm; } },
                 './common/autoStart.js': {
                     triggerConfiguredWorkflowForTicket: function() { return false; },
