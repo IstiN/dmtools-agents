@@ -48,6 +48,10 @@ var reviewSpecClaims = require('./common/reviewSpecClaims.js');
 // finding-filter leg — reviewPolicy.verification = filter re-verifies each
 // rework/polish-tier candidate in a fresh context before it posts.
 var reviewFilterModule = require('./common/reviewFilter.js');
+// The one model-written-path guard — owned by the pure filter module since
+// the round-2 demote fix needs it there too; aliased here so every call
+// site in this file keeps its name.
+var isCommentFilePath = reviewFilterModule.isCommentFilePath;
 var reviewHelpers = require('./postStoryTestAutomationReviewHelpers.js');
 // gh-1369 (hoisted, never lazy — the gh-823 pack-require rule): the
 // terminal-PR guard — a MERGED/CLOSED PR never re-enters the rework loop
@@ -223,20 +227,6 @@ function readMarkdownFile(filePath, ticketKey, workingDir) {
         console.warn('Could not read file ' + filePath + ':', error);
     }
     return '';
-}
-
-/**
- * The one model-written-path guard (gh-1350 class): a file reference from
- * the review model is only trusted in the comment-file layout — a bare
- * .md name, or outputs/ / pr_review_comments/ prefixed. Every read AND
- * every write of a model-written file reference goes through this shape
- * check (gh-1403 review thread 2: the demote stamp wrote `entry.comment`
- * unguarded — a hallucinated path could append the stamp to any readable
- * file relative to the runtime cwd, e.g. a repo source file).
- */
-function isCommentFilePath(value) {
-    return typeof value === 'string' &&
-        /^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(value.trim());
 }
 
 /**
@@ -1236,12 +1226,15 @@ function demoteStampsOf(applied) {
 }
 
 /**
- * The first not-yet-stamped inline entry a stamp targets: same path + line,
- * structured severity still at the demote target (entries are consumed once
- * so two demotes on one file cannot double-append).
+ * The first not-yet-stamped inline entry a stamp targets: same code file +
+ * line, structured severity still at the demote target (entries are
+ * consumed once so two demotes on one file cannot double-append). Both
+ * tolerated spec shapes match (gh-1403 review round 2, shape B): agent
+ * output `{ path, ... }` and old spec `{ file, ... }`.
  */
 function isStampTarget(entry, stamp) {
-    if (entry.__filterNoted || entry.path !== stamp.path || entry.line !== stamp.line) return false;
+    var entryPath = entry.path || entry.file;
+    if (entry.__filterNoted || entryPath !== stamp.path || entry.line !== stamp.line) return false;
     return String(entry.severity || '').toUpperCase() === stamp.to;
 }
 
@@ -1255,17 +1248,22 @@ function matchingStampTarget(inline, stamp) {
 
 /**
  * One stamp: mark the entry consumed, then append the note to the comment
- * file it references (inline bodies have no file — nothing to write). The
- * model-written path is guarded by the same shape check every other
- * model-written file reference applies (isCommentFilePath — gh-1403 review
- * thread 2): a hallucinated `comment` value can never redirect the write.
+ * file it references. Shape-aware (gh-1403 review round 2): the note's
+ * file target is the old-spec `comment` field, or the agent-output
+ * body-as-path hybrid the poster resolves at post time
+ * (resolveInlineComment → resolveCommentFileReference) — both shapes pass
+ * the shared isCommentFilePath guard, so a hallucinated path can never
+ * redirect the write. Prose bodies have no file — their note already went
+ * inline from the pure apply (stampDemotionBody).
  */
 function stampOneDemotion(entry, stamp, ctx) {
     entry.__filterNoted = true;
-    if (!isCommentFilePath(entry.comment)) return;
-    var content = readMarkdownFile(entry.comment, ctx.ticketKey, ctx.workingDir);
+    var target = isCommentFilePath(entry.comment) ? entry.comment :
+        (isCommentFilePath(entry.body) ? entry.body : null);
+    if (!target) return;
+    var content = readMarkdownFile(target, ctx.ticketKey, ctx.workingDir);
     if (content) {
-        writeFilterArtifact(entry.comment, content.replace(/\s*$/, '') + '\n' + stamp.note + '\n');
+        writeFilterArtifact(target, content.replace(/\s*$/, '') + '\n' + stamp.note + '\n');
     }
 }
 
@@ -2914,8 +2912,12 @@ function action(params) {
         // filter) — a fresh-context pass verifies each rework/polish-tier
         // candidate BEFORE posting; drops become digest lines, demotes tier
         // downgrades, the census is recomputed after filtering. Non-fatal:
-        // any filter failure degrades to the unfiltered review.
-        var filterOutcome = applyReviewFilter(reviewData, ctx, filterDiffPathOf(params, ctx.ticketKey));
+        // any filter failure degrades to the unfiltered review. The diff
+        // path is probed lazily (round-2 NIT): only when the filter is
+        // enabled — the default `none` round never touches the input
+        // folders for pr_diff.txt.
+        var filterOutcome = applyReviewFilter(reviewData, ctx,
+            verificationEnabledOf(ctx.reviewPolicy) ? filterDiffPathOf(params, ctx.ticketKey) : null);
 
         console.log('Review recommendation:', reviewData.recommendation);
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
