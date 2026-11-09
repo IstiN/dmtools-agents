@@ -307,16 +307,6 @@ function untagFilterIds(inline) {
 }
 
 /**
- * The machine demotion provenance note for a filter demote — the gh-1053
- * demotion head (so the gh-1332 registry strips the machine tail from the
- * cross-round claim) with the filter's own provenance + reason.
- */
-function demotionNote(reason) {
-    return reviewSpecClaims.DEMOTION_NOTE_HEAD +
-        ': review-filter demotion (gh-1403)** — fresh-context verification: ' + String(reason || '');
-}
-
-/**
  * The demotion provenance appended to an INLINE body. File-referenced
  * findings get the note appended to their comment file by the runner (file
  * writes stay out of this module).
