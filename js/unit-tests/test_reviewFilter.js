@@ -232,7 +232,7 @@ suite('reviewFilter — verdict application', function() {
         assert.equal(out.dropped.length, 2);
         assert.equal(out.dropped[0].path, 'a.js');
         assert.equal(out.dropped[0].reason, 'guard exists upstream');
-        assert.equal(out.dropped[1].claim, 'claim for c.js:30', 'dropped entries keep the claim for the digest list');
+        assert.equal(out.dropped[1].claim, 'speculative three', 'dropped entries keep the claim for the digest list');
     });
 
     test('empty verdict list changes nothing (filter ran, said nothing)', function() {
@@ -309,7 +309,7 @@ suite('reviewFilter — anti-over-suppression stats', function() {
         ]);
         var warning = mod.buildOverSuppressionWarning(stats);
         assert.ok(warning, '≈100% drop rate must warn');
-        assert.ok(warning.indexOf('misconfigured') !== -1);
+        assert.ok(warning.indexOf('MISCONFIGURED') !== -1);
         assert.ok(warning.indexOf('3/3') !== -1, 'warning names the sample: ' + warning);
     });
 
@@ -348,7 +348,7 @@ suite('reviewFilter — digest lines + comment injection', function() {
         ]);
         assert.ok(section.indexOf('Review filter') !== -1);
         assert.ok(section.indexOf('`a.js:10`') !== -1);
-        assert.ok(section.indexOf('1/2') !== -1, 'stats line names the drop rate');
+        assert.ok(section.indexOf('50%') !== -1, 'stats line names the drop rate');
     });
 });
 
