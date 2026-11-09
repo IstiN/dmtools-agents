@@ -76,8 +76,7 @@ jobs:
 
       - name: Install dmtools CLI
         run: |
-          set -o pipefail
-          curl -fsSL --retry 5 --retry-delay 2 --retry-max-time 60 https://github.com/epam/dm.ai/releases/latest/download/install.sh | bash
+          curl -fsSL https://github.com/epam/dm.ai/releases/latest/download/install.sh | bash
           echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
 
       - name: Run docs unit tests
