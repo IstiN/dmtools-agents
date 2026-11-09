@@ -347,6 +347,32 @@ function getPRDiff(baseBranch, headBranch, workingDir) {
     }
 }
 
+// ── gh-1404: the diff-of-diff (re-review rounds review new hunks only) ───────
+
+/**
+ * The raw code delta between two commits — the content of pr_new_hunks.txt:
+ * what changed since the last review concluded. Two explicit SHAs, no branch
+ * fallback ladder: a missing SHA (force-push, pruned object) fails the single
+ * command and the '' return degrades the caller to the full-diff review.
+ */
+function getDiffBetweenCommits(fromSha, toSha, workingDir) {
+    var cmd = dirScopedCmd(workingDir);
+    try {
+        console.log('Generating diff between commits', fromSha, 'and', toSha,
+            workingDir ? '(in ' + workingDir + ')' : '');
+        var result = _runDiffCommand(cmd, 'git diff ' + fromSha + ' ' + toSha);
+        if (result.ok) {
+            console.log('Diff-of-diff size:', result.raw.length, 'chars');
+            return result.diff;
+        }
+        console.warn('Diff-of-diff failed (last reviewed head may be missing locally):', result.error);
+        return '';
+    } catch (e) {
+        console.warn('Failed to get diff between commits:', e);
+        return '';
+    }
+}
+
 /**
  * Detects merge conflicts between the current branch and `origin/{baseBranch}`.
  *
@@ -615,6 +641,7 @@ module.exports = {
     cleanCommandOutput: cleanCommandOutput,
     checkoutPRBranch: checkoutPRBranch,
     getPRDiff: getPRDiff,
+    getDiffBetweenCommits: getDiffBetweenCommits,
     detectMergeConflicts: detectMergeConflicts,
     trimLargeTextForInput: trimLargeTextForInput,
     writeInputFile: writeInputFile,

@@ -57,22 +57,18 @@ function headsDiffer(lastHead, currentHead) {
     return !!lastHead && !!currentHead && !sameHead(lastHead, currentHead);
 }
 
-function shortSha(sha) {
-    var s = String(sha || '');
-    return s.length > 10 ? s.substring(0, 10) : s;
-}
-
 /**
  * Renders pr_new_hunks.txt: a short header carrying the frozen-lines
  * contract (so the decision rule is cheap to follow at review time) followed
- * by the raw delta between the two heads.
+ * by the raw delta between the two heads. The FULL shas are cited — the
+ * reviewer can run git against them (log, diff, the interaction neighborhood).
  */
 function buildNewHunksFile(lastHead, currentHead, diff) {
     var lines = [
         '# PR new hunks — what changed since the last review concluded',
         '',
-        'Last reviewed head: ' + shortSha(lastHead),
-        'Current head: ' + shortSha(currentHead),
+        'Last reviewed head: ' + String(lastHead || ''),
+        'Current head: ' + String(currentHead || ''),
         '',
         'These hunks are the re-review scope, together with their interaction',
         'neighborhood (direct callers/callees of changed symbols). Every line',

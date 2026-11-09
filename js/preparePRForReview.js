@@ -17,6 +17,9 @@ const commentMarkup = require('./common/commentMarkup.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var trackersModule = require('./common/trackers.js');
 var forkCheckout = require('./common/forkCheckout.js');
+// gh-1404 (hoisted, never lazy — the gh-823 pack-require rule): the
+// diff-of-diff input — the re-review round's frozen already-reviewed code.
+var prNewHunks = require('./common/prNewHunks.js');
 // gh-1332 (hoisted, never lazy — the gh-823 pack-require rule): the
 // finding-identity registry — the review-round dedup. The registry's
 // previously-raised-findings injection tells a review round what earlier
@@ -306,6 +309,42 @@ function writeFindingRegistryContext(ctx, prNumber) {
     }
 }
 
+// ── gh-1404: the diff-of-diff injection (pr_new_hunks.txt) ───────────────────
+
+/**
+ * Step 6.6: inject the new hunks since the last reviewed head into the review
+ * input. A re-review round reviews the diff-of-diff plus the interaction
+ * neighborhood instead of whole files, and unchanged lines are frozen
+ * (gh-1404) — this is what stops findings landing on already-reviewed code.
+ * The last reviewed head is the head of the newest machine verdict record on
+ * the PR (reviewVerdicts). Non-fatal end to end: a first round (no verdict
+ * record), an unchanged head, a failed diff command or a provider without
+ * getPrComments leaves the input exactly as before — the reviewer then
+ * reviews the full PR diff.
+ */
+function writeNewHunksContext(ctx, prDetails) {
+    try {
+        var currentHead = prDetails && prDetails.head && prDetails.head.sha;
+        if (!prDetails || !prDetails.number || !currentHead) return false;
+        var comments = prCommentListForRegistry(ctx.scm, prDetails.number);
+        if (comments === null) return false;
+        var lastHead = prNewHunks.lastReviewedHead(comments,
+            { authorLogins: machineAuthorLoginsOf(ctx) });
+        if (!prNewHunks.headsDiffer(lastHead, currentHead)) return false;
+        var hunks = gitOps.getDiffBetweenCommits(lastHead, currentHead, ctx.config.workingDir);
+        if (!hunks) return false;
+        gitOps.writeInputFile(ctx.inputFolder + '/pr_new_hunks.txt',
+            prNewHunks.buildNewHunksFile(lastHead, currentHead,
+                gitOps.trimLargeTextForInput(hunks, 'pr_new_hunks.txt')),
+            'pr_new_hunks.txt');
+        console.log('✅ Diff-of-diff context written (new hunks since last reviewed head)');
+        return true;
+    } catch (e) {
+        console.warn('Diff-of-diff context injection failed (non-fatal):', e.message || e);
+        return false;
+    }
+}
+
 // Step 6.5: detect failed checks on the head commit.
 // gh-1119: the PR diff rides along so detectFailedChecks can tag extracted
 // gate violations owned/foreign in ci_failures.md (same tables the rework
@@ -449,6 +488,10 @@ function action(params) {
         // previously raised findings this round must answer, not re-raise.
         writeFindingRegistryContext(ctx, prOutcome.pr.number);
 
+        // Step 6.6: inject the diff-of-diff (gh-1404) — the hunks added since
+        // the last reviewed head, so already-reviewed code stays frozen.
+        writeNewHunksContext(ctx, prDetails);
+
         var failedChecks = detectCheckFailures(ctx, prDetails, diff);
 
         finishReviewStart(ctx, prDetails, branchName, failedChecks);
@@ -488,6 +531,7 @@ if (typeof module !== 'undefined' && module.exports) {
         fetchDiscussionData: fetchDiscussionData,
         writePrContext: writePrContext,
         writeFindingRegistryContext: writeFindingRegistryContext,
+        writeNewHunksContext: writeNewHunksContext,
         detectCheckFailures: detectCheckFailures,
         buildFailedChecksPanel: buildFailedChecksPanel,
         buildReviewStartedComment: buildReviewStartedComment,
