@@ -349,6 +349,20 @@ function getPRDiff(baseBranch, headBranch, workingDir) {
 
 // ── gh-1404: the diff-of-diff (re-review rounds review new hunks only) ───────
 
+// The sha shape both diff-of-diff heads must have before they may reach the
+// command string (gh-1404 rework, review thread ⚠️): fromSha/toSha are read
+// back from PR comment CONTENT (the verdict-record head field) at review
+// time, and the verdict record stores `String(parsed.head)` with no shape
+// check. The author allowlist validates who posted the comment, not its
+// payload, so the format check here is the defense-in-depth line: a
+// git short/full sha is 7–40 hex chars; anything else (branch name,
+// injection payload, truncated garbage) never reaches a command.
+var DIFF_SHA_RE = /^[0-9a-fA-F]{7,40}$/;
+
+function isDiffSha(value) {
+    return DIFF_SHA_RE.test(String(value));
+}
+
 /**
  * The raw code delta between two commits — the content of pr_new_hunks.txt:
  * what changed since the last review concluded. Two explicit SHAs, no branch
@@ -358,6 +372,11 @@ function getPRDiff(baseBranch, headBranch, workingDir) {
 function getDiffBetweenCommits(fromSha, toSha, workingDir) {
     var cmd = dirScopedCmd(workingDir);
     try {
+        if (!isDiffSha(fromSha) || !isDiffSha(toSha)) {
+            console.warn('Diff-of-diff skipped — non-sha head value in verdict record:',
+                JSON.stringify(String(fromSha)), '→', JSON.stringify(String(toSha)));
+            return '';
+        }
         console.log('Generating diff between commits', fromSha, 'and', toSha,
             workingDir ? '(in ' + workingDir + ')' : '');
         var result = _runDiffCommand(cmd, 'git diff ' + fromSha + ' ' + toSha);

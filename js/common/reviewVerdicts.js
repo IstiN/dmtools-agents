@@ -369,6 +369,25 @@ function warnConflictOnce(key, message) {
     console.warn(message);
 }
 
+/**
+ * The shared prefix-aware head equality (gh-1404 rework, review thread 💡):
+ * exact match, or one sha being a >=7-char prefix of the other. ONE copy of
+ * the rule lives here — the module that owns verdict-for-head matching — and
+ * every consumer (latestVerdictForHead below, prNewHunks' diff-of-diff
+ * trigger) delegates to it, so the components can never drift apart on what
+ * counts as "the same head" (the gh-1248 dirScopedCmd lesson: byte-identical
+ * copies grow and diverge).
+ */
+function sameHead(a, b) {
+    if (!a || !b) return false;
+    var x = String(a);
+    var y = String(b);
+    if (x === y) return true;
+    if (x.length >= 7 && y.indexOf(x) === 0) return true;
+    if (y.length >= 7 && x.indexOf(y) === 0) return true;
+    return false;
+}
+
 function latestVerdictForHead(records, headSha) {
     if (!headSha) return null;
     var head = String(headSha);
@@ -377,9 +396,7 @@ function latestVerdictForHead(records, headSha) {
         // Prefix match: legs may record the full sha while a probe passes a
         // short sha (and vice versa) — the marker carries the full sha, the
         // short form is its unambiguous prefix for conflict purposes.
-        if (records[i].head === head ||
-            (head.length >= 7 && records[i].head.indexOf(head) === 0) ||
-            (records[i].head.length >= 7 && head.indexOf(records[i].head) === 0)) {
+        if (sameHead(records[i].head, head)) {
             forHead.push(records[i]);
         }
     }
@@ -851,6 +868,7 @@ if (typeof module !== 'undefined' && module.exports) {
         extractVerdictRecord: extractVerdictRecord,
         parseVerdictRecords: parseVerdictRecords,
         latestVerdictForHead: latestVerdictForHead,
+        sameHead: sameHead,
         resolveLoserLabel: resolveLoserLabel,
         buildReconciliationComment: buildReconciliationComment,
         reconcileDecision: reconcileDecision,

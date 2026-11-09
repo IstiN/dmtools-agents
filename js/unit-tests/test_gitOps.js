@@ -827,6 +827,78 @@ suite('gitOps.getDiffBetweenCommits — the diff-of-diff (gh-1404)', function() 
             'a null workingDir stays unset');
     });
 
+    // gh-1404 rework (review thread ⚠️): fromSha/toSha are read back from PR
+    // comment CONTENT (the verdict-record head field) at review time — the
+    // author allowlist validates who posted, not the payload. Both values are
+    // format-checked before they may reach the command string: a non-sha head
+    // (branch name, injection payload, truncated garbage) skips the diff and
+    // degrades to the full-diff review, exactly like a failed command.
+    test('a non-sha fromSha is rejected before the command runs', function() {
+        var h = makeHarness({});
+
+        var diff = run(h, 'main; rm -rf /', 'abc123def456', null);
+
+        assert.equal(diff, '', 'the caller degrades to the full-diff review');
+        assert.equal(h.commands.length, 0, 'an unvalidated head value must never be interpolated into a command');
+        assert.contains(h.warns.join('\n'), 'non-sha');
+    });
+
+    test('a non-sha toSha is rejected the same way', function() {
+        var h = makeHarness({});
+
+        var diff = run(h, 'bbb222ccc333', 'HEAD~1 && echo pwned', null);
+
+        assert.equal(diff, '');
+        assert.equal(h.commands.length, 0, 'no command may run with a non-sha second head');
+        assert.contains(h.warns.join('\n'), 'non-sha');
+    });
+
+    test('a branch name is a non-sha head value (the diff-of-diff is sha-only by contract)', function() {
+        var h = makeHarness({});
+
+        var diff = run(h, 'origin/main', 'abc123def456', null);
+
+        assert.equal(diff, '');
+        assert.equal(h.commands.length, 0, 'branch names are not sha values — rejected');
+        assert.contains(h.warns.join('\n'), 'non-sha');
+    });
+
+    test('boundary shas still pass: 7-char short form and 40-char full form', function() {
+        var h = makeHarness({
+            'git diff bbb222c abc123def4567890abc123def4567890abc12345': '+ hunk\nCOMMAND_EXIT_CODE=0'
+        });
+
+        assert.equal(run(h, 'bbb222c', 'abc123def4567890abc123def4567890abc12345', null), '+ hunk',
+            'a 7-char short sha is valid');
+        assert.equal(h.commands.length, 1);
+
+        var h2 = makeHarness({
+            'git diff bbb222ccc333def4445 abc123def4567890abc123def4567890abc12345': '+ hunk\nCOMMAND_EXIT_CODE=0'
+        });
+        assert.equal(run(h2, 'bbb222ccc333def4445', 'abc123def4567890abc123def4567890abc12345', null), '+ hunk',
+            'a 17-char hex sha is valid');
+        assert.equal(h2.commands.length, 1);
+    });
+
+    test('an uppercase hex sha is accepted (shas are case-insensitive on input)', function() {
+        var h = makeHarness({
+            'git diff BBB222CCC333 abc123def456': '+ hunk\nCOMMAND_EXIT_CODE=0'
+        });
+
+        assert.equal(run(h, 'BBB222CCC333', 'abc123def456', null), '+ hunk');
+        assert.equal(h.commands.length, 1);
+    });
+
+    test('a 6-char or 41-char head value is too short/long for a sha — rejected', function() {
+        var h = makeHarness({});
+        assert.equal(run(h, 'bbb222', 'abc123def456', null), '', '6 chars is not a git short sha');
+        assert.equal(h.commands.length, 0);
+        var h2 = makeHarness({});
+        assert.equal(run(h2, 'b222ccc333def444555666777888999aaabbbccc000', 'abc123def456', null), '',
+            '41 chars is not a sha');
+        assert.equal(h2.commands.length, 0);
+    });
+
 });
 
 

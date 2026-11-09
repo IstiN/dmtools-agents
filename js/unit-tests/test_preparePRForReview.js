@@ -45,6 +45,21 @@ function verdictCommentBody(head, at) {
     });
 }
 
+// A real machine finding-registry comment body (gh-1332) — file-scope so the
+// gh-1404 suites can build one for direct-call tests too.
+function registryCommentBodyFor() {
+    var fr = loadModule('js/common/findingRegistry.js', makeRequire({
+        './machineAuthor.js': machineAuthorReal(),
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+            makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+    }), {});
+    var policy = fr.resolveIdentityPolicy({}, null);
+    var outcome = fr.applyRound(null, { at: '2026-11-03T10:00:00Z', findings: [
+        { file: 'src/auth.ts', claim: 'nothing validates a token', severity: 'BLOCKING', line: 45 }
+    ] }, policy);
+    return fr.buildRegistryComment(Object.assign(outcome.registry, { at: '2026-11-03T10:00:00Z' }));
+}
+
 function prRecorder() {
     return { comments: [], gitOps: [], ghCalls: [], parentCalls: [], configCalls: [] };
 }
@@ -82,8 +97,29 @@ function prGhMocks(opts, record) {
     };
 }
 
-function prGitOpsMocks(opts, record) {
+// gh-1404 rework (review thread 🚨 CRAP ratchet): the diff-of-diff mock
+// builders live in their own factory — keeping them inside prGitOpsMocks
+// pushed that factory past the CRAP threshold (CC 10 > 8). Splitting keeps
+// every mock factory under the gate; the merged shape is identical.
+function prNewHunksGitOpsMocks(opts, record) {
     return {
+        // gh-1404: the diff-of-diff for pr_new_hunks.txt (re-review rounds).
+        getDiffBetweenCommits: function(fromSha, toSha, workingDir) {
+            record.gitOps.push({ fn: 'getDiffBetweenCommits', fromSha: fromSha,
+                toSha: toSha, workingDir: workingDir });
+            if (opts.diffBetweenCommitsError) throw opts.diffBetweenCommitsError;
+            return opts.diffBetweenCommits !== undefined ? opts.diffBetweenCommits : '+ rework hunk line';
+        },
+        trimLargeTextForInput: function(content, label, maxChars) {
+            record.gitOps.push({ fn: 'trimLargeTextForInput', label: label,
+                length: content ? content.length : 0 });
+            return content || '';
+        }
+    };
+}
+
+function prGitOpsMocks(opts, record) {
+    return Object.assign({
         checkoutPRBranch: function(branchName, workingDir, baseBranch, pullRef) {
             var entry = { fn: 'checkoutPRBranch', branchName: branchName,
                 workingDir: workingDir, baseBranch: baseBranch };
@@ -96,18 +132,6 @@ function prGitOpsMocks(opts, record) {
                 headBranch: headBranch, workingDir: workingDir });
             return opts.diffText !== undefined ? opts.diffText : 'diff --git a/x b/x';
         },
-        // gh-1404: the diff-of-diff for pr_new_hunks.txt (re-review rounds).
-        getDiffBetweenCommits: function(fromSha, toSha, workingDir) {
-            record.gitOps.push({ fn: 'getDiffBetweenCommits', fromSha: fromSha,
-                toSha: toSha, workingDir: workingDir });
-            if (opts.diffBetweenCommitsError) throw opts.diffBetweenCommitsError;
-            return opts.diffBetweenCommits !== undefined ? opts.diffBetweenCommits : '+ rework hunk line';
-        },
-        trimLargeTextForInput: function(content, label, maxChars) {
-            record.gitOps.push({ fn: 'trimLargeTextForInput', label: label,
-                length: content ? content.length : 0 });
-            return content || '';
-        },
         writePRContext: function(inputFolder, prDetails, diff, markdown, rawThreads) {
             record.gitOps.push({ fn: 'writePRContext', inputFolder: inputFolder,
                 prNumber: prDetails && prDetails.number, diff: diff,
@@ -116,7 +140,7 @@ function prGitOpsMocks(opts, record) {
         writeInputFile: function(path, content, label) {
             record.gitOps.push({ fn: 'writeInputFile', path: path, content: content, label: label });
         }
-    };
+    }, prNewHunksGitOpsMocks(opts, record));
 }
 
 function prTrackerGlobals(record, trackerThrows) {
@@ -439,6 +463,107 @@ suite('preparePRForReview — gh-1404 diff-of-diff injection (pr_new_hunks.txt)'
         };
         assert.equal(loaded.module.writeNewHunksContext(ctx, { number: 42, head: { sha: null } }), false);
         assert.equal(loaded.module.writeNewHunksContext(ctx, null), false);
+    });
+
+    // gh-1404 rework (review thread ⚠️): steps 6.5 and 6.6 parse the SAME
+    // comment payload (registry records / verdict records) — one provider
+    // fetch serves both; a second getPrComments round-trip per round is a
+    // wasted API budget line and a duplicated failure surface.
+    test('steps 6.5+6.6 read the PR comment list ONCE per review round', function() {
+        var rec = prRecorder();
+        var fetches = 0;
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            scm: { getPrComments: function() { fetches++; return []; } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        assert.equal(fetches, 1, 'one getPrComments round-trip serves the registry AND the diff-of-diff step');
+    });
+
+    test('one shared fetch still feeds BOTH injections when a moved head injects pr_new_hunks.txt', function() {
+        var rec = prRecorder();
+        var fetches = 0;
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            scm: { getPrComments: function() {
+                fetches++;
+                return [{ body: verdictCommentBody('bbb222ccc333'), user: { login: 'ai-teammate' } }];
+            } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success);
+        assert.equal(fetches, 1, 'still exactly one fetch on a re-review round');
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' && String(g.path).indexOf('pr_new_hunks') !== -1;
+        }).length, 1, 'the diff-of-diff write still happens from the shared payload');
+    });
+
+    test('a shared-fetch transport failure is non-fatal and skips both steps quietly', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({
+            record: rec,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' }, machineAuthor: 'ai-teammate' },
+            scm: { getPrComments: function() { throw new Error('api down'); } }
+        });
+        var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+        assert.ok(result.success, 'the review start never breaks on a comment-read failure');
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' &&
+                (String(g.path).indexOf('pr_new_hunks') !== -1 || String(g.path).indexOf('pr_findings') !== -1);
+        }).length, 0, 'both context injections skip when the shared fetch fails');
+    });
+
+    test('writeNewHunksContext honors a pre-fetched comment list (direct-call shape)', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({ record: rec });
+        var ctx = {
+            scm: { getPrComments: function() { throw new Error('must not be called when comments are passed in'); } },
+            config: { workingDir: '/w', machineAuthor: 'ai-teammate' },
+            jp: {},
+            inputFolder: 'input/TS-42'
+        };
+        var comments = [{ body: verdictCommentBody('bbb222ccc333'), user: { login: 'ai-teammate' } }];
+        assert.equal(loaded.module.writeNewHunksContext(ctx, { number: 42, head: { sha: 'abc123def' } }, comments), true,
+            'the moved-head round writes from the passed-in comments without a fetch');
+        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'getDiffBetweenCommits'; }).length, 1);
+    });
+
+    // Direct-call coverage for the optional-comments contract both writers
+    // share (gh-1404 rework): omitted → the step fetches its own list;
+    // explicit null → the step skips quietly. Keeps the fallback branches
+    // covered for the CRAP ratchet, too.
+    test('writeFindingRegistryContext fetches its own list when comments are omitted (direct call)', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({ record: rec });
+        var ctx = {
+            scm: { getPrComments: function() { return [
+                { body: registryCommentBodyFor(), user: { login: "ai-teammate" } }
+            ]; } },
+            config: { machineAuthor: 'ai-teammate' },
+            jp: {},
+            inputFolder: 'input/TS-42'
+        };
+        assert.equal(loaded.module.writeFindingRegistryContext(ctx, 42), true,
+            'the omitted-comments shape fetches and writes the registry');
+        assert.equal(rec.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' && g.path === 'input/TS-42/pr_findings.md';
+        }).length, 1);
+    });
+
+    test('writeFindingRegistryContext skips quietly on an explicit null comment list', function() {
+        var rec = prRecorder();
+        var loaded = prLoad({ record: rec });
+        var ctx = {
+            scm: { getPrComments: function() { throw new Error('must not be called when comments are passed in'); } },
+            config: { machineAuthor: 'ai-teammate' },
+            jp: {},
+            inputFolder: 'input/TS-42'
+        };
+        assert.equal(loaded.module.writeFindingRegistryContext(ctx, 42, null), false);
+        assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writeInputFile'; }).length, 0);
     });
 });
 

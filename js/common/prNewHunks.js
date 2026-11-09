@@ -14,11 +14,12 @@
  * the PR (reviewVerdicts, gh-807): a review leg concluded at that head.
  * Pure module — no dmtools globals; preparePRForReview feeds it comment
  * payloads and the current head sha. Keep it GraalJS-clean (var + plain
- * functions, JSON-safe data only).
+ * functions, JSON-safe data only). The machineAuthor allowlist is not
+ * consulted here: it flows through opts into reviewVerdicts.parseVerdictRecords
+ * (gh-1404 rework — the module carries no machineAuthor require of its own).
  */
 'use strict';
 
-var machineAuthor = require('./machineAuthor.js');
 var reviewVerdicts = require('./reviewVerdicts.js');
 
 /**
@@ -34,19 +35,12 @@ function lastReviewedHead(comments, opts) {
     return records[records.length - 1].head;
 }
 
-/**
- * Prefix-aware head equality (same rule as latestVerdictForHead): exact
- * match, or one sha being a >=7-char prefix of the other.
- */
-function sameHead(a, b) {
-    if (!a || !b) return false;
-    var x = String(a);
-    var y = String(b);
-    if (x === y) return true;
-    if (x.length >= 7 && y.indexOf(x) === 0) return true;
-    if (y.length >= 7 && x.indexOf(y) === 0) return true;
-    return false;
-}
+// Prefix-aware head equality — the SHARED rule, exported by reviewVerdicts
+// (gh-1404 rework, review thread 💡): one copy of the >=7-char prefix rule
+// lives in reviewVerdicts.js next to latestVerdictForHead; this module delegates
+// so the diff-of-diff trigger and the SM's verdict-for-head matching can
+// never drift apart. (gh-1248 dirScopedCmd lesson: hand copies diverge.)
+var sameHead = reviewVerdicts.sameHead;
 
 /**
  * The re-review precondition: true only when BOTH heads exist and differ.

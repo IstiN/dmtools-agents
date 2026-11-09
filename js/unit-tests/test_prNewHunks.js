@@ -8,14 +8,24 @@
  */
 
 function prNewHunksDeps() {
-    var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    // gh-1404 rework (review thread 🪶): './machineAuthor.js' is GONE from the
+    // module's require map — prNewHunks never used it (the allowlist flows
+    // through opts into reviewVerdicts.parseVerdictRecords). Loading the
+    // module without the binding proves the dead import is really dead.
     var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
-        makeRequire({ './machineAuthor.js': machineAuthor }), {});
+        makeRequire({ './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}) }), {});
     return loadModule('js/common/prNewHunks.js',
-        makeRequire({
-            './machineAuthor.js': machineAuthor,
-            './reviewVerdicts.js': reviewVerdicts
-        }), {});
+        makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+}
+
+// The reviewVerdicts instance prNewHunksDeps loads — for the shared-matcher
+// identity assertions (gh-1404 rework, thread 💡).
+function prNewHunksReviewVerdictsDeps() {
+    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}) }), {});
+    var prNewHunks = loadModule('js/common/prNewHunks.js',
+        makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+    return { reviewVerdicts: reviewVerdicts, prNewHunks: prNewHunks };
 }
 
 // A real machine verdict-record comment body for one head.
@@ -136,5 +146,28 @@ suite('prNewHunks.buildNewHunksFile', function() {
         var content = m.buildNewHunksFile('bbb222ccc333', 'abc123def456', '');
         assert.contains(content, 'bbb222ccc333');
         assert.contains(content, 'abc123def456');
+    });
+});
+
+// gh-1404 rework threads 💡 + 🪶: the module shares reviewVerdicts' head
+// matcher instead of re-implementing it, and carries no machineAuthor
+// require of its own (the allowlist flows through opts into
+// reviewVerdicts.parseVerdictRecords).
+suite('prNewHunks — shared matcher, no dead wiring (gh-1404 rework)', function() {
+
+    test('the module loads WITHOUT a machineAuthor binding (dead import removed)', function() {
+        // prNewHunksDeps no longer maps './machineAuthor.js' for this module:
+        // a remaining require('./machineAuthor.js') would throw at load time.
+        var m = prNewHunksDeps();
+        assert.equal(typeof m.lastReviewedHead, 'function');
+        assert.equal(m.lastReviewedHead([], { authorLogins: ['ai-teammate'] }), null);
+    });
+
+    test('sameHead IS the reviewVerdicts matcher — one rule, no hand copy', function() {
+        var d = prNewHunksReviewVerdictsDeps();
+        assert.equal(d.prNewHunks.sameHead, d.reviewVerdicts.sameHead,
+            'prNewHunks must delegate to the exported reviewVerdicts.sameHead, not re-implement it');
+        assert.equal(d.prNewHunks.sameHead('bbb222ccc333', 'bbb222c'), true);
+        assert.equal(d.prNewHunks.sameHead('bbb222ccc333', 'bbc222c'), false);
     });
 });

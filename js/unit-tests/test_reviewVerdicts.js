@@ -1240,3 +1240,54 @@ suite('reviewVerdicts — NIT severity stamp (gh-1351)', function () {
     });
 });
 
+
+suite('reviewVerdicts.sameHead — the shared prefix-equality rule (gh-1404 rework)', function () {
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
+
+    // gh-1404 rework (review thread 💡): the >=7-char prefix rule lived as ONE
+    // copy inside latestVerdictForHead and a SECOND byte-identical copy in
+    // prNewHunks.sameHead. The rule is now exported from here — the module
+    // that owns verdict-for-head matching — and both callers share it, so a
+    // future prefix-length change cannot split the two components' notion of
+    // "the same head".
+
+    test('exact match → true', function () {
+        assert.equal(rv.sameHead('aaaabbbbccccddddeeeeffff0000111122223333',
+            'aaaabbbbccccddddeeeeffff0000111122223333'), true);
+    });
+
+    test('full sha vs its >=7-char prefix → true (both directions)', function () {
+        assert.equal(rv.sameHead('aaaabbbbccccddddeeeeffff0000111122223333', 'aaaabbb'), true);
+        assert.equal(rv.sameHead('aaaabbb', 'aaaabbbbccccddddeeeeffff0000111122223333'), true);
+    });
+
+    test('a prefix shorter than 7 chars never matches (ambiguity guard)', function () {
+        assert.equal(rv.sameHead('aaaabbbbccccddddeeeeffff0000111122223333', 'aaabbbb'), false);
+        assert.equal(rv.sameHead('aaaabbb', 'aaaabbc'), false);
+    });
+
+    test('a prefix that is NOT the other head → false', function () {
+        assert.equal(rv.sameHead('aaaabbbbcccc', 'bbb222ccc333'), false);
+    });
+
+    test('falsy values → false (never a match, never a throw)', function () {
+        assert.equal(rv.sameHead(null, 'aaaabbb'), false);
+        assert.equal(rv.sameHead('aaaabbb', null), false);
+        assert.equal(rv.sameHead('', ''), false);
+        assert.equal(rv.sameHead(undefined, undefined), false);
+    });
+
+    test('non-string inputs are normalized like latestVerdictForHead does', function () {
+        assert.equal(rv.sameHead(1234567890123, '1234567890'), true);
+    });
+
+    test('latestVerdictForHead still matches short-probe forms through the shared rule', function () {
+        var records = rv.parseVerdictRecords([
+            { body: rv.buildVerdictComment({ head: 'aaaabbbbccccddddeeeeffff0000111122223333', verdict: 'APPROVE',
+                blocking: 0, important: 0, suggestions: 0, nits: 0, digest: 0,
+                at: '2026-11-09T10:00:00Z', source: 'pr_review.json' }), user: { login: 'ai-teammate' } }
+        ], { authorLogins: ['ai-teammate'] });
+        assert.equal(rv.latestVerdictForHead(records, 'aaaabbb').record.verdict, 'APPROVE',
+            'the extracted matcher keeps the prefix behavior of the loop');
+    });
+});
