@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-09T08:27:31.555Z",
+  "ticketKey": "pr-1405",
+  "headSha": "aedcc5b72a357030c9a1fc8c03502052c47cdfc8",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:8826a3b7e16827c2",
+      "size": 126671
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:cf13c10fe138be89",
+      "size": 160757
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:d26d46128ae9d11f",
+      "size": 897
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:8474707f8c4488d5",
+      "size": 12306
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:11c2499aa1fd03c2",
+      "size": 21108
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:6b36c75124b1820c",
+      "size": 11082
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:238e178062346726",
+      "size": 2906
+    },
+    "request.md": {
+      "hash": "fnv1a64:f01408b1b603925c",
+      "size": 2560
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:614396054ddd0e5d",
+      "size": 1250
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:b7fa40c9c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:f18a97bea619841a",
+      "size": 2645
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:f01408b1b603925c",
+      "size": 2560
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs61LA8v",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": ".cursor/skills/installed-skills.json:1",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: Scope violation — 133 vendored `.cursor/skills/**` files (+57,904 lines) swept into the commit**\n\nThis PR's actual gh-1402 fix is ~450 lines (`js/smAgent.js` +79, `js/unit-tests/test_smAgent.js` +372). The other **133 files / +57,904 lines** under `.cursor/skills/` are the DMtools skill packages that the teammate CI leg **installs at runtime into `.cursor/skills`** — not source. Evidence:\n\n- `origin/main` contains **zero** `.cursor/` entries (`git ls-tree -r origin/main | grep .cursor` → empty).\n- `ci_failures_full.log` (this very run) shows the installer writing there every leg: *\"Detecting skill directories… Found: .cursor/skills → Installing to: .cursor/skills → Removing old version…\"*.\n- `.cursor/skills/installed-skills.json` / `endpoints.json` are machine state (`\"version\": \"latest\"`, installed-package list).\n- The drift risk is already live: this run's installer **failed to download `dmtools-github-skill.zip`**, so vendored copies go stale/partial per install and will churn every future leg.\n\nThis also skips the AGENTS.md hard rule — *\"Before every commit: re-read your diff\"* — and makes the 58K-line diff unreviewable.\n\n**Fix**:\n1. Strip the sweep from the branch (single commit on an unmerged branch → rebase/amend is clean):\n   ```bash\n   git rm -r --cached .cursor/skills\n   git commit --amend --no-edit   # or a follow-up \"chore: drop vendored skills\" commit\n   git push --force-with-lease\n   ```\n2. Prevent recurrence — add `.cursor/skills/` to `.gitignore`. The repo has precedent for exactly this failure class: the gh-628 `.dmtools/*.log` entries were added after runtime artifacts were swept onto a branch three times."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61LBAr",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/smAgent.js:737",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI check `teammate / teammate` failed on commit `aedcc5b7`** ([run log](https://github.com/IstiN/dmtools-agents/actions/runs/42581160351/job/129040094735))\n\nRoot cause (from `ci_failures.md` / `ci_failures_full.log`):\n\n```\nError: AgentPackException: Failed to read registry catalog: HTTP 504 for\nhttps://github.com/IstiN/dmtools-agents/releases/download/agents-rel-20261107-051301/catalog.json\n##[error]Process completed with exit code 1.\n```\n\nThe `dmtools-github-skill.zip` download also failed in the same run. This is **infrastructure flakiness** (GitHub releases serving 504s ~07:37–07:47Z on 2026-11-09) — the rework leg died **before `dmtools run` even started**, so the agent never executed and nothing here is attributable to the changed code.\n\n**Action**: no code change required — re-run the workflow (a rework push re-triggers it). Full untruncated log: `ci_failures_full.log`. Note this leg also consumed the rework cycle (`close-rework-cycle.sh` ran and removed `agent:rework`) without any rework actually executing — worth a glance from the owner if the machine does not re-arm automatically."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61LBE0",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/smAgent.js:1024",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI check `docs-freshness` failed on commit `aedcc5b7`** ([run log](https://github.com/IstiN/dmtools-agents/actions/runs/42580445244/job/129037603938))\n\nImportant nuance: the actual doc-freshness check **passed** — `node js/agentDocGenerator.js && node generate_agent_snapshots.js` ran clean and the `git diff --exit-code -- docs/agents/generated snapshots` gate produced no error. The job died in the **next step**:\n\n```\ncurl: (22) The requested URL returned error: 504\n##[error]Process completed with exit code 22.\n```\n\n— the download of `crap4dart-linux-x64` (v0.15.0 release asset) for the similarity ratchet. Same GitHub-releases 504 window as the other two failures on this commit; **not attributable to the diff**.\n\n**Action**: re-run CI — no code change required. Until a green run exists, the PR description's ratchet claims (\"crap4js ratchet — 0 regressions; duplication ratchet — no growth on pinned `js/smAgent.js`\") remain locally-verified only; the unit suites themselves were re-verified in this review (619/619 smAgent, 9089/9089 full suite)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61LBIc",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/smAgent.js:3590",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI check `docs-coverage-tests` failed on commit `aedcc5b7`** ([run log](https://github.com/IstiN/dmtools-agents/actions/runs/42580445244/job/129037603905))\n\nRoot cause (from `ci_failures.md` / `ci_failures_full.log`):\n\n```\nDownloading DMTools shell script from https://github.com/epam/dm.ai/releases/download/v1.7.287/dmtools.sh (attempt 1/3)...\ncurl: (22) The requested URL returned error: 504   # × 3 attempts\nError: Failed to download DMTools shell script ... after 3 attempts.\n##[error]Process completed with exit code 1.\n```\n\nInstall-time infrastructure failure (HTTP 504 from GitHub release downloads, same 07:37Z window as `docs-freshness` and `teammate`) — the DMTools CLI never installed and **no test ran**, so nothing is attributable to the changed code.\n\n**Action**: no code change required — re-run the workflow. (Same infra window felled all three checks on `aedcc5b7`; if the 504s persist across re-runs, that is a GitHub-side incident, not a PR problem.)"
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61LBL-",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/smAgent.js:766",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the terminal probe is the first statement of `triggerWorkflow` — move it after the cheap local gates**\n\n`prTerminalStateOf(...)` here issues a real `github_get_pr` REST read **per dispatch candidate per tick** — and it runs *before* two gates that can skip the same candidate for free milliseconds later:\n\n- `js/smAgent.js:810` — `workflowBudget.remaining <= 0` (local counter): a budget-exhausted tick still pays one API read per candidate before returning false on the cap.\n- `js/smAgent.js:815` — `hasActiveTargetWorkflowRun(...)` in-flight dedup: candidates already covered by an active leg get probed every tick.\n- The probe also fires in DRY mode (the DRY branch is at ~line 895), where no dispatch will happen anyway.\n\nOn a busy tick (many labeled PRs, cap reached) this multiplies installation-token rate-limit spend for zero behavioral gain. Moving this block **after line 815** (still before any dispatch/`scm.triggerWorkflow` call) keeps the exact same guarantee — no dispatch can fire for a terminal PR — while skipping the probe for candidates the cheap gates would reject anyway. The audit line for those candidates is lost, but budget/dedup skips already log their own ⏭️ lines."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61LBPn",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/smAgent.js:3590",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the same PR is probed twice in one tick on the validate_pr conflict-rework path**\n\nThis lane guard probes `prTerminalStateOf(effectiveRepoInfo, ticket.prNumber)` at the top of the `validate_pr` branch. Further down, the merge-conflict rework path dispatches through `triggerWorkflow` (js/smAgent.js:4860) passing `{ prNumber: ticket.prNumber, branch: ticket.branch }` — and `triggerWorkflow`'s own new guard re-probes **the same PR** with an identical `github_get_pr` read. Two REST reads for one PR in one tick, and the second one re-races the merge the first just ruled open.\n\nThis file already has a probe-once doctrine for exactly this shape — js/smAgent.js:2117: *\"the SAME probe feeds reworkArmGate (no double github_get_pr read)\"*.\n\n**Options**:\n- resolve terminality once per item in `processRule` and thread the boolean down into `triggerWorkflow` (e.g. via `item.__terminal` or a `skipInfo` field), or\n- memoize `prTerminalStateOf` per `owner/repo#prNumber` per tick (the file already keeps per-tick caches like `validationCheckSync`, `dropOpenPrsCache`)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61LBSq",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/smAgent.js:738",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: `prTerminalStateOf` re-implements `prHeadAndLabels`' read/parse/fail-open block**\n\nBoth probes run the identical sequence — `github_get_pr({ workspace, repository, pullRequestId: String(prNumber) })` → `JSON.parse` string-or-object → `if (!pr || pr.message) return <fail-open>` → `prTerminalStateModule.isTerminalPrState(pr.state, pr.merged === true)` (see `prHeadAndLabels`, js/smAgent.js:6552). The only real difference is that this probe tolerates a **missing `head.sha`** (correct for merged PRs whose head record outlives the branch) while `prHeadAndLabels` requires it and warns on failure.\n\nExtracting the shared raw-read (e.g. a small `prRawRead(repoInfo, prNumber)` returning the parsed payload-or-null, consumed by both probes — or a `requireHead` flag on one function) would mean future payload-shape fixes (new error-body shapes, rate-limit bodies, field renames) land **once**, not twice. The file already repeats this idiom in several places, so this is consistency hygiene, not a defect — behavior here is correct and the fail-open doctrine matches gh-1369."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61LBW7",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/smAgent.js:769",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: audit-line wording + duplicated message template**\n\n`' is terminal (merged/closed) — terminal PR — dispatch skipped'` says \"terminal\" twice in one line. Minor, but the message template is also duplicated verbatim at js/smAgent.js:3591-3593 (the `validate_pr` lane) — the only differences are the parenthetical. A single shared suffix constant (or tiny helper) would keep the string — and the `'terminal PR — dispatch skipped'` substring the tests assert on (`indexOf` at 12 call sites in `test_smAgent.js`) — single-sourced, so a future wording tweak can't silently break one lane's assertion but not the other's. Style only; no behavioral impact."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:df2d9d7d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: Scope violation — 133 vendored `.cursor/skills/**` files (+57,904 lines) swept into the commit**\n\nThis PR's actual gh-1402 fix is ~450 lines (`js/smAgent.js` +79, `js/unit-tests/test_smAgent.js` +372). The other **133 files / +57,904 lines** under `.cursor/skills/` are the DMtools skill packages that the teammate CI leg **installs at runtime into `.cursor/skills`** — not source. Evidence:\n\n- `origin/main` contains **zero** `.cursor/` entries (`git ls-tree -r origin/main | grep .cursor` → empty).\n- `ci_failures_full.log` (this very run) shows the installer writing there every leg: *\"Detecting skill directories… Found: .cursor/skills → Installing to: .cursor/skills → Removing old version…\"*.\n- `.cursor/skills/installed-skills.json` / `endpoints.json` are machine state (`\"version\": \"latest\"`, installed-package list).\n- The drift risk is already live: this run's installer **failed to download `dmtools-github-skill.zip`**, so vendored copies go stale/partial per install and will churn every future leg.\n\nThis also skips the AGENTS.md hard rule — *\"Before every commit: re-read your diff\"* — and makes the 58K-line diff unreviewable.\n\n**Fix**:\n1. Strip the sweep from the branch (single commit on an unmerged branch → rebase/amend is clean):\n   ```bash\n   git rm -r --cached .cursor/skills\n   git commit --amend --no-edit   # or a follow-up \"chore: drop vendored skills\" commit\n   git push --force-with-lease\n   ```\n2. Prevent recurrence — add `.cursor/skills/` to `.gitignore`. The repo has precedent for exactly this failure class: the gh-628 `.dmtools/*.log` entries were added after runtime artifacts were swept onto a branch three times."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:e7057d35",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI check `teammate / teammate` failed on commit `aedcc5b7`** ([run log](https://github.com/IstiN/dmtools-agents/actions/runs/42581160351/job/129040094735))\n\nRoot cause (from `ci_failures.md` / `ci_failures_full.log`):\n\n```\nError: AgentPackException: Failed to read registry catalog: HTTP 504 for\nhttps://github.com/IstiN/dmtools-agents/releases/download/agents-rel-20261107-051301/catalog.json\n##[error]Process completed with exit code 1.\n```\n\nThe `dmtools-github-skill.zip` download also failed in the same run. This is **infrastructure flakiness** (GitHub releases serving 504s ~07:37–07:47Z on 2026-11-09) — the rework leg died **before `dmtools run` even started**, so the agent never executed and nothing here is attributable to the changed code.\n\n**Action**: no code change required — re-run the workflow (a rework push re-triggers it). Full untruncated log: `ci_failures_full.log`. Note this leg also consumed the rework cycle (`close-rework-cycle.sh` ran and removed `agent:rework`) without any rework actually executing — worth a glance from the owner if the machine does not re-arm automatically."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:45ed26aa",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI check `docs-freshness` failed on commit `aedcc5b7`** ([run log](https://github.com/IstiN/dmtools-agents/actions/runs/42580445244/job/129037603938))\n\nImportant nuance: the actual doc-freshness check **passed** — `node js/agentDocGenerator.js && node generate_agent_snapshots.js` ran clean and the `git diff --exit-code -- docs/agents/generated snapshots` gate produced no error. The job died in the **next step**:\n\n```\ncurl: (22) The requested URL returned error: 504\n##[error]Process completed with exit code 22.\n```\n\n— the download of `crap4dart-linux-x64` (v0.15.0 release asset) for the similarity ratchet. Same GitHub-releases 504 window as the other two failures on this commit; **not attributable to the diff**.\n\n**Action**: re-run CI — no code change required. Until a green run exists, the PR description's ratchet claims (\"crap4js ratchet — 0 regressions; duplication ratchet — no growth on pinned `js/smAgent.js`\") remain locally-verified only; the unit suites themselves were re-verified in this review (619/619 smAgent, 9089/9089 full suite)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:ad993251",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI check `docs-coverage-tests` failed on commit `aedcc5b7`** ([run log](https://github.com/IstiN/dmtools-agents/actions/runs/42580445244/job/129037603905))\n\nRoot cause (from `ci_failures.md` / `ci_failures_full.log`):\n\n```\nDownloading DMTools shell script from https://github.com/epam/dm.ai/releases/download/v1.7.287/dmtools.sh (attempt 1/3)...\ncurl: (22) The requested URL returned error: 504   # × 3 attempts\nError: Failed to download DMTools shell script ... after 3 attempts.\n##[error]Process completed with exit code 1.\n```\n\nInstall-time infrastructure failure (HTTP 504 from GitHub release downloads, same 07:37Z window as `docs-freshness` and `teammate`) — the DMTools CLI never installed and **no test ran**, so nothing is attributable to the changed code.\n\n**Action**: no code change required — re-run the workflow. (Same infra window felled all three checks on `aedcc5b7`; if the 504s persist across re-runs, that is a GitHub-side incident, not a PR problem.)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:0ad4c4ce",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the terminal probe is the first statement of `triggerWorkflow` — move it after the cheap local gates**\n\n`prTerminalStateOf(...)` here issues a real `github_get_pr` REST read **per dispatch candidate per tick** — and it runs *before* two gates that can skip the same candidate for free milliseconds later:\n\n- `js/smAgent.js:810` — `workflowBudget.remaining <= 0` (local counter): a budget-exhausted tick still pays one API read per candidate before returning false on the cap.\n- `js/smAgent.js:815` — `hasActiveTargetWorkflowRun(...)` in-flight dedup: candidates already covered by an active leg get probed every tick.\n- The probe also fires in DRY mode (the DRY branch is at ~line 895), where no dispatch will happen anyway.\n\nOn a busy tick (many labeled PRs, cap reached) this multiplies installation-token rate-limit spend for zero behavioral gain. Moving this block **after line 815** (still before any dispatch/`scm.triggerWorkflow` call) keeps the exact same guarantee — no dispatch can fire for a terminal PR — while skipping the probe for candidates the cheap gates would reject anyway. The audit line for those candidates is lost, but budget/dedup skips already log their own ⏭️ lines."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:137b84bd",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the same PR is probed twice in one tick on the validate_pr conflict-rework path**\n\nThis lane guard probes `prTerminalStateOf(effectiveRepoInfo, ticket.prNumber)` at the top of the `validate_pr` branch. Further down, the merge-conflict rework path dispatches through `triggerWorkflow` (js/smAgent.js:4860) passing `{ prNumber: ticket.prNumber, branch: ticket.branch }` — and `triggerWorkflow`'s own new guard re-probes **the same PR** with an identical `github_get_pr` read. Two REST reads for one PR in one tick, and the second one re-races the merge the first just ruled open.\n\nThis file already has a probe-once doctrine for exactly this shape — js/smAgent.js:2117: *\"the SAME probe feeds reworkArmGate (no double github_get_pr read)\"*.\n\n**Options**:\n- resolve terminality once per item in `processRule` and thread the boolean down into `triggerWorkflow` (e.g. via `item.__terminal` or a `skipInfo` field), or\n- memoize `prTerminalStateOf` per `owner/repo#prNumber` per tick (the file already keeps per-tick caches like `validationCheckSync`, `dropOpenPrsCache`)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:79ae87fc",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: `prTerminalStateOf` re-implements `prHeadAndLabels`' read/parse/fail-open block**\n\nBoth probes run the identical sequence — `github_get_pr({ workspace, repository, pullRequestId: String(prNumber) })` → `JSON.parse` string-or-object → `if (!pr || pr.message) return <fail-open>` → `prTerminalStateModule.isTerminalPrState(pr.state, pr.merged === true)` (see `prHeadAndLabels`, js/smAgent.js:6552). The only real difference is that this probe tolerates a **missing `head.sha`** (correct for merged PRs whose head record outlives the branch) while `prHeadAndLabels` requires it and warns on failure.\n\nExtracting the shared raw-read (e.g. a small `prRawRead(repoInfo, prNumber)` returning the parsed payload-or-null, consumed by both probes — or a `requireHead` flag on one function) would mean future payload-shape fixes (new error-body shapes, rate-limit bodies, field renames) land **once**, not twice. The file already repeats this idiom in several places, so this is consistency hygiene, not a defect — behavior here is correct and the fail-open doctrine matches gh-1369."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:fd5b9a1d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: audit-line wording + duplicated message template**\n\n`' is terminal (merged/closed) — terminal PR — dispatch skipped'` says \"terminal\" twice in one line. Minor, but the message template is also duplicated verbatim at js/smAgent.js:3591-3593 (the `validate_pr` lane) — the only differences are the parenthetical. A single shared suffix constant (or tiny helper) would keep the string — and the `'terminal PR — dispatch skipped'` substring the tests assert on (`indexOf` at 12 call sites in `test_smAgent.js`) — single-sourced, so a future wording tweak can't silently break one lane's assertion but not the other's. Style only; no behavioral impact."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:824afe4b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The gh-1402 guard logic itself is correct, fail-open per the gh-1369 doctrine, and well-tested (12 new tests; re-verified locally: 619/619 smAgent, 9089/9089 full suite) — but the branch carries a blocking scope violation: 133 vendored `.cursor/skills/**` runtime-installer artifacts (+57,904 of the +58,354 lines) swept into the fix commit, and all 3 CI checks are red on `aedcc5b7` (HTTP 504 infra flakes during release downloads, not code-attributable).\n\n**Key Issues**:\n- 🚨 Scope violation — `.cursor/skills/**` vendored sweep committed (runtime installer output; AGENTS.md \"re-read your diff\" skipped; already stale — this run's installer failed to fetch `dmtools-github-skill.zip`). Strip from branch + add `.cursor/skills/` to `.gitignore` (gh-628 precedent).\n- 🚨 CI red ×3 — `teammate` (pack-catalog 504), `docs-freshness` (crap4dart download 504; the doc-freshness gate itself passed), `docs-coverage-tests` (dmtools.sh download 504). Re-run required; the description's ratchet claims stay CI-unverified until green.\n- 💡 3 suggestions (non-blocking): guard ordering after budget/dedup gates (API-rate-limit spend), double probe on the validate_pr conflict-rework path, shared read helper for `prTerminalStateOf`/`prHeadAndLabels`.\n\n**Next Steps**:\n1. Remove `.cursor/skills/**` from the commit and ignore the directory to prevent recurrence.\n2. Re-push → CI re-runs → confirm green (including the crap4js/duplication ratchets).\n3. Optionally apply the 💡 suggestions — they do not gate the merge."
+    }
+  ]
+}
