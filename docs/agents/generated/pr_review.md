@@ -24,6 +24,20 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `projectKey` — tracker project key override.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
+## Review policy: `reviewPolicy.verification` (gh-1403)
+
+Set in the project `.dmtools/config.js` (e.g. `reviewPolicy: { verification: 'filter' }`); jobParams `reviewPolicy` overrides per run. The resolved table stamped into `review_policy.md` documents the active value.
+
+- `none` (default) — findings post exactly as the review leg raised them. No extra cost, no extra risk.
+- `filter` — a second, FRESH-context CLI pass re-verifies each file-referenced finding against the actual PR diff before it is posted, and rewrites the review:
+  - `demote` — a still-valid finding loses its tier (no longer gates approval), its body is kept and prefixed with the machine-parsed provenance marker `dmtools:demoted-from-BLOCKING` / `dmtools:demoted-from-IMPORTANT`, the thread is resolved.
+  - `drop` — a non-finding is removed, its thread resolved.
+  - `keep` (default) — the finding posts unchanged. Round-none tiers (🪶 under the default preset) never enter the filter.
+  - Verdict reconciliation: when the filter removed every rework-tier thread, a surviving `BLOCK`/`REQUEST_CHANGES` token is advisory — the machine verdict follows the post-filter census (logged as a machine-enforcement reconciliation). Without an applied filter the token rules stand: a model `BLOCK` is never silently overridden.
+  - Anti-over-suppression guard: when every candidate of a run is dropped or demoted (nothing kept — a fully-demoted round flips every gated finding to non-gating too), a ⚠️ warning is stamped into the review summary — a miscalibrated filter must not silently erase real findings.
+
+**Trial opt-in** (gh-1403): this repository opts in via `.dmtools/config.js` in #1408 — post-merge, once a pack release cut from post-gh-1403 main is out (the knob ships blockless until then: a `reviewPolicy` block, even with `'none'`, crashes released pre-gh-1403 packs at leg setup). The trial bar is fewer rework laps per PR AND higher precision AND ≈ 0 wrongly-dropped findings. Revert to `none` if the trial fails.
+
 _Human doc: [`agents/docs/agents/pr_review.md`](agents/docs/agents/pr_review.md)_
 
 ## Attributes

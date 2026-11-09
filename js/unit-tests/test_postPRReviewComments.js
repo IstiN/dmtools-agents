@@ -221,9 +221,22 @@ function prReviewRequireMap(overrides) {
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
         }), {}),
         './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+        './common/reviewFilter.js': loadReviewFilterModule(),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
     };
     return Object.assign(map, overrides || {});
+}
+
+/**
+ * Shared loader for js/common/reviewFilter.js (gh-1403) — the pure filter
+ * leg over the real reviewPolicy + reviewVerdicts + reviewSpecClaims.
+ */
+function loadReviewFilterModule() {
+    return loadModule('js/common/reviewFilter.js', makeRequire({
+        './reviewPolicy.js': loadReviewPolicyModule(),
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+        './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+    }), {});
 }
 
 function loadPostPRReviewComments(mocks) {
@@ -520,6 +533,7 @@ suite('postPRReviewComments', function() {
                     './common/reviewPolicy.js': loadReviewPolicyModule(),
                     './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+                    './common/reviewFilter.js': loadReviewFilterModule(),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
                 mergedMocks
@@ -776,6 +790,7 @@ suite('postPRReviewComments', function() {
                     './common/reviewPolicy.js': loadReviewPolicyModule(),
                     './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+                    './common/reviewFilter.js': loadReviewFilterModule(),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
                 formalMocks
@@ -1091,6 +1106,7 @@ suite('postPRReviewComments', function() {
             './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+            './common/reviewFilter.js': loadReviewFilterModule(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
                 {
@@ -1524,6 +1540,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
             './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+            './common/reviewFilter.js': loadReviewFilterModule(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
         merged
@@ -2436,6 +2453,7 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
                     makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
             }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+            './common/reviewFilter.js': loadReviewFilterModule(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }), {});
 
@@ -2529,6 +2547,7 @@ function gh926ResumeRequire(opts) {
         './common/reviewPolicy.js': loadReviewPolicyModule(),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
         './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+        './common/reviewFilter.js': loadReviewFilterModule(),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
     });
 }
@@ -2881,6 +2900,7 @@ function loadForPrSearch(foundPr) {
             './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+            './common/reviewFilter.js': loadReviewFilterModule(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
         {
@@ -3996,5 +4016,893 @@ suite('postPRReviewComments — gh-1369 terminal-PR guard on the rework arms', f
 
         assert.ok(!h.added.some(function(c) { return c.label === 'agent:rework'; }),
             'legacy: the lookup failure already suppressed the write quietly');
+    });
+});
+
+suite('postPReviewComments — gh-1403 review filter leg (verification: filter)', function() {
+
+    var GENERAL_MD = '## General review\n\nThe PR looks solid overall.';
+
+    function mapFileRead(fileMap) {
+        return function (args) {
+            var p = args && (args.path || args);
+            if (fileMap[p] !== undefined) return fileMap[p];
+            if (p && p.indexOf('.dmtools/config') !== -1) return null;
+            return null;
+        };
+    }
+
+    // Loader for the filter-runner helpers: real outputFiles wired to a
+    // file map, a file_write recorder and a controllable cli_execute_command.
+    function loadFilterRunner(fileMap, writes, cli) {
+        var cliCalls = [];
+        var cliMock = function (args) {
+            cliCalls.push(args);
+            if (typeof cli === 'function') return cli(args);
+            return 'cli output';
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: mapFileRead(fileMap) });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({
+                    './reviewPolicy.js': loadReviewPolicyModule(),
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+                }), {})
+            })),
+            {
+                file_read: mapFileRead(fileMap),
+                file_write: function (a, b) {
+                    writes.push(typeof a === 'string' ? { path: a, content: b } : a);
+                },
+                cli_execute_command: cliMock
+            }
+        );
+        return { mod: mod, cliCalls: cliCalls };
+    }
+
+    function filterPolicy() {
+        return loadReviewPolicyModule().validateReviewPolicy({ verification: 'filter' }, 'test');
+    }
+
+    function filterCtx(policy, ticketKey) {
+        return {
+            reviewPolicy: policy,
+            ticketKey: ticketKey || 'PROJ-1',
+            workingDir: null,
+            customParams: {}
+        };
+    }
+
+    function filteredReviewData() {
+        return {
+            recommendation: 'APPROVE',
+            issueCounts: { blocking: 0, important: 2, suggestions: 1, nits: 1, digest: 1 },
+            inlineComments: [
+                { path: 'a.js', line: 10, severity: 'IMPORTANT', body: 'wrong claim one' },
+                { path: 'b.js', line: 20, severity: 'IMPORTANT', body: 'overstated claim two' },
+                { path: 'c.js', line: 30, severity: 'SUGGESTION', body: 'solid claim three' },
+                { path: 'd.js', line: 40, severity: 'NIT', body: 'nit four never filtered' }
+            ],
+            generalComment: 'outputs/pr_review_general.md'
+        };
+    }
+
+    function dropDemoteKeepVerdicts() {
+        return JSON.stringify({ verdicts: [
+            { id: 0, decision: 'drop', reason: 'guard exists upstream' },
+            { id: 1, decision: 'demote', tier: 'SUGGESTION', reason: 'real but cosmetic' },
+            { id: 2, decision: 'keep' }
+        ] });
+    }
+
+    test('applyReviewFilter is a full no-op when verification is none (legacy byte-identical path)', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({}, writes, null);
+        var data = filteredReviewData();
+        var before = JSON.stringify(data.inlineComments);
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(loadReviewPolicyModule().defaultPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(outcome, null, 'no filter outcome');
+        assert.equal(JSON.stringify(data.inlineComments), before, 'review data untouched');
+        assert.equal(loaded.cliCalls.length, 0, 'no CLI run');
+        assert.equal(writes.length, 0, 'no files written');
+    });
+
+    test('filterDiffPathOf — inputFolderPath wins when it holds the diff (inputFolderCandidates chain)', function() {
+        var loaded = loadFilterRunner({
+            'input/TS-42/pr_diff.txt': 'diff --git a/y b/y'
+        }, [], null);
+        assert.equal(loaded.mod.filterDiffPathOf({ inputFolderPath: 'input/TS-42' }, 'TS-42'),
+            'input/TS-42/pr_diff.txt', 'dispatched input folder used as-is');
+        assert.equal(loaded.mod.filterDiffPathOf({}, 'TS-42'),
+            'input/TS-42/pr_diff.txt', 'ticketKey fallback matches the review prompt layout');
+        assert.equal(loaded.mod.filterDiffPathOf({ inputFolderPath: 'input/pr-1940' }, null),
+            'input/pr-1940/pr_diff.txt', 'PR-anchored folder key works without a ticketKey');
+    });
+
+    test('filterDiffPathOf — a composite key resolves through inputFolderNameFor, not the raw key (gh-1403 thread 1)', function() {
+        var loaded = loadFilterRunner({ 'input/gh-1407/pr_diff.txt': 'diff --git a/x b/x' }, [], null);
+        assert.equal(loaded.mod.filterDiffPathOf({}, 'acme/widgets#1407'),
+            'input/gh-1407/pr_diff.txt',
+            'the derived input/<gh-N> layout is probed — the raw composite key path would 404');
+        var bothFolders = loadFilterRunner({
+            'input/gh-1407/pr_diff.txt': 'derived',
+            'input/explicit-1407/pr_diff.txt': 'explicit'
+        }, [], null);
+        assert.equal(bothFolders.mod.filterDiffPathOf({ inputFolderPath: 'input/explicit-1407' }, 'acme/widgets#1407'),
+            'input/explicit-1407/pr_diff.txt', 'the explicit dispatch folder is still most specific');
+    });
+
+    test('filterDiffPathOf — a sanitized key resolves its derived folder', function() {
+        var loaded = loadFilterRunner({ 'input/PROJ-123-A-B/pr_diff.txt': 'diff' }, [], null);
+        assert.equal(loaded.mod.filterDiffPathOf({}, 'PROJ-123/A B'),
+            'input/PROJ-123-A-B/pr_diff.txt', 'non-[\\w.-] key chars are derived away by inputFolderNameFor');
+    });
+
+    test('filterDiffPathOf — the jobParams-wrapped params shape is unwrapped', function() {
+        var loaded = loadFilterRunner({ 'input/WRAPPED/pr_diff.txt': 'diff' }, [], null);
+        assert.equal(loaded.mod.filterDiffPathOf({ jobParams: { inputFolderPath: 'input/WRAPPED' } }, 'K'),
+            'input/WRAPPED/pr_diff.txt', 'JSRunner jobParams wrapper unwrapped like linkedIssuesReport');
+    });
+
+    test('filterDiffPathOf — no candidate holds the diff: the first candidate is named anyway (fail-open)', function() {
+        var loaded = loadFilterRunner({}, [], null);
+        assert.equal(loaded.mod.filterDiffPathOf({}, 'acme/widgets#1407'),
+            'input/gh-1407/pr_diff.txt',
+            'degrades to the derived layout — the same fail-open class as any filter degradation');
+    });
+
+    test('applyReviewFilter with zero candidates skips the CLI (no cost round)', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({}, writes, null);
+        var data = {
+            recommendation: 'APPROVE',
+            issueCounts: { blocking: 0, important: 0, suggestions: 0, nits: 2, digest: 0 },
+            inlineComments: [
+                { path: 'd.js', line: 40, severity: 'NIT', body: 'nit one' },
+                { path: 'e.js', line: 50, severity: 'NIT', body: 'nit two' }
+            ]
+        };
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(outcome, null, 'nothing to verify');
+        assert.equal(loaded.cliCalls.length, 0, 'zero candidates must not cost a CLI run');
+        assert.equal(data.inlineComments.length, 2);
+    });
+
+    test('applyReviewFilter runs the fresh-context CLI, applies verdicts and recomputes the census', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({
+            'outputs/pr_review_filter.json': dropDemoteKeepVerdicts(),
+            'outputs/pr_review_general.md': GENERAL_MD
+        }, writes, null);
+        var data = filteredReviewData();
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+
+        assert.ok(outcome, 'filter outcome returned');
+        assert.deepEqual(outcome.stats, { candidates: 3, kept: 1, demoted: 1, dropped: 1, dropRate: 0.333 });
+
+        // CLI contract: run-agent.sh on the hidden filter prompt, from the
+        // runtime cwd (no workingDirectory override — same as the main leg).
+        assert.equal(loaded.cliCalls.length, 1);
+        assert.equal(loaded.cliCalls[0].command, 'bash agents/scripts/run-agent.sh outputs/.pr-review-filter-prompt.md');
+        assert.equal(loaded.cliCalls[0].workingDirectory, undefined);
+
+        // The written prompt is a fresh-context contract.
+        var promptWrite = writes.filter(function(w) { return w.path === 'outputs/.pr-review-filter-prompt.md'; })[0];
+        assert.ok(promptWrite, 'filter prompt written');
+        assert.ok(promptWrite.content.indexOf('outputs/pr_review_filter_input.json') !== -1);
+        assert.ok(promptWrite.content.indexOf('input/PROJ-1/pr_diff.txt') !== -1, 'diff path injected');
+        assert.ok(promptWrite.content.indexOf('outputs/pr_review_filter.json') !== -1);
+
+        // The written input carries claims, never severities.
+        var inputWrite = writes.filter(function(w) { return w.path === 'outputs/pr_review_filter_input.json'; })[0];
+        assert.ok(inputWrite, 'filter input written');
+        assert.ok(inputWrite.content.indexOf('wrong claim one') !== -1, 'claims ride the input');
+        assert.ok(inputWrite.content.indexOf('IMPORTANT') === -1, 'severity never rides the input');
+
+        // Machine semantics: drop removes, demote downgrades, keep stays, NIT untouched.
+        assert.equal(data.inlineComments.length, 3, 'the dropped thread is gone');
+        var byPath = {};
+        data.inlineComments.forEach(function(c) { byPath[c.path] = c; });
+        assert.ok(!byPath['a.js'], 'dropped finding posts nowhere');
+        assert.equal(byPath['b.js'].severity, 'SUGGESTION', 'demote downgrades the tier');
+        assert.equal(byPath['c.js'].severity, 'SUGGESTION', 'keep is unchanged');
+        assert.equal(byPath['d.js'].severity, 'NIT', 'NIT never went through the filter');
+
+        // Census recomputed AFTER filtering: threads by tier + digest + dropped.
+        assert.deepEqual(data.issueCounts, { blocking: 0, important: 0, suggestions: 2, nits: 1, digest: 2 });
+
+        // The general comment gains the dropped section (one line per drop).
+        var gcWrite = writes.filter(function(w) { return w.path === 'outputs/pr_review_general.md'; })[0];
+        assert.ok(gcWrite, 'general comment rewritten');
+        assert.ok(gcWrite.content.indexOf('Review filter (gh-1403)') !== -1);
+        assert.ok(gcWrite.content.indexOf('`a.js:10`') !== -1, 'dropped candidate listed');
+        assert.ok(gcWrite.content.indexOf('guard exists upstream') !== -1, 'drop reason listed');
+        assert.ok(gcWrite.content.indexOf(GENERAL_MD) !== -1, 'original comment preserved');
+
+        // The demoted thread carries the machine demotion note.
+        assert.ok(byPath['b.js'].body.indexOf('Severity demoted') !== -1, 'demotion note appended');
+        assert.ok(byPath['b.js'].body.indexOf('real but cosmetic') !== -1);
+    });
+
+    test('applyReviewFilter — a CLI failure degrades to unfiltered (fail-open)', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({}, writes, function() { throw new Error('provider down'); });
+        var data = filteredReviewData();
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(outcome, null, 'no outcome on CLI failure');
+        assert.equal(data.inlineComments.length, 4, 'review data untouched');
+        assert.equal(data.issueCounts.important, 2, 'census untouched');
+    });
+
+    test('applyReviewFilter — missing or malformed verdict file degrades to unfiltered', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({}, writes, null);
+        var data = filteredReviewData();
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(outcome, null, 'no verdicts file → unfiltered');
+        assert.equal(data.inlineComments.length, 4);
+
+        var loaded2 = loadFilterRunner({ 'outputs/pr_review_filter.json': '{{{bad json' }, writes, null);
+        var data2 = filteredReviewData();
+        var outcome2 = loaded2.mod.applyReviewFilter(data2, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(outcome2, null, 'malformed verdicts → unfiltered');
+        assert.equal(data2.inlineComments.length, 4);
+    });
+
+    test('applyReviewFilter — a demote on a file-referenced comment rewrites the comment file', function() {
+        var writes = [];
+        var commentFile = 'outputs/pr_review_comments/c1.md';
+        var fileMap = {
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'demote', tier: 'SUGGESTION', reason: 'overstated' }
+            ] }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'outputs/pr_review_comments/c1.md': '⚠️ The helper duplicates logic.'
+        };
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                { path: 'b.js', line: 20, severity: 'IMPORTANT', comment: commentFile }
+            ]
+        };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome);
+        assert.equal(data.inlineComments[0].severity, 'SUGGESTION');
+        var fileWrite = writes.filter(function(w) { return w.path === commentFile; })[0];
+        assert.ok(fileWrite, 'comment file rewritten');
+        assert.ok(fileWrite.content.indexOf('The helper duplicates logic.') !== -1, 'original prose kept');
+        assert.ok(fileWrite.content.indexOf('Severity demoted') !== -1, 'demotion note appended to the file');
+        assert.ok(fileWrite.content.indexOf('overstated') !== -1, 'filter reason in the note');
+        assert.ok(!data.inlineComments[0].__filterId, 'filter tags cleaned from the posted payload');
+    });
+
+    test('stampOneDemotion — a non-comment-file path is never written (gh-1350 class guard, gh-1403 thread 2)', function() {
+        var writes = [];
+        var foreign = 'docs/agents/pr_review.md';
+        var fileMap = {
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'demote', tier: 'SUGGESTION', reason: 'overstated' }
+            ] }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'docs/agents/pr_review.md': '# pr review\nReadable repo doc the model must never mutate.'
+        };
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                { path: 'b.js', line: 20, severity: 'IMPORTANT', comment: foreign }
+            ]
+        };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome, 'the demote itself still applies');
+        assert.equal(data.inlineComments[0].severity, 'SUGGESTION', 'tier downgraded');
+        assert.equal(writes.filter(function(w) { return w.path === foreign; }).length, 0,
+            'a repo file outside the comment-file layout is NEVER written');
+    });
+
+    test('stampOneDemotion — hostile model-written shapes are refused (nested dir, workflow yaml)', function() {
+        var writes = [];
+        var fileMap = {
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'demote', tier: 'SUGGESTION', reason: 'overstated' }
+            ] }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'sub/dir/note.md': 'nested doc',
+            '.github/workflows/ci.yml': 'name: ci'
+        };
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                { path: 'a.js', line: 10, severity: 'IMPORTANT', comment: 'sub/dir/note.md' },
+                { path: 'b.js', line: 20, severity: 'IMPORTANT', comment: '.github/workflows/ci.yml' }
+            ]
+        };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(writes.filter(function(w) { return w.path === 'sub/dir/note.md'; }).length, 0);
+        assert.equal(writes.filter(function(w) { return w.path === '.github/workflows/ci.yml'; }).length, 0);
+    });
+
+    test('action() recomputes the verdict from the FILTERED census — a dropped thread no longer gates approval', function() {
+        var writes = [];
+        var scmCommentCalls = [];
+        var scmInlineCalls = [];
+        var scmAddLabelCalls = [];
+        var cliCalls = [];
+        var fileMap = {
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [
+                    { path: 'a.js', line: 10, severity: 'IMPORTANT', body: 'overstated claim' }
+                ],
+                generalComment: 'outputs/pr_review_general.md'
+            }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'drop', reason: 'verified wrong against the caller guard' }
+            ] })
+        };
+        var fileRead = mapFileRead(fileMap);
+        var scm = {
+            listPrs: function() { return []; },
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+            addLabel: function(prId, label) { scmAddLabelCalls.push(label); },
+            removeLabel: function() {},
+            fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+            addComment: function(prId, body) { scmCommentCalls.push(body); },
+            addInlineComment: function() { scmInlineCalls.push(1); }
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: fileRead });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                },
+                './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({
+                    './reviewPolicy.js': loadReviewPolicyModule(),
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+                }), {})
+            })),
+            {
+                file_read: fileRead,
+                file_write: function(a, b) {
+                    // writes are visible to later reads (the poster re-reads
+                    // the general comment file after the filter appends to it)
+                    var w = typeof a === 'string' ? { path: a, content: b } : a;
+                    writes.push(w);
+                    fileMap[w.path] = w.content;
+                },
+                cli_execute_command: function(args) { cliCalls.push(args); return 'filter cli ok'; },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function(args) {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-1', fields: { labels: [] } },
+            response: 'Jira review content',
+            inputFolderPath: 'input/PROJ-1',
+            jobParams: {
+                reviewPolicy: JSON.stringify({ verification: 'filter' })
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.recommendation, 'APPROVE',
+            'the only gating thread was filter-dropped → the census recomputes to APPROVE');
+        assert.ok(result.filter && result.filter.candidates === 1 && result.filter.dropped === 1,
+            'filter stats ride the result');
+        assert.equal(scmInlineCalls.length, 0, 'the dropped finding never posts as a thread');
+        assert.ok(scmAddLabelCalls.indexOf('pr_approved') !== -1, 'approval flows through');
+        var postedGeneral = scmCommentCalls.filter(function(b) {
+            return b.indexOf('Review filter (gh-1403)') !== -1;
+        });
+        assert.equal(postedGeneral.length, 1, 'the general comment carries the dropped section');
+        assert.ok(postedGeneral[0].indexOf('verified wrong against the caller guard') !== -1);
+        assert.equal(cliCalls.length, 1, 'exactly one filter CLI run');
+    });
+
+    test('action() reconciles a surviving BLOCK token against a clean post-filter census (gh-1403 thread 3)', function() {
+        var writes = [];
+        var scmCommentCalls = [];
+        var scmAddLabelCalls = [];
+        var cliCalls = [];
+        var fileMap = {
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'BLOCK',
+                issueCounts: { blocking: 1, important: 0, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [
+                    { path: 'a.js', line: 10, severity: 'BLOCKING', body: 'claimed data loss on the empty path' }
+                ],
+                generalComment: 'outputs/pr_review_general.md'
+            }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'drop', reason: 'the caller validates the input — claim wrong' }
+            ] })
+        };
+        var fileRead = mapFileRead(fileMap);
+        var scm = {
+            listPrs: function() { return []; },
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+            addLabel: function(prId, label) { scmAddLabelCalls.push(label); },
+            removeLabel: function() {},
+            fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+            addComment: function(prId, body) { scmCommentCalls.push(body); },
+            addInlineComment: function() {}
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: fileRead });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                },
+                './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({
+                    './reviewPolicy.js': loadReviewPolicyModule(),
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+                }), {})
+            })),
+            {
+                file_read: fileRead,
+                file_write: function(a, b) {
+                    var w = typeof a === 'string' ? { path: a, content: b } : a;
+                    writes.push(w);
+                    fileMap[w.path] = w.content;
+                },
+                cli_execute_command: function(args) { cliCalls.push(args); return 'filter cli ok'; },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function(args) {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-1', fields: { labels: [] } },
+            response: 'Jira review content',
+            inputFolderPath: 'input/PROJ-1',
+            jobParams: {
+                reviewPolicy: JSON.stringify({ verification: 'filter' })
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.recommendation, 'APPROVE',
+            'the filter dropped every gating thread — the pre-filter BLOCK token is advisory, the census wins');
+        assert.ok(scmAddLabelCalls.indexOf('pr_approved') !== -1, 'the reconciled approval flows through');
+        assert.ok(result.filter && result.filter.dropped === 1, 'filter stats ride the result');
+    });
+
+    test('action() — a BLOCK token stands when no filter ran (verification none keeps the invariant)', function() {
+        var scmAddLabelCalls = [];
+        var fileMap = {
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'BLOCK',
+                issueCounts: { blocking: 1, important: 0, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [
+                    { path: 'a.js', line: 10, severity: 'BLOCKING', body: 'real data loss' }
+                ],
+                generalComment: 'outputs/pr_review_general.md'
+            }),
+            'outputs/pr_review_general.md': GENERAL_MD
+        };
+        var fileRead = mapFileRead(fileMap);
+        var scm = {
+            listPrs: function() { return []; },
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+            addLabel: function(prId, label) { scmAddLabelCalls.push(label); },
+            removeLabel: function() {},
+            fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+            addComment: function() {},
+            addInlineComment: function() {}
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: fileRead });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                }
+            })),
+            {
+                file_read: fileRead,
+                file_write: function() {},
+                cli_execute_command: function() { throw new Error('no filter CLI without verification filter'); },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function() {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-1', fields: { labels: [] } },
+            response: 'Jira review content',
+            inputFolderPath: 'input/PROJ-1'
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.recommendation, 'BLOCK',
+            'model BLOCK (security/data-loss) stands untouched without an applied filter');
+        assert.ok(scmAddLabelCalls.indexOf('pr_approved') === -1, 'no approval label');
+    });
+
+    test('action() — a BLOCK token stands when the post-filter census still gates (kept BLOCKING thread)', function() {
+        var fileMap = {
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'BLOCK',
+                issueCounts: { blocking: 2, important: 0, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [
+                    { path: 'a.js', line: 10, severity: 'BLOCKING', body: 'verified data loss — kept' },
+                    { path: 'b.js', line: 20, severity: 'BLOCKING', body: 'overstated claim — dropped' }
+                ],
+                generalComment: 'outputs/pr_review_general.md'
+            }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 1, decision: 'drop', reason: 'guard exists upstream' }
+            ] })
+        };
+        var fileRead = mapFileRead(fileMap);
+        var scm = {
+            listPrs: function() { return []; },
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+            addLabel: function() {},
+            removeLabel: function() {},
+            fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+            addComment: function() {},
+            addInlineComment: function() {}
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: fileRead });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                },
+                './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({
+                    './reviewPolicy.js': loadReviewPolicyModule(),
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+                }), {})
+            })),
+            {
+                file_read: fileRead,
+                file_write: function() {},
+                cli_execute_command: function() { return 'filter cli ok'; },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function() {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-1', fields: { labels: [] } },
+            response: 'Jira review content',
+            inputFolderPath: 'input/PROJ-1',
+            jobParams: {
+                reviewPolicy: JSON.stringify({ verification: 'filter' })
+            }
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.recommendation, 'BLOCK',
+            'blocking evidence remains posted — the BLOCK token is not reconciled away');
+    });
+
+    test('action() with verification none never invokes the filter CLI (default stays legacy)', function() {
+        var writes = [];
+        var cliCalls = [];
+        var fileMap = {
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [],
+                generalComment: 'outputs/pr_review_general.md'
+            })
+        };
+        var fileRead = mapFileRead(fileMap);
+        var scm = {
+            listPrs: function() { return []; },
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+            addLabel: function() {},
+            removeLabel: function() {},
+            fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+            addComment: function() {},
+            addInlineComment: function() {}
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: fileRead });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                },
+                './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({
+                    './reviewPolicy.js': loadReviewPolicyModule(),
+                    './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+                    './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+                }), {})
+            })),
+            {
+                file_read: fileRead,
+                file_write: function() {},
+                cli_execute_command: function(args) { cliCalls.push(args); return 'cli'; },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function() {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-1', fields: { labels: [] } },
+            response: 'Jira review content',
+            inputFolderPath: 'input/PROJ-1'
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.filter, undefined, 'no filter outcome on the default policy');
+        assert.equal(cliCalls.length, 0, 'verification none costs nothing');
+    });
+
+    test('action() with verification none runs no input-folder diff probes (lazy diff path, round 2 NIT)', function() {
+        var diffReads = 0;
+        var fileMap = {
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [],
+                generalComment: 'outputs/pr_review_general.md'
+            })
+        };
+        var baseRead = mapFileRead(fileMap);
+        var fileRead = function(args) {
+            var p = args && (args.path || args);
+            if (p && String(p).indexOf('pr_diff.txt') !== -1) diffReads++;
+            return baseRead(args);
+        };
+        var scm = {
+            listPrs: function() { return []; },
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+            addLabel: function() {},
+            removeLabel: function() {},
+            fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+            addComment: function() {},
+            addInlineComment: function() {}
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: fileRead });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                }
+            })),
+            {
+                file_read: fileRead,
+                file_write: function() {},
+                cli_execute_command: function() { throw new Error('no filter CLI without verification filter'); },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function() {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-1', fields: { labels: [] } },
+            response: 'Jira review content',
+            inputFolderPath: 'input/PROJ-1'
+        });
+        assert.equal(result.success, true);
+        assert.equal(diffReads, 0,
+            'a disabled filter must not probe the input folders for pr_diff.txt');
+    });
+
+    test('applyReviewFilter — a throwing verdict-file read degrades to unfiltered (fail-open)', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({}, writes, function(args) {
+            var p = args && (args.path || args);
+            if (p === 'outputs/pr_review_filter.json') throw new Error('disk boom');
+            return 'cli output';
+        });
+        var data = filteredReviewData();
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(outcome, null, 'unreadable verdicts → unfiltered');
+        assert.equal(data.inlineComments.length, 4, 'review data untouched');
+        assert.equal(data.issueCounts.important, 2, 'census untouched');
+    });
+
+    test('applyReviewFilter — a non-file generalComment skips the drop listing, stats still ride', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({ 'outputs/pr_review_filter.json': dropDemoteKeepVerdicts() }, writes, null);
+        var data = filteredReviewData();
+        data.generalComment = '## General review\n\ninline text, not a file reference';
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome, 'filter outcome still returned');
+        assert.equal(outcome.stats.candidates, 3);
+        assert.equal(outcome.dropped.length, 1);
+        var gcWrites = writes.filter(function(w) { return w.path === 'outputs/pr_review_general.md'; });
+        assert.equal(gcWrites.length, 0, 'no general-comment file write without a file path');
+    });
+
+    test('applyReviewFilter — an unreadable general-comment file skips the injection (non-fatal)', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({ 'outputs/pr_review_filter.json': dropDemoteKeepVerdicts() }, writes, null);
+        var data = filteredReviewData();
+        data.generalComment = 'outputs/pr_review_comments/missing.md';
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome, 'filter outcome still returned');
+        assert.equal(writes.filter(function(w) { return w.path === 'outputs/pr_review_comments/missing.md'; }).length, 0,
+            'nothing written when the general comment file does not exist');
+    });
+
+    test('applyReviewFilter — a body-as-path hybrid gets its note in the FILE, body stays resolvable (round 2, shape A)', function() {
+        var writes = [];
+        var commentFile = 'outputs/pr_review_comments/c1.md';
+        var fileMap = {
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'demote', tier: 'SUGGESTION', reason: 'overstated' }
+            ] }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'outputs/pr_review_comments/c1.md': '⚠️ The helper duplicates logic.'
+        };
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                // agent-output hybrid: the body HOLDS the comment-file path —
+                // the shape resolveInlineComment resolves at post time
+                { path: 'b.js', line: 20, severity: 'IMPORTANT', body: commentFile }
+            ]
+        };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome);
+        assert.equal(data.inlineComments[0].severity, 'SUGGESTION');
+        assert.equal(data.inlineComments[0].body, commentFile,
+            'the body keeps its path shape — appending the note would publish the literal path');
+        assert.ok(loaded.mod.isCommentFilePath(data.inlineComments[0].body),
+            'the poster still resolves this body to the claim content, not a literal path');
+        var fileWrite = writes.filter(function(w) { return w.path === commentFile; })[0];
+        assert.ok(fileWrite, 'the demotion note lands in the referenced comment file instead');
+        assert.ok(fileWrite.content.indexOf('Severity demoted') !== -1);
+        assert.ok(fileWrite.content.indexOf('The helper duplicates logic.') !== -1, 'claim prose kept');
+    });
+
+    test('applyReviewFilter — old-spec {file, comment} gets the note in its comment file (round 2, shape B)', function() {
+        var writes = [];
+        var commentFile = 'outputs/pr_review_comments/old.md';
+        var fileMap = {
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'demote', tier: 'SUGGESTION', reason: 'overstated' }
+            ] }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'outputs/pr_review_comments/old.md': 'Old-spec claim prose.'
+        };
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                // old spec: `file` names the code location, `comment` references the file
+                { file: 'b.js', line: 20, severity: 'IMPORTANT', comment: commentFile }
+            ]
+        };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome);
+        assert.equal(data.inlineComments[0].severity, 'SUGGESTION', 'structured tier still downgrades');
+        var fileWrite = writes.filter(function(w) { return w.path === commentFile; })[0];
+        assert.ok(fileWrite, 'the demotion note lands in the old-spec comment file (isStampTarget matches entry.file)');
+        assert.ok(fileWrite.content.indexOf('Severity demoted') !== -1);
+    });
+    test('stampDemotionNotesOnFiles — a stamp whose severity no longer matches is skipped (consume-once)', function() {
+        var writes = [];
+        var fileMap = { 'outputs/pr_review_comments/c1.md': 'original claim prose' };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                { path: 'b.js', line: 20, severity: 'IMPORTANT', comment: 'outputs/pr_review_comments/c1.md' }
+            ]
+        };
+        loaded.mod.stampDemotionNotesOnFiles(data, [
+            { decision: 'demote', path: 'b.js', line: 20, to: 'SUGGESTION', note: 'demotion note' }
+        ], filterCtx(filterPolicy()));
+        var fileWrite = writes.filter(function(w) { return w.path === 'outputs/pr_review_comments/c1.md'; })[0];
+        assert.equal(fileWrite, undefined, 'severity mismatch → the comment file is NOT rewritten');
+        assert.equal(data.inlineComments[0].severity, 'IMPORTANT', 'the entry severity is untouched');
+        assert.ok(!data.inlineComments[0].__filterNoted, 'no stamp tag left behind');
+    });
+
+    test('applyReviewFilter — an unexpected internal error degrades to unfiltered (catch-all fail-open)', function() {
+        var writes = [];
+        var realFilter = loadModule('js/common/reviewFilter.js', makeRequire({
+            './reviewPolicy.js': loadReviewPolicyModule(),
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+        }), {});
+        var brokenFilter = {};
+        for (var k in realFilter) { brokenFilter[k] = realFilter[k]; }
+        brokenFilter.buildFilterInputJson = function() { throw new Error('input boom'); };
+        var cliCalls = [];
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: mapFileRead({}) });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/reviewFilter.js': brokenFilter
+            })),
+            {
+                file_read: mapFileRead({ 'outputs/pr_review_filter.json': dropDemoteKeepVerdicts() }),
+                file_write: function(a, b) { writes.push(typeof a === 'string' ? { path: a, content: b } : a); },
+                cli_execute_command: function(args) { cliCalls.push(args); return 'cli'; }
+            }
+        );
+        var data = filteredReviewData();
+        var outcome = mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(outcome, null, 'internal filter error → unfiltered, never fatal');
+        assert.equal(data.inlineComments.length, 4, 'review data untouched');
+        assert.equal(data.issueCounts.important, 2, 'census untouched');
     });
 });

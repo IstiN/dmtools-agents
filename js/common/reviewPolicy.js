@@ -42,6 +42,13 @@ var TIERS = ['BLOCKING', 'IMPORTANT', 'SUGGESTION', 'NIT'];
 var ROUND_VALUES = ['rework', 'polish', 'none'];
 var FIX_VALUES = ['mandatory', 'opportunistic', 'never'];
 
+// gh-1403: the finding-verification stage — `none` (default, the review leg
+// is the only gate) or `filter` (a fresh-context ReviewFilter pass verifies
+// each rework/polish-tier candidate before it costs a lap; the ByteDance
+// BitsAI-CR pattern). Majority voting may later land as `filter` with N
+// passes — the enum stays two-valued until that trial data exists.
+var VERIFICATION_VALUES = ['none', 'filter'];
+
 // The known presets (epic §4.2).
 var PRESETS = ['default', 'fix-everything', 'relaxed', 'investigation'];
 
@@ -228,13 +235,29 @@ function validateSeverityEntry(tier, raw) {
 /** Shape gate: the policy must be a plain object with known keys only. */
 function validatePolicyShape(raw) {
     if (!isPlainObject(raw)) {
-        throw policyError('reviewPolicy must be an object { preset, severities, bounds, identity }, got: ' + JSON.stringify(raw));
+        throw policyError('reviewPolicy must be an object { preset, severities, bounds, identity, verification }, got: ' + JSON.stringify(raw));
     }
-    var unknown = unknownKeysOf(raw, { preset: 1, severities: 1, bounds: 1, identity: 1 });
+    var unknown = unknownKeysOf(raw, { preset: 1, severities: 1, bounds: 1, identity: 1, verification: 1 });
     if (unknown.length > 0) {
         throw policyError('reviewPolicy has unknown key(s): ' + unknown.join(', ') +
-            ' — known keys: preset, severities, bounds, identity');
+            ' — known keys: preset, severities, bounds, identity, verification');
     }
+}
+
+/**
+ * gh-1403: the verification value — `none` (default) or `filter`. An absent
+ * value rides `none` silently (owners opt in); a present-but-invalid value
+ * is a hard validation error, exactly like the other policy enums.
+ */
+function resolveVerification(raw) {
+    if (!hasKey(raw, 'verification') || raw.verification === undefined || raw.verification === null) {
+        return 'none';
+    }
+    if (typeof raw.verification !== 'string' || VERIFICATION_VALUES.indexOf(raw.verification) === -1) {
+        throw policyError('reviewPolicy.verification has an invalid value: ' + JSON.stringify(raw.verification) +
+            ' — expected one of ' + VERIFICATION_VALUES.join(' | '));
+    }
+    return raw.verification;
 }
 
 /** The preset name of a shaped policy — an absent/null preset rides `default`. */
@@ -309,6 +332,7 @@ function validateReviewPolicy(raw, source) {
     return {
         preset: preset,
         source: source || 'built-in default',
+        verification: resolveVerification(raw),
         severities: severityTableFor(preset, raw.severities),
         bounds: boundsOrDefault(raw),
         identity: raw.identity || {}
@@ -541,6 +565,9 @@ function policyTableBody(p) {
             (sev.round === 'rework' ? 'YES' : 'no') + ' |');
     }
     lines.push('');
+    lines.push('Verification: `' + p.verification + '` — ' + verificationPhrase(p.verification) +
+        ' (gh-1403).');
+    lines.push('');
     lines.push('Bounds: polishMaxThreads=' + p.bounds.polishMaxThreads +
         ' · polishMaxChangedLines=' + p.bounds.polishMaxChangedLines +
         ' · opportunisticMaxThreads=' + p.bounds.opportunisticMaxThreads +
@@ -564,6 +591,18 @@ function policyTableBody(p) {
 }
 
 /**
+ * gh-1403: the one-line verification-mode phrase the policy stamps carry —
+ * what the mode means for this run's findings.
+ */
+function verificationPhrase(verification) {
+    if (verification === 'filter') {
+        return 'rework/polish-tier findings are re-verified by a fresh-context filter pass ' +
+            'before posting (keep | demote | drop); drops become digest lines, demotes tier downgrades';
+    }
+    return 'findings post exactly as the review leg raised them — no second-stage verification';
+}
+
+/**
  * The gh-1351 run-context file body (review/rework input `review_policy.md`,
  * epic §1 plumbing): the resolved policy table PLUS the agent duties the
  * machine enforces — density top-K/digest discipline and the downgrade
@@ -576,6 +615,7 @@ function policyInputContextMarkdown(policy) {
     lines.push('');
     lines.push('Preset: `' + p.preset + '` — resolved from: ' + p.source +
         ' (resolution chain: projectConfig.reviewPolicy → workflow jobParams → built-in default).');
+    lines.push('Verification: `' + p.verification + '` — ' + verificationPhrase(p.verification) + '.');
     lines.push('Every verdict on this PR is traceable to this table.');
     lines.push('');
     lines.push(policyTableBody(p));
@@ -595,6 +635,7 @@ if (typeof module !== 'undefined' && module.exports) {
         TIERS: TIERS,
         ROUND_VALUES: ROUND_VALUES,
         FIX_VALUES: FIX_VALUES,
+        VERIFICATION_VALUES: VERIFICATION_VALUES,
         PRESETS: PRESETS,
         DEFAULT_BOUNDS: DEFAULT_BOUNDS,
         PRESET_TABLES: PRESET_TABLES,
@@ -602,6 +643,8 @@ if (typeof module !== 'undefined' && module.exports) {
         TIER_EMOJI: TIER_EMOJI,
         resolveReviewPolicy: resolveReviewPolicy,
         validateReviewPolicy: validateReviewPolicy,
+        resolveVerification: resolveVerification,
+        verificationPhrase: verificationPhrase,
         defaultPolicy: defaultPolicy,
         presetPolicy: presetPolicy,
         gatingCensusCount: gatingCensusCount,

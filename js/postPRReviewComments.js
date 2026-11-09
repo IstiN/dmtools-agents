@@ -44,6 +44,14 @@ var reviewPolicyModule = require('./common/reviewPolicy.js');
 // mechanically costs no extra agent work.
 var findingRegistry = require('./common/findingRegistry.js');
 var reviewSpecClaims = require('./common/reviewSpecClaims.js');
+// gh-1403 (hoisted, never lazy — the gh-823 pack-require rule): the
+// finding-filter leg — reviewPolicy.verification = filter re-verifies each
+// rework/polish-tier candidate in a fresh context before it posts.
+var reviewFilterModule = require('./common/reviewFilter.js');
+// The one model-written-path guard — owned by the pure filter module since
+// the round-2 demote fix needs it there too; aliased here so every call
+// site in this file keeps its name.
+var isCommentFilePath = reviewFilterModule.isCommentFilePath;
 var reviewHelpers = require('./postStoryTestAutomationReviewHelpers.js');
 // gh-1369 (hoisted, never lazy — the gh-823 pack-require rule): the
 // terminal-PR guard — a MERGED/CLOSED PR never re-enters the rework loop
@@ -238,11 +246,8 @@ function readMarkdownFile(filePath, ticketKey, workingDir) {
  * (flutter_agent_harness #720).
  */
 function resolveCommentFileReference(value, ticketKey, workingDir) {
-    if (typeof value !== 'string') return null;
+    if (!isCommentFilePath(value)) return null;
     var trimmed = value.trim();
-    if (!/^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(trimmed)) {
-        return null;
-    }
     var content = readMarkdownFile(trimmed, ticketKey, workingDir);
     return content || null;
 }
@@ -1095,6 +1100,291 @@ function stampVerdictRecord(scm, prNumber, headSha, isApproved, recommendation, 
                 ', head ' + String(headSha).substring(0, 7) + ')');
 }
 
+// ═══════════════ gh-1403 review filter leg (verification: filter) ═══════════════
+//
+// Placement (gh-1403): AFTER the review leg produces outputs/pr_review.json,
+// BEFORE posting (this action's step 4). A fresh-context CLI run (the same
+// run-agent.sh wrapper, one extra review pass per round — the ByteDance
+// BitsAI-CR shape) verifies each rework/polish-tier candidate against the
+// diff hunks + the interaction neighborhood and returns
+// keep | demote(<tier>) | drop per candidate. Machine semantics: the census
+// is recomputed AFTER filtering; drop → digest-only line (visible, never a
+// thread); demote → tier downgrade. 💡-digest lines are not threads and
+// round-none tiers (🪶 under the default preset) never go through.
+// Fail-open end to end: any filter failure (CLI, missing/malformed verdict
+// file) logs and degrades to the unfiltered review — the filter can never
+// cost the leg its posting.
+
+var FILTER_PROMPT_FILE = 'outputs/.pr-review-filter-prompt.md';
+var FILTER_CLI_PREFIX = 'bash agents/scripts/run-agent.sh ';
+
+function verificationEnabledOf(policy) {
+    return !!policy && policy.verification === 'filter';
+}
+
+function filterDiffPathOf(params, ticketKey) {
+    // The review leg's diff: the first input-folder candidate that actually
+    // holds pr_diff.txt. The chain is ticketKeyShapes.inputFolderCandidates
+    // (gh-1403 review thread 1) — params.inputFolderPath when the dispatch
+    // carries it (unwrapping the jobParams wrapper the way
+    // linkedIssuesReport.resolveInputContext does), else the Java-derived
+    // input/<inputFolderNameFor(key)> layout — a composite key
+    // owner/repo#1407 dispatches input/gh-1407, not input/<raw key> — then
+    // the legacy input/<ticketKey>. When no candidate holds the file, the
+    // first candidate is named anyway: fail-open, the same degradation
+    // class as every other filter failure.
+    var actualParams = params && params.inputFolderPath ? params : ((params && params.jobParams) || params || {});
+    var folders = ticketKeyShapes.inputFolderCandidates(actualParams.inputFolderPath, ticketKey);
+    for (var i = 0; i < folders.length; i++) {
+        if (readInputFileOrNull(folders[i] + '/pr_diff.txt')) return folders[i] + '/pr_diff.txt';
+    }
+    return folders[0] + '/pr_diff.txt';
+}
+
+function filterCliCommandOf() {
+    return FILTER_CLI_PREFIX + FILTER_PROMPT_FILE;
+}
+
+/**
+ * The claim resolution injected into the pure candidate selection — the
+ * same body-or-comment-file resolution the poster uses.
+ */
+function filterClaimResolver(ctx) {
+    return function (inlineComment) {
+        return resolveInlineComment(inlineComment, ctx.ticketKey, ctx.workingDir);
+    };
+}
+
+function writeFilterArtifact(path, content) {
+    writeFile(path, content);
+}
+
+function runFilterCli() {
+    // No workingDirectory override: the filter agent reads input/ + outputs/
+    // from the RUNTIME cwd exactly like the review leg and the gh-775
+    // resume run; code paths (when config.workingDir is set) ride the
+    // prompt, not the subprocess cwd.
+    try {
+        var out = cli_execute_command({ command: filterCliCommandOf() });
+        console.log('🧯 review filter CLI run completed: ' + String(out || '').substring(0, 300));
+        return true;
+    } catch (e) {
+        console.warn('🧯 review filter CLI failed (gh-1403 fail-open, running unfiltered): ' + (e.message || e));
+        return false;
+    }
+}
+
+function readFilterVerdictsRaw(ctx) {
+    try {
+        var review = outputFiles.readOutputFileDetailed(reviewFilterModule.OUTPUT_FILE, {
+            ticketKey: ctx.ticketKey,
+            workingDir: ctx.workingDir
+        });
+        return review && review.content ? review.content : null;
+    } catch (e) {
+        console.warn('🧯 review filter verdicts unreadable (gh-1403 fail-open, running unfiltered): ' + (e.message || e));
+        return null;
+    }
+}
+
+function filterPathOfGeneralComment(reviewData) {
+    var path = reviewData && typeof reviewData.generalComment === 'string' ? reviewData.generalComment.trim() : null;
+    if (!path || !isCommentFilePath(path)) return null;
+    return path;
+}
+
+/**
+ * The anti-over-suppression listing (gh-1403): the dropped candidates are
+ * appended to the general comment file the generalComment field references
+ * — visible, one line each, never a thread. A non-file generalComment (or
+ * an unreadable file) skips the injection; the stats still log.
+ */
+function appendDroppedSection(reviewData, section, ctx) {
+    var path = filterPathOfGeneralComment(reviewData);
+    if (!path) return false;
+    var content = readMarkdownFile(path, ctx.ticketKey, ctx.workingDir);
+    if (!content) return false;
+    writeFilterArtifact(path, content.replace(/\s*$/, '') + '\n' + section + '\n');
+    return true;
+}
+
+/**
+ * The inlineComments list of a review payload — [] for null payloads and
+ * non-array fields (the same empty-list read the pure filter module uses).
+ */
+function filterInlineOf(reviewData) {
+    return reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
+}
+
+/**
+ * The round's demote stamps: the applied entries that carry a note — a demote
+ * on a FILE-referenced comment stamps the demotion note into the comment
+ * file (inline bodies got theirs from the pure apply).
+ */
+function demoteStampsOf(applied) {
+    return (applied || []).filter(function(a) { return a.decision === 'demote' && a.note; });
+}
+
+/**
+ * The first not-yet-stamped inline entry a stamp targets: same code file +
+ * line, structured severity still at the demote target (entries are
+ * consumed once so two demotes on one file cannot double-append). Both
+ * tolerated spec shapes match (gh-1403 review round 2, shape B): agent
+ * output `{ path, ... }` and old spec `{ file, ... }`.
+ */
+function isStampTarget(entry, stamp) {
+    var entryPath = entry.path || entry.file;
+    if (entry.__filterNoted || entryPath !== stamp.path || entry.line !== stamp.line) return false;
+    return String(entry.severity || '').toUpperCase() === stamp.to;
+}
+
+function matchingStampTarget(inline, stamp) {
+    for (var j = 0; j < inline.length; j++) {
+        var entry = inline[j] || {};
+        if (isStampTarget(entry, stamp)) return entry;
+    }
+    return null;
+}
+
+/**
+ * One stamp: mark the entry consumed, then append the note to the comment
+ * file it references. Shape-aware (gh-1403 review round 2): the note's
+ * file target is the old-spec `comment` field, or the agent-output
+ * body-as-path hybrid the poster resolves at post time
+ * (resolveInlineComment → resolveCommentFileReference) — both shapes pass
+ * the shared isCommentFilePath guard, so a hallucinated path can never
+ * redirect the write. Prose bodies have no file — their note already went
+ * inline from the pure apply (stampDemotionBody).
+ */
+function stampOneDemotion(entry, stamp, ctx) {
+    entry.__filterNoted = true;
+    var target = isCommentFilePath(entry.comment) ? entry.comment :
+        (isCommentFilePath(entry.body) ? entry.body : null);
+    if (!target) return;
+    var content = readMarkdownFile(target, ctx.ticketKey, ctx.workingDir);
+    if (content) {
+        writeFilterArtifact(target, content.replace(/\s*$/, '') + '\n' + stamp.note + '\n');
+    }
+}
+
+/**
+ * A demote on a FILE-referenced comment stamps the demotion note into the
+ * comment file (inline bodies got theirs from the pure apply). Entries are
+ * consumed once so two demotes on one file cannot double-append.
+ */
+function stampDemotionNotesOnFiles(reviewData, applied, ctx) {
+    var inline = filterInlineOf(reviewData);
+    var stamps = demoteStampsOf(applied);
+    for (var i = 0; i < stamps.length; i++) {
+        var entry = matchingStampTarget(inline, stamps[i]);
+        if (!entry) continue;
+        stampOneDemotion(entry, stamps[i], ctx);
+    }
+    for (var k = 0; k < inline.length; k++) {
+        delete inline[k].__filterNoted;
+    }
+}
+
+function logFilterOutcome(stats, warning, notes) {
+    console.log('🧯 ' + reviewFilterModule.buildFilterStampLine(stats));
+    (notes || []).forEach(function(n) {
+        console.warn('🧯 review filter: ' + n);
+    });
+    if (warning) console.warn(warning);
+}
+
+/**
+ * The round's inputs + CLI run: the filter input and prompt artifacts are
+ * written, the fresh-context CLI runs, and the verdict payload is read.
+ * null on any fail-open degradation (CLI failure, unreadable verdicts).
+ */
+function runFilterRound(candidates, ctx, diffPath) {
+    writeFilterArtifact('outputs/' + reviewFilterModule.INPUT_FILE, reviewFilterModule.buildFilterInputJson(candidates));
+    writeFilterArtifact(FILTER_PROMPT_FILE, reviewFilterModule.buildFilterPrompt(diffPath, ctx.workingDir));
+    if (!runFilterCli()) return null;
+    var raw = readFilterVerdictsRaw(ctx);
+    if (!raw) {
+        console.warn('🧯 review filter: no verdicts file — running unfiltered (gh-1403 fail-open)');
+        return null;
+    }
+    return reviewFilterModule.parseFilterVerdicts(raw);
+}
+
+/**
+ * The verdicts applied to the review data, or null when nothing applied —
+ * zero applicable verdicts (malformed payload, unknown ids, all-refused
+ * demotes) means nothing was filtered, so the census is NOT recomputed and
+ * the leg posts exactly as raised.
+ */
+function applyVerdictsIfChanged(reviewData, candidates, parsed) {
+    var result = reviewFilterModule.applyFilterVerdicts(reviewData, candidates, parsed.verdicts);
+    if (!result.changed) {
+        console.warn('🧯 review filter: no applicable verdicts — running unfiltered (gh-1403 fail-open)');
+        return null;
+    }
+    return result;
+}
+
+/**
+ * The anti-over-suppression listing: dropped candidates are appended to the
+ * general comment file the generalComment field references. A non-file
+ * generalComment (or an unreadable file) skips the injection.
+ */
+function injectDropsIntoGeneralComment(reviewData, ctx, stats, result) {
+    var section = reviewFilterModule.buildGeneralCommentInjection(stats, result.dropped);
+    if (section) appendDroppedSection(reviewData, section, ctx);
+}
+
+/**
+ * The wired filter leg (gh-1403): select candidates → run the fresh-context
+ * CLI → apply verdicts → recompute the census → list drops in the general
+ * comment. Returns { stats, applied, dropped } or null (verification none,
+ * zero candidates, or any fail-open degradation — in every null case the
+ * review data posts exactly as the review leg raised it).
+ */
+function applyReviewFilter(reviewData, ctx, diffPath) {
+    try {
+        if (!verificationEnabledOf(ctx.reviewPolicy)) return null;
+        var candidates = reviewFilterModule.selectFilterCandidates(reviewData, ctx.reviewPolicy, filterClaimResolver(ctx));
+        if (candidates.length === 0) {
+            console.log('🧯 review filter (gh-1403): 0 candidates (no rework/polish-tier threads) — skipped');
+            return null;
+        }
+        var parsed = runFilterRound(candidates, ctx, diffPath);
+        if (!parsed) return null;
+        var result = applyVerdictsIfChanged(reviewData, candidates, parsed);
+        if (!result) return null;
+        stampDemotionNotesOnFiles(reviewData, result.applied, ctx);
+        // gh-1403 machine semantics: the census is recomputed AFTER filtering;
+        // the gh-1351 verdict machinery then reads it unchanged.
+        reviewData.issueCounts = reviewFilterModule.recomputeCensus(reviewData, result.dropped.length);
+        var stats = reviewFilterModule.filterStats(candidates.length, result.applied);
+        var warning = reviewFilterModule.buildOverSuppressionWarning(stats);
+        logFilterOutcome(stats, warning, parsed.notes.concat(result.notes));
+        injectDropsIntoGeneralComment(reviewData, ctx, stats, result);
+        return { stats: stats, applied: result.applied, dropped: result.dropped, warning: warning };
+    } catch (e) {
+        console.warn('🧯 review filter failed (gh-1403 non-fatal, running unfiltered): ' + (e.message || e));
+        return null;
+    }
+}
+
+/**
+ * The filter stamp in the tracker review comment (gh-1403): one line per
+ * round, plus the misconfigured-filter warning when it fired. '' when the
+ * filter did not run.
+ */
+function filterStampSection(m, filterOutcome) {
+    if (!filterOutcome || !filterOutcome.stats) return '';
+    var line = m.h(3, 'Review Filter (gh-1403)') + '\n' +
+        reviewFilterModule.buildFilterStampLine(filterOutcome.stats);
+    if (filterOutcome.dropped && filterOutcome.dropped.length > 0) {
+        line += '\n' + reviewFilterModule.buildDroppedDigestLines(filterOutcome.dropped).join('\n');
+    }
+    if (filterOutcome.warning) line += '\n' + filterOutcome.warning;
+    return line + '\n\n';
+}
+
 // ═══════════════ gh-1332 finding-identity registry ═══════════════
 //
 // The review-round dedup: this round's structured inlineComments already
@@ -1307,7 +1597,7 @@ function policyStampSection(m, policy) {
         reviewPolicyModule.policyTableBody(policy) + '\n\n';
 }
 
-function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, policy) {
+function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, policy, filterOutcome) {
     try {
         const m = commentMarkup.forTicket(ticketKey);
         let comment = m.h(2, '🔍 Automated PR Review Completed') + '\n\n';
@@ -1323,6 +1613,9 @@ function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, 
         comment += m.h(3, 'Issue Summary') + '\n';
         comment += censusSummaryLines(m, issueCounts);
         comment += policyStampSection(m, policy);
+        // gh-1403: the filter round summary + the dropped list (visible, one
+        // line each — the anti-over-suppression listing rides the ticket too).
+        comment += filterStampSection(m, filterOutcome);
 
         if (prUrl) {
             comment += m.h(3, 'Pull Request') + '\n';
@@ -1554,6 +1847,33 @@ function hasBlockingOrImportant(issueCounts, policy) {
  */
 function machineApprovalFromCensus(recommendation, issueCounts, policy) {
     return reviewPolicyModule.machineApprovalDecision(recommendation, issueCounts, policy);
+}
+
+/**
+ * gh-1403 filter-vs-token reconciliation: when the filter leg APPLIED
+ * changes and the post-filter census gates nothing, a surviving
+ * BLOCK/REQUEST_CHANGES token is advisory exactly the way gh-1351 treats
+ * an APPROVE token — the machine verdict follows the census. The
+ * pre-filter token would otherwise arm a rework lap for findings the
+ * machine itself just re-classified as non-findings (the wasted-lap cost
+ * gh-1403 exists to remove). Without an applied filter nothing
+ * reconciles: a model BLOCK is a security/data-loss classification and is
+ * never silently overridden (reviewPolicy.machineApprovalDecision), and a
+ * census that still gates keeps its non-approve verdict. The
+ * reconciliation is logged through the standard machine-verdict line
+ * (recomputed: true).
+ */
+function reconcileFilterTokenWithCensus(machine, filterOutcome, issueCounts, policy) {
+    if (!filterOutcome) return machine;
+    if (machine.approved) return machine;
+    if (reviewPolicyModule.hasBlockingOrImportant(issueCounts, policy)) return machine;
+    return {
+        approved: true,
+        verdict: 'APPROVE',
+        reason: 'filter applied (gh-1403): post-filter census has no rework-tier threads — advisory ' +
+            machine.verdict + ' token reconciled to the census',
+        recomputed: true
+    };
 }
 
 /**
@@ -2441,8 +2761,8 @@ function finalizeReviewRun(ctx, params, isApproved) {
     postTokenUsageQuietly(ctx, params);
 }
 
-function buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo, advisoryRecommendation) {
-    return {
+function buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo, advisoryRecommendation, filterStats) {
+    var result = {
         success: true,
         message: isApproved ? 'PR approved — awaiting reviewer merge' : 'Changes requested, ticket returned to In Development',
         recommendation: recommendation,
@@ -2450,6 +2770,8 @@ function buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo
         issueCounts: reviewData.issueCounts,
         githubCommentsPosted: !!(pr.number && repoInfo)
     };
+    if (filterStats) result.filter = filterStats;
+    return result;
 }
 
 function ticketKeyOfTicket(ticket) {
@@ -2586,6 +2908,17 @@ function action(params) {
         // claim keeps BLOCKING force with the citation auto-appended.
         applySpecClaimDowngrades(reviewData, ctx.ticketKey, ctx.workingDir, params.inputFolderPath);
 
+        // gh-1403: the finding-filter leg (reviewPolicy.verification =
+        // filter) — a fresh-context pass verifies each rework/polish-tier
+        // candidate BEFORE posting; drops become digest lines, demotes tier
+        // downgrades, the census is recomputed after filtering. Non-fatal:
+        // any filter failure degrades to the unfiltered review. The diff
+        // path is probed lazily (round-2 NIT): only when the filter is
+        // enabled — the default `none` round never touches the input
+        // folders for pr_diff.txt.
+        var filterOutcome = applyReviewFilter(reviewData, ctx,
+            verificationEnabledOf(ctx.reviewPolicy) ? filterDiffPathOf(params, ctx.ticketKey) : null);
+
         console.log('Review recommendation:', reviewData.recommendation);
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
 
@@ -2626,6 +2959,10 @@ function action(params) {
         // advisory. Any 🚨/⚠️ (rework-tier) thread open → REQUEST_CHANGES;
         // only 💡/🪶 → APPROVE (suggestion-only cycles converge).
         var machine = machineApprovalFromCensus(recommendation, issueCounts, ctx.reviewPolicy);
+        // gh-1403: a filter round that removed every gating thread makes a
+        // surviving non-approve token advisory — the census wins (logged by
+        // the same machine-verdict line).
+        machine = reconcileFilterTokenWithCensus(machine, filterOutcome, issueCounts, ctx.reviewPolicy);
         var isApproved = machine.approved;
         if (machine.recomputed) {
             console.warn(buildMachineVerdictLog(machine, recommendation));
@@ -2641,7 +2978,7 @@ function action(params) {
         }
 
         // Step 6: Post review to the ticket (merge is handled by SM/required reviewers, not by this agent)
-        postReviewToJira(tracker, ctx.ticketKey, ctx.jiraReview, reviewData, pr.url, ctx.reviewPolicy);
+        postReviewToJira(tracker, ctx.ticketKey, ctx.jiraReview, reviewData, pr.url, ctx.reviewPolicy, filterOutcome);
 
         // Step 7: Update ticket status based on outcome
         applyTicketOutcome(tracker, ctx.ticketKey, statuses, isApproved, pr, repoInfo);
@@ -2666,7 +3003,8 @@ function action(params) {
 
         finalizeReviewRun(ctx, params, isApproved);
 
-        return buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo, advisoryTokenOf(reviewData));
+        return buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo, advisoryTokenOf(reviewData),
+            filterOutcome ? filterOutcome.stats : null);
 
     } catch (error) {
         return reportReviewError(params, tracker, error);
@@ -2711,6 +3049,8 @@ if (typeof module !== 'undefined' && module.exports) {
         hasAllowApproveWithSuggestions,
         hasBlockingOrImportant,
         machineApprovalFromCensus,
+        reconcileFilterTokenWithCensus,
+        isCommentFilePath,
         buildMachineVerdictLog,
         auditDensityAgainstPolicy,
         prAdditionsOf,
@@ -2748,6 +3088,14 @@ if (typeof module !== 'undefined' && module.exports) {
         searchMissingPRNumber,
         ticketKeyOfParams,
         applySpecClaimDowngrades,
-        readTicketClaimSource
+        readTicketClaimSource,
+        // gh-1403 review filter leg
+        verificationEnabledOf,
+        filterDiffPathOf,
+        filterCliCommandOf,
+        applyReviewFilter,
+        filterStampSection,
+        appendDroppedSection,
+        stampDemotionNotesOnFiles
     };
 }
