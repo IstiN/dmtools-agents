@@ -1144,11 +1144,13 @@ function writeFilterArtifact(path, content) {
     writeFile(path, content);
 }
 
-function runFilterCli(workingDir) {
-    var args = { command: filterCliCommandOf() };
-    if (workingDir) args.workingDirectory = workingDir;
+function runFilterCli() {
+    // No workingDirectory override: the filter agent reads input/ + outputs/
+    // from the RUNTIME cwd exactly like the review leg and the gh-775
+    // resume run; code paths (when config.workingDir is set) ride the
+    // prompt, not the subprocess cwd.
     try {
-        var out = cli_execute_command(args);
+        var out = cli_execute_command({ command: filterCliCommandOf() });
         console.log('🧯 review filter CLI run completed: ' + String(out || '').substring(0, 300));
         return true;
     } catch (e) {
@@ -1243,8 +1245,8 @@ function applyReviewFilter(reviewData, ctx, diffPath) {
             return null;
         }
         writeFilterArtifact('outputs/' + reviewFilterModule.INPUT_FILE, reviewFilterModule.buildFilterInputJson(candidates));
-        writeFilterArtifact(FILTER_PROMPT_FILE, reviewFilterModule.buildFilterPrompt(diffPath));
-        if (!runFilterCli(ctx.workingDir)) return null;
+        writeFilterArtifact(FILTER_PROMPT_FILE, reviewFilterModule.buildFilterPrompt(diffPath, ctx.workingDir));
+        if (!runFilterCli()) return null;
         var raw = readFilterVerdictsRaw(ctx);
         if (!raw) {
             console.warn('🧯 review filter: no verdicts file — running unfiltered (gh-1403 fail-open)');

@@ -4141,9 +4141,11 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         assert.ok(outcome, 'filter outcome returned');
         assert.deepEqual(outcome.stats, { candidates: 3, kept: 1, demoted: 1, dropped: 1, dropRate: 0.333 });
 
-        // CLI contract: run-agent.sh on the hidden filter prompt.
+        // CLI contract: run-agent.sh on the hidden filter prompt, from the
+        // runtime cwd (no workingDirectory override — same as the main leg).
         assert.equal(loaded.cliCalls.length, 1);
         assert.equal(loaded.cliCalls[0].command, 'bash agents/scripts/run-agent.sh outputs/.pr-review-filter-prompt.md');
+        assert.equal(loaded.cliCalls[0].workingDirectory, undefined);
 
         // The written prompt is a fresh-context contract.
         var promptWrite = writes.filter(function(w) { return w.path === 'outputs/.pr-review-filter-prompt.md'; })[0];
@@ -4288,7 +4290,13 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
             })),
             {
                 file_read: fileRead,
-                file_write: function(a, b) { writes.push(typeof a === 'string' ? { path: a, content: b } : a); },
+                file_write: function(a, b) {
+                    // writes are visible to later reads (the poster re-reads
+                    // the general comment file after the filter appends to it)
+                    var w = typeof a === 'string' ? { path: a, content: b } : a;
+                    writes.push(w);
+                    fileMap[w.path] = w.content;
+                },
                 cli_execute_command: function(args) { cliCalls.push(args); return 'filter cli ok'; },
                 jira_add_label: function() {},
                 jira_move_to_status: function() {},
@@ -4351,6 +4359,11 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
             'js/postPRReviewComments.js',
             makeRequire(prReviewRequireMap({
                 './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                },
                 './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({
                     './reviewPolicy.js': loadReviewPolicyModule(),
                     './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),

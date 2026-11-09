@@ -380,6 +380,13 @@ suite('reviewFilter — filter input + prompt builders', function() {
         assert.ok(prompt.indexOf('codegraph') !== -1, 'codegraph neighborhood tools named');
     });
 
+    test('the prompt names the checkout when a working dir is configured', function() {
+        var plain = mod.buildFilterPrompt('input/pr-7/pr_diff.txt');
+        assert.ok(plain.indexOf('checked out at') === -1, 'no checkout line without a working dir');
+        var withRoot = mod.buildFilterPrompt('input/pr-7/pr_diff.txt', '/srv/target-repo');
+        assert.ok(withRoot.indexOf('checked out at `/srv/target-repo`') !== -1, 'codeRoot injected');
+    });
+
     test('filter stamp line summarizes one round', function() {
         var line = mod.buildFilterStampLine(mod.filterStats(4, [
             { decision: 'keep' }, { decision: 'demote' }, { decision: 'drop' }, { decision: 'drop' }

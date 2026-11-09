@@ -439,9 +439,10 @@ function buildFilterInputJson(candidates) {
  * hunks + the interaction neighborhood (callers/callees of the changed
  * symbols — never whole files; over-broad context manufactures findings),
  * then write the verdict file. The prompt never mentions the finder's
- * severity — the input does not carry it either.
+ * severity — the input does not carry it either. codeRoot (optional) names
+ * the checkout the PR branch lives in when config.workingDir is set.
  */
-function buildFilterPrompt(diffPath) {
+function buildFilterPrompt(diffPath, codeRoot) {
     var lines = [];
     lines.push('# Review Filter pass (gh-1403) — verify candidate findings before they are posted');
     lines.push('');
@@ -456,6 +457,9 @@ function buildFilterPrompt(diffPath) {
         'The finder\'s severity and rationale are deliberately NOT included — judge each claim on its own ' +
         'merits, with no anchor to the finder\'s confidence.');
     lines.push('2. `' + diffPath + '` — the diff hunks under review. Findings live on these hunks.');
+    if (codeRoot) {
+        lines.push('   The PR branch is checked out at `' + codeRoot + '` — read code there.');
+    }
     lines.push('3. The interaction neighborhood: callers/callees of the changed symbols ' +
         '(`codegraph_callers` / `codegraph_callees` when available, else a scoped `grep` for the symbol ' +
         'name). Do NOT read whole files beyond what verification needs — over-broad context manufactures ' +
