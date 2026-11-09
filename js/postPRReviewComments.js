@@ -1271,6 +1271,48 @@ function logFilterOutcome(stats, warning, notes) {
 }
 
 /**
+ * The round's inputs + CLI run: the filter input and prompt artifacts are
+ * written, the fresh-context CLI runs, and the verdict payload is read.
+ * null on any fail-open degradation (CLI failure, unreadable verdicts).
+ */
+function runFilterRound(candidates, ctx, diffPath) {
+    writeFilterArtifact('outputs/' + reviewFilterModule.INPUT_FILE, reviewFilterModule.buildFilterInputJson(candidates));
+    writeFilterArtifact(FILTER_PROMPT_FILE, reviewFilterModule.buildFilterPrompt(diffPath, ctx.workingDir));
+    if (!runFilterCli()) return null;
+    var raw = readFilterVerdictsRaw(ctx);
+    if (!raw) {
+        console.warn('🧯 review filter: no verdicts file — running unfiltered (gh-1403 fail-open)');
+        return null;
+    }
+    return reviewFilterModule.parseFilterVerdicts(raw);
+}
+
+/**
+ * The verdicts applied to the review data, or null when nothing applied —
+ * zero applicable verdicts (malformed payload, unknown ids, all-refused
+ * demotes) means nothing was filtered, so the census is NOT recomputed and
+ * the leg posts exactly as raised.
+ */
+function applyVerdictsIfChanged(reviewData, candidates, parsed) {
+    var result = reviewFilterModule.applyFilterVerdicts(reviewData, candidates, parsed.verdicts);
+    if (!result.changed) {
+        console.warn('🧯 review filter: no applicable verdicts — running unfiltered (gh-1403 fail-open)');
+        return null;
+    }
+    return result;
+}
+
+/**
+ * The anti-over-suppression listing: dropped candidates are appended to the
+ * general comment file the generalComment field references. A non-file
+ * generalComment (or an unreadable file) skips the injection.
+ */
+function injectDropsIntoGeneralComment(reviewData, ctx, stats, result) {
+    var section = reviewFilterModule.buildGeneralCommentInjection(stats, result.dropped);
+    if (section) appendDroppedSection(reviewData, section, ctx);
+}
+
+/**
  * The wired filter leg (gh-1403): select candidates → run the fresh-context
  * CLI → apply verdicts → recompute the census → list drops in the general
  * comment. Returns { stats, applied, dropped } or null (verification none,
@@ -1285,23 +1327,10 @@ function applyReviewFilter(reviewData, ctx, diffPath) {
             console.log('🧯 review filter (gh-1403): 0 candidates (no rework/polish-tier threads) — skipped');
             return null;
         }
-        writeFilterArtifact('outputs/' + reviewFilterModule.INPUT_FILE, reviewFilterModule.buildFilterInputJson(candidates));
-        writeFilterArtifact(FILTER_PROMPT_FILE, reviewFilterModule.buildFilterPrompt(diffPath, ctx.workingDir));
-        if (!runFilterCli()) return null;
-        var raw = readFilterVerdictsRaw(ctx);
-        if (!raw) {
-            console.warn('🧯 review filter: no verdicts file — running unfiltered (gh-1403 fail-open)');
-            return null;
-        }
-        var parsed = reviewFilterModule.parseFilterVerdicts(raw);
-        var result = reviewFilterModule.applyFilterVerdicts(reviewData, candidates, parsed.verdicts);
-        if (!result.changed) {
-            // Zero applicable verdicts (malformed payload, unknown ids,
-            // all-refused demotes) — nothing was filtered, so the census is
-            // NOT recomputed and the leg posts exactly as raised.
-            console.warn('🧯 review filter: no applicable verdicts — running unfiltered (gh-1403 fail-open)');
-            return null;
-        }
+        var parsed = runFilterRound(candidates, ctx, diffPath);
+        if (!parsed) return null;
+        var result = applyVerdictsIfChanged(reviewData, candidates, parsed);
+        if (!result) return null;
         stampDemotionNotesOnFiles(reviewData, result.applied, ctx);
         // gh-1403 machine semantics: the census is recomputed AFTER filtering;
         // the gh-1351 verdict machinery then reads it unchanged.
@@ -1309,8 +1338,7 @@ function applyReviewFilter(reviewData, ctx, diffPath) {
         var stats = reviewFilterModule.filterStats(candidates.length, result.applied);
         var warning = reviewFilterModule.buildOverSuppressionWarning(stats);
         logFilterOutcome(stats, warning, parsed.notes.concat(result.notes));
-        var section = reviewFilterModule.buildGeneralCommentInjection(stats, result.dropped);
-        if (section) appendDroppedSection(reviewData, section, ctx);
+        injectDropsIntoGeneralComment(reviewData, ctx, stats, result);
         return { stats: stats, applied: result.applied, dropped: result.dropped, warning: warning };
     } catch (e) {
         console.warn('🧯 review filter failed (gh-1403 non-fatal, running unfiltered): ' + (e.message || e));
