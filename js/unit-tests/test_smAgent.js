@@ -169,6 +169,9 @@ function makeSmAgent(opts) {
     var capturedPrLabelAdds = [];
     var capturedPrLabelRemoves = [];
     var capturedPrComments = [];
+    // gh-1402 review round 1: every github_get_pr read (PR number order) —
+    // the probe-once assertions count REST reads per tick.
+    var capturedPrLookups = [];
     var capturedEnvSets = [];
     var capturedScmConfigs = [];
     var capturedIoCacheDrops = [];
@@ -432,8 +435,37 @@ function makeSmAgent(opts) {
     // opts.github.prLookupError = make github_get_pr THROW (the gh-1369
     // probe-failure replays: transport/auth/timeout failures the smAgent
     // guards must fail open on) — mirrors issueLookupError above.
-    function getPrMock() {
+    // gh-1402 additions, each its own tiny decision unit (the gh-120 CRAP
+    // pattern — every helper stays ≤ 7 CC so the per-function ratchet
+    // cannot flag it even on a partial-coverage run):
+    //   opts.github.prByPr     = { <prNumber>: payload } — per-PR payloads
+    //     for a tick that probes SEVERAL PRs (the terminal guard walks every
+    //     candidate); the static opts.github.pr stays the fallback.
+    //   opts.github.prSequence = [payload, ...] — payloads served IN ORDER
+    //     (last one sticky): replays the mid-tick merge race where the
+    //     dispatch-time probe sees OPEN and the recorder's re-probe sees
+    //     MERGED. Mutated per run — define it fresh in every test.
+    function prSequencePayload() {
+        var seq = opts.github.prSequence;
+        if (seq && seq.length) {
+            return seq.length > 1 ? seq.shift() : seq[0];
+        }
+        return null;
+    }
+
+    function prByPrPayload(getOpts) {
+        var byPr = opts.github.prByPr;
+        if (!byPr || !getOpts) return null;
+        return byPr[getOpts.pullRequestId] || null;
+    }
+
+    function getPrMock(getOpts) {
+        capturedPrLookups.push(getOpts && getOpts.pullRequestId);
         if (opts.github.prLookupError) throw new Error(opts.github.prLookupError);
+        var seq = prSequencePayload();
+        if (seq !== null) return JSON.stringify(seq);
+        var byPr = prByPrPayload(getOpts);
+        if (byPr !== null) return JSON.stringify(byPr);
         return JSON.stringify(mockPrPayload(opts.github, capturedCliCommands));
     }
 
@@ -682,6 +714,7 @@ function makeSmAgent(opts) {
         capturedPrLabelAdds: capturedPrLabelAdds,
         capturedPrLabelRemoves: capturedPrLabelRemoves,
         capturedPrComments: capturedPrComments,
+        capturedPrLookups: capturedPrLookups,
         capturedEnvSets: capturedEnvSets,
         capturedScmConfigs: capturedScmConfigs,
         capturedIoCacheDrops: capturedIoCacheDrops,
@@ -8093,6 +8126,520 @@ suite('smAgent: validate_pr fail-open dispatch (gh-922)', function () {
         assert.ok(sm.capturedCliCommands.some(function (c) {
             return c.command.indexOf("--ref '" + VSALIVE + "'") !== -1;
         }), 'the next candidate\'s CI dispatch fired in the same tick');
+    });
+});
+
+suite('smAgent: terminal-PR dispatch guard (gh-1402)', function () {
+    // gh-1402 (live PR #1392, 2026-11-07T05:11Z): the machine merged the PR
+    // at 05:11:20 (verdict APPROVE 05:10, clean census), GitHub auto-deleted
+    // the branch — and at 05:11:26 a dispatch step still fired
+    // workflow_dispatch onto the deleted head ref. The 422 no-ref landed in
+    // the gh-922 recorder: a trigger-failed marker comment on a MERGED PR
+    // and an attempt counted toward the validation_failed park. A merged PR
+    // cannot succeed on any retry — the message has no reason to exist and
+    // the counter is meaningless. Two layers:
+    //  1. pre-dispatch state guard (triggerWorkflow + the validate_pr CI
+    //     lane): the item's PR resolves terminal at dispatch time → the
+    //     dispatch is skipped with a log-only audit line — no comment, no
+    //     attempt counting — regardless of the failure mode (deleted ref,
+    //     race, anything).
+    //  2. recordDispatchFailure downgrade: a PR that turned terminal while
+    //     the dispatch was in flight records LOG-ONLY (no issue comment, no
+    //     park-cap counting) — the mid-tick merge race the guard's probe
+    //     cannot fully close.
+    // Open PRs keep the exact gh-922 behavior (marker comment + cap
+    // counting), and every degraded probe shape (absent state, throwing
+    // read) fails open into it — the gh-1369 doctrine: unknown is not
+    // terminal.
+
+    var G_DEAD = 'gone/merged-branch';
+    var G_NO_REF = '422: No ref found for: ' + G_DEAD;
+    var G_LIVE = 'feat/alive';
+
+    function gConfig(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function gSha(n) {
+        var s = 'g14' + n;
+        while (s.length < 40) s += '0';
+        return s;
+    }
+
+    // Raw REST /pulls payload for the QUERY-TIME listing (github_list_prs
+    // serves it verbatim). The listing is the STALE snapshot — a PR listed
+    // open can merge mid-tick, which is exactly the live #1392 shape.
+    function gPr(n, labels, ref, state) {
+        return { number: n, state: state || 'open', draft: false, body: '',
+                 head: { sha: gSha(n), ref: ref },
+                 base: { sha: 'gbase0' },
+                 labels: (labels || []).map(function (l) { return { name: l }; }),
+                 user: { login: 'ai-teammate' } };
+    }
+
+    var G_RULE = { source: 'github', id: 'review-on-label-gh1402',
+        query: { type: 'pr', labels: ['agent:review'], draft: false },
+        inputs: { pr: '{prNumber}', leg: 'review' },
+        workflowRef: '{branch}', limit: 5 };
+
+    var G_VALIDATE_RULE = { source: 'github', id: 'validate-armed-gh1402',
+        query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'], draft: false },
+        localAction: 'validate_pr', limit: 5 };
+
+    function gAction(sm, opts) {
+        var jp = { owner: 'o', repo: 'r', machineAuthor: 'ai-teammate',
+                   rules: opts.rules || [opts.rule || G_RULE],
+                   dryRun: opts.dryRun === true };
+        // gh-1402 review round 1 (probe ordering): a set cap lets tests
+        // exhaust the budget BEFORE the terminal probe would fire.
+        if (typeof opts.maxTriggeredWorkflows !== 'undefined') {
+            jp.maxTriggeredWorkflows = opts.maxTriggeredWorkflows;
+        }
+        sm.action({ jobParams: jp });
+    }
+
+    function gRun(opts) {
+        var gh = Object.assign({ realSource: true }, opts.github || {});
+        var extra = {};
+        // gh-1402 review round 1 (probe ordering): active-run fixtures ride
+        // the harness scm (opts.workflowRuns), which is what the budget and
+        // dedup gates read through listWorkflowRuns.
+        if (opts.workflowRuns) extra.workflowRuns = opts.workflowRuns;
+        var sm = makeSmAgent(Object.assign(gConfig('o', 'r'), {
+            captureConsole: true,
+            github: gh,
+            onTrigger: opts.onTrigger,
+            onCliExecute: opts.onCliExecute
+        }, extra));
+        gAction(sm, opts);
+        return sm;
+    }
+
+    function gMarkerComments(sm) {
+        return sm.capturedPrComments.filter(function (c) {
+            return String(c.body || '').indexOf('trigger-failed') !== -1;
+        }).map(function (c) { return String(c.body); });
+    }
+
+    function gParkAdds(sm) {
+        return sm.capturedPrLabelAdds.filter(function (a) {
+            return (a.labels || []).indexOf('validation_failed') !== -1;
+        }).map(function (a) { return a.number; });
+    }
+
+    function gArmAdds(sm) {
+        return sm.capturedPrLabelAdds.filter(function (a) {
+            return (a.labels || []).indexOf('ai_validating') !== -1;
+        }).map(function (a) { return a.number; });
+    }
+
+    function gLog(sm) {
+        return sm.capturedLogs.join('\n');
+    }
+
+    function gWorkflowRunCmds(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run') !== -1;
+        }).map(function (c) { return c.command; });
+    }
+
+    test('AC1 replay — a PR that merged mid-tick: the head-targeted dispatch is skipped, zero comments, zero counting, audit line present', function () {
+        // Query-time listing says open (the stale snapshot the SM resolved);
+        // the dispatch-time probe (github_get_pr) says MERGED — the #1392
+        // replay. The guard fires before any dispatch attempt.
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(402, ['agent:review'], G_DEAD, 'open')]),
+                pr: { number: 402, state: 'closed', merged: true, head: { sha: gSha(402) } },
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        assert.deepEqual(sm.capturedTriggers.filter(function (t) {
+            return t.ref === G_DEAD; }), [],
+            'no workflow_dispatch onto the terminal PR head ref');
+        assert.deepEqual(gMarkerComments(sm), [],
+            'no trigger-failed marker on a merged PR (the message has no reason to exist)');
+        assert.deepEqual(gParkAdds(sm), [], 'no attempt counting toward the park');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') !== -1,
+            'the log-only audit line is present');
+    });
+
+    test('AC1 — a CLOSED (not merged) PR is equally terminal: no dispatch, no comment, audit line present', function () {
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(403, ['agent:review'], G_DEAD, 'open')]),
+                pr: { number: 403, state: 'closed', merged: false, head: { sha: gSha(403) } },
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch for a closed PR');
+        assert.deepEqual(gMarkerComments(sm), [], 'no marker on a closed PR');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') !== -1,
+            'the log-only audit line is present');
+    });
+
+    test('the guard is a STATE guard, not a ref guard: a main-ref rule for a terminal PR also skips', function () {
+        var mainRule = Object.assign({}, G_RULE,
+            { workflowRef: 'main', id: 'review-main-ref-gh1402' });
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(404, ['agent:review'], G_LIVE, 'open')]),
+                pr: { number: 404, state: 'closed', merged: true, head: { sha: gSha(404) } },
+                prComments: []
+            },
+            rule: mainRule,
+            onTrigger: function () { throw new Error('422: No ref found for: main'); }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch at all for a terminal PR');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') !== -1,
+            'the log-only audit line is present');
+    });
+
+    test('AC2 regression — an OPEN PR dead head keeps the exact gh-922 behavior: marker comment + attempt counting', function () {
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(405, ['agent:review'], G_DEAD, 'open')]),
+                pr: { number: 405, state: 'open', merged: false, head: { sha: gSha(405) } },
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        var markers = gMarkerComments(sm);
+        assert.equal(markers.length, 1, 'the open dead head records the trigger-failed marker');
+        assert.ok(markers[0].indexOf('attempt 1/3') !== -1, 'the attempt is counted');
+        assert.ok(markers[0].indexOf(G_DEAD) !== -1, 'the marker names the dead ref');
+        assert.deepEqual(gParkAdds(sm), [], 'the first failure does not park');
+        assert.equal(sm.capturedTriggers.length, 1, 'the dispatch itself was attempted');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') === -1,
+            'no audit line for a live PR');
+    });
+
+    test('AC2 regression — an OPEN PR dead head at the cap parks validation_failed exactly as today', function () {
+        var prior = [1, 2].map(function (n) {
+            return { body: '\u26A0\uFE0F trigger-failed ' + G_DEAD + ' \u2014 attempt ' + n +
+                '/3 at 2026-11-07T05:0' + n + ':00Z — prior failure' };
+        });
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(406, ['agent:review'], G_DEAD, 'open')]),
+                pr: { number: 406, state: 'open', merged: false, head: { sha: gSha(406) } },
+                prComments: prior
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        assert.deepEqual(gParkAdds(sm), [406],
+            'the open PR parks at the cap (gh-922 cap counting unchanged)');
+        assert.equal(gMarkerComments(sm).length, 1, 'exactly the park comment carries the marker');
+    });
+
+    test('mixed tick — a terminal PR is skipped while the live dead head of ANOTHER PR records normally', function () {
+        // 2+ items in one tick: the guard decides PER PR, never per rule.
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([
+                    gPr(407, ['agent:review'], G_DEAD, 'open'),       // merges mid-tick
+                    gPr(408, ['agent:review'], 'gone/second', 'open') // stays open, dead head
+                ]),
+                prByPr: {
+                    407: { number: 407, state: 'closed', merged: true, head: { sha: gSha(407) } },
+                    408: { number: 408, state: 'open', merged: false, head: { sha: gSha(408) } }
+                },
+                prComments: []
+            },
+            onTrigger: function (o, r, w, inputs, ref) {
+                throw new Error('422: No ref found for: ' + ref);
+            }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'only the open PR reached the dispatch (the terminal PR was skipped)');
+        assert.equal(sm.capturedTriggers[0].ref, 'gone/second',
+            'the attempted dispatch belongs to the open PR');
+        var markers = gMarkerComments(sm);
+        assert.equal(markers.length, 1, 'only the open dead head records a marker');
+        assert.ok(markers[0].indexOf('gone/second') !== -1, 'the marker names the open PR ref');
+        assert.deepEqual(gParkAdds(sm), [], 'no park for either PR (first failure)');
+    });
+
+    test('fail-open — a PR payload without state (legacy shape) keeps the dispatch + recording path', function () {
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(409, ['agent:review'], G_DEAD, 'open')]),
+                pr: { number: 409, head: { sha: gSha(409) } }, // no state, no merged flag
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'fail-open: the dispatch was attempted');
+        assert.equal(gMarkerComments(sm).length, 1, 'fail-open: the failure records as today');
+    });
+
+    test('fail-open — a throwing PR read keeps the dispatch + recording path', function () {
+        var sm = gRun({
+            github: {
+                realSource: true,
+                prList: JSON.stringify([gPr(410, ['agent:review'], G_DEAD, 'open')]),
+                prLookupError: 'transport boom',
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'fail-open: the dispatch was attempted');
+        assert.equal(gMarkerComments(sm).length, 1, 'fail-open: the failure records as today');
+    });
+
+    test('layer 2 — a PR that turned terminal while the dispatch was in flight: the no-ref failure records LOG-ONLY (no comment, no park)', function () {
+        // The mid-tick merge race: the guard's probe saw OPEN (payload 1),
+        // the dispatch fired and 422'd, the recorder's re-probe sees MERGED
+        // (payload 2). Without the downgrade this would post attempt 3/3 and
+        // PARK a merged PR — the live #1392 noise, one layer deeper.
+        var prior = [1, 2].map(function (n) {
+            return { body: '\u26A0\uFE0F trigger-failed ' + G_DEAD + ' \u2014 attempt ' + n +
+                '/3 at 2026-11-07T05:1' + n + ':00Z — prior failure' };
+        });
+        var sm = gRun({
+            github: {
+                realSource: true,
+                prList: JSON.stringify([gPr(411, ['agent:review'], G_DEAD, 'open')]),
+                prSequence: [
+                    { number: 411, state: 'open', merged: false, head: { sha: gSha(411) } },
+                    { number: 411, state: 'closed', merged: true, head: { sha: gSha(411) } }
+                ],
+                prComments: prior
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'the dispatch WAS attempted (the race happened — the guard probe saw open)');
+        assert.deepEqual(gMarkerComments(sm), [],
+            'no trigger-failed comment on a PR that is terminal at record time');
+        assert.deepEqual(gParkAdds(sm), [],
+            'no park-cap counting for a terminal PR (3/3 must never park a merged PR)');
+        assert.ok(gLog(sm).indexOf('LOG-ONLY') !== -1,
+            'the downgrade is recorded as a log-only audit line');
+    });
+
+    test('validate_pr lane — a terminal PR: no CI dispatch, no ai_validating arm, no comment, audit line present', function () {
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(412, ['pr_approved'], G_DEAD, 'open')]),
+                pr: { number: 412, state: 'closed', merged: true, head: { sha: gSha(412) } },
+                prComments: []
+            },
+            rule: G_VALIDATE_RULE
+        });
+
+        assert.deepEqual(gWorkflowRunCmds(sm), [], 'no CI dispatch for a terminal PR');
+        assert.deepEqual(gArmAdds(sm), [], 'no ai_validating arm on a terminal PR');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment on a terminal PR');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') !== -1,
+            'the log-only audit line is present');
+    });
+
+    test('validate_pr lane regression — an OPEN PR still dispatches CI (the guard is terminal-only)', function () {
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(413, ['pr_approved'], G_LIVE, 'open')]),
+                pr: { number: 413, state: 'open', merged: false, head: { sha: gSha(413) } },
+                prComments: []
+            },
+            rule: G_VALIDATE_RULE
+        });
+
+        assert.equal(gWorkflowRunCmds(sm).length, 1, 'the CI dispatch fires for an open PR');
+        assert.deepEqual(gArmAdds(sm), [413], 'the ai_validating arm fires for an open PR');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') === -1,
+            'no audit line for a live PR');
+    });
+
+    test('DRY replay — a terminal PR skips the dry dispatch too: audit line, no [dry] dispatch line', function () {
+        var sm = gRun({
+            dryRun: true,
+            github: {
+                prList: JSON.stringify([gPr(414, ['agent:review'], G_DEAD, 'open')]),
+                pr: { number: 414, state: 'closed', merged: true, head: { sha: gSha(414) } },
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch (dry or not)');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') !== -1,
+            'the audit line is present in DRY');
+        assert.ok(gLog(sm).indexOf('[dry] \u25B6\uFE0F') === -1,
+            'no dry-dispatch line for a terminal PR — the skip happens BEFORE it');
+    });
+
+    // ── review round 1 (pr-1405) ────────────────────────────────────────────
+    // 4 review threads on the guard itself, all in js/smAgent.js:
+    //  💡 probe ordering — the guard sat BEFORE the cheap local gates, so a
+    //     cap-exhausted / already-covered candidate paid one REST read
+    //     before a free skip; the guard now sits after every suppression
+    //     gate, still before any dispatch.
+    //  💡 probe-once — the same PR could be read twice in one tick (lane
+    //     probe + the dispatch guard re-probing); the per-tick memo makes
+    //     the second read free, while the recorder's mid-tick race re-probe
+    //     stays deliberately FRESH (the layer-2 test above pins that).
+    //  💡 shared raw-read — prTerminalStateOf and prHeadAndLabels ran the
+    //     identical fetch/parse/fail-open block; both now consume prRawRead.
+    //  🪶 wording — the audit line said "terminal" twice; the suffix is now
+    //     one shared constant consumed by both lanes.
+
+    test('probe ordering — a budget-exhausted tick never pays the terminal probe (cheap local gates first)', function () {
+        // cap=1 fully consumed by one active run → the budget gate skips the
+        // candidate for free; the terminal probe (a real github_get_pr read)
+        // must not fire for a candidate the local gates already rejected.
+        var sm = gRun({
+            maxTriggeredWorkflows: 1,
+            workflowRuns: { in_progress: [{ id: 5001, name: 'AI Teammate',
+                                            display_title: '▶ review (SM)',
+                                            status: 'in_progress',
+                                            updated_at: '2026-11-09T08:00:00Z' }] },
+            github: {
+                prList: JSON.stringify([gPr(420, ['agent:review'], G_DEAD, 'open')]),
+                pr: { number: 420, state: 'closed', merged: true, head: { sha: gSha(420) } },
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        assert.deepEqual(sm.capturedTriggers, [], 'no dispatch (cap exhausted)');
+        assert.deepEqual(sm.capturedPrLookups, [],
+            'no github_get_pr read for a candidate the budget gate already skips');
+        assert.ok(gLog(sm).indexOf('global workflow cap reached') !== -1,
+            'the cap gate is what skipped the candidate');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') === -1,
+            'no terminal audit line — the probe never ran');
+    });
+
+    test('probe ordering — an in-flight same-key leg skips the terminal probe too (dedup gate first)', function () {
+        // The stub-title anchor ('· pr-<N>') matches the in-flight guard —
+        // the candidate is suppressed WITHOUT any dispatch decision, so the
+        // terminal probe must not fire either.
+        var sm = gRun({
+            workflowRuns: { in_progress: [{ id: 5002, name: 'AI Teammate',
+                                            display_title: '▶ review (SM) · pr-421',
+                                            status: 'in_progress',
+                                            updated_at: '2026-11-09T08:00:00Z' }] },
+            github: {
+                prList: JSON.stringify([gPr(421, ['agent:review'], G_DEAD, 'open')]),
+                pr: { number: 421, state: 'closed', merged: true, head: { sha: gSha(421) } },
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        assert.deepEqual(sm.capturedTriggers, [], 'no dispatch (leg already in flight)');
+        assert.deepEqual(sm.capturedPrLookups, [],
+            'no github_get_pr read for a candidate the dedup gate already skips');
+        assert.ok(gLog(sm).indexOf('active workflow already exists') !== -1,
+            'the in-flight dedup gate is what skipped the candidate');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') === -1,
+            'no terminal audit line — the probe never ran');
+    });
+
+    test('probe-once — two dispatch rules matching the same PR in one tick pay ONE terminal probe', function () {
+        // The reviewer's double-read shape, generalized: any second
+        // triggerWorkflow pass for the same PR in the same tick (here a
+        // second labeled rule; the validate_pr→conflict-rework pairing is
+        // the live instance) re-uses the tick's first terminal read via the
+        // per-tick memo instead of re-racing the merge it just ruled open.
+        var reworkRule = { source: 'github', id: 'rework-on-label-gh1402-once',
+            query: { type: 'pr', labels: ['agent:rework'], draft: false },
+            inputs: { pr: '{prNumber}', leg: 'rework' },
+            workflowRef: '{branch}', limit: 5 };
+        var sm = gRun({
+            rules: [G_RULE, reworkRule],
+            github: {
+                realSource: true,
+                prList: JSON.stringify([gPr(421, ['agent:review', 'agent:rework'], G_LIVE, 'open')]),
+                pr: { number: 421, state: 'open', merged: false, head: { sha: gSha(421) } },
+                prComments: []
+            },
+            onTrigger: function (o, r, w, inputs, ref) {
+                throw new Error('422: No ref found for: ' + ref);
+            }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 2,
+            'both rules still dispatch (the memo changes reads, never outcomes)');
+        // String-keyed reads = the probes that pass String(prNumber) — the
+        // dispatch guard does. Pre-fix this ran 2× (one guard pass per rule);
+        // post-fix the second pass hits the per-tick memo, leaving 1 guard
+        // read + 2 non-guard PR consumers (freshness head probe, latch gate)
+        // that this scenario already paid before the memo existed.
+        var stringReads = sm.capturedPrLookups.filter(function (x) { return typeof x === 'string'; });
+        assert.equal(stringReads.length, 3,
+            'the two dispatch-guard passes collapse to ONE terminal read');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') === -1,
+            'the PR is open — no audit line, just the shared read');
+    });
+
+    test('shared raw-read — a REST error body (rate-limit shape) fails the guard open in every lane', function () {
+        // prRawRead's fail-open contract, pinned through the dispatch guard:
+        // an error BODY (not a throw, not a missing field) is not terminal
+        // evidence — the gh-922 path proceeds byte-for-byte.
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(422, ['agent:review'], G_DEAD, 'open')]),
+                pr: { number: 422, message: 'API rate limit exceeded' },
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'fail-open: the dispatch was attempted');
+        assert.equal(gMarkerComments(sm).length, 1, 'fail-open: the failure records as today');
+        assert.ok(gLog(sm).indexOf('terminal PR — dispatch skipped') === -1,
+            'an error body is not terminal evidence — no audit line');
+    });
+
+    test('audit-line wording — single-sourced suffix, no doubled "terminal"', function () {
+        // 🪶 NIT: the line used to read "PR #N is terminal (merged/closed) —
+        // terminal PR — dispatch skipped" — "terminal" twice, and the
+        // template duplicated per lane. Both lanes now consume one constant.
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(423, ['agent:review'], G_DEAD, 'open')]),
+                pr: { number: 423, state: 'closed', merged: true, head: { sha: gSha(423) } },
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(G_NO_REF); }
+        });
+
+        var log = gLog(sm);
+        assert.ok(log.indexOf('PR #423 (merged/closed) — terminal PR — dispatch skipped') !== -1,
+            'the dispatch-guard lane logs the single-sourced line');
+        assert.ok(log.indexOf('is terminal (merged/closed) — terminal PR') === -1,
+            'the doubled "terminal" wording is gone');
+    });
+
+    test('audit-line wording — the validate_pr lane logs the SAME single-sourced suffix', function () {
+        var sm = gRun({
+            github: {
+                prList: JSON.stringify([gPr(424, ['pr_approved'], G_DEAD, 'open')]),
+                pr: { number: 424, state: 'closed', merged: true, head: { sha: gSha(424) } },
+                prComments: []
+            },
+            rule: G_VALIDATE_RULE
+        });
+
+        var log = gLog(sm);
+        assert.ok(log.indexOf('PR #424 (merged/closed) — terminal PR — dispatch skipped') !== -1,
+            'the CI lane logs the same single-sourced line');
+        assert.ok(log.indexOf('is terminal (merged/closed) — terminal PR') === -1,
+            'the doubled "terminal" wording is gone here too');
     });
 });
 
@@ -19206,3 +19753,4 @@ suite('smAgent: arm notice repeat-suppression wiring (gh-1387 L2 / gh-1392 revie
             'armReworkLatch fired under the suppressed notice — reworkInFlight carries pr-413@<head>');
     });
 });
+

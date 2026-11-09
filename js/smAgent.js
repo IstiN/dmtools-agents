@@ -772,6 +772,70 @@ function localIssueExists(repoInfo, issueNumber) {
     return false; // empty/unparseable body — unverifiable, do not anchor
 }
 
+// gh-1402 review round 1 (SUGGESTION — shared raw-read): ONE
+// github_get_pr fetch shared by every PR-state probe — tool-presence
+// check → string-or-object parse → error-body fail-open. Payload-shape
+// fixes (new error bodies, rate-limit shapes, field renames) now land
+// once, not once per probe. Returns the parsed payload or null (fail
+// open: no tool, throwing read, unparseable body, REST error body).
+// throwWarn (optional) names the caller in the fail-open console.warn —
+// only prHeadAndLabels warns (the verdict-probe doctrine); the dispatch
+// guard stays silent.
+function prRawRead(repoInfo, prNumber, throwWarn) {
+    if (typeof github_get_pr !== 'function') return null;
+    try {
+        var raw = github_get_pr({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: String(prNumber)
+        });
+        var pr = (typeof raw === 'string') ? JSON.parse(raw) : (raw || {});
+        if (!pr || pr.message) return null;
+        return pr;
+    } catch (e) {
+        if (throwWarn) console.warn('  ⚠️ ' + throwWarn + ' (fail-open): ' + (e.message || e));
+        return null;
+    }
+}
+
+// gh-1402 review round 1 (SUGGESTION — probe-once): one terminal verdict
+// per PR per tick. The dispatch guard can run several times for the SAME
+// PR within one tick (multiple labeled rules; the validate_pr lane probe
+// feeding a conflict-rework dispatch) — the memo makes every pass after
+// the first free instead of re-reading (and re-racing the merge) with an
+// identical github_get_pr call. Cleared at the top of every action() tick;
+// the recordDispatchFailure downgrade deliberately bypasses it (opts.fresh)
+// — the mid-tick merge race needs a FRESH record-time read (the layer-2
+// test pins exactly that).
+var terminalPrMemo = {};
+
+// gh-1402: the dispatch-lane terminal-state probe — reads the PR's REST
+// `state` ('open'/'closed') + the authoritative `merged` flag and decides
+// through the shared gh-1369 pure guard (prTerminalState.isTerminalPrState).
+// Fails OPEN on every degraded shape — no tool (jira-only/ADO bridges), a
+// throwing read, an error body, an absent state — because "unknown is not
+// terminal" (the gh-1369 doctrine): a broken probe must never silently
+// disarm a working dispatch. Unlike prHeadAndLabels this needs NO head.sha
+// (a merged PR's head record can outlive the head itself); only the
+// terminal evidence matters. opts.fresh bypasses the per-tick memo (the
+// recordDispatchFailure downgrade must re-read at record time).
+function prTerminalStateOf(repoInfo, prNumber, opts) {
+    var memoKey = ((repoInfo && repoInfo.owner) || '?') + '/' +
+        ((repoInfo && repoInfo.repo) || '?') + '#' + String(prNumber);
+    if (!(opts && opts.fresh) && typeof terminalPrMemo[memoKey] !== 'undefined') {
+        return terminalPrMemo[memoKey];
+    }
+    var pr = prRawRead(repoInfo, prNumber);
+    var terminal = !!pr && prTerminalStateModule.isTerminalPrState(pr.state, pr.merged === true);
+    terminalPrMemo[memoKey] = terminal;
+    return terminal;
+}
+
+// gh-1402 review round 1 (NIT — single-sourced audit suffix): both lanes
+// (dispatch guard + validate_pr CI lane) log the same substring the tests
+// assert on, so a future wording tweak cannot silently break one lane's
+// assertion but not the other's.
+var TERMINAL_PR_SKIP_MSG = 'terminal PR — dispatch skipped';
+
 function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBudget, item, skipInfo) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     // workflowRef may reference the matched item: '{branch}' dispatches the
@@ -875,6 +939,33 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
                     'a second leg would race its push)');
                 return false;
             }
+        }
+        // gh-1402 pre-dispatch state guard: the item's PR resolves TERMINAL
+        // (merged/closed) at dispatch time → skip the dispatch entirely. A
+        // merged PR cannot succeed on any retry (live PR #1392 2026-11-07:
+        // merged 05:11:20, the 05:11:26 head-ref dispatch 422'd on the
+        // auto-deleted branch and the gh-922 recorder commented + counted a
+        // parked PR's attempt budget on shipped code). The guard is a STATE
+        // guard, not a ref guard: it fires for ANY dispatch resolved for a
+        // terminal PR (head-targeted, machine-ref, fork-rerouted) — no comment,
+        // no attempt counting, one log-only audit line. Returning false (not
+        // processed) keeps the gh-922 fail-open yield: the slot moves to the
+        // next candidate, nothing is consumed, the next tick re-runs the same
+        // cheap skip. Fail-open: a degraded probe (absent state, throwing read,
+        // no tool) is NOT terminal — the dispatch proceeds exactly as before.
+        // gh-1402 review round 1 (SUGGESTION — ordering): the probe sits AFTER
+        // every suppression gate (workflow cap, in-flight dedup, cross-anchor,
+        // gh-1028 branch leg) instead of first-in-function — a candidate those
+        // cheap gates skip costs ZERO REST reads, while the guarantee is
+        // unchanged: the probe still runs before any scm.triggerWorkflow call
+        // (the DRY [dry] replay included — that test pins the audit line).
+        // Repeat passes for the same PR in one tick hit the per-tick memo.
+        var itG = item || {};
+        if (itG.prNumber && prTerminalStateOf(repoInfo, itG.prNumber)) {
+            console.log('  ⏭️  ' + ticketKey + ' PR #' + itG.prNumber +
+                ' (merged/closed) — ' + TERMINAL_PR_SKIP_MSG +
+                ' (gh-1402: state guard — no comment, no attempt counting)');
+            return false;
         }
         var inputs;
         if (rule.inputs) {
@@ -1003,12 +1094,36 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
 // so that shape drops to the branch-keyed legacy leg below — same AC3
 // park outcome, no ls-remote probe (REG-1 pins the fail-closed shape and
 // the deleted-shape test pins the branch-keyed park).
+// gh-1402: a PR that is TERMINAL (merged/closed) at record time downgrades
+// the whole bookkeeping to a log-only audit line — a merged PR cannot
+// succeed on any retry, so neither the marker comment nor the park-cap
+// count has a reason to exist (the mid-tick merge race the pre-dispatch
+// state guard cannot fully close).
 // NEVER throws: the slot yield already happened in the loop;
 // a recording failure must not break the dispatch loop.
 function recordDispatchFailure(repoInfo, ticketKey, item, err, expandedRef, failClass) {
     try {
         if (DRY || failClass !== 'no-ref') return;
         if (!item || !item.prNumber || !item.branch) return;
+        // gh-1402 terminal-PR downgrade: a PR that turned MERGED/CLOSED
+        // while this dispatch was in flight (the guard's probe raced the
+        // merge — live PR #1392: merged 05:11:20, dispatch 05:11:26) cannot
+        // succeed on any retry, so the marker comment and the park-cap
+        // count are meaningless noise on shipped code. Downgrade to a
+        // log-only record: no issue comment, no attempt counting, no
+        // park. Fail-open: a degraded re-probe (absent state, throwing
+        // read) is NOT terminal — the recording below keeps the exact
+        // gh-922 semantics for live heads.
+        // gh-1402 review round 1: opts.fresh — this re-probe MUST NOT hit
+        // the per-tick terminal memo (the guard's earlier open verdict is
+        // exactly what raced the merge); the layer-2 test pins the fresh
+        // record-time read.
+        if (prTerminalStateOf(repoInfo, item.prNumber, { fresh: true })) {
+            console.log('  ⏭️  ' + ticketKey + ' PR #' + item.prNumber +
+                ' turned terminal while the dispatch was in flight — trigger-failure' +
+                ' recorded LOG-ONLY (gh-1402: no issue comment, no park-cap counting)');
+            return;
+        }
         // gh-1075 AC2/AC3: the fork head's liveness oracle is
         // refs/pull/<N>/head (#1057), never the branch name. A no-ref 422
         // touching a fork PR is structurally expected on the base side and
@@ -3583,6 +3698,21 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         if (rule.localAction === 'validate_pr') {
+            // gh-1402 pre-dispatch state guard (CI lane): the item's PR
+            // resolves TERMINAL (merged/closed) at dispatch time → the whole
+            // action exits — no CI trigger, no ai_validating arm, no park
+            // reset, no marker, no attempt counting; one log-only audit
+            // line. A merged PR cannot succeed on any validation (live PR
+            // #1392 2026-11-07: the CI dispatch raced the merge onto the
+            // auto-deleted head ref and the gh-922 recorder commented +
+            // counted it). Fail-open: a degraded probe is NOT terminal —
+            // the open-PR flow below is byte-for-byte unchanged.
+            if (ticket.prNumber && prTerminalStateOf(effectiveRepoInfo, ticket.prNumber)) {
+                console.log('  ⏭️  ' + key + ' PR #' + ticket.prNumber +
+                    ' (merged/closed) — ' + TERMINAL_PR_SKIP_MSG +
+                    ' (gh-1402: no CI trigger, no arm, no comment, no attempt counting)');
+                continue;
+            }
             // gh-1114 (AC12/UT-9): the merge candidate whose head THIS
             // tick's L1 freshness rules just refreshed is not validated in
             // the same tick — the fresh head has no checks yet, and the
@@ -6540,28 +6670,24 @@ function failMarkerState(repoInfo, prNumber) {
 // Fetches the PR's head sha + current labels in one github_get_pr call
 // (labels ride the REST body, same as the query path's prStatus). Returns
 // { headSha, labels } or null when the probe fails — callers fail open.
+// gh-1402 review round 1 (SUGGESTION — shared raw-read): the fetch/parse/
+// fail-open block lives in prRawRead now (shared with the dispatch guard's
+// terminal probe); this probe keeps its two distinguishing traits — the
+// fail-open console.warn on a throwing read, and the hard head.sha
+// requirement (a merged PR's head record can outlive the head).
 function prHeadAndLabels(repoInfo, prNumber) {
-    try {
-        var raw = github_get_pr({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            pullRequestId: String(prNumber)
-        });
-        var pr = (typeof raw === 'string') ? JSON.parse(raw) : (raw || {});
-        if (!pr || pr.message || !pr.head || !pr.head.sha) return null;
-        return {
-            headSha: pr.head.sha,
-            labels: (pr.labels || []).map(function(l) { return (l && l.name) || l; }),
-            // gh-1369: the terminal-state evidence — REST `state` ('open'/
-            // 'closed') + the authoritative `merged` flag. isTerminalPrState
-            // normalizes/decides; an absent field stays fail-open (not
-            // terminal) so legacy payload shapes keep the legacy semantics.
-            state: prTerminalStateModule.normalizePrState(pr.state),
-            merged: pr.merged === true
-        };
-    } catch (e) {
-        console.warn('  ⚠️ verdict probe: PR read failed (fail-open): ' + (e.message || e));
-        return null;
-    }
+    var pr = prRawRead(repoInfo, prNumber, 'verdict probe: PR read failed');
+    if (!pr || !pr.head || !pr.head.sha) return null;
+    return {
+        headSha: pr.head.sha,
+        labels: (pr.labels || []).map(function(l) { return (l && l.name) || l; }),
+        // gh-1369: the terminal-state evidence — REST `state` ('open'/
+        // 'closed') + the authoritative `merged` flag. isTerminalPrState
+        // normalizes/decides; an absent field stays fail-open (not
+        // terminal) so legacy payload shapes keep the legacy semantics.
+        state: prTerminalStateModule.normalizePrState(pr.state),
+        merged: pr.merged === true
+    };
 }
 
 // The gh-728 machine-author allowlist for verdict-record parsing (gh-828
@@ -9495,6 +9621,7 @@ function action(params) {
     tickStampsFailed = 0; // gh-1118: fresh per-tick stamp-failure counter
     tickFreshResets = {}; // gh-1101 follow-up: one fresh-sha reset per PR per tick
     tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
+    terminalPrMemo = {}; // gh-1402 review round 1: one terminal read per PR per tick (probe-once)
     tickMovedPrs = {}; // gh-1114: heads moved by THIS tick's freshness layer
     tickMergeReservedSlots = 0; // gh-1114: merge-first capacity (resolved below)
     tickMergeSlotSpent = null;
