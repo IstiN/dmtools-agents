@@ -44,7 +44,10 @@
  *   addIssueLabel(issueNumber, label)
  *
  * Known gaps (documented, non-fatal):
- *   - gitlab has no close-issue tool — closeIssue warns and no-ops.
+ *   - gitlab has no close-issue tool — closeIssue warns and no-ops (it
+ *     never posts the comment as an MR note: issue/MR iids differ).
+ *   - gitlab has no issue-label tool — SM issue-carrier label writes are
+ *     skipped (smAgent warns); MR labels use gitlab_add/remove_mr_label.
  *   - gitlab activeMachineRuns cannot map a pipeline to an issue number
  *     (pipelines do not expose trigger variables) — any running API-sourced
  *     pipeline counts as "machine busy" (conservative: fewer parallel legs).
@@ -1255,14 +1258,108 @@ function _glIssueMatches(it, machineLabels, agentHandle) {
     return machineLabels.some(function (ml) { return labels.indexOf(ml) !== -1; });
 }
 
+// The bridge returns JSON strings; unit fixtures return decoded values.
+function _glList(res, key) {
+    var parsed = parseMcp(res);
+    if (!parsed) return [];
+    if (Array.isArray(parsed)) return parsed;
+    if (key && Array.isArray(parsed[key])) return parsed[key];
+    return asList(parsed);
+}
+
 // gitlab_list_issues accepts comma-separated labels (AND on GitLab);
 // machine labels are OR semantics, so list open issues once and filter
 // client-side.
 function _glListMachineIssues(owner, repo, machineLabels, agentHandle, limit) {
-    var res = gitlab_list_issues({ workspace: owner, repository: repo, state: 'opened', perPage: limit || 50 }) || [];
-    return (res.issues || res || []).filter(function (it) {
+    var res = gitlab_list_issues({ workspace: owner, repository: repo, state: 'opened', perPage: limit || 50 });
+    return _glList(res, 'issues').filter(function (it) {
         return _glIssueMatches(it, machineLabels, agentHandle);
     }).map(_glIssueToState);
+}
+
+// Open issues for the SM issue carrier — one fetch per tick (ioCache),
+// shaped like the GitHub search payload the source reads: {number, labels,
+// title, assignees}. gitlab_list_issues has no label/assignee filter, so
+// descriptors filter client-side (searchOpenIssues).
+var GL_ISSUE_PAGE = 100;
+
+function _glOpenIssues(owner, repo) {
+    var hit = ioCacheGet(owner, repo, 'openIssues', null);
+    if (hit !== undefined) return hit;
+    var list = _glList(gitlab_list_issues({
+        workspace: owner, repository: repo, state: 'opened', perPage: GL_ISSUE_PAGE
+    }), 'issues').map(function (it) {
+        return {
+            number: it.iid,
+            title: it.title || '',
+            labels: it.labels || [],
+            assignees: _glAssigneeLogins(it).map(function (l) { return { login: l }; })
+        };
+    });
+    ioCachePut(owner, repo, 'openIssues', null, list);
+    return list;
+}
+
+function _glSearchOpenIssues(owner, repo, descriptor, assignee) {
+    return _glOpenIssues(owner, repo).filter(function (it) {
+        if (descriptor.kind === 'label') return it.labels.indexOf(descriptor.label) !== -1;
+        return it.assignees.some(function (a) { return a.login === assignee; });
+    });
+}
+
+function _glIssueLabels(owner, repo, issueNumber) {
+    var list = _glOpenIssues(owner, repo);
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].number === issueNumber) return list[i].labels;
+    }
+    return null;
+}
+
+// Head repository of an MR as 'owner/repo' — only resolvable for
+// same-project MRs (the list payload carries fork project ids, not paths);
+// null keeps fork MRs out of the cross-repo lanes (fail closed).
+function _glMrHeadRepoFull(mr, owner, repo) {
+    if (mr.source_project_id === undefined || mr.source_project_id === mr.target_project_id) {
+        return owner + '/' + repo;
+    }
+    return null;
+}
+
+function _glMrPrLabels(mr) {
+    return (mr.labels || []).map(function (l) { return { name: (l && l.name) || l }; });
+}
+
+function _glMrHead(mr, owner, repo) {
+    return { ref: mr.source_branch || '', sha: mr.sha || '',
+             repo: { full_name: _glMrHeadRepoFull(mr, owner, repo) } };
+}
+
+// GitLab MR → the GitHub REST /pulls item shape githubSource reads.
+function _glMrToPrListItem(mr, owner, repo) {
+    return {
+        number: mr.iid,
+        title: mr.title || '',
+        body: mr.description || '',
+        draft: !!(mr.draft || mr.work_in_progress),
+        labels: _glMrPrLabels(mr),
+        head: _glMrHead(mr, owner, repo),
+        user: { login: _glMrAuthor(mr) },
+        maintainer_can_modify: mr.allow_maintainer_to_push === true,
+        created_at: mr.created_at || ''
+    };
+}
+
+function _glFetchOpenPrs(owner, repo) {
+    return _glList(gitlab_list_mrs({ workspace: owner, repository: repo, state: 'opened' }))
+        .map(function (mr) { return _glMrToPrListItem(mr, owner, repo); });
+}
+
+function _glListOpenPrs(owner, repo) {
+    var hit = ioCacheGet(owner, repo, 'openPrs', null);
+    if (hit !== undefined) return hit;
+    var list = _glFetchOpenPrs(owner, repo);
+    ioCachePut(owner, repo, 'openPrs', null, list);
+    return list;
 }
 
 function _glMrMatches(mr, branch, bodyRe) {
@@ -1271,7 +1368,7 @@ function _glMrMatches(mr, branch, bodyRe) {
 
 function _glFindOpenMr(owner, repo, issueNumber, branch) {
     var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
-    var open = (gitlab_list_mrs({ workspace: owner, repository: repo, state: 'opened' }) || [])
+    var open = _glList(gitlab_list_mrs({ workspace: owner, repository: repo, state: 'opened' }))
         .filter(function (mr) { return _glMrMatches(mr, branch, bodyRe); });
     if (!open.length) return null;
     return { number: open[0].iid, state: 'OPEN', branch: open[0].source_branch || branch };
@@ -1281,7 +1378,7 @@ function _glFindPr(owner, repo, issueNumber, branchPrefix) {
     var branch = branchPrefix + issueNumber;
     var open = _glFindOpenMr(owner, repo, issueNumber, branch);
     if (open) return open;
-    var merged = (gitlab_list_mrs({ workspace: owner, repository: repo, state: 'merged' }) || [])
+    var merged = _glList(gitlab_list_mrs({ workspace: owner, repository: repo, state: 'merged' }))
         .filter(function (mr) { return mr.source_branch === branch; });
     if (merged.length) {
         return { number: merged[0].iid, state: 'MERGED', branch: branch };
@@ -1333,9 +1430,16 @@ function _glMrAuthor(mr) {
     return (mr.author && mr.author.username) || '';
 }
 
+// GitLab MR states ('opened' | 'merged' | 'closed' | 'locked') in the
+// provider-wide uppercase vocabulary the prState guards compare against.
+function _glMrState(mr) {
+    var st = String(mr.state || 'opened').toLowerCase();
+    return st === 'opened' ? 'OPEN' : st.toUpperCase();
+}
+
 function _glBuildMrStatus(mr, tally, mergeState) {
     return {
-        state: mr.state ? String(mr.state).toUpperCase() : 'OPEN',
+        state: _glMrState(mr),
         checkConclusion: _glCheckConclusionLabel(tally),
         mergeState: mergeState,
         mergeable: mr.merge_status === 'can_be_merged' && !mr.has_conflicts,
@@ -1344,32 +1448,29 @@ function _glBuildMrStatus(mr, tally, mergeState) {
 }
 
 function _glPrStatus(owner, repo, mrNumber) {
-    var mr = gitlab_get_mr({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) }) || {};
+    var mr = parseMcp(gitlab_get_mr({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) })) || {};
     // Pipelines for the MR head — the CI verdict.
-    var pipes = (gitlab_get_mr_pipelines({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) }) || {});
-    var list = pipes.pipelines || pipes || [];
-    return _glBuildMrStatus(mr, _glTallyPipelines(list), _glMrMergeState(mr));
+    var list = _glList(gitlab_get_mr_pipelines({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) }), 'pipelines');
+    var status = _glBuildMrStatus(mr, _glTallyPipelines(list), _glMrMergeState(mr));
+    status.branch = mr.source_branch || '';
+    status.headSha = mr.sha || '';
+    return status;
 }
 
 function _glActiveMachineRuns(owner, repo) {
     // Pipelines do not expose trigger variables, so an API-sourced
     // running pipeline is conservatively "the machine is busy".
-    var res = gitlab_list_pipeline_runs({ workspace: owner, repository: repo, status: 'running' }) || [];
-    var runs = res.pipelines || res || [];
+    var runs = _glList(gitlab_list_pipeline_runs({ workspace: owner, repository: repo, status: 'running' }), 'pipelines');
     var api = runs.filter(function (p) { return p.source === 'api' || p.source === 'trigger'; });
     return api.length ? ['unknown'] : [];
 }
 
-function _glCloseIssue(owner, repo, issueNumber, comment) {
-    // No native close-issue tool in the GitLab catalog yet — document
-    // the gap, stay non-fatal.
-    console.warn('  ⚠️ gitlab close-issue tool not available — issue !' +
-        issueNumber + ' left open (comment-only).');
-    if (comment) {
-        // Issue notes ride the generic note path when present.
-        try { gitlab_create_mr_note({ workspace: owner, repository: repo, pullRequestId: String(issueNumber), text: comment }); }
-        catch (e) { console.warn('  ⚠️ close-issue comment failed: ' + (e.message || e)); }
-    }
+function _glCloseIssue(issueNumber) {
+    // No close-issue tool in the GitLab bridge catalog yet — warn and
+    // no-op. Never post the comment through an MR-note tool: issue and MR
+    // iids are independent sequences, so it would land on an unrelated MR.
+    console.warn('  ⚠️ gitlab close-issue tool not available — issue #' +
+        issueNumber + ' left open.');
     return null;
 }
 
@@ -1383,15 +1484,26 @@ function gitlabProvider(cfg) {
         provider: 'gitlab',
 
         listOpenPrs: function () {
-            // Documented gap (gitlab twin of the github contract): the
-            // runAsync fan-out is github-only for now; returning null lets
-            // callers skip the snapshot fetch the same way.
-            return null;
+            // Cached (per-tick ioCache), GitHub /pulls-shaped MR list.
+            return _glListOpenPrs(owner, repo);
+        },
+
+        listOpenPrsLive: function () {
+            return _glFetchOpenPrs(owner, repo);
         },
 
         snapshot: function () {
-            // Documented gap — see listOpenPrs above.
+            // Documented gap: the runAsync fan-out preseed is github-only;
+            // null makes callers skip the snapshot fetch.
             return null;
+        },
+
+        searchOpenIssues: function (descriptor, assignee) {
+            return _glSearchOpenIssues(owner, repo, descriptor, assignee);
+        },
+
+        issueLabels: function (issueNumber) {
+            return _glIssueLabels(owner, repo, issueNumber);
         },
 
         listMachineIssues: function (machineLabels, agentHandle, limit) {
@@ -1433,8 +1545,8 @@ function gitlabProvider(cfg) {
             return gitlab_merge_mr({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) });
         },
 
-        closeIssue: function (issueNumber, comment) {
-            return _glCloseIssue(owner, repo, issueNumber, comment);
+        closeIssue: function (issueNumber) {
+            return _glCloseIssue(issueNumber);
         },
 
         addIssueLabel: function (issueNumber, label) {

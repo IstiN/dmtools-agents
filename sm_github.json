@@ -807,7 +807,7 @@
               "agent:review",
               "pr_approved"
             ],
-            "prState": "open",
+            "prState": "OPEN",
             "draft": false
           },
           "workflowFile": "ai-teammate.yml",

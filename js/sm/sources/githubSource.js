@@ -47,7 +47,7 @@ var guestTransplantModule = require('../../common/guestTransplant.js');
 var PR_STATUS_WORKER_SOURCE = [
     'function(args) {',
     "    var mod = require('./common/smProvider.js');",
-    "    var p = mod.createSmProvider({ scm: { provider: 'github' }, repository: args.repo, preseed: args.preseed });",
+    "    var p = mod.createSmProvider({ scm: { provider: args.scmProvider || 'github' }, repository: args.repo, preseed: args.preseed });",
     '    return p.prStatus(args.n);',
     '}'
 ].join('\n');
@@ -55,7 +55,7 @@ var PR_STATUS_WORKER_SOURCE = [
 var ISSUE_ENRICH_WORKER_SOURCE = [
     'function(args) {',
     "    var mod = require('./common/smProvider.js');",
-    "    var p = mod.createSmProvider({ scm: { provider: 'github' }, repository: args.repo, preseed: args.preseed });",
+    "    var p = mod.createSmProvider({ scm: { provider: args.scmProvider || 'github' }, repository: args.repo, preseed: args.preseed });",
     '    var prRef = p.findPr(args.n, args.prefix);',
     '    var pr = null;',
     "    if (prRef && prRef.state === 'OPEN') {",
@@ -180,10 +180,50 @@ function resolvePriorityLabels(cfg) {
 // only, tier degrades toward medium — never wedges the queue on I/O).
 var PRIORITY_ISSUE_LABEL_TTL_MS = 60 * 1000;
 var _priorityIssueLabelCache = { entries: {} };
+// Providers that read issue labels themselves (gitlab: no github_get_issue
+// twin), registered per repo by query().
+var _issueLabelProviders = {};
+
+function _repoKey(repoInfo) {
+    return (repoInfo.owner || '') + '/' + (repoInfo.repo || '');
+}
+
+function _registerIssueLabelProvider(repoInfo, provider) {
+    var k = _repoKey(repoInfo);
+    if (provider && typeof provider.issueLabels === 'function') _issueLabelProviders[k] = provider;
+    else delete _issueLabelProviders[k];
+}
+
+function _providerIssueLabels(labelProvider, issueNumber) {
+    try { return labelProvider.issueLabels(issueNumber); } catch (eP) { return null; }
+}
+
+function _githubIssueLabels(repoInfo, issueNumber) {
+    if (typeof github_get_issue !== 'function') return null;
+    try {
+        // Exact call shape of the smAgent sites (gh-601): the sync tool
+        // does NOT throw on 404 — it returns the REST error body, which
+        // carries `message` and no usable labels.
+        var res = github_get_issue({
+            workspace: repoInfo.owner,
+            repository: repoInfo.repo,
+            issueNumber: issueNumber
+        });
+        var obj = (typeof res === 'string') ? parseMcp(res) : res;
+        if (obj && typeof obj === 'object' && !obj.message) return issueLabels(obj);
+    } catch (e) { /* unreadable → null */ }
+    return null;
+}
+
+function _fetchIssueLabels(repoInfo, issueNumber) {
+    var labelProvider = _issueLabelProviders[_repoKey(repoInfo)];
+    return labelProvider
+        ? _providerIssueLabels(labelProvider, issueNumber)
+        : _githubIssueLabels(repoInfo, issueNumber);
+}
 
 function cachedIssueLabels(repoInfo, issueNumber) {
-    var key = (repoInfo.owner || '') + '/' + (repoInfo.repo || '') +
-        ':issueLabels:' + issueNumber;
+    var key = _repoKey(repoInfo) + ':issueLabels:' + issueNumber;
     var hit = _priorityIssueLabelCache.entries[key];
     if (hit) {
         if (Date.now() - hit.at > PRIORITY_ISSUE_LABEL_TTL_MS) {
@@ -192,23 +232,7 @@ function cachedIssueLabels(repoInfo, issueNumber) {
             return hit.data;
         }
     }
-    var labels = null;
-    if (typeof github_get_issue === 'function') {
-        try {
-            // Exact call shape of the smAgent sites (gh-601): the sync tool
-            // does NOT throw on 404 — it returns the REST error body, which
-            // carries `message` and no usable labels.
-            var res = github_get_issue({
-                workspace: repoInfo.owner,
-                repository: repoInfo.repo,
-                issueNumber: issueNumber
-            });
-            var obj = (typeof res === 'string') ? parseMcp(res) : res;
-            if (obj && typeof obj === 'object' && !obj.message) {
-                labels = issueLabels(obj);
-            }
-        } catch (e) { labels = null; }
-    }
+    var labels = _fetchIssueLabels(repoInfo, issueNumber);
     _priorityIssueLabelCache.entries[key] = { at: Date.now(), data: labels };
     return labels;
 }
@@ -591,19 +615,32 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     return true;
 }
 
+// The forge a rule reads: ctx.scmProvider (smAgent's resolved forge) wins,
+// else the rule source names it ('gitlab' rules → gitlab, else github).
+function scmProviderOf(rule, ctx) {
+    if (ctx && ctx.scmProvider) return ctx.scmProvider;
+    return (rule && rule.source === 'gitlab') ? 'gitlab' : 'github';
+}
+
+// Forge name shipped to runAsync workers so they build the same provider.
+function _scmNameOf(provider) {
+    return (provider && provider.provider) || 'github';
+}
+
 /**
- * Queries GitHub state for the rule.
+ * Queries forge (GitHub or GitLab) state for the rule.
  * @param {Object} rule - SM rule with rule.query (see module doc)
- * @param {Object} ctx  - { config, repoInfo: {owner, repo}, provider? }
+ * @param {Object} ctx  - { config, repoInfo: {owner, repo}, provider?, scmProvider? }
  * @returns {Array<Object>} state items
  */
 function query(rule, ctx) {
     var q = rule.query || {};
     var repoInfo = ctx.repoInfo || {};
     var provider = ctx.provider || smProviderModule.createSmProvider({
-        scm: { provider: 'github' },
+        scm: { provider: scmProviderOf(rule, ctx) },
         repository: repoInfo
     });
+    _registerIssueLabelProvider(repoInfo, provider);
     var branchPrefix = branchPrefixOf(rule);
     var limit = rule.limit || 50;
 
@@ -668,7 +705,14 @@ function issueSearchOneFn(full, assigneeQuery) {
 
 // The scans fan out through smAsync: one runAsync worker round when
 // parallelWorkers is wired, the identical sequential order otherwise.
-function _runIssueSearch(descriptors, searchOne, repoInfo, assigneeQuery) {
+// Providers with their own open-issue search (gitlab) stay sequential —
+// the worker source speaks github_search_issues only.
+function _runIssueSearch(descriptors, searchOne, repoInfo, assigneeQuery, provider) {
+    if (provider && typeof provider.searchOpenIssues === 'function') {
+        return descriptors.map(function (d) {
+            return { descriptor: d, items: provider.searchOpenIssues(d, assigneeQuery) || [] };
+        });
+    }
     if (descriptors.length > 1) {
         return smAsyncModule.map(descriptors, ISSUE_SEARCH_WORKER_SOURCE, function (d) {
             return { repo: repoInfo, descriptor: d, assignee: assigneeQuery };
@@ -736,7 +780,8 @@ function _applyIssuePrRef(item, prRef, pr) {
 function _enrichIssueItemsParallel(items, provider, repoInfo, branchPrefix) {
     var snapshot = _issueStatusSnapshot(provider);
     var enrichResults = smAsyncModule.map(items, ISSUE_ENRICH_WORKER_SOURCE, function (item) {
-        return { repo: repoInfo, n: item.issueNumber, prefix: branchPrefix, preseed: snapshot };
+        return { repo: repoInfo, n: item.issueNumber, prefix: branchPrefix, preseed: snapshot,
+                 scmProvider: _scmNameOf(provider) };
     });
     return enrichResults.map(function (r, i) {
         var item = _applyIssuePrRef(items[i], r.prRef, r.pr);
@@ -778,7 +823,7 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
 
     var search = _issueSearchDescriptors(q, machineAuthor);
     var searchResults = _runIssueSearch(
-        search.descriptors, issueSearchOneFn(full, search.assigneeQuery), repoInfo, search.assigneeQuery);
+        search.descriptors, issueSearchOneFn(full, search.assigneeQuery), repoInfo, search.assigneeQuery, provider);
     var items = _collectIssueItems(searchResults);
 
     // Linked-PR enrichment: the issue carries the state, the PR carries
@@ -1022,13 +1067,15 @@ function takeMutexTickSnapshot() {
 function _openPrList(provider, repoInfo) {
     // The open-PR list rides the provider's per-tick ioCache — this site
     // fired github_list_prs once PER RULE (measured: 18 calls, one idle
-    // tick, all the same payload). Providers without the cache contract
-    // (gitlab stub returns null) keep the direct fetch.
-    return (provider && typeof provider.listOpenPrs === 'function'
-        ? provider.listOpenPrs() : null) ||
-        asList(parseMcp(github_list_prs({
-            workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
-        })));
+    // tick, all the same payload). The direct github_list_prs fetch is a
+    // GitHub-only fallback for providers without the cache contract; a
+    // non-github provider never falls through to a GitHub tool.
+    var cached = (provider && typeof provider.listOpenPrs === 'function')
+        ? provider.listOpenPrs() : null;
+    if (cached || _scmNameOf(provider) !== 'github') return asList(cached);
+    return asList(parseMcp(github_list_prs({
+        workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
+    })));
 }
 
 function _prListBranch(p) {
@@ -1220,7 +1267,7 @@ function _enrichPrItemsWithStatus(items, provider, repoInfo) {
     // repo, zero uses in this path).
     var prSnapshot = _fetchPrStatusSnapshot(provider);
     var prStatuses = smAsyncModule.map(items, PR_STATUS_WORKER_SOURCE, function (item) {
-        return { repo: repoInfo, n: item.prNumber, preseed: prSnapshot };
+        return { repo: repoInfo, n: item.prNumber, preseed: prSnapshot, scmProvider: _scmNameOf(provider) };
     });
     return _absorbPrStatuses(items, provider, prStatuses);
 }

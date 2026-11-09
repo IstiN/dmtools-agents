@@ -6,11 +6,14 @@
       "maxTriggeredWorkflows": 3,
       "validationConcurrency": 3,
       "validationConcurrencyQueueWatermark": 3,
-      "smGuestTransplant": {},
+      "smGuestTransplant": {
+        "enabled": false
+      },
       "rules": [
         {
-          "description": "GitLab SM rule: rerun-cancelled-checks",
+          "description": "GitLab twin of sm_github.json rule 'rerun-cancelled-checks' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'rerun_cancelled_checks' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -37,8 +40,9 @@
           "id": "rerun-cancelled-checks"
         },
         {
-          "description": "GitLab SM rule: rerun-any-cancelled-checks",
+          "description": "GitLab twin of sm_github.json rule 'rerun-any-cancelled-checks' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'rerun_cancelled_checks' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -62,8 +66,9 @@
         },
         {
           "id": "reconcile-rework-vs-approval",
-          "description": "GitLab SM rule: reconcile-rework-vs-approval",
+          "description": "GitLab twin of sm_github.json rule 'reconcile-rework-vs-approval' — see that rule's description for the operational contract. Disabled on GitLab: no GitLab machine verdict records (latestVerdict never matches, notLatestVerdict fails open).",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -79,8 +84,9 @@
         },
         {
           "id": "reconcile-issue-rework-vs-approval",
-          "description": "GitLab SM rule: reconcile-issue-rework-vs-approval",
+          "description": "GitLab twin of sm_github.json rule 'reconcile-issue-rework-vs-approval' — see that rule's description for the operational contract. Disabled on GitLab: no GitLab machine verdict records (latestVerdict never matches, notLatestVerdict fails open).",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "issue",
             "labels": [
@@ -96,8 +102,9 @@
         },
         {
           "id": "reconcile-approval-vs-changes",
-          "description": "GitLab SM rule: reconcile-approval-vs-changes",
+          "description": "GitLab twin of sm_github.json rule 'reconcile-approval-vs-changes' — see that rule's description for the operational contract. Disabled on GitLab: no GitLab machine verdict records (latestVerdict never matches, notLatestVerdict fails open).",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -113,8 +120,9 @@
           "limit": 10
         },
         {
-          "description": "GitLab SM rule: unarm-stale-validation",
+          "description": "GitLab twin of sm_github.json rule 'unarm-stale-validation' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'unarm_validation' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -130,8 +138,9 @@
           "id": "unarm-stale-validation"
         },
         {
-          "description": "GitLab SM rule: silent-update-behind",
+          "description": "GitLab twin of sm_github.json rule 'silent-update-behind' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'update_branch' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "notLabels": [
@@ -147,8 +156,9 @@
           "id": "silent-update-behind"
         },
         {
-          "description": "GitLab SM rule: park-reset",
+          "description": "GitLab twin of sm_github.json rule 'park-reset' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'update_branch' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -165,8 +175,9 @@
           "id": "park-reset"
         },
         {
-          "description": "GitLab SM rule: merge-validated",
+          "description": "GitLab twin of sm_github.json rule 'merge-validated' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'merge_pr' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -184,8 +195,9 @@
           "id": "merge-validated"
         },
         {
-          "description": "GitLab SM rule: merge-validated-guest",
+          "description": "GitLab twin of sm_github.json rule 'merge-validated-guest' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'merge_pr' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -210,8 +222,9 @@
           "id": "merge-validated-guest"
         },
         {
-          "description": "GitLab SM rule: fail-validation",
+          "description": "GitLab twin of sm_github.json rule 'fail-validation' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'fail_validation' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -224,8 +237,9 @@
           "id": "fail-validation"
         },
         {
-          "description": "GitLab SM rule: rework-on-red-gate-unlatched",
+          "description": "GitLab twin of sm_github.json rule 'rework-on-red-gate-unlatched' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'arm_rework' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "checks": [
@@ -250,8 +264,9 @@
           "id": "rework-on-red-gate-unlatched"
         },
         {
-          "description": "GitLab SM rule: rework-on-validation-failed",
+          "description": "GitLab twin of sm_github.json rule 'rework-on-validation-failed' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'arm_rework' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -272,8 +287,9 @@
           "id": "rework-on-validation-failed"
         },
         {
-          "description": "GitLab SM rule: sweep-stale-validating",
+          "description": "GitLab twin of sm_github.json rule 'sweep-stale-validating' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'sweep_stale_validation' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -290,8 +306,9 @@
           "id": "sweep-stale-validating"
         },
         {
-          "description": "GitLab SM rule: validate-armed",
+          "description": "GitLab twin of sm_github.json rule 'validate-armed' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'validate_pr' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -324,8 +341,9 @@
           "deferRedHead": true
         },
         {
-          "description": "GitLab SM rule: revalidate-armed",
+          "description": "GitLab twin of sm_github.json rule 'revalidate-armed' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'validate_pr' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -356,8 +374,9 @@
           "id": "revalidate-armed"
         },
         {
-          "description": "GitLab SM rule: revalidate-armed-green",
+          "description": "GitLab twin of sm_github.json rule 'revalidate-armed-green' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'validate_pr' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -389,8 +408,9 @@
           "skipIfGreenCi": true
         },
         {
-          "description": "GitLab SM rule: validate-fresh",
+          "description": "GitLab twin of sm_github.json rule 'validate-fresh' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'validate_pr' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "checks": [
@@ -410,8 +430,9 @@
           "id": "validate-fresh"
         },
         {
-          "description": "GitLab SM rule: validate-fresh-masked-green",
+          "description": "GitLab twin of sm_github.json rule 'validate-fresh-masked-green' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'validate_pr' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "checks": "green",
@@ -438,8 +459,9 @@
           "id": "validate-fresh-masked-green"
         },
         {
-          "description": "GitLab SM rule: validated-green",
+          "description": "GitLab twin of sm_github.json rule 'validated-green' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'complete_validation' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -457,8 +479,9 @@
         {
           "id": "guest-transplant",
           "source": "gitlab",
+          "enabled": false,
           "guestTransplant": true,
-          "description": "GitLab SM rule: guest-transplant",
+          "description": "GitLab twin of sm_github.json rule 'guest-transplant' — see that rule's description for the operational contract. Disabled on GitLab: guest transplant (smGuestTransplant) is disabled on GitLab.",
           "query": {
             "type": "pr",
             "labels": [
@@ -476,8 +499,9 @@
           "limit": 1
         },
         {
-          "description": "GitLab SM rule: conflict-rework",
+          "description": "GitLab twin of sm_github.json rule 'conflict-rework' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'conflict_rework' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "mergeState": [
@@ -490,7 +514,7 @@
           "id": "conflict-rework"
         },
         {
-          "description": "GitLab SM rule: rework-on-red-ci",
+          "description": "GitLab twin of sm_github.json rule 'rework-on-red-ci' — see that rule's description for the operational contract.",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -513,7 +537,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab SM rule: rework-on-label",
+          "description": "GitLab twin of sm_github.json rule 'rework-on-label' — see that rule's description for the operational contract.",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -536,8 +560,9 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab SM rule: rework-arm-restore",
+          "description": "GitLab twin of sm_github.json rule 'rework-arm-restore' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'restore_rework_arm' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "notLabels": [
@@ -553,7 +578,7 @@
         },
         {
           "id": "dev-on-assignment",
-          "description": "GitLab SM rule: dev-on-assignment",
+          "description": "GitLab twin of sm_github.json rule 'dev-on-assignment' — see that rule's description for the operational contract.",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -584,7 +609,8 @@
         {
           "id": "develop-done",
           "source": "gitlab",
-          "description": "GitLab SM rule: develop-done",
+          "enabled": false,
+          "description": "GitLab twin of sm_github.json rule 'develop-done' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'mark_developed' still uses GitHub-only tools in js/smAgent.js.",
           "query": {
             "type": "issue",
             "notLabels": [
@@ -598,7 +624,7 @@
           "localAction": "mark_developed"
         },
         {
-          "description": "GitLab SM rule: review-after-dev",
+          "description": "GitLab twin of sm_github.json rule 'review-after-dev' — see that rule's description for the operational contract.",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -627,7 +653,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab SM rule: review-external-once",
+          "description": "GitLab twin of sm_github.json rule 'review-external-once' — see that rule's description for the operational contract.",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -651,7 +677,7 @@
           "id": "review-external-once"
         },
         {
-          "description": "GitLab SM rule: review-machine-unlinked",
+          "description": "GitLab twin of sm_github.json rule 'review-machine-unlinked' — see that rule's description for the operational contract.",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -683,8 +709,9 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab SM rule: review-stale-verdict",
+          "description": "GitLab twin of sm_github.json rule 'review-stale-verdict' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'arm_review' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "notLabels": [
@@ -703,8 +730,9 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab SM rule: review-threads-resolved",
+          "description": "GitLab twin of sm_github.json rule 'review-threads-resolved' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'arm_review' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -726,8 +754,9 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab SM rule: review-stale-verdict-unchecked",
+          "description": "GitLab twin of sm_github.json rule 'review-stale-verdict-unchecked' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'arm_review' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -750,8 +779,9 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab SM rule: rework-unresolved-threads",
+          "description": "GitLab twin of sm_github.json rule 'rework-unresolved-threads' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'arm_rework' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "pr",
             "labels": [
@@ -772,7 +802,7 @@
           "id": "rework-unresolved-threads"
         },
         {
-          "description": "GitLab SM rule: review-on-label",
+          "description": "GitLab twin of sm_github.json rule 'review-on-label' — see that rule's description for the operational contract.",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -792,7 +822,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab SM rule: review-on-issue-label",
+          "description": "GitLab twin of sm_github.json rule 'review-on-issue-label' — see that rule's description for the operational contract.",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -806,7 +836,7 @@
               "agent:review",
               "pr_approved"
             ],
-            "prState": "open",
+            "prState": "OPEN",
             "draft": false
           },
           "workflowFile": "ai-teammate.yml",
@@ -820,8 +850,9 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab SM rule: close-on-merge",
+          "description": "GitLab twin of sm_github.json rule 'close-on-merge' — see that rule's description for the operational contract. Disabled on GitLab: the GitLab bridge has no close-issue tool (the rule would re-fire every tick).",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "issue",
             "labels": [
@@ -834,8 +865,9 @@
           "id": "close-on-merge"
         },
         {
-          "description": "GitLab SM rule: plan-advance",
+          "description": "GitLab twin of sm_github.json rule 'plan-advance' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'advance_plan' still uses GitHub-only tools in js/smAgent.js.",
           "source": "gitlab",
+          "enabled": false,
           "query": {
             "type": "issue",
             "labels": [

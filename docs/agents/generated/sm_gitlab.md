@@ -1,15 +1,48 @@
 # Sm Gitlab
 
-The GitLab state engine for the machine loop. It evaluates configured GitLab merge-request and issue rules on each tick to reconcile review and validation state, rerun cancelled checks, update branches, and merge eligible changes.
+The GitLab state engine for the machine loop. Each tick it reads GitLab issue and merge-request state through the GitLab SM provider and dispatches review, rework and development legs. This is not full parity with `sm_github.json` yet. The GitHub-only lanes are switched off until GitLab support exists (see "GitLab engine gaps").
+
+## Selecting GitLab
+
+- `jobParams.scm.provider: "gitlab"` in `sm_gitlab.json` selects GitLab for the whole tick. `js/smAgent.js` applies it over the project config's `scm.provider`, and it reaches dispatch, MR labels and the SM probes.
+- Every rule uses `source: "gitlab"`. `js/sm/sourceResolver.js` sends these rules to the forge-portable state source, which runs against the GitLab SM provider (`js/common/smProvider.js`). A `gitlab` rule always dispatches through the GitLab SCM, even when the project config names another forge.
+- You can also set `scm: { provider: 'gitlab' }` in the consuming repo's `.dmtools/config.js`, or pass `customParams.scmProvider`.
+
+## Enabled rules
+
+Only the dispatch-only rules (no `localAction`) are enabled:
+
+- `rework-on-red-ci`
+- `rework-on-label`
+- `dev-on-assignment`
+- `review-after-dev`
+- `review-external-once`
+- `review-machine-unlinked`
+- `review-on-label`
+- `review-on-issue-label`
+
+Each rule's `description` points to its `sm_github.json` twin, which documents the operational contract. All other rules ship with `enabled: false`, and the description names the reason.
+
+## GitLab engine gaps
+
+- **Machine verdict records.** GitLab has no verdict records. The `reconcile_verdicts` rules would never match, and the `notLatestVerdict` merge/validation vetoes would fail open. Those rules are disabled.
+- **Close issue.** The bridge has no close-issue tool, so `close-on-merge` is disabled. `closeIssue` warns and does nothing. It never posts an MR note keyed by an issue iid.
+- **Issue labels.** The bridge has no issue-label tool. Label writes on issue carriers (`gh-<iid>`, for example `consumeLabels` on an issue rule) are skipped with a warning. MR carriers (`pr-<iid>`) use `gitlab_add_mr_label` / `gitlab_remove_mr_label`.
+- **Local actions.** Merge, validation, branch update, rerun of cancelled checks, rework/review arming, plan advance and guest transplant still call GitHub-only tools in `js/smAgent.js`. Their rules are disabled. The GitHub-only naked-PR sweep and dispatch-failure park bookkeeping are skipped on a GitLab tick.
+- **Busy detection.** `activeMachineRuns` cannot map a pipeline to an issue, so busy detection is conservative.
+- **runAsync fan-out.** GitLab has no cache snapshot preseed. Issue search runs sequentially over a single cached `gitlab_list_issues` page of 100 open issues.
+- **Guest transplant.** `smGuestTransplant` is `{ "enabled": false }`. An empty object would turn on the transplant defaults.
 
 ## Parameters
 
-Configured in `jobParams` in `sm_gitlab.json`.
+Set these in `jobParams` in `sm_gitlab.json`.
 
-- `maxTriggeredWorkflows` — maximum workflows dispatched during one tick.
-- `validationConcurrency` — maximum number of concurrent validation runs when the approved queue reaches its configured watermark.
-- `validationConcurrencyQueueWatermark` — approved queue depth that enables concurrent validation.
-- `rules` — GitLab-backed issue and merge-request rules processed by `js/smAgent.js`.
+- `maxTriggeredWorkflows` — maximum workflows dispatched in one tick.
+- `validationConcurrency` — maximum concurrent validation runs once the approved queue reaches the watermark.
+- `validationConcurrencyQueueWatermark` — approved queue depth that turns on concurrent validation.
+- `smGuestTransplant` — guest-transplant settings (disabled on GitLab).
+- `scm` — forge selection (`{ "provider": "gitlab" }`), read by `js/smAgent.js`.
+- `rules` — GitLab issue and merge-request rules processed by `js/smAgent.js`.
 
 _Human doc: [`agents/docs/agents/sm_gitlab.md`](agents/docs/agents/sm_gitlab.md)_
 
