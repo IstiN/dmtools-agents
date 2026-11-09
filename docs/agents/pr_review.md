@@ -23,3 +23,18 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `onApproved` — action to run when the review approves (e.g. trigger merge).
 - `projectKey` — tracker project key override.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
+
+## Review policy: `reviewPolicy.verification` (gh-1403)
+
+Set in the project `.dmtools/config.js` (e.g. `reviewPolicy: { verification: 'filter' }`); jobParams `reviewPolicy` overrides per run. The resolved table stamped into `review_policy.md` documents the active value.
+
+- `none` (default) — findings post exactly as the review leg raised them. No extra cost, no extra risk.
+- `filter` — a second, FRESH-context CLI pass re-verifies each file-referenced finding against the actual PR diff before it is posted, and rewrites the review:
+  - `demote` — a still-valid finding loses its tier (no longer gates approval), its body is kept and prefixed with the machine-parsed provenance marker `dmtools:demoted-from-BLOCKING` / `dmtools:demoted-from-IMPORTANT`, the thread is resolved.
+  - `drop` — a non-finding is removed, its thread resolved.
+  - `keep` (default) — the finding posts unchanged. Round-none tiers (🪶 under the default preset) never enter the filter.
+  - Anti-over-suppression guard: when every candidate of a run is dropped/demoted and kept ≪ candidates, a ⚠️ warning is stamped into the review summary — a miscalibrated filter must not silently erase real findings.
+
+Pair `filter` with the `AI_REVIEW_FILTER_MODEL` env var in `scripts/run-agent.sh` deployments so the verification pass runs a different model than the finder (guarding anchoring/self-preference); providers without a model knob run the filter on the same model.
+
+**Trial opt-in** (gh-1403): this repository itself opts in via `.dmtools/config.js`; the trial bar is fewer rework laps per PR AND higher precision AND ≈ 0 wrongly-dropped findings. Revert to `none` if the trial fails.

@@ -4112,6 +4112,16 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         assert.equal(writes.length, 0, 'no files written');
     });
 
+    test('filterDiffPathOf — inputFolderPath wins; fallback is the input/<ticketKey> layout', function() {
+        var loaded = loadFilterRunner({}, [], null);
+        assert.equal(loaded.mod.filterDiffPathOf({ inputFolderPath: 'input/TS-42' }, 'TS-42'),
+            'input/TS-42/pr_diff.txt', 'dispatched input folder used as-is');
+        assert.equal(loaded.mod.filterDiffPathOf({}, 'TS-42'),
+            'input/TS-42/pr_diff.txt', 'ticketKey fallback matches the review prompt layout');
+        assert.equal(loaded.mod.filterDiffPathOf({ inputFolderPath: 'input/pr-1940' }, null),
+            'input/pr-1940/pr_diff.txt', 'PR-anchored folder key works without a ticketKey');
+    });
+
     test('applyReviewFilter with zero candidates skips the CLI (no cost round)', function() {
         var writes = [];
         var loaded = loadFilterRunner({}, writes, null);

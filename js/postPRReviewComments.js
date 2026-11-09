@@ -1121,9 +1121,12 @@ function verificationEnabledOf(policy) {
     return !!policy && policy.verification === 'filter';
 }
 
-function filterDiffPathOf(params) {
+function filterDiffPathOf(params, ticketKey) {
+    // The review leg's diff — params.inputFolderPath when the dispatch
+    // carries it, else the established input/<ticketKey> layout the review
+    // prompt itself names (line ~268).
     var folder = params && params.inputFolderPath;
-    return (folder ? folder : 'input') + '/pr_diff.txt';
+    return (folder ? folder : 'input/' + String(ticketKey || '')) + '/pr_diff.txt';
 }
 
 function filterCliCommandOf() {
@@ -2794,7 +2797,7 @@ function action(params) {
         // candidate BEFORE posting; drops become digest lines, demotes tier
         // downgrades, the census is recomputed after filtering. Non-fatal:
         // any filter failure degrades to the unfiltered review.
-        var filterOutcome = applyReviewFilter(reviewData, ctx, filterDiffPathOf(params));
+        var filterOutcome = applyReviewFilter(reviewData, ctx, filterDiffPathOf(params, ctx.ticketKey));
 
         console.log('Review recommendation:', reviewData.recommendation);
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
