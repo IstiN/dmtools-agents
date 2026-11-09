@@ -1,0 +1,277 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-09T13:19:58.977Z",
+  "ticketKey": "gh-1403",
+  "headSha": "1c9777d254665af29b1930eacd2c84d43dea53bd",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:804b5ba1c52c5bbb",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:7dac304e6fcc546c",
+      "size": 34548
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:ccb3e5e97c0050b6",
+      "size": 7212
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:c371f713c278aef0",
+      "size": 4794
+    },
+    "request.md": {
+      "hash": "fnv1a64:737f81e858a25613",
+      "size": 5942
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:5fafdb4c1c158a34",
+      "size": 1514
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:b35035d1cd83b4e3",
+      "size": 963
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:ea58fe6dc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:b05a0c65021d63ff",
+      "size": 6054
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:737f81e858a25613",
+      "size": 5942
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs61Q7UP",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postPRReviewComments.js:1243",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the demote provenance note misses two tolerated input shapes — the note is lost, or the posted thread is corrupted**\n\nThe demote path delivers its provenance note through two mechanisms, and both have gaps against the input shapes the poster explicitly tolerates (\"Accept both spec formats: old spec `{ file, comment }`, agent output `{ path, body }\"` — `postInlineComment`). Verified against this branch's code with a live reproduction (`reviewFilter.applyFilterVerdicts` + the exported `isCommentFilePath`):\n\n**Shape A — body-as-path hybrid → corrupted posted thread.** `stampDemotionBody` (js/common/reviewFilter.js:341-345) appends the note to `entry.body` whenever it is a non-empty string. For the shape `resolveInlineComment` exists for — `body` holding the comment-file *path* — the append turns the path into `outputs/pr_review_comments/c1.md\\n---\\n⚠️ **Severity demoted: …**`. At post time `isCommentFilePath` no longer matches (the string now contains a newline), so the poster publishes the **literal path + note instead of the claim content** — the finding's substance disappears from the thread. Reproduced:\n\n```javascript\nbody before: \"outputs/pr_review_comments/c1.md\"\nbody after demote: \"outputs/pr_review_comments/c1.md\\n---\\n⚠️ **Severity demoted: review-filter demotion (gh-1403)** — fresh-context verification: overstated\"\nisCommentFilePath(body after) → false  // poster posts it literally\n```\n\n`stampOneDemotion` then also appends the note to the comment file — double provenance, and the posted text still never shows the claim.\n\n**Shape B — old-spec `{file, comment}` → note silently missing.** `filterCandidateOf` reads `c.path || c.file || ''` (js/common/reviewFilter.js:126), so the candidate carries `path: 'a.js'`, but the stamp targeting compares `entry.path` only (`isStampTarget`, js/postPRReviewComments.js:1243-1246): `entry.path` is `undefined` for old-spec entries → no match → the demotion note never lands in the comment file. The structured severity *is* downgraded (the machine-stamped severity line is correct), but the documented contract — \"its body is kept and prefixed with the machine-parsed provenance marker\" (docs/agents/pr_review.md:34) — silently doesn't hold, and the gh-1332 registry loses the demotion marker it cuts claims at.\n\nNot reachable under the merge-time default `verification: 'none'`; reachable once #1408 flips the knob. Same reachability profile as the F3 fix from the last lap.\n\n**Suggestion**: make the demote-note delivery shape-aware — (1) in `stampDemotionBody`, skip bodies that pass `isCommentFilePath` (let `stampOneDemotion` stamp the file, or resolve the file content into `body` first); (2) in `isStampTarget`, compare `(entry.path || entry.file)` against `stamp.path`. Pin both with tests using the two tolerated shapes."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61Q7YR",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "docs/agents/pr_review.md:39",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the docs' \"Trial opt-in\" line reads as already-active, but the merge deliberately ships blockless**\n\ndocs/agents/pr_review.md:39 (and the regenerated copy) states:\n\n> **Trial opt-in** (gh-1403): this repository itself opts in via `.dmtools/config.js`; …\n\nAt the merge commit this is not true — `.dmtools/config.js` deliberately carries **no** `reviewPolicy` block (the block, even with `'none'`, crashes pre-gh-1403 packs at leg setup; the opt-in lands via #1408, as this PR's own config comment at `.dmtools/config.js:6-10` explains). A reader of the docs alone would conclude `verification: 'filter'` is live in this repo today, and any trial conclusion drawn from the docs before #1408 lands would compare against a filter that never ran.\n\n**Suggestion**: phase the sentence — e.g. \"this repository opts in via `.dmtools/config.js` in #1408 (post-merge, once a pack release cut from post-gh-1403 main is out; the knob ships blockless until then)\". The generated copy rides along via `node js/agentDocGenerator.js` (verified in-sync today)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61Q7aw",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/reviewFilter.js:95",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: the prose severity-head strip also eats a legitimate first line that merely opens with a tier word + colon**\n\n`PROSE_SEVERITY_HEAD_RE` (js/common/reviewFilter.js:95-102) strips the whole first line when it heads with a tier word, colon required — the right call for the few-shots headers (`🚨 **BLOCKING: SQL Injection**`). But a claim that legitimately *opens* with a tier word as prose loses that line from the filter input. Reproduced with the exported strip:\n\n```javascript\nstripProseSeverityHead('Important: reconsider the API shape\\nbody here') → 'body here'\nstripProseSeverityHead('nit: rename\\nbody')                              → 'body'\n```\n\nDamage is bounded and fail-safe: the strip only affects `pr_review_filter_input.json` (the posted thread is untouched), and the claim body below survives — but the filter verifies with one line less context on exactly the claims that open with an emphatic \"Important: …\". Residual of the F4 fix; acceptable to accept — if so, pin the accepted trade-off with a control test next to the existing mid-claim control (`a tier word mid-claim is data`), so the ambiguity stays a documented decision rather than an accident."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61Q7dO",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postPRReviewComments.js:2918",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: `filterDiffPathOf` runs its input-folder probes on every review leg, even when the filter is disabled**\n\n`action()` evaluates the diff path eagerly as an argument:\n\n```javascript\nvar filterOutcome = applyReviewFilter(reviewData, ctx, filterDiffPathOf(params, ctx.ticketKey));\n```\n\n`filterDiffPathOf` performs up to 3 `pr_diff.txt` existence reads (one per input-folder candidate) before `applyReviewFilter` is entered — and `applyReviewFilter` returns immediately when `verification` is `'none'`, the merge-time default for this repo and every deployed pack until #1408 flips. The probes are harmless (fail-open reads) but are wasted I/O on the hot path of every review leg across all deployments.\n\n**Suggestion**: move the `filterDiffPathOf(params, ctx.ticketKey)` evaluation inside `applyReviewFilter` (after the `verificationEnabledOf` / zero-candidates early returns), or guard the call site on `verificationEnabledOf(ctx.reviewPolicy)`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:503c1998",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: `filterDiffPathOf` runs its input-folder probes on every review leg, even when the filter is disabled**\n\n`action()` evaluates the diff path eagerly as an argument:\n\n```javascript\nvar filterOutcome = applyReviewFilter(reviewData, ctx, filterDiffPathOf(params, ctx.ticketKey));\n```\n\n`filterDiffPathOf` performs up to 3 `pr_diff.txt` existence reads (one per input-folder candidate) before `applyReviewFilter` is entered — and `applyReviewFilter` returns immediately when `verification` is `'none'`, the merge-time default for this repo and every deployed pack until #1408 flips. The probes are harmless (fail-open reads) but are wasted I/O on the hot path of every review leg across all deployments.\n\n**Suggestion**: move the `filterDiffPathOf(params, ctx.ticketKey)` evaluation inside `applyReviewFilter` (after the `verificationEnabledOf` / zero-candidates early returns), or guard the call site on `verificationEnabledOf(ctx.reviewPolicy)`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:01e2183d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `stampOneDemotion` writes to `entry.comment` without the path-shape guard every other model-written file reference applies**\n\n```javascript\nfunction stampOneDemotion(entry, stamp, ctx) {\n    entry.__filterNoted = true;\n    if (!entry.comment) return;\n    var content = readMarkdownFile(entry.comment, ctx.ticketKey, ctx.workingDir);\n    if (content) {\n        writeFilterArtifact(entry.comment, content.replace(/\\s*$/, '') + '\\n' + stamp.note + '\\n');\n    }\n}\n```\n\n`entry.comment` comes from the review agent's `outputs/pr_review.json` — a model-written field. This file already treats model-written file references as untrusted input:\n\n- `resolveCommentFileReference` (line 222) gates reads behind `/^(outputs\\/)?(pr_review_comments\\/)?[\\w.\\-]+\\.md$/`.\n- `filterPathOfGeneralComment` (line ~1150, this PR) applies the same regex before `appendDroppedSection` writes.\n\nThe demote stamp is the one new write path that skips the guard. The `if (content)` read-before-write narrows the blast radius (the target must have been readable), but a malformed/hallucinated `comment` value still lets a demote **append to (i.e. modify) any readable file relative to the runtime cwd** — e.g. a repo source file or a workflow YAML — instead of the intended `outputs/pr_review_comments/*.md`. gh-1350 was introduced for exactly this class (\"observed in production\": model-written shapes going wrong).\n\n**Suggestion**: reuse the `resolveCommentFileReference`-style regex here (or extract it into a shared `isCommentFilePath(value)` helper and apply it to both call sites) so every model-written path write is guarded identically."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:f47dc557",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: a model-emitted `BLOCK` token survives the filter — a fully-filtered review can still post `BLOCK` with a zero blocking census**\n\nThe new leg allows `drop`/`demote` on **BLOCKING** candidates (rework tier → filterable), and the census is correctly recomputed post-filter. But the verdict re-derivation does not fully follow:\n\n1. The review leg emits `recommendation: 'BLOCK'` (security/data-loss token) plus its supporting BLOCKING finding(s).\n2. The filter drops all rework-tier candidates → `recomputeCensus` yields `blocking: 0` (dropped candidates become digest lines) — the posted evidence no longer contains any blocking thread.\n3. `machineApprovalDecision` (js/common/reviewPolicy.js:427-429) short-circuits: `if (raw === 'BLOCK') return { approved: false, verdict: 'BLOCK', reason: 'model BLOCK (security/data-loss) stands' }` — the pre-filter token outranks the post-filter census.\n4. `censusCrossCheckOverride` only corrects the **APPROVE** direction (posted BLOCKING severity + approving verdict), so nothing reconciles a non-approve verdict against a clean census.\n\nResult: the PR is posted as `BLOCK` with `issueCounts.blocking = 0` and no blocking thread on it, and a rework lap is armed for findings the machine itself just declared non-findings — the exact wasted-lap cost gh-1403 exists to remove.\n\nNot reachable under the merge-time default `verification: 'none'`; reachable once #1408 flips the knob.\n\n**Suggestion**: when the filter applied changes and the post-filter census has no rework-tier threads left, treat a surviving `BLOCK`/`REQUEST_CHANGES` token as advisory the same way gh-1351 treats an `APPROVE` token (log the reconciliation; the machine verdict follows the census). Alternatively, exclude BLOCKING candidates from filterable tiers if \"model BLOCK always stands\" is the intended invariant — but then the docs should say so, since the PR description states drops apply to \"each rework/polish-tier finding\" with no BLOCKING carve-out."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:c4344166",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the anchoring guard leaks the finder's severity in its common prose form**\n\n`claimOf` strips only the canonical machine-stamped head:\n\n```javascript\nreturn reviewVerdicts.stripLeadingSeverityLine(String(claim || ''));\n```\n\n`MACHINE_SEVERITY_LINE_HEAD_RE` matches `[tier-emoji] severity: BLOCKING —`-style heads. But the review agents author comment files per the output rules/few-shots format — `[tier-emoji] **BLOCKING: SQL Injection**` — a prose severity header the regex does **not** strip. That header survives into `pr_review_filter_input.json`, so in the common case the filter still sees the finder's severity classification — the anchor the ByteDance ReviewFilter pattern (and the PR description: \"the finder's severity line is stripped … and never enters the filter input or prompt\") is meant to remove.\n\nThe damage is bounded (demote targets still must rank strictly below the structured tier, and every drop needs a reason), so this is guard-effectiveness, not correctness. Consider also scrubbing the prose form — e.g. a leading `emoji + **TIER:` head via `TIER_EMOJI`/tier-word matching, or reuse `EXPLICIT_SEVERITY_RE`'s vocabulary for a head-of-claim strip — and pinning it with a test that uses the few-shots body shape (`[tier-emoji] **BLOCKING: ...**`), not only the canonical `severity: X` line."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:3e472589",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: docs overstate the anti-over-suppression guard relative to the code**\n\ndocs/agents/pr_review.md:36 (and its generated copy) says the warning fires *\"when every candidate of a run is dropped/demoted and kept ≪ candidates\"*, but the implementation only fires at **100% drops**:\n\n```javascript\nif (stats.dropped < stats.candidates) return null;\n```\n\nA round that demotes **all** candidates (e.g. 4/4 demoted, 0 dropped) never warns — yet per the docs' wording it should, and \"all demoted\" is precisely a miscalibration signal too (the finder's tiers were systematically wrong). Either align the docs with the implemented drop-rate-100% trigger (the PR description's own wording), or extend `buildOverSuppressionWarning` to fire when `dropped + demoted === candidates`. If you take the latter, note a fully-demoted round still flips every gated finding to non-gating, which is worth the same \"silence is not precision\" scrutiny as a full drop round."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:309e5094",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: `run_all.json` — wholesale alphabetical re-sort buries a one-entry addition**\n\n419 of this PR's 2,346 added lines are the `testFiles` list in `js/unit-tests/run_all.json` being re-sorted (the functional change is one added line: `test_reviewFilter.js`; nothing was dropped — verified old vs new: 246 → 247 entries). The sort is a nice normalization for future diffs, but inside this already-large PR it inflates the review surface and obscures the actual change. If intentional, fine — a dedicated `chore:` commit would have kept this PR's diff focused; if incidental (editor/tool auto-format), worth reverting or splitting in future PRs."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:1d02b757",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "**Fixed.** `filterDiffPathOf` no longer guesses the layout from the raw key — it now walks the established `ticketKeyShapes.inputFolderCandidates(inputFolderPath, ticketKey)` chain and probes for the first candidate that actually holds `pr_diff.txt` (the `readTicketClaimSource` pattern), falling back to naming the first candidate when no candidate holds the file (fail-open, the same degradation class as every other filter failure).\n\n- `js/postPRReviewComments.js` — `filterDiffPathOf` now: (1) unwraps the `jobParams`-wrapped params shape the way `linkedIssuesReport.resolveInputContext` does, (2) probes each candidate (`params.inputFolderPath` → Java-derived `input/<inputFolderNameFor(key)>` → legacy `input/<ticketKey>`) with a `file_read` existence check, (3) returns the first hit. A composite key `owner/repo#1407` now resolves `input/gh-1407/pr_diff.txt`; a sanitized key resolves its derived folder.\n- Pinned test updated as the finding requested: `js/unit-tests/test_postPRReviewComments.js` — \"filterDiffPathOf — inputFolderPath wins when it holds the diff (inputFolderCandidates chain)\" plus new regression tests: composite key resolves through `inputFolderNameFor`, sanitized key, `jobParams` unwrap, and the fail-open fallback.\n- Verified: `dmtools run js/unit-tests/run_postPRReviewComments.json` — 194 passed, 0 failed (full `run_all` green on the rework head).\n\nFixed in commit `1c9777d25`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:1c434dd6",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "**Fixed.** The demote stamp no longer writes to `entry.comment` unguarded — the model-written path now passes through the same shape guard every other model-written file reference in this module applies.\n\n- `js/postPRReviewComments.js` — extracted the shared guard `isCommentFilePath(value)` (the exact `^(outputs\\/)?(pr_review_comments\\/)?[\\w.\\-]+\\.md$` shape `resolveCommentFileReference` used inline) and applied it to **all three** call sites: `resolveCommentFileReference` (read), `filterPathOfGeneralComment` (write), and now `stampOneDemotion` (write). A hallucinated/nested/foreign `comment` value (`docs/agents/pr_review.md`, `sub/dir/note.md`, `.github/workflows/ci.yml`) can no longer be read-then-appended by the demote stamp — the stamp is skipped and the demote still applies to the structured severity.\n- Regression tests (`js/unit-tests/test_postPRReviewComments.js`): \"stampOneDemotion — a non-comment-file path is never written (gh-1350 class guard)\" — a demote on an entry whose `comment` points at a readable repo doc writes nothing; and \"stampOneDemotion — hostile model-written shapes are refused\" (nested dir, workflow YAML). Both reproduce the reported shape against the pre-fix code (verified RED before the fix).\n- Verified: `dmtools run js/unit-tests/run_postPRReviewComments.json` — 194 passed, 0 failed (full `run_all` green on the rework head).\n\nFixed in commit `1c9777d25`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:13f6a32e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "**Fixed** (your first suggested option — reconcile, no BLOCKING carve-out). A surviving `BLOCK`/`REQUEST_CHANGES` token is now advisory when the filter applied changes and the post-filter census gates nothing: the machine verdict follows the census, exactly the way gh-1351 treats an `APPROVE` token.\n\n- `js/postPRReviewComments.js` — new `reconcileFilterTokenWithCensus(machine, filterOutcome, issueCounts, policy)`, applied in `action()` right after `machineApprovalFromCensus`: when `filterOutcome` exists (the filter leg applied ≥ 1 verdict) and `reviewPolicyModule.hasBlockingOrImportant(...)` is false, a non-approve machine verdict is replaced by `{ approved: true, verdict: 'APPROVE', recomputed: true }` — which flows through the existing `buildMachineVerdictLog` line, so the reconciliation is logged (`advisory BLOCK → effective APPROVE — filter applied (gh-1403): post-filter census has no rework-tier threads`).\n- The invariants you called out are preserved and pinned by tests: **without an applied filter, `BLOCK` stands untouched** (`machineApprovalDecision`'s short-circuit is not overridden — \"action() — a BLOCK token stands when no filter ran (verification none keeps the invariant)\"), and **a filter round that leaves a BLOCKING thread posted keeps the non-approve verdict** (\"action() — a BLOCK token stands when the post-filter census still gates\"). The wasted-lap scenario you described (BLOCK + `issueCounts.blocking = 0` + zero blocking threads → rework lap armed) now resolves to APPROVE with the digest lines still listing every drop.\n- Tests: `js/unit-tests/test_postPRReviewComments.js` — 3 new action()-level tests (RED-verified against the pre-fix code). Full `run_all` green on the rework head.\n\nFixed in commit `1c9777d25`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:323b3c39",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "**Fixed.** The anchoring guard now also strips the prose severity header form.\n\n- `js/common/reviewFilter.js` — `claimOf` applies a second strip after `reviewVerdicts.stripLeadingSeverityLine`: `stripProseSeverityHead` removes the first line when it heads with a tier word (`BLOCKING|IMPORTANT|SUGGESTION|NIT`, case-insensitive — the `EXPLICIT_SEVERITY_RE` vocabulary), with the tier emoji and `**` bold markers optional and a colon required: the exact few-shots shape `🚨 **BLOCKING: SQL Injection**` and its unembellished `**BLOCKING: …**` variant. The whole header line (title included) drops — that line is severity classification; the claim's substance starts below it. Head-of-claim only: a tier word further down the claim (\"this helper is important for the parser contract\") is data, not protocol, and is pinned untouched by test.\n- Pinned with the few-shots body shape as requested: `js/unit-tests/test_reviewFilter.js` — \"the claim is severity-stripped in the few-shots prose form too (🚨 **BLOCKING: title**)\" (RED-verified against the pre-fix code) plus a per-tier-words sweep and the mid-claim control. `pr_review_filter_input.json` no longer carries the finder's classification in either form.\n- Verified: `dmtools run js/unit-tests/run_reviewFilter.json` — 50 passed, 0 failed (full `run_all` green on the rework head).\n\nFixed in commit `1c9777d25`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:939e4656",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "**Fixed** (your second option — the code now matches the docs, not the other way around). `buildOverSuppressionWarning` fires whenever every candidate of a round was suppressed with **nothing kept** — `dropped + demoted === candidates` — so a fully-demoted round (4/4 demoted, 0 dropped) warns exactly like a full-drop round.\n\n- `js/common/reviewFilter.js` — the trigger moved from `stats.dropped < stats.candidates → null` to: `kept > 0 → null`, then `demoted + dropped < candidates → null`. The warning message now names both counts (\"N/M dropped, K demoted — every candidate of the run was suppressed (0 kept)\"), and the module header + `docs/agents/pr_review.md` were aligned with the implemented trigger (the generated copy `docs/agents/generated/pr_review.md` regenerated via `node js/agentDocGenerator.js`). Your caution is folded into both: a fully-demoted round flips every gated finding to non-gating, so it earns the same \"silence is not precision\" scrutiny — that is why it warns.\n- Tests (`js/unit-tests/test_reviewFilter.js`): all-demoted warns, mixed demote/drop with 0 kept warns, any round with ≥ 1 kept stays silent, full-drop still warns (existing pin unchanged). RED-verified against the pre-fix code.\n- Verified: `dmtools run js/unit-tests/run_reviewFilter.json` — 50 passed, 0 failed (full `run_all` green on the rework head).\n\nFixed in commit `1c9777d25`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:fa0cf4ae",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "**Intentional — kept.** The alphabetical re-sort of `js/unit-tests/run_all.json` was deliberate normalization, not editor noise: the file had drifted out of sort order over ~250 additive entries, and every future single-line suite addition would otherwise keep landing in arbitrary positions (and keep colliding in rebase). Nothing was dropped — the diff is one functional line (`test_reviewFilter.js`) plus ordering, exactly as your verification states (246 → 247 entries).\n\nAgreed on the process note: in a PR of this size the normalization belongs in its own `chore:` commit to keep the review surface focused. We'll do the split going forward rather than un-sorting here — reverting the sort now would re-churn 419 lines to buy back review surface this lap has already spent, and the entry count is mechanically pinned by the suite runner (a dropped entry fails `dmtools run js/unit-tests/run_all.json` immediately).\n\nNo code change in this lap; the observation stands for future PR hygiene."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:af76bbe7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the demote provenance note misses two tolerated input shapes — the note is lost, or the posted thread is corrupted**\n\nThe demote path delivers its provenance note through two mechanisms, and both have gaps against the input shapes the poster explicitly tolerates (\"Accept both spec formats: old spec `{ file, comment }`, agent output `{ path, body }\"` — `postInlineComment`). Verified against this branch's code with a live reproduction (`reviewFilter.applyFilterVerdicts` + the exported `isCommentFilePath`):\n\n**Shape A — body-as-path hybrid → corrupted posted thread.** `stampDemotionBody` (js/common/reviewFilter.js:341-345) appends the note to `entry.body` whenever it is a non-empty string. For the shape `resolveInlineComment` exists for — `body` holding the comment-file *path* — the append turns the path into `outputs/pr_review_comments/c1.md\\n---\\n⚠️ **Severity demoted: …**`. At post time `isCommentFilePath` no longer matches (the string now contains a newline), so the poster publishes the **literal path + note instead of the claim content** — the finding's substance disappears from the thread. Reproduced:\n\n```javascript\nbody before: \"outputs/pr_review_comments/c1.md\"\nbody after demote: \"outputs/pr_review_comments/c1.md\\n---\\n⚠️ **Severity demoted: review-filter demotion (gh-1403)** — fresh-context verification: overstated\"\nisCommentFilePath(body after) → false  // poster posts it literally\n```\n\n`stampOneDemotion` then also appends the note to the comment file — double provenance, and the posted text still never shows the claim.\n\n**Shape B — old-spec `{file, comment}` → note silently missing.** `filterCandidateOf` reads `c.path || c.file || ''` (js/common/reviewFilter.js:126), so the candidate carries `path: 'a.js'`, but the stamp targeting compares `entry.path` only (`isStampTarget`, js/postPRReviewComments.js:1243-1246): `entry.path` is `undefined` for old-spec entries → no match → the demotion note never lands in the comment file. The structured severity *is* downgraded (the machine-stamped severity line is correct), but the documented contract — \"its body is kept and prefixed with the machine-parsed provenance marker\" (docs/agents/pr_review.md:34) — silently doesn't hold, and the gh-1332 registry loses the demotion marker it cuts claims at.\n\nNot reachable under the merge-time default `verification: 'none'`; reachable once #1408 flips the knob. Same reachability profile as the F3 fix from the last lap.\n\n**Suggestion**: make the demote-note delivery shape-aware — (1) in `stampDemotionBody`, skip bodies that pass `isCommentFilePath` (let `stampOneDemotion` stamp the file, or resolve the file content into `body` first); (2) in `isStampTarget`, compare `(entry.path || entry.file)` against `stamp.path`. Pin both with tests using the two tolerated shapes."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:7249ee37",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the docs' \"Trial opt-in\" line reads as already-active, but the merge deliberately ships blockless**\n\ndocs/agents/pr_review.md:39 (and the regenerated copy) states:\n\n> **Trial opt-in** (gh-1403): this repository itself opts in via `.dmtools/config.js`; …\n\nAt the merge commit this is not true — `.dmtools/config.js` deliberately carries **no** `reviewPolicy` block (the block, even with `'none'`, crashes pre-gh-1403 packs at leg setup; the opt-in lands via #1408, as this PR's own config comment at `.dmtools/config.js:6-10` explains). A reader of the docs alone would conclude `verification: 'filter'` is live in this repo today, and any trial conclusion drawn from the docs before #1408 lands would compare against a filter that never ran.\n\n**Suggestion**: phase the sentence — e.g. \"this repository opts in via `.dmtools/config.js` in #1408 (post-merge, once a pack release cut from post-gh-1403 main is out; the knob ships blockless until then)\". The generated copy rides along via `node js/agentDocGenerator.js` (verified in-sync today)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:f5ada10c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🪶 severity: NIT —\n🪶 **NIT: the prose severity-head strip also eats a legitimate first line that merely opens with a tier word + colon**\n\n`PROSE_SEVERITY_HEAD_RE` (js/common/reviewFilter.js:95-102) strips the whole first line when it heads with a tier word, colon required — the right call for the few-shots headers (`🚨 **BLOCKING: SQL Injection**`). But a claim that legitimately *opens* with a tier word as prose loses that line from the filter input. Reproduced with the exported strip:\n\n```javascript\nstripProseSeverityHead('Important: reconsider the API shape\\nbody here') → 'body here'\nstripProseSeverityHead('nit: rename\\nbody')                              → 'body'\n```\n\nDamage is bounded and fail-safe: the strip only affects `pr_review_filter_input.json` (the posted thread is untouched), and the claim body below survives — but the filter verifies with one line less context on exactly the claims that open with an emphatic \"Important: …\". Residual of the F4 fix; acceptable to accept — if so, pin the accepted trade-off with a control test next to the existing mid-claim control (`a tier word mid-claim is data`), so the ambiguity stays a documented decision rather than an accident."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:f18cf60d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `filterDiffPathOf` bypasses `ticketKeyShapes.inputFolderCandidates` — the filter prompt can name a diff path that does not exist**\n\nThis module's own import comment (js/postPRReviewComments.js:56-57) states: *\"the Java runtime passes `params.inputFolderPath` to pre-CLI actions only, so a post-action derives it.\"* This leg runs in the **post-action**, so in production the dispatch folder is typically absent and the fallback rides the legacy `input/<ticketKey>` layout:\n\n```javascript\nfunction filterDiffPathOf(params, ticketKey) {\n    var folder = params && params.inputFolderPath;\n    return (folder ? folder : 'input/' + String(ticketKey || '')) + '/pr_diff.txt';\n}\n```\n\nThe codebase already solved exactly this problem — `ticketKeyShapes.inputFolderCandidates(explicit, key)` (used by `readTicketClaimSource` at line 2008 and `readPRInfoMarkdown` in this same file) — because the runtime folder name is `input/<inputFolderNameFor(key)>`, not the raw key:\n\n- For a composite GitHub key `owner/repo#1407`, `inputFolderNameFor` derives `gh-1407`, so the diff lives at `input/gh-1407/pr_diff.txt` while this prompt names `input/owner/repo#1407/pr_diff.txt` (raw `/` and `#` in the path).\n- For keys needing sanitization (`inputFolderNameFor` replaces non-`[\\w.-]` chars), the raw-key fallback breaks the same way.\n\nBecause the failure mode is fail-open, nothing crashes — the filter agent just cannot read the named diff and verifies against degraded (or zero) context, silently. That defeats the precision purpose of the leg on exactly the key shapes where the machine loop operates.\n\n**Suggestion**: derive the diff path from `ticketKeyShapes.inputFolderCandidates(inputFolderPath, ticketKey)` and probe for the first candidate that holds `pr_diff.txt` (the `readTicketClaimSource` pattern). Note `filterDiffPathOf`'s current fallback is pinned by a unit test (\"filterDiffPathOf — inputFolderPath wins; fallback is the input/<ticketKey> layout\"), so the fix updates that test too. Also consider unwrapping the `jobParams`-wrapped params shape the way `linkedIssuesReport.js:17` does."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:bbbfc4cf",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: gh-1403 adds the `reviewPolicy.verification: none | filter` leg cleanly — fail-open wiring, hoisted requires, and strong tests (40/74/185 pass locally, pack-require pin green) — but three IMPORTANT issues need fixing before merge: the filter prompt's diff path bypasses the established `ticketKeyShapes.inputFolderCandidates` derivation (broken diff path on composite/unsanitized key shapes → silently degraded verification), the demote file-stamp writes to the model-written `entry.comment` path without the guard every other model-written file reference applies, and a surviving `BLOCK` token can post a BLOCK verdict with a post-filter zero blocking census.\n\n**Key Issues**:\n- 🚨 Blocking: 0\n- ⚠️ Important: 3 — diff-path derivation (postPRReviewComments.js:1124), unguarded `entry.comment` write (postPRReviewComments.js:1238), `BLOCK` token survives filter (postPRReviewComments.js:1337)\n- 💡 Suggestions: 2 — anchoring guard leaks prose severity (`reviewFilter.js:94`), docs overstate the over-suppression trigger (docs/agents/pr_review.md:36)\n- 🪶 Nits: 1 — `run_all.json` wholesale re-sort buries a one-entry addition\n- 📋 Digest: 3 — `buildDroppedDigestLine` renders `path:undefined` when a candidate has no line (`reviewFilter.js:440`); `buildFilterStampLine` under-accounts when the verdict file is incomplete (candidates 4 → kept 2, remainder invisible, `reviewFilter.js:521`); PR description \"How to verify\" counts stale (31/31/180 vs actual 40/74/185)\n\n**Next Steps**:\n1. Derive the filter diff path via `ticketKeyShapes.inputFolderCandidates` + existence probe; update the pinning test\n2. Guard the `stampOneDemotion` write path with the `resolveCommentFileReference`-style regex\n3. Reconcile a surviving `BLOCK`/`REQUEST_CHANGES` token against a clean post-filter census (or document a BLOCKING carve-out from the filter)\n4. Address the two suggestions; trial opt-in sequencing itself (`.dmtools/config.js` carries no `reviewPolicy` at merge) verified correct"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-09:bb75f7b0",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-09",
+      "updatedAt": "2026-11-09",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The rework lap landed cleanly — all three previous IMPORTANT findings (diff-path derivation, unguarded demote write, BLOCK-token reconciliation) and both suggestions are fixed with pinned regression tests, and the full suite is green (9178 passed, 0 failed). One new IMPORTANT remains: the demote provenance note corrupts the posted thread for body-as-path entries and silently skips old-spec `{file, comment}` entries (verified by reproduction).\n\n**Key Issues**:\n- 🚨 Blocking: 0\n- ⚠️ Important: 1 — demote-note delivery misses tolerated input shapes (postPRReviewComments.js:1243, reviewFilter.js:341)\n- 💡 Suggestions: 1 — docs' \"Trial opt-in\" line reads as already-active while the merge ships blockless (docs/agents/pr_review.md:39)\n- 🪶 Nits: 2 — prose severity-strip eats a legitimate \"Important: …\" first line (reviewFilter.js:95); `filterDiffPathOf` probes run on every leg even when verification is off (postPRReviewComments.js:2918)\n- 📋 Digest: 1 — PR description \"How to verify\" counts still stale (says 31/31/180; actual 50/74/194, verified by running all three suites)\n\n**Next Steps**:\n1. Make the demote-note delivery shape-aware: skip body-as-path bodies in `stampDemotionBody`; compare `(entry.path || entry.file)` in `isStampTarget`; pin both shapes with tests\n2. Phase the docs' trial opt-in wording (opt-in lands via #1408, not at merge)\n3. Optionally: lazy diff-path probes + a control test for the prose-strip trade-off\n4. Registry answered: F1–F5 fixed (hunks cited), F6 withdrawn (intentional normalization; re-verified mechanically 246 → 247 entries, nothing dropped)"
+    }
+  ]
+}
