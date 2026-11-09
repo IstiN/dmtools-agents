@@ -1,26 +1,4 @@
 {
-  "pr-1272": [
-    {
-      "leg": "review",
-      "at": "2026-10-26T15:30:06Z",
-      "prompt": 34403,
-      "completion": 8838,
-      "total": 43241,
-      "cacheRead": 886564,
-      "model": "kimi-for-coding"
-    }
-  ],
-  "pr-1273": [
-    {
-      "leg": "review",
-      "at": "2026-10-26T15:30:29Z",
-      "prompt": 19561,
-      "completion": 5981,
-      "total": 25542,
-      "cacheRead": 459812,
-      "model": "kimi-for-coding"
-    }
-  ],
   "pr-1274": [
     {
       "leg": "review",
@@ -1683,6 +1661,15 @@
       "completion": 30903,
       "total": 221867,
       "cacheRead": 5575168,
+      "model": "glm-5.3-flash"
+    },
+    {
+      "leg": "review",
+      "at": "2026-11-09T15:43:03Z",
+      "prompt": 97779,
+      "completion": 29230,
+      "total": 127009,
+      "cacheRead": 3274624,
       "model": "glm-5.3-flash"
     }
   ]
