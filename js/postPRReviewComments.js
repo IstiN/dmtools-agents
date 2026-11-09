@@ -44,6 +44,10 @@ var reviewPolicyModule = require('./common/reviewPolicy.js');
 // mechanically costs no extra agent work.
 var findingRegistry = require('./common/findingRegistry.js');
 var reviewSpecClaims = require('./common/reviewSpecClaims.js');
+// gh-1403 (hoisted, never lazy — the gh-823 pack-require rule): the
+// finding-filter leg — reviewPolicy.verification = filter re-verifies each
+// rework/polish-tier candidate in a fresh context before it posts.
+var reviewFilterModule = require('./common/reviewFilter.js');
 var reviewHelpers = require('./postStoryTestAutomationReviewHelpers.js');
 // gh-1369 (hoisted, never lazy — the gh-823 pack-require rule): the
 // terminal-PR guard — a MERGED/CLOSED PR never re-enters the rework loop
@@ -1095,7 +1099,192 @@ function stampVerdictRecord(scm, prNumber, headSha, isApproved, recommendation, 
                 ', head ' + String(headSha).substring(0, 7) + ')');
 }
 
-// ═══════════════ gh-1332 finding-identity registry ═══════════════
+// ═══════════════ gh-1403 review filter leg (verification: filter) ═══════════════
+//
+// Placement (gh-1403): AFTER the review leg produces outputs/pr_review.json,
+// BEFORE posting (this action's step 4). A fresh-context CLI run (the same
+// run-agent.sh wrapper, one extra review pass per round — the ByteDance
+// BitsAI-CR shape) verifies each rework/polish-tier candidate against the
+// diff hunks + the interaction neighborhood and returns
+// keep | demote(<tier>) | drop per candidate. Machine semantics: the census
+// is recomputed AFTER filtering; drop → digest-only line (visible, never a
+// thread); demote → tier downgrade. 💡-digest lines are not threads and
+// round-none tiers (🪶 under the default preset) never go through.
+// Fail-open end to end: any filter failure (CLI, missing/malformed verdict
+// file) logs and degrades to the unfiltered review — the filter can never
+// cost the leg its posting.
+
+var FILTER_PROMPT_FILE = 'outputs/.pr-review-filter-prompt.md';
+var FILTER_CLI_PREFIX = 'bash agents/scripts/run-agent.sh ';
+
+function verificationEnabledOf(policy) {
+    return !!policy && policy.verification === 'filter';
+}
+
+function filterDiffPathOf(params) {
+    var folder = params && params.inputFolderPath;
+    return (folder ? folder : 'input') + '/pr_diff.txt';
+}
+
+function filterCliCommandOf() {
+    return FILTER_CLI_PREFIX + FILTER_PROMPT_FILE;
+}
+
+/**
+ * The claim resolution injected into the pure candidate selection — the
+ * same body-or-comment-file resolution the poster uses.
+ */
+function filterClaimResolver(ctx) {
+    return function (inlineComment) {
+        return resolveInlineComment(inlineComment, ctx.ticketKey, ctx.workingDir);
+    };
+}
+
+function writeFilterArtifact(path, content) {
+    writeFile(path, content);
+}
+
+function runFilterCli(workingDir) {
+    var args = { command: filterCliCommandOf() };
+    if (workingDir) args.workingDirectory = workingDir;
+    try {
+        var out = cli_execute_command(args);
+        console.log('🧯 review filter CLI run completed: ' + String(out || '').substring(0, 300));
+        return true;
+    } catch (e) {
+        console.warn('🧯 review filter CLI failed (gh-1403 fail-open, running unfiltered): ' + (e.message || e));
+        return false;
+    }
+}
+
+function readFilterVerdictsRaw(ctx) {
+    try {
+        var review = outputFiles.readOutputFileDetailed(reviewFilterModule.OUTPUT_FILE, {
+            ticketKey: ctx.ticketKey,
+            workingDir: ctx.workingDir
+        });
+        return review && review.content ? review.content : null;
+    } catch (e) {
+        console.warn('🧯 review filter verdicts unreadable (gh-1403 fail-open, running unfiltered): ' + (e.message || e));
+        return null;
+    }
+}
+
+function filterPathOfGeneralComment(reviewData) {
+    var path = reviewData && typeof reviewData.generalComment === 'string' ? reviewData.generalComment.trim() : null;
+    if (!path || !/^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(path)) return null;
+    return path;
+}
+
+/**
+ * The anti-over-suppression listing (gh-1403): the dropped candidates are
+ * appended to the general comment file the generalComment field references
+ * — visible, one line each, never a thread. A non-file generalComment (or
+ * an unreadable file) skips the injection; the stats still log.
+ */
+function appendDroppedSection(reviewData, section, ctx) {
+    var path = filterPathOfGeneralComment(reviewData);
+    if (!path) return false;
+    var content = readMarkdownFile(path, ctx.ticketKey, ctx.workingDir);
+    if (!content) return false;
+    writeFilterArtifact(path, content.replace(/\s*$/, '') + '\n' + section + '\n');
+    return true;
+}
+
+/**
+ * A demote on a FILE-referenced comment stamps the demotion note into the
+ * comment file (inline bodies got theirs from the pure apply). Entries are
+ * consumed once so two demotes on one file cannot double-append.
+ */
+function stampDemotionNotesOnFiles(reviewData, applied, ctx) {
+    var inline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
+    var stamps = (applied || []).filter(function(a) { return a.decision === 'demote' && a.note; });
+    for (var i = 0; i < stamps.length; i++) {
+        var stamp = stamps[i];
+        for (var j = 0; j < inline.length; j++) {
+            var entry = inline[j] || {};
+            if (entry.__filterNoted || entry.path !== stamp.path || entry.line !== stamp.line) continue;
+            if (String(entry.severity || '').toUpperCase() !== stamp.to) continue;
+            entry.__filterNoted = true;
+            if (!entry.comment) break;
+            var content = readMarkdownFile(entry.comment, ctx.ticketKey, ctx.workingDir);
+            if (content) {
+                writeFilterArtifact(entry.comment, content.replace(/\s*$/, '') + '\n' + stamp.note + '\n');
+            }
+            break;
+        }
+    }
+    for (var k = 0; k < inline.length; k++) {
+        delete inline[k].__filterNoted;
+    }
+}
+
+function logFilterOutcome(stats, warning, notes) {
+    console.log('🧯 ' + reviewFilterModule.buildFilterStampLine(stats));
+    (notes || []).forEach(function(n) {
+        console.warn('🧯 review filter: ' + n);
+    });
+    if (warning) console.warn(warning);
+}
+
+/**
+ * The wired filter leg (gh-1403): select candidates → run the fresh-context
+ * CLI → apply verdicts → recompute the census → list drops in the general
+ * comment. Returns { stats, applied, dropped } or null (verification none,
+ * zero candidates, or any fail-open degradation — in every null case the
+ * review data posts exactly as the review leg raised it).
+ */
+function applyReviewFilter(reviewData, ctx, diffPath) {
+    try {
+        if (!verificationEnabledOf(ctx.reviewPolicy)) return null;
+        var candidates = reviewFilterModule.selectFilterCandidates(reviewData, ctx.reviewPolicy, filterClaimResolver(ctx));
+        if (candidates.length === 0) {
+            console.log('🧯 review filter (gh-1403): 0 candidates (no rework/polish-tier threads) — skipped');
+            return null;
+        }
+        writeFilterArtifact('outputs/' + reviewFilterModule.INPUT_FILE, reviewFilterModule.buildFilterInputJson(candidates));
+        writeFilterArtifact(FILTER_PROMPT_FILE, reviewFilterModule.buildFilterPrompt(diffPath));
+        if (!runFilterCli(ctx.workingDir)) return null;
+        var raw = readFilterVerdictsRaw(ctx);
+        if (!raw) {
+            console.warn('🧯 review filter: no verdicts file — running unfiltered (gh-1403 fail-open)');
+            return null;
+        }
+        var parsed = reviewFilterModule.parseFilterVerdicts(raw);
+        var result = reviewFilterModule.applyFilterVerdicts(reviewData, candidates, parsed.verdicts);
+        stampDemotionNotesOnFiles(reviewData, result.applied, ctx);
+        // gh-1403 machine semantics: the census is recomputed AFTER filtering;
+        // the gh-1351 verdict machinery then reads it unchanged.
+        reviewData.issueCounts = reviewFilterModule.recomputeCensus(reviewData, result.dropped.length);
+        var stats = reviewFilterModule.filterStats(candidates.length, result.applied);
+        var warning = reviewFilterModule.buildOverSuppressionWarning(stats);
+        logFilterOutcome(stats, warning, parsed.notes.concat(result.notes));
+        var section = reviewFilterModule.buildGeneralCommentInjection(stats, result.dropped);
+        if (section) appendDroppedSection(reviewData, section, ctx);
+        return { stats: stats, applied: result.applied, dropped: result.dropped, warning: warning };
+    } catch (e) {
+        console.warn('🧯 review filter failed (gh-1403 non-fatal, running unfiltered): ' + (e.message || e));
+        return null;
+    }
+}
+
+/**
+ * The filter stamp in the tracker review comment (gh-1403): one line per
+ * round, plus the misconfigured-filter warning when it fired. '' when the
+ * filter did not run.
+ */
+function filterStampSection(m, filterOutcome) {
+    if (!filterOutcome || !filterOutcome.stats) return '';
+    var line = m.h(3, 'Review Filter (gh-1403)') + '\n' +
+        reviewFilterModule.buildFilterStampLine(filterOutcome.stats);
+    if (filterOutcome.dropped && filterOutcome.dropped.length > 0) {
+        line += '\n' + reviewFilterModule.buildDroppedDigestLines(filterOutcome.dropped).join('\n');
+    }
+    if (filterOutcome.warning) line += '\n' + filterOutcome.warning;
+    return line + '\n\n';
+}
+
+
 //
 // The review-round dedup: this round's structured inlineComments already
 // carry path/severity/claim, so registering the round mechanically (marker

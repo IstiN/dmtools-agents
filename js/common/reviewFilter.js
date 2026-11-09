@@ -253,10 +253,19 @@ function applyFilterVerdicts(reviewData, candidates, verdicts) {
             }
             var idx = inlineIndexOf(reviewData, v.id);
             if (idx === -1) continue;
-            inline[idx].severity = v.tier;
+            var note = demotionNote(v.reason);
+            var entry = inline[idx];
+            entry.severity = v.tier;
+            // The posted body carries the provenance when the finding is
+            // inline; file-referenced findings get the note appended to
+            // their comment file by the runner (file writes stay out of
+            // this module).
+            if (typeof entry.body === 'string' && entry.body.trim()) {
+                entry.body = entry.body.replace(/\s*$/, '') + '\n' + note;
+            }
             applied.push({
                 id: v.id, decision: 'demote', from: candidate.severity, to: v.tier,
-                reason: v.reason, note: demotionNote(v.reason),
+                reason: v.reason, note: note,
                 path: candidate.path, line: candidate.line
             });
             continue;
