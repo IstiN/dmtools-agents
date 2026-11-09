@@ -187,6 +187,7 @@
         "js/unit-tests/test_mergeStateReconcile.js",
         "js/unit-tests/test_mutexRegistry.js",
         "js/unit-tests/test_smGithubSource.js",
+        "js/unit-tests/test_smGitlabSource.js",
         "js/unit-tests/test_mergeCadence.js",
         "js/unit-tests/test_conflictReworkScan.js",
         "js/unit-tests/test_reviewVerdict.js",

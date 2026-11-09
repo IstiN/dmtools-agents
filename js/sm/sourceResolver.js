@@ -2,7 +2,9 @@
  * Source resolver for the SM rule engine: picks the state source a rule
  * queries. The rule format stays sm.json-compatible — rules without a
  * `source` keep the classic Jira/JQL behavior; `source: 'github'` rules
- * read GitHub issue/PR state (see sources/githubSource.js).
+ * read GitHub issue/PR state (see sources/githubSource.js). `source:
+ * 'gitlab'` rules run the same forge-portable source against the GitLab
+ * SM provider (issue/MR state through gitlab_* bridge tools).
  */
 'use strict';
 
@@ -11,12 +13,13 @@ var githubSource = require('./sources/githubSource.js');
 
 var SOURCES = {
     jira: jiraSource,
-    github: githubSource
+    github: githubSource,
+    gitlab: githubSource
 };
 
 /**
  * Resolves the source module for a rule.
- * @param {Object} rule - SM rule (rule.source: 'jira' | 'github'; default jira)
+ * @param {Object} rule - SM rule (rule.source: 'jira' | 'github' | 'gitlab'; default jira)
  * @returns {Object} module with query(rule, ctx)
  */
 function resolve(rule) {

@@ -289,6 +289,10 @@ var tickWorkflowEscalations = null;
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
+// The forge the SM tick's probes and forge-sourced rules talk to: 'gitlab'
+// when jobParams.scm.provider or the project config selects it, else
+// 'github' (ado/other projects keep the historical github probes).
+var SM_FORGE = 'github';
 // gh-806: the rework in-flight latch, one map per tick — lazily loaded from
 // the previous factory-state snapshot, armed by this tick's rework arming
 // paths, ridden into the published snapshot. Null until the first latch
@@ -381,11 +385,54 @@ var STALE_NON_RUNNING_WORKFLOW_MS = 6 * 60 * 60 * 1000;
  * Otherwise falls back to the global projectConfig.
  */
 function loadRuleConfig(rule) {
-    if (!rule.configPath) return projectConfig;
-    var ruleConfig = configLoader.loadProjectConfig({ configPath: rule.configPath });
+    if (!rule.configPath) return applyRuleForge(projectConfig, rule);
+    var ruleConfig = applyJobParamsScm(configLoader.loadProjectConfig({ configPath: rule.configPath }), RUN_JOB_PARAMS);
     console.log('  🔧 Rule config: ' + rule.configPath +
         (ruleConfig.jira.project ? ' (project: ' + ruleConfig.jira.project + ')' : ''));
-    return ruleConfig;
+    return applyRuleForge(ruleConfig, rule);
+}
+
+// Shallow config copy with scm.provider pinned — never mutates the shared
+// project config object.
+function withScmProvider(config, provider) {
+    var cfg = {};
+    var src = config || {};
+    for (var k in src) {
+        if (Object.prototype.hasOwnProperty.call(src, k)) cfg[k] = src[k];
+    }
+    var scm = {};
+    var srcScm = src.scm || {};
+    for (var s in srcScm) {
+        if (Object.prototype.hasOwnProperty.call(srcScm, s)) scm[s] = srcScm[s];
+    }
+    scm.provider = provider;
+    cfg.scm = scm;
+    return cfg;
+}
+
+// jobParams.scm.provider (the SM deployment file, e.g. sm_gitlab.json)
+// selects the forge for dispatch/labels over the project config's default.
+function applyJobParamsScm(config, jobParams) {
+    var want = jobParams && jobParams.scm && jobParams.scm.provider;
+    if (!want || !config) return config;
+    if (config.scm && config.scm.provider === want) return config;
+    return withScmProvider(config, want);
+}
+
+// A `source: 'gitlab'` rule always dispatches/labels through the GitLab SCM.
+function applyRuleForge(config, rule) {
+    if (!config || !rule || rule.source !== 'gitlab') return config;
+    if (config.scm && config.scm.provider === 'gitlab') return config;
+    return withScmProvider(config, 'gitlab');
+}
+
+function resolveSmForge(config) {
+    return (config && config.scm && config.scm.provider === 'gitlab') ? 'gitlab' : 'github';
+}
+
+// Forge-sourced rules (issue/PR state from GitHub or GitLab, not JQL).
+function isForgeSource(rule) {
+    return !!rule && (rule.source === 'github' || rule.source === 'gitlab');
 }
 
 function parseWorkflowRuns(raw) {
@@ -704,7 +751,7 @@ function isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget, repoIn
 // the github_get_issue tool skip the check and trust the scrape (legacy
 // behavior, unchanged).
 function localIssueExists(repoInfo, issueNumber) {
-    if (typeof github_get_issue !== 'function') return true;
+    if (SM_FORGE !== 'github' || typeof github_get_issue !== 'function') return true;
     var res;
     try {
         res = github_get_issue({
@@ -1036,6 +1083,7 @@ function forkPullRefLive(repoInfo, prNumber) {
 // (gh-1075 AC3). The marker key is what the next tick's counter re-reads;
 // the parked-head sha (not the key) is what the #633 RESET probes key on.
 function recordNoRefBookkeeping(repoInfo, ticketKey, item, err, markKey) {
+    if (SM_FORGE !== 'github') return; // marker/park bookkeeping reads GitHub PR comments only
     if ((item.labels || []).indexOf('validation_failed') !== -1) return; // already parked (query-time snapshot)
     if (tickParkedRecorded && tickParkedRecorded[item.prNumber]) return; // a sibling rule already recorded this PR earlier in the SAME tick — the stale label snapshot cannot see its park (gh-922 review: no duplicate marker, no duplicate park)
     var cap = triggerFailuresModule.capOf(RUN_JOB_PARAMS);
@@ -1281,10 +1329,28 @@ function firstMatchingLabel(ticket, labels) {
     return null;
 }
 
+// GitLab rule labels: MR carriers ('pr-<iid>') ride gitlab_add/remove_mr_label
+// through the SCM layer. The bridge has no issue-label tool, so issue-carrier
+// ('gh-<iid>') writes are skipped loudly — never routed to an MR by iid.
+function gitlabRuleLabel(ticketKey, label, repoInfo, add) {
+    var sign = add ? ' +' : ' -';
+    var m = /^pr-(\d+)$/.exec(String(ticketKey));
+    if (!m) {
+        console.warn('  ⚠️  gitlab: no issue-label tool — ' + ticketKey + sign + label + ' skipped');
+        return;
+    }
+    if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + sign + label); return; }
+    var scm = createTargetScm(withScmProvider(projectConfig, 'gitlab'), repoInfo);
+    if (add) scm.addLabel(m[1], label);
+    else scm.removeLabel(m[1], label);
+}
+
 function addRuleLabels(ticketKey, rule, repoInfo) {
     labelListModule.normalizeLabels(rule.addLabel, rule.addLabels).forEach(function(label) {
         try {
-            if (rule.source === 'github') {
+            if (rule.source === 'gitlab') {
+                gitlabRuleLabel(ticketKey, label, repoInfo, true);
+            } else if (rule.source === 'github') {
                 var n = /(\d+)$/.exec(String(ticketKey));
                 // gh-683 bug D (live fa #1194, 2026-10-04): without
                 // workspace/repository the github bridge answers "Issue
@@ -1327,7 +1393,9 @@ function ruleTargetSelfManagesLabel(rule) {
 function removeRuleLabel(ticketKey, label, rule, repoInfo) {
     if (!ticketKey || !label) return;
     try {
-        if (rule && rule.source === 'github') {
+        if (rule && rule.source === 'gitlab') {
+            gitlabRuleLabel(ticketKey, label, repoInfo, false);
+        } else if (rule && rule.source === 'github') {
             var n = /(\d+)$/.exec(String(ticketKey));
             // gh-683 bug D (live fa #1194, 2026-10-04): the call carried NO
             // workspace/repository (and `labels:[…]` where the bridge reads
@@ -1508,12 +1576,14 @@ function logRuleQuery(rule, interpolatedJql) {
 // like the inline copies did.
 function queryRuleTickets(rule, effectiveConfig, effectiveRepoInfo, interpolatedJql) {
     var sourceMod = smSource.resolve(rule);
-    return sourceMod.query(rule, {
+    var ctx = {
         config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql,
         machineAuthor: machineAuthorModule.resolveMachineAuthor(
             RUN_JOB_PARAMS, effectiveConfig),
         priorityLabels: PRIORITY_LABELS
-    }) || [];
+    };
+    if (isForgeSource(rule)) ctx.scmProvider = rule.source;
+    return sourceMod.query(rule, ctx) || [];
 }
 
 function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
@@ -5772,7 +5842,7 @@ function approvedPrs(list) {
 function approvedQueueDepth(repoInfo) {
     try {
         var provider = smProviderModule.createSmProvider({
-            scm: { provider: 'github' },
+            scm: { provider: SM_FORGE },
             repository: repoInfo
         });
         if (!provider || typeof provider.listOpenPrs !== 'function') return 0;
@@ -5800,7 +5870,7 @@ function effectiveValidationConcurrency(cfg, approvedDepth) {
 function reportValidationCost(repoInfo, cfg, mutexMax) {
     try {
         var provider = smProviderModule.createSmProvider({
-            scm: { provider: 'github' },
+            scm: { provider: SM_FORGE },
             repository: repoInfo
         });
         var list = (provider && typeof provider.listOpenPrs === 'function')
@@ -8261,7 +8331,7 @@ function validationRollupGreen(repoInfo, prNumber) {
     // validation run, never a skipped one.
     try {
         var provider = smProviderModule.createSmProvider({
-            scm: { provider: 'github' },
+            scm: { provider: SM_FORGE },
             repository: repoInfo
         });
         var st = provider.prStatus(prNumber);
@@ -8280,7 +8350,7 @@ function headChecksRed(repoInfo, prNumber) {
     // deferRedHead park still catches it), never a wrongful park.
     try {
         var provider = smProviderModule.createSmProvider({
-            scm: { provider: 'github' },
+            scm: { provider: SM_FORGE },
             repository: repoInfo
         });
         var st = provider.prStatus(prNumber);
@@ -9396,7 +9466,7 @@ function scanGuestDeadZoneTick(machineAuthor) {
         var t0 = Date.now();
         try {
             var dzProvider = smProviderModule.createSmProvider({
-                scm: { provider: 'github' },
+                scm: { provider: SM_FORGE },
                 repository: dzRepoInfo
             });
             var stats = guestValidationPathModule.scanRepoGuestDeadZone(
@@ -9438,7 +9508,8 @@ function action(params) {
     var rules = p.rules;
 
     // Load global project configuration (used as default when rules have no configPath)
-    projectConfig = configLoader.loadProjectConfig(p);
+    projectConfig = applyJobParamsScm(configLoader.loadProjectConfig(p), p);
+    SM_FORGE = resolveSmForge(projectConfig);
 
     var configuredWorkflowCap = resolveWorkflowCap(
         typeof p.maxTriggeredWorkflows !== 'undefined' ? p.maxTriggeredWorkflows : p.maxWorkflowsPerRun,
@@ -9747,7 +9818,8 @@ function action(params) {
 
     // gh-1097 — naked-PR reconciliation: AFTER every dispatch lane, labels
     // only (never dispatches; the next tick's lanes pick the PR up).
-    if (p.nakedPrSweep !== false) runNakedPrSweep(globalRepoInfo);
+    // GitHub-only (github_list_prs + issue labels) — skipped on a GitLab tick.
+    if (p.nakedPrSweep !== false && SM_FORGE === 'github') runNakedPrSweep(globalRepoInfo);
 
     // gh-837 AC2 — runner-cost report (validation-minutes) — after every
     // rule so the arm counts reflect this tick's mutations.
