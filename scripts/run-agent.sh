@@ -153,33 +153,6 @@ fi
 PROVIDER="${AI_AGENT_PROVIDER:-cursor}"
 echo "AI Agent Provider: $PROVIDER"
 
-# ── gh-1403 review-filter model override ─────────────────────────────────────
-# The review-filter leg (js/common/reviewFilter.js) re-verifies the review
-# leg's findings in a FRESH context, and the anchoring/self-preference guard
-# works best when that pass runs a DIFFERENT model than the finder. A
-# deployment opts in by exporting AI_REVIEW_FILTER_MODEL (workflow env /
-# dmtools.env); when set AND this invocation is a review-filter run (detected
-# by the prompt file name the filter runner writes), the provider's own
-# model env var is overridden. Providers that honor none of these knobs (or
-# the var left unset) simply run the filter on the same model — "when the
-# provider allows".
-case "$PROMPT_ARG" in
-  *pr-review-filter*)
-    if [ -n "${AI_REVIEW_FILTER_MODEL:-}" ]; then
-      echo "Review filter model override: ${AI_REVIEW_FILTER_MODEL}"
-      case "$PROVIDER" in
-        cursor)      export CURSOR_MODEL="${AI_REVIEW_FILTER_MODEL}" ;;
-        kimi)        export KIMI_MODEL="${AI_REVIEW_FILTER_MODEL}" ;;
-        fa)          export FA_PROVIDER_MODEL="${AI_REVIEW_FILTER_MODEL}" ;;
-        claude-code) export CLAUDE_CODE_MODEL="${AI_REVIEW_FILTER_MODEL}" ;;
-        codemie)     export CODEMIE_MODEL="${AI_REVIEW_FILTER_MODEL}" ;;
-        copilot)     export COPILOT_MODEL="${AI_REVIEW_FILTER_MODEL}" ;;
-        *) echo "Review filter model override: provider '${PROVIDER}' has no model knob — ignored" ;;
-      esac
-    fi
-    ;;
-esac
-
 # Derive a human-readable usage name for token-report files.
 # Prefer the agent config name (e.g. story_acceptance_criteria from CONFIG_FILE),
 # then fall back to the workflow-provided AI_TEAMMATE_CONFIG_FILE,

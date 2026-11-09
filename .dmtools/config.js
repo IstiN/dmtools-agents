@@ -3,17 +3,18 @@
 // runner here; runner paths are repo-relative. bug/story may share a
 // single 'dev' entry instead of two.
 //
-// gh-1403: this repository opts in to reviewPolicy.verification = filter as
-// the TRIAL SUBJECT — its own PRs (incl. factory-bot PRs) are reviewed by
-// the same machinery, so the rework laps it produces are the baseline and
-// the trial data in one place. Revert to 'none' (or delete the block) if
-// the trial bar (laps/PR ↓ AND precision ↑ AND wrongly-dropped ≈ 0) fails.
+// gh-1403: this repository ships reviewPolicy.verification but MERGES WITH
+// 'none' — the opt-in to 'filter' (the trial: this repo's own PRs are the
+// baseline and the trial data in one place) flips in a follow-up issue once
+// the agent pack release carrying this support is published. If the trial
+// bar fails (laps/PR ↓ AND precision ↑ AND wrongly-dropped ≈ 0), revert to
+// 'none' (or delete the block).
 module.exports = {
   // #687: whose login is "the machine" — auto rework (prMachineAuthor)
   // and pr_approved arming fire only on PRs authored by this login.
   machineAuthor: 'ai-teammate,github-actions[bot],dmtools-factory-bot',
   reviewPolicy: {
-    verification: 'filter'
+    verification: 'none'
   },
   sm: {
     runners: {

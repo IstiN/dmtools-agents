@@ -35,6 +35,4 @@ Set in the project `.dmtools/config.js` (e.g. `reviewPolicy: { verification: 'fi
   - `keep` (default) — the finding posts unchanged. Round-none tiers (🪶 under the default preset) never enter the filter.
   - Anti-over-suppression guard: when every candidate of a run is dropped/demoted and kept ≪ candidates, a ⚠️ warning is stamped into the review summary — a miscalibrated filter must not silently erase real findings.
 
-Pair `filter` with the `AI_REVIEW_FILTER_MODEL` env var in `scripts/run-agent.sh` deployments so the verification pass runs a different model than the finder (guarding anchoring/self-preference); providers without a model knob run the filter on the same model.
-
 **Trial opt-in** (gh-1403): this repository itself opts in via `.dmtools/config.js`; the trial bar is fewer rework laps per PR AND higher precision AND ≈ 0 wrongly-dropped findings. Revert to `none` if the trial fails.
