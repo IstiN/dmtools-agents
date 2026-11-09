@@ -221,9 +221,22 @@ function prReviewRequireMap(overrides) {
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
         }), {}),
         './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+        './common/reviewFilter.js': loadReviewFilterModule(),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
     };
     return Object.assign(map, overrides || {});
+}
+
+/**
+ * Shared loader for js/common/reviewFilter.js (gh-1403) — the pure filter
+ * leg over the real reviewPolicy + reviewVerdicts + reviewSpecClaims.
+ */
+function loadReviewFilterModule() {
+    return loadModule('js/common/reviewFilter.js', makeRequire({
+        './reviewPolicy.js': loadReviewPolicyModule(),
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+        './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+    }), {});
 }
 
 function loadPostPRReviewComments(mocks) {
@@ -520,6 +533,7 @@ suite('postPRReviewComments', function() {
                     './common/reviewPolicy.js': loadReviewPolicyModule(),
                     './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+                    './common/reviewFilter.js': loadReviewFilterModule(),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
                 mergedMocks
@@ -776,6 +790,7 @@ suite('postPRReviewComments', function() {
                     './common/reviewPolicy.js': loadReviewPolicyModule(),
                     './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+                    './common/reviewFilter.js': loadReviewFilterModule(),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
                 formalMocks
@@ -1091,6 +1106,7 @@ suite('postPRReviewComments', function() {
             './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+            './common/reviewFilter.js': loadReviewFilterModule(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
                 {
@@ -1524,6 +1540,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
             './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+            './common/reviewFilter.js': loadReviewFilterModule(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
         merged
@@ -2436,6 +2453,7 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
                     makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
             }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+            './common/reviewFilter.js': loadReviewFilterModule(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }), {});
 
@@ -2529,6 +2547,7 @@ function gh926ResumeRequire(opts) {
         './common/reviewPolicy.js': loadReviewPolicyModule(),
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
         './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+        './common/reviewFilter.js': loadReviewFilterModule(),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
     });
 }
@@ -2881,6 +2900,7 @@ function loadForPrSearch(foundPr) {
             './common/reviewPolicy.js': loadReviewPolicyModule(),
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+            './common/reviewFilter.js': loadReviewFilterModule(),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
         {
@@ -4025,7 +4045,7 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
             './common/commentMarkup.js': commentMarkupModule
         }), { file_read: mapFileRead(fileMap) });
         var mod = loadModule(
-            'js/postPReviewComments.js',
+            'js/postPRReviewComments.js',
             makeRequire(prReviewRequireMap({
                 './common/outputFiles.js': outputFiles,
                 './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({
@@ -4111,7 +4131,10 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
 
     test('applyReviewFilter runs the fresh-context CLI, applies verdicts and recomputes the census', function() {
         var writes = [];
-        var loaded = loadFilterRunner({ 'outputs/pr_review_filter.json': dropDemoteKeepVerdicts() }, writes, null);
+        var loaded = loadFilterRunner({
+            'outputs/pr_review_filter.json': dropDemoteKeepVerdicts(),
+            'outputs/pr_review_general.md': GENERAL_MD
+        }, writes, null);
         var data = filteredReviewData();
         var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
 
@@ -4222,6 +4245,14 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         var cliCalls = [];
         var fileMap = {
             'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [
+                    { path: 'a.js', line: 10, severity: 'IMPORTANT', body: 'overstated claim' }
+                ],
+                generalComment: 'outputs/pr_review_general.md'
+            }),
             'outputs/pr_review_general.md': GENERAL_MD,
             'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
                 { id: 0, decision: 'drop', reason: 'verified wrong against the caller guard' }
@@ -4241,9 +4272,14 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
             './common/commentMarkup.js': commentMarkupModule
         }), { file_read: fileRead });
         var mod = loadModule(
-            'js/postPReviewComments.js',
+            'js/postPRReviewComments.js',
             makeRequire(prReviewRequireMap({
                 './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                },
                 './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({
                     './reviewPolicy.js': loadReviewPolicyModule(),
                     './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
@@ -4290,7 +4326,13 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         var writes = [];
         var cliCalls = [];
         var fileMap = {
-            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n'
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [],
+                generalComment: 'outputs/pr_review_general.md'
+            })
         };
         var fileRead = mapFileRead(fileMap);
         var scm = {
@@ -4306,7 +4348,7 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
             './common/commentMarkup.js': commentMarkupModule
         }), { file_read: fileRead });
         var mod = loadModule(
-            'js/postPReviewComments.js',
+            'js/postPRReviewComments.js',
             makeRequire(prReviewRequireMap({
                 './common/outputFiles.js': outputFiles,
                 './common/reviewFilter.js': loadModule('js/common/reviewFilter.js', makeRequire({

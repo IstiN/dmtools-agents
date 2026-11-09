@@ -1252,6 +1252,13 @@ function applyReviewFilter(reviewData, ctx, diffPath) {
         }
         var parsed = reviewFilterModule.parseFilterVerdicts(raw);
         var result = reviewFilterModule.applyFilterVerdicts(reviewData, candidates, parsed.verdicts);
+        if (!result.changed) {
+            // Zero applicable verdicts (malformed payload, unknown ids,
+            // all-refused demotes) — nothing was filtered, so the census is
+            // NOT recomputed and the leg posts exactly as raised.
+            console.warn('🧯 review filter: no applicable verdicts — running unfiltered (gh-1403 fail-open)');
+            return null;
+        }
         stampDemotionNotesOnFiles(reviewData, result.applied, ctx);
         // gh-1403 machine semantics: the census is recomputed AFTER filtering;
         // the gh-1351 verdict machinery then reads it unchanged.
@@ -1284,7 +1291,7 @@ function filterStampSection(m, filterOutcome) {
     return line + '\n\n';
 }
 
-
+// ═══════════════ gh-1332 finding-identity registry ═══════════════
 //
 // The review-round dedup: this round's structured inlineComments already
 // carry path/severity/claim, so registering the round mechanically (marker
@@ -1496,7 +1503,7 @@ function policyStampSection(m, policy) {
         reviewPolicyModule.policyTableBody(policy) + '\n\n';
 }
 
-function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, policy) {
+function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, policy, filterOutcome) {
     try {
         const m = commentMarkup.forTicket(ticketKey);
         let comment = m.h(2, '🔍 Automated PR Review Completed') + '\n\n';
@@ -1512,6 +1519,9 @@ function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl, 
         comment += m.h(3, 'Issue Summary') + '\n';
         comment += censusSummaryLines(m, issueCounts);
         comment += policyStampSection(m, policy);
+        // gh-1403: the filter round summary + the dropped list (visible, one
+        // line each — the anti-over-suppression listing rides the ticket too).
+        comment += filterStampSection(m, filterOutcome);
 
         if (prUrl) {
             comment += m.h(3, 'Pull Request') + '\n';
@@ -2630,8 +2640,8 @@ function finalizeReviewRun(ctx, params, isApproved) {
     postTokenUsageQuietly(ctx, params);
 }
 
-function buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo, advisoryRecommendation) {
-    return {
+function buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo, advisoryRecommendation, filterStats) {
+    var result = {
         success: true,
         message: isApproved ? 'PR approved — awaiting reviewer merge' : 'Changes requested, ticket returned to In Development',
         recommendation: recommendation,
@@ -2639,6 +2649,8 @@ function buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo
         issueCounts: reviewData.issueCounts,
         githubCommentsPosted: !!(pr.number && repoInfo)
     };
+    if (filterStats) result.filter = filterStats;
+    return result;
 }
 
 function ticketKeyOfTicket(ticket) {
@@ -2775,6 +2787,13 @@ function action(params) {
         // claim keeps BLOCKING force with the citation auto-appended.
         applySpecClaimDowngrades(reviewData, ctx.ticketKey, ctx.workingDir, params.inputFolderPath);
 
+        // gh-1403: the finding-filter leg (reviewPolicy.verification =
+        // filter) — a fresh-context pass verifies each rework/polish-tier
+        // candidate BEFORE posting; drops become digest lines, demotes tier
+        // downgrades, the census is recomputed after filtering. Non-fatal:
+        // any filter failure degrades to the unfiltered review.
+        var filterOutcome = applyReviewFilter(reviewData, ctx, filterDiffPathOf(params));
+
         console.log('Review recommendation:', reviewData.recommendation);
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
 
@@ -2830,7 +2849,7 @@ function action(params) {
         }
 
         // Step 6: Post review to the ticket (merge is handled by SM/required reviewers, not by this agent)
-        postReviewToJira(tracker, ctx.ticketKey, ctx.jiraReview, reviewData, pr.url, ctx.reviewPolicy);
+        postReviewToJira(tracker, ctx.ticketKey, ctx.jiraReview, reviewData, pr.url, ctx.reviewPolicy, filterOutcome);
 
         // Step 7: Update ticket status based on outcome
         applyTicketOutcome(tracker, ctx.ticketKey, statuses, isApproved, pr, repoInfo);
@@ -2855,7 +2874,8 @@ function action(params) {
 
         finalizeReviewRun(ctx, params, isApproved);
 
-        return buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo, advisoryTokenOf(reviewData));
+        return buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo, advisoryTokenOf(reviewData),
+            filterOutcome ? filterOutcome.stats : null);
 
     } catch (error) {
         return reportReviewError(params, tracker, error);
@@ -2937,6 +2957,14 @@ if (typeof module !== 'undefined' && module.exports) {
         searchMissingPRNumber,
         ticketKeyOfParams,
         applySpecClaimDowngrades,
-        readTicketClaimSource
+        readTicketClaimSource,
+        // gh-1403 review filter leg
+        verificationEnabledOf,
+        filterDiffPathOf,
+        filterCliCommandOf,
+        applyReviewFilter,
+        filterStampSection,
+        appendDroppedSection,
+        stampDemotionNotesOnFiles
     };
 }
