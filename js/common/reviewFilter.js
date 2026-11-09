@@ -49,6 +49,19 @@ var INPUT_FILE = 'pr_review_filter_input.json';
 // The verdict enum. demote carries a tier; drop/keep do not.
 var VERDICT_DECISIONS = ['keep', 'demote', 'drop'];
 
+/**
+ * The one model-written-path guard (gh-1350 class; owned here since the
+ * round-2 demote fix needs it in the pure apply too): a file reference
+ * from the review model is only trusted in the comment-file layout — a
+ * bare .md name, or outputs/ / pr_review_comments/ prefixed. Every read
+ * AND every write of a model-written file reference goes through this
+ * shape check.
+ */
+function isCommentFilePath(value) {
+    return typeof value === 'string' &&
+        /^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(value.trim());
+}
+
 // The claim truncation for digest lines — a digest line is one line.
 var DIGEST_CLAIM_MAX = 160;
 
@@ -336,12 +349,17 @@ function untagFilterIds(inline) {
 /**
  * The demotion provenance appended to an INLINE body. File-referenced
  * findings get the note appended to their comment file by the runner (file
- * writes stay out of this module).
+ * writes stay out of this module). Shape-aware (gh-1403 review round 2):
+ * a body-as-path hybrid — the body HOLDING the comment-file path, which
+ * resolveInlineComment resolves to the file content at post time — is NOT
+ * appended: appending would break the path shape and the poster would
+ * publish the literal path + note instead of the claim. The wired runner
+ * stamps the referenced file for that shape instead.
  */
 function stampDemotionBody(entry, note) {
-    if (typeof entry.body === 'string' && entry.body.trim()) {
-        entry.body = entry.body.replace(/\s*$/, '') + '\n' + note;
-    }
+    if (typeof entry.body !== 'string' || !entry.body.trim()) return;
+    if (isCommentFilePath(entry.body)) return;
+    entry.body = entry.body.replace(/\s*$/, '') + '\n' + note;
 }
 
 /**
@@ -694,12 +712,14 @@ if (typeof module !== 'undefined' && module.exports) {
         INPUT_FILE: INPUT_FILE,
         VERDICT_DECISIONS: VERDICT_DECISIONS,
         DIGEST_CLAIM_MAX: DIGEST_CLAIM_MAX,
+        isCommentFilePath: isCommentFilePath,
         tierRank: tierRank,
         isFilterableTier: isFilterableTier,
         stripProseSeverityHead: stripProseSeverityHead,
         selectFilterCandidates: selectFilterCandidates,
         parseFilterVerdicts: parseFilterVerdicts,
         demotionNote: demotionNote,
+        stampDemotionBody: stampDemotionBody,
         applyFilterVerdicts: applyFilterVerdicts,
         recomputeCensus: recomputeCensus,
         filterStats: filterStats,

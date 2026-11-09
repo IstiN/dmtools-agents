@@ -138,7 +138,27 @@ suite('reviewFilter — candidate selection (gh-1403: rework/polish tiers only)'
         assert.equal(candidates[0].claim, 'this helper is important for the parser contract',
             'claim prose is never rewritten');
     });
+
+    test('ACCEPTED trade-off: a first line that merely opens with a tier word + colon strips too (pinned decision)', function() {
+        // Round-2 NIT (gh-1403): an emphatic 'Important: …' first line loses
+        // that line from the FILTER INPUT. Accepted deliberately — requiring
+        // emoji/bold markers would re-open the round-1 anchor leak for bare
+        // '**BLOCKING: …**' variants, and the damage is bounded to
+        // pr_review_filter_input.json (the posted thread is untouched, the
+        // body below survives). Pinned so the decision stays documented
+        // rather than accidental, next to the mid-claim control above.
+        assert.equal(mod.stripProseSeverityHead('Important: reconsider the API shape\nbody here'), 'body here');
+        assert.equal(mod.stripProseSeverityHead('nit: rename\nbody'), 'body');
+    });
+
+    test('stampDemotionBody leaves a body-as-path hybrid untouched — the runner stamps the file (round 2, shape A)', function() {
+        var entry = { path: 'b.js', line: 20, severity: 'SUGGESTION', body: 'outputs/pr_review_comments/c1.md' };
+        mod.stampDemotionBody(entry, '⚠️ **Severity demoted: review-filter demotion (gh-1403)** — why');
+        assert.equal(entry.body, 'outputs/pr_review_comments/c1.md',
+            'appending would break the path shape and the poster would publish the literal path');
+    });
 });
+
 
 suite('reviewFilter — verdict parse ladder', function() {
 

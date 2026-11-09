@@ -4695,6 +4695,67 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         assert.equal(cliCalls.length, 0, 'verification none costs nothing');
     });
 
+    test('action() with verification none runs no input-folder diff probes (lazy diff path, round 2 NIT)', function() {
+        var diffReads = 0;
+        var fileMap = {
+            'input/PROJ-1/pr_info.md': '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+            'outputs/pr_review.json': JSON.stringify({
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 0, nits: 0, digest: 0 },
+                inlineComments: [],
+                generalComment: 'outputs/pr_review_general.md'
+            })
+        };
+        var baseRead = mapFileRead(fileMap);
+        var fileRead = function(args) {
+            var p = args && (args.path || args);
+            if (p && String(p).indexOf('pr_diff.txt') !== -1) diffReads++;
+            return baseRead(args);
+        };
+        var scm = {
+            listPrs: function() { return []; },
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+            addLabel: function() {},
+            removeLabel: function() {},
+            fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+            addComment: function() {},
+            addInlineComment: function() {}
+        };
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: fileRead });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/scm.js': { createScm: function() { return scm; } },
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function() { return false; },
+                    triggerSmIfIdle: function() {}
+                }
+            })),
+            {
+                file_read: fileRead,
+                file_write: function() {},
+                cli_execute_command: function() { throw new Error('no filter CLI without verification filter'); },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function() {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-1', fields: { labels: [] } },
+            response: 'Jira review content',
+            inputFolderPath: 'input/PROJ-1'
+        });
+        assert.equal(result.success, true);
+        assert.equal(diffReads, 0,
+            'a disabled filter must not probe the input folders for pr_diff.txt');
+    });
+
     test('applyReviewFilter — a throwing verdict-file read degrades to unfiltered (fail-open)', function() {
         var writes = [];
         var loaded = loadFilterRunner({}, writes, function(args) {
@@ -4733,6 +4794,65 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
             'nothing written when the general comment file does not exist');
     });
 
+    test('applyReviewFilter — a body-as-path hybrid gets its note in the FILE, body stays resolvable (round 2, shape A)', function() {
+        var writes = [];
+        var commentFile = 'outputs/pr_review_comments/c1.md';
+        var fileMap = {
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'demote', tier: 'SUGGESTION', reason: 'overstated' }
+            ] }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'outputs/pr_review_comments/c1.md': '⚠️ The helper duplicates logic.'
+        };
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                // agent-output hybrid: the body HOLDS the comment-file path —
+                // the shape resolveInlineComment resolves at post time
+                { path: 'b.js', line: 20, severity: 'IMPORTANT', body: commentFile }
+            ]
+        };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome);
+        assert.equal(data.inlineComments[0].severity, 'SUGGESTION');
+        assert.equal(data.inlineComments[0].body, commentFile,
+            'the body keeps its path shape — appending the note would publish the literal path');
+        assert.ok(loaded.mod.isCommentFilePath(data.inlineComments[0].body),
+            'the poster still resolves this body to the claim content, not a literal path');
+        var fileWrite = writes.filter(function(w) { return w.path === commentFile; })[0];
+        assert.ok(fileWrite, 'the demotion note lands in the referenced comment file instead');
+        assert.ok(fileWrite.content.indexOf('Severity demoted') !== -1);
+        assert.ok(fileWrite.content.indexOf('The helper duplicates logic.') !== -1, 'claim prose kept');
+    });
+
+    test('applyReviewFilter — old-spec {file, comment} gets the note in its comment file (round 2, shape B)', function() {
+        var writes = [];
+        var commentFile = 'outputs/pr_review_comments/old.md';
+        var fileMap = {
+            'outputs/pr_review_filter.json': JSON.stringify({ verdicts: [
+                { id: 0, decision: 'demote', tier: 'SUGGESTION', reason: 'overstated' }
+            ] }),
+            'outputs/pr_review_general.md': GENERAL_MD,
+            'outputs/pr_review_comments/old.md': 'Old-spec claim prose.'
+        };
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                // old spec: `file` names the code location, `comment` references the file
+                { file: 'b.js', line: 20, severity: 'IMPORTANT', comment: commentFile }
+            ]
+        };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome);
+        assert.equal(data.inlineComments[0].severity, 'SUGGESTION', 'structured tier still downgrades');
+        var fileWrite = writes.filter(function(w) { return w.path === commentFile; })[0];
+        assert.ok(fileWrite, 'the demotion note lands in the old-spec comment file (isStampTarget matches entry.file)');
+        assert.ok(fileWrite.content.indexOf('Severity demoted') !== -1);
+    });
     test('stampDemotionNotesOnFiles — a stamp whose severity no longer matches is skipped (consume-once)', function() {
         var writes = [];
         var fileMap = { 'outputs/pr_review_comments/c1.md': 'original claim prose' };
