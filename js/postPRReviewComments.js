@@ -226,6 +226,20 @@ function readMarkdownFile(filePath, ticketKey, workingDir) {
 }
 
 /**
+ * The one model-written-path guard (gh-1350 class): a file reference from
+ * the review model is only trusted in the comment-file layout — a bare
+ * .md name, or outputs/ / pr_review_comments/ prefixed. Every read AND
+ * every write of a model-written file reference goes through this shape
+ * check (gh-1403 review thread 2: the demote stamp wrote `entry.comment`
+ * unguarded — a hallucinated path could append the stamp to any readable
+ * file relative to the runtime cwd, e.g. a repo source file).
+ */
+function isCommentFilePath(value) {
+    return typeof value === 'string' &&
+        /^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(value.trim());
+}
+
+/**
  * Defense-in-depth guard: the agent is instructed (instructions/pr_review/output_rules.md,
  * few_shots.md) to reference comment text via the `comment` field (a path to a
  * .md file under outputs/), never inline in `body`. If a
@@ -241,20 +255,6 @@ function readMarkdownFile(filePath, ticketKey, workingDir) {
  * landed with the literal string "outputs/pr_review_general.md" as its body
  * (flutter_agent_harness #720).
  */
-/**
- * The one model-written-path guard (gh-1350 class): a file reference from
- * the review model is only trusted in the comment-file layout — a bare
- * .md name, or outputs/ / pr_review_comments/ prefixed. Every read AND
- * every write of a model-written file reference goes through this shape
- * check (gh-1403 review thread 2: the demote stamp wrote `entry.comment`
- * unguarded — a hallucinated path could append the stamp to any readable
- * file relative to the runtime cwd, e.g. a repo source file).
- */
-function isCommentFilePath(value) {
-    return typeof value === 'string' &&
-        /^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(value.trim());
-}
-
 function resolveCommentFileReference(value, ticketKey, workingDir) {
     if (!isCommentFilePath(value)) return null;
     var trimmed = value.trim();
