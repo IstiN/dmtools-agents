@@ -35,6 +35,15 @@ site/factory/.playwright-cli/
 # fa session runtime artifacts (bash job logs/state — churn every session)
 .fah/
 
+# teammate CI runtime skill packages — installed per-leg by the dmtools
+# skill installer into .cursor/skills (live CI legs write there every run:
+# "Detecting skill directories… Installing to: .cursor/skills — Removing
+# old version…"). gh-1402 review round 1 (BLOCKING): one dev commit swept
+# 133 vendored package files (+57,904 lines) onto ai/gh-1402 — machine
+# state, stale per install, unreviewable diff. Same failure class as the
+# gh-628 .dmtools/*.log sweeps: runtime-installer output, never source.
+.cursor/skills/
+
 # python bytecode caches — regenerated per-run, never commit
 __pycache__/
 *.pyc
