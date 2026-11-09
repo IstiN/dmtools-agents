@@ -40,6 +40,11 @@ fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 echo "📥 Installing dmtools-dart (${DMTOOLS_VERSION})..."
+# Ensure global cross-agent skills directory exists so skill-install.sh --global
+# always installs into $HOME/.agents/skills and never falls back to a relative
+# .cursor/skills directory inside the current git workspace (gh-1397).
+mkdir -p "${HOME}/.agents/skills"
+export DMTOOLS_SKILLS_GLOBAL_ONLY=true
 
 # The upstream installer honors DMTOOLS_VERSION + DMTOOLS_INSTALL_DIR and
 # pins a concrete release when a version argument is passed.

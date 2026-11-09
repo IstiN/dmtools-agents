@@ -58,10 +58,14 @@ fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 echo "📥 Installing DMtools ${DMTOOLS_VERSION}..."
+# Ensure global cross-agent skills directory exists so skill-install.sh --global
+# always installs into $HOME/.agents/skills and never falls back to a relative
+# .cursor/skills directory inside the current git workspace (gh-1397).
+mkdir -p "${HOME}/.agents/skills"
 # pipefail scoped to this pipeline: a failed download (bad version, 404, network) must fail the step
 # instead of feeding an empty script to bash, which exits 0.
 if ! ( set -o pipefail; curl -fsSL "https://raw.githubusercontent.com/${DMTOOLS_INSTALL_REPO}/${DMTOOLS_VERSION}/install.sh" \
-  | DMTOOLS_VERSION="${DMTOOLS_VERSION}" bash -s -- "${DMTOOLS_VERSION}" ); then
+  | DMTOOLS_VERSION="${DMTOOLS_VERSION}" DMTOOLS_SKILLS_GLOBAL_ONLY=true bash -s -- "${DMTOOLS_VERSION}" ); then
   echo "❌ DMtools ${DMTOOLS_VERSION} download/install failed (bad version, missing release or network error)" >&2
   exit 1
 fi
