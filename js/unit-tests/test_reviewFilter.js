@@ -98,6 +98,46 @@ suite('reviewFilter — candidate selection (gh-1403: rework/polish tiers only)'
         assert.ok(claim.indexOf('null deref') !== -1, 'claim text kept');
         assert.ok(claim.indexOf('BLOCKING') === -1, 'machine severity line stripped: ' + claim);
     });
+
+    test('the claim is severity-stripped in the few-shots prose form too (🚨 **BLOCKING: title**)', function() {
+        var policy = reviewPolicy.defaultPolicy();
+        var data = reviewDataWith([
+            { path: 'a.js', line: 10, severity: 'BLOCKING',
+              body: '\uD83D\uDEA8 **BLOCKING: SQL Injection**\nraw concatenation in the query builder' }
+        ]);
+        var candidates = mod.selectFilterCandidates(data, policy, bodyClaimResolver);
+        var claim = candidates[0].claim;
+        assert.ok(claim.indexOf('raw concatenation') !== -1, 'claim body kept: ' + claim);
+        assert.ok(claim.indexOf('BLOCKING') === -1, 'prose severity header stripped: ' + claim);
+        assert.ok(claim.indexOf('SQL Injection') === -1, 'the header line (title included) is gone: ' + claim);
+    });
+
+    test('prose severity strip covers every tier word and the unembellished **TIER: form', function() {
+        var policy = reviewPolicy.defaultPolicy();
+        var shapes = [
+            { sev: 'IMPORTANT', body: '\u26A0\uFE0F **IMPORTANT: racy init**\nthe map is mutated before the lock' },
+            { sev: 'SUGGESTION', body: '\uD83D\uDCA1 **SUGGESTION: extract helper**\nthe loop body duplicates the guard' },
+            { sev: 'BLOCKING', body: '**BLOCKING: unvalidated input**\nthe handler trusts the query string' }
+        ];
+        for (var i = 0; i < shapes.length; i++) {
+            var data = reviewDataWith([{ path: 'a.js', line: 10, severity: shapes[i].sev, body: shapes[i].body }]);
+            var claim = mod.selectFilterCandidates(data, policy, bodyClaimResolver)[0].claim;
+            var word = shapes[i].sev;
+            assert.ok(claim.indexOf(word) === -1, word + ' head stripped from: ' + claim);
+            assert.ok(claim.trim().length > 0, 'claim body survives: ' + claim);
+        }
+    });
+
+    test('a tier word mid-claim is data, not a header — only a head-of-claim line strips', function() {
+        var policy = reviewPolicy.defaultPolicy();
+        var data = reviewDataWith([
+            { path: 'a.js', line: 10, severity: 'IMPORTANT',
+              body: 'this helper is important for the parser contract' }
+        ]);
+        var candidates = mod.selectFilterCandidates(data, policy, bodyClaimResolver);
+        assert.equal(candidates[0].claim, 'this helper is important for the parser contract',
+            'claim prose is never rewritten');
+    });
 });
 
 suite('reviewFilter — verdict parse ladder', function() {
@@ -319,6 +359,28 @@ suite('reviewFilter — anti-over-suppression stats', function() {
         ])), null);
         assert.equal(mod.buildOverSuppressionWarning(mod.filterStats(0, [])), null);
     });
+
+    test('a fully-demoted round warns too — every candidate suppressed with 0 kept (gh-1403 review thread 5)', function() {
+        var warning = mod.buildOverSuppressionWarning(mod.filterStats(4, [
+            { decision: 'demote' }, { decision: 'demote' }, { decision: 'demote' }, { decision: 'demote' }
+        ]));
+        assert.ok(warning, 'all-demoted is the same miscalibration signal as all-dropped');
+        assert.ok(warning.indexOf('MISCONFIGURED') !== -1);
+        assert.ok(warning.indexOf('demoted') !== -1, 'the demote count rides the message: ' + warning);
+    });
+
+    test('a mixed demote/drop round with zero kept warns (docs wording: dropped/demoted)', function() {
+        var warning = mod.buildOverSuppressionWarning(mod.filterStats(3, [
+            { decision: 'demote' }, { decision: 'drop' }, { decision: 'demote' }
+        ]));
+        assert.ok(warning, 'suppression of every candidate warns whatever the split');
+    });
+
+    test('a kept finding means a sane round — no warning', function() {
+        assert.equal(mod.buildOverSuppressionWarning(mod.filterStats(4, [
+            { decision: 'keep' }, { decision: 'demote' }, { decision: 'demote' }, { decision: 'demote' }
+        ])), null);
+    });
 });
 
 suite('reviewFilter — digest lines + comment injection', function() {
@@ -339,6 +401,18 @@ suite('reviewFilter — digest lines + comment injection', function() {
         var long = new Array(400 + 1).join('x');
         var lines = mod.buildDroppedDigestLines([{ path: 'a.js', line: 1, claim: long, reason: 'r' }]);
         assert.ok(lines[0].length < 300, 'digest line bounded: ' + lines[0].length);
+    });
+
+    test('a candidate without a line renders the bare path — never path:undefined (digest list review note)', function() {
+        var line = mod.buildDroppedDigestLine({ path: 'a.js', severity: 'IMPORTANT', claim: 'claim', reason: 'why' });
+        assert.ok(line.indexOf('`a.js` —') !== -1, 'bare path rendered: ' + line);
+        assert.ok(line.indexOf('undefined') === -1, 'no undefined leak: ' + line);
+    });
+
+    test('a candidate with neither path nor line stays auditable', function() {
+        var line = mod.buildDroppedDigestLine({ severity: 'IMPORTANT', claim: 'claim', reason: 'why' });
+        assert.ok(line.indexOf('undefined') === -1, 'no undefined leak: ' + line);
+        assert.ok(line.indexOf('why') !== -1, 'reason still listed: ' + line);
     });
 
     test('injection is null when nothing was dropped; a section otherwise', function() {
@@ -518,6 +592,20 @@ suite('reviewFilter — filter input + prompt builders', function() {
         assert.ok(line.indexOf('4') !== -1 && line.indexOf('1') !== -1 && line.indexOf('2') !== -1);
         assert.ok(line.indexOf('50%') !== -1, 'drop rate rendered as a percentage: ' + line);
         assert.ok(line.indexOf('gh-1403') !== -1);
+    });
+
+    test('an incomplete verdict file names its unaccounted candidates (digest list review note)', function() {
+        var line = mod.buildFilterStampLine(mod.filterStats(4, [
+            { decision: 'keep' }, { decision: 'keep' }
+        ]));
+        assert.ok(line.indexOf('unaccounted 2') !== -1, 'remainder visible: ' + line);
+    });
+
+    test('a complete round names no unaccounted remainder', function() {
+        var line = mod.buildFilterStampLine(mod.filterStats(2, [
+            { decision: 'keep' }, { decision: 'drop' }
+        ]));
+        assert.ok(line.indexOf('unaccounted') === -1, 'no noise on a complete round: ' + line);
     });
 
     test('file names are exported for the runner + tests', function() {

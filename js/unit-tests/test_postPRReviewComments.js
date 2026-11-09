@@ -4112,14 +4112,48 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         assert.equal(writes.length, 0, 'no files written');
     });
 
-    test('filterDiffPathOf — inputFolderPath wins; fallback is the input/<ticketKey> layout', function() {
-        var loaded = loadFilterRunner({}, [], null);
+    test('filterDiffPathOf — inputFolderPath wins when it holds the diff (inputFolderCandidates chain)', function() {
+        var loaded = loadFilterRunner({
+            'input/TS-42/pr_diff.txt': 'diff --git a/y b/y'
+        }, [], null);
         assert.equal(loaded.mod.filterDiffPathOf({ inputFolderPath: 'input/TS-42' }, 'TS-42'),
             'input/TS-42/pr_diff.txt', 'dispatched input folder used as-is');
         assert.equal(loaded.mod.filterDiffPathOf({}, 'TS-42'),
             'input/TS-42/pr_diff.txt', 'ticketKey fallback matches the review prompt layout');
         assert.equal(loaded.mod.filterDiffPathOf({ inputFolderPath: 'input/pr-1940' }, null),
             'input/pr-1940/pr_diff.txt', 'PR-anchored folder key works without a ticketKey');
+    });
+
+    test('filterDiffPathOf — a composite key resolves through inputFolderNameFor, not the raw key (gh-1403 thread 1)', function() {
+        var loaded = loadFilterRunner({ 'input/gh-1407/pr_diff.txt': 'diff --git a/x b/x' }, [], null);
+        assert.equal(loaded.mod.filterDiffPathOf({}, 'acme/widgets#1407'),
+            'input/gh-1407/pr_diff.txt',
+            'the derived input/<gh-N> layout is probed — the raw composite key path would 404');
+        var bothFolders = loadFilterRunner({
+            'input/gh-1407/pr_diff.txt': 'derived',
+            'input/explicit-1407/pr_diff.txt': 'explicit'
+        }, [], null);
+        assert.equal(bothFolders.mod.filterDiffPathOf({ inputFolderPath: 'input/explicit-1407' }, 'acme/widgets#1407'),
+            'input/explicit-1407/pr_diff.txt', 'the explicit dispatch folder is still most specific');
+    });
+
+    test('filterDiffPathOf — a sanitized key resolves its derived folder', function() {
+        var loaded = loadFilterRunner({ 'input/PROJ-123-A-B/pr_diff.txt': 'diff' }, [], null);
+        assert.equal(loaded.mod.filterDiffPathOf({}, 'PROJ-123/A B'),
+            'input/PROJ-123-A-B/pr_diff.txt', 'non-[\\w.-] key chars are derived away by inputFolderNameFor');
+    });
+
+    test('filterDiffPathOf — the jobParams-wrapped params shape is unwrapped', function() {
+        var loaded = loadFilterRunner({ 'input/WRAPPED/pr_diff.txt': 'diff' }, [], null);
+        assert.equal(loaded.mod.filterDiffPathOf({ jobParams: { inputFolderPath: 'input/WRAPPED' } }, 'K'),
+            'input/WRAPPED/pr_diff.txt', 'JSRunner jobParams wrapper unwrapped like linkedIssuesReport');
+    });
+
+    test('filterDiffPathOf — no candidate holds the diff: the first candidate is named anyway (fail-open)', function() {
+        var loaded = loadFilterRunner({}, [], null);
+        assert.equal(loaded.mod.filterDiffPathOf({}, 'acme/widgets#1407'),
+            'input/gh-1407/pr_diff.txt',
+            'degrades to the derived layout — the same fail-open class as any filter degradation');
     });
 
     test('applyReviewFilter with zero candidates skips the CLI (no cost round)', function() {
