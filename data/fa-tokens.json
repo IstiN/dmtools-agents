@@ -1,15 +1,4 @@
 {
-  "pr-1271": [
-    {
-      "leg": "review",
-      "at": "2026-10-26T15:22:39Z",
-      "prompt": 34361,
-      "completion": 4286,
-      "total": 38647,
-      "cacheRead": 372736,
-      "model": "kimi-for-coding"
-    }
-  ],
   "pr-1272": [
     {
       "leg": "review",
@@ -1683,6 +1672,17 @@
       "completion": 30547,
       "total": 204812,
       "cacheRead": 3331328,
+      "model": "glm-5.3-flash"
+    }
+  ],
+  "issue-1408": [
+    {
+      "leg": "dev",
+      "at": "2026-11-09T15:28:52Z",
+      "prompt": 190964,
+      "completion": 30903,
+      "total": 221867,
+      "cacheRead": 5575168,
       "model": "glm-5.3-flash"
     }
   ]
