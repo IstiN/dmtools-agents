@@ -1197,27 +1197,65 @@ function appendDroppedSection(reviewData, section, ctx) {
 }
 
 /**
+ * The inlineComments list of a review payload — [] for null payloads and
+ * non-array fields (the same empty-list read the pure filter module uses).
+ */
+function filterInlineOf(reviewData) {
+    return reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
+}
+
+/**
+ * The round's demote stamps: the applied entries that carry a note — a demote
+ * on a FILE-referenced comment stamps the demotion note into the comment
+ * file (inline bodies got theirs from the pure apply).
+ */
+function demoteStampsOf(applied) {
+    return (applied || []).filter(function(a) { return a.decision === 'demote' && a.note; });
+}
+
+/**
+ * The first not-yet-stamped inline entry a stamp targets: same path + line,
+ * structured severity still at the demote target (entries are consumed once
+ * so two demotes on one file cannot double-append).
+ */
+function isStampTarget(entry, stamp) {
+    if (entry.__filterNoted || entry.path !== stamp.path || entry.line !== stamp.line) return false;
+    return String(entry.severity || '').toUpperCase() === stamp.to;
+}
+
+function matchingStampTarget(inline, stamp) {
+    for (var j = 0; j < inline.length; j++) {
+        var entry = inline[j] || {};
+        if (isStampTarget(entry, stamp)) return entry;
+    }
+    return null;
+}
+
+/**
+ * One stamp: mark the entry consumed, then append the note to the comment
+ * file it references (inline bodies have no file — nothing to write).
+ */
+function stampOneDemotion(entry, stamp, ctx) {
+    entry.__filterNoted = true;
+    if (!entry.comment) return;
+    var content = readMarkdownFile(entry.comment, ctx.ticketKey, ctx.workingDir);
+    if (content) {
+        writeFilterArtifact(entry.comment, content.replace(/\s*$/, '') + '\n' + stamp.note + '\n');
+    }
+}
+
+/**
  * A demote on a FILE-referenced comment stamps the demotion note into the
  * comment file (inline bodies got theirs from the pure apply). Entries are
  * consumed once so two demotes on one file cannot double-append.
  */
 function stampDemotionNotesOnFiles(reviewData, applied, ctx) {
-    var inline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
-    var stamps = (applied || []).filter(function(a) { return a.decision === 'demote' && a.note; });
+    var inline = filterInlineOf(reviewData);
+    var stamps = demoteStampsOf(applied);
     for (var i = 0; i < stamps.length; i++) {
-        var stamp = stamps[i];
-        for (var j = 0; j < inline.length; j++) {
-            var entry = inline[j] || {};
-            if (entry.__filterNoted || entry.path !== stamp.path || entry.line !== stamp.line) continue;
-            if (String(entry.severity || '').toUpperCase() !== stamp.to) continue;
-            entry.__filterNoted = true;
-            if (!entry.comment) break;
-            var content = readMarkdownFile(entry.comment, ctx.ticketKey, ctx.workingDir);
-            if (content) {
-                writeFilterArtifact(entry.comment, content.replace(/\s*$/, '') + '\n' + stamp.note + '\n');
-            }
-            break;
-        }
+        var entry = matchingStampTarget(inline, stamps[i]);
+        if (!entry) continue;
+        stampOneDemotion(entry, stamps[i], ctx);
     }
     for (var k = 0; k < inline.length; k++) {
         delete inline[k].__filterNoted;

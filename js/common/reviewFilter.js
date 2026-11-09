@@ -54,6 +54,14 @@ var DIGEST_CLAIM_MAX = 160;
 // ── Candidate selection ──────────────────────────────────────────────────────
 
 /**
+ * The inlineComments list of a review payload — [] for null payloads and
+ * non-array fields (every caller needs the same empty-list read).
+ */
+function inlineListOf(reviewData) {
+    return reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
+}
+
+/**
  * The tier order rank (lower = more severe). Unknown tiers rank last — a
  * demote target must rank strictly HIGHER (less severe) than the finding's
  * tier.
@@ -87,26 +95,35 @@ function claimOf(inlineComment, resolveClaim) {
 }
 
 /**
+ * One candidate from one inline comment, or null when the finding must not
+ * go through the filter: not a filterable tier, or no resolvable claim —
+ * there is nothing to verify.
+ */
+function filterCandidateOf(c, id, policy, resolveClaim) {
+    if (!isFilterableTier(c.severity, policy)) return null;
+    var claim = claimOf(c, resolveClaim);
+    if (!claim || !claim.trim()) return null;
+    return {
+        id: id,
+        path: c.path || c.file || '',
+        line: c.line,
+        severity: c.severity,
+        claim: claim
+    };
+}
+
+/**
  * The round's filter candidates: {id, path, line, severity, claim} where id
  * is the position in the ORIGINAL inlineComments array (the verdict file's
  * join key). Findings without a resolvable claim are skipped — there is
  * nothing to verify.
  */
 function selectFilterCandidates(reviewData, policy, resolveClaim) {
-    var inline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
+    var inline = inlineListOf(reviewData);
     var candidates = [];
     for (var i = 0; i < inline.length; i++) {
-        var c = inline[i] || {};
-        if (!isFilterableTier(c.severity, policy)) continue;
-        var claim = claimOf(c, resolveClaim);
-        if (!claim || !claim.trim()) continue;
-        candidates.push({
-            id: i,
-            path: c.path || c.file || '',
-            line: c.line,
-            severity: c.severity,
-            claim: claim
-        });
+        var candidate = filterCandidateOf(inline[i] || {}, i, policy, resolveClaim);
+        if (candidate) candidates.push(candidate);
     }
     return candidates;
 }
@@ -118,15 +135,45 @@ function isNonEmptyString(v) {
 }
 
 /**
- * One structural verdict, or null with a note. Structural only — the
- * downgrade check needs the candidate's own tier and runs at apply time.
+ * The verdict id: numbers ride as-is, numeric strings fall back to parseInt
+ * (the verdict file is model-written — ids may arrive quoted).
  */
-function parseOneVerdict(v, seenIds, notes) {
+function verdictIdOf(v) {
+    return typeof v.id === 'number' ? v.id : parseInt(v.id, 10);
+}
+
+/**
+ * The demote target tier, upper-cased and validated against the policy tier
+ * list. null (with a note) when the tier is unknown — a demote to a
+ * non-tier is structurally refused.
+ */
+function demoteTierOf(v, id, notes) {
+    var tier = String(v.tier || '').trim().toUpperCase();
+    if (reviewPolicy.TIERS.indexOf(tier) === -1) {
+        notes.push('ignoring demote for candidate ' + id + ': unknown tier ' + JSON.stringify(v.tier));
+        return null;
+    }
+    return tier;
+}
+
+/**
+ * The verdict's one-line reason, or null. The reason is part of the output
+ * contract for drop/demote (checked by the caller).
+ */
+function verdictReasonOf(v) {
+    return isNonEmptyString(v.reason) ? v.reason.trim() : null;
+}
+
+/**
+ * The structural head of one verdict — object shape, id, known decision,
+ * not a duplicate — or null with a note.
+ */
+function parseVerdictHead(v, seenIds, notes) {
     if (!v || typeof v !== 'object') {
         notes.push('ignoring non-object verdict entry');
         return null;
     }
-    var id = typeof v.id === 'number' ? v.id : parseInt(v.id, 10);
+    var id = verdictIdOf(v);
     if (isNaN(id)) {
         notes.push('ignoring verdict without a numeric id');
         return null;
@@ -140,23 +187,51 @@ function parseOneVerdict(v, seenIds, notes) {
         notes.push('ignoring duplicate verdict for candidate ' + id + ' — first wins');
         return null;
     }
-    var tier = null;
-    if (decision === 'demote') {
-        tier = String(v.tier || '').trim().toUpperCase();
-        if (reviewPolicy.TIERS.indexOf(tier) === -1) {
-            notes.push('ignoring demote for candidate ' + id + ': unknown tier ' + JSON.stringify(v.tier));
-            return null;
-        }
-    }
-    var reason = isNonEmptyString(v.reason) ? v.reason.trim() : null;
+    return { id: id, decision: decision };
+}
+
+/**
+ * The contract tail of one verdict — the demote tier (when demote) and the
+ * mandatory one-line reason for drop/demote — or null with a note.
+ * Structural only — the downgrade check needs the candidate's own tier and
+ * runs at apply time.
+ */
+function parseVerdictTail(v, id, decision, notes) {
+    var tier = decision === 'demote' ? demoteTierOf(v, id, notes) : null;
+    if (decision === 'demote' && tier === null) return null;
+    var reason = verdictReasonOf(v);
     if (decision !== 'keep' && !reason) {
         // gh-1403: the one-line reason is part of the output contract — a
         // reasonless drop/demote is refused (fail-open to keep).
         notes.push('ignoring ' + decision + ' for candidate ' + id + ': missing one-line reason');
         return null;
     }
-    seenIds[id] = true;
     return { id: id, decision: decision, tier: tier, reason: reason };
+}
+
+/**
+ * One structural verdict, or null with a note. The seenIds mark lands only
+ * after every check passes (a refused verdict never consumes its id).
+ */
+function parseOneVerdict(v, seenIds, notes) {
+    var head = parseVerdictHead(v, seenIds, notes);
+    if (!head) return null;
+    var verdict = parseVerdictTail(v, head.id, head.decision, notes);
+    if (!verdict) return null;
+    seenIds[head.id] = true;
+    return verdict;
+}
+
+/**
+ * The verdicts array of a parsed payload, or null with a note when the
+ * payload carries none.
+ */
+function verdictsListOf(parsed, notes) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.verdicts)) {
+        notes.push('filter verdicts carry no verdicts array — running unfiltered');
+        return null;
+    }
+    return parsed.verdicts;
 }
 
 /**
@@ -176,14 +251,12 @@ function parseFilterVerdicts(raw) {
             return { verdicts: [], notes: notes };
         }
     }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.verdicts)) {
-        notes.push('filter verdicts carry no verdicts array — running unfiltered');
-        return { verdicts: [], notes: notes };
-    }
+    var verdictList = verdictsListOf(parsed, notes);
+    if (!verdictList) return { verdicts: [], notes: notes };
     var seenIds = {};
     var verdicts = [];
-    for (var i = 0; i < parsed.verdicts.length; i++) {
-        var verdict = parseOneVerdict(parsed.verdicts[i], seenIds, notes);
+    for (var i = 0; i < verdictList.length; i++) {
+        var verdict = parseOneVerdict(verdictList[i], seenIds, notes);
         if (verdict) verdicts.push(verdict);
     }
     return { verdicts: verdicts, notes: notes };
@@ -209,11 +282,118 @@ function candidateById(candidates, id) {
 }
 
 function inlineIndexOf(reviewData, id) {
-    var inline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
+    var inline = inlineListOf(reviewData);
     for (var i = 0; i < inline.length; i++) {
         if ((inline[i] || {}).__filterId === id) return i;
     }
     return -1;
+}
+
+/**
+ * The one-shot identity tags that make a drop-by-id splice the right object
+ * even when the array shifted under an earlier drop — and their cleanup
+ * before the payload posts.
+ */
+function tagFilterIds(inline) {
+    for (var t = 0; t < inline.length; t++) {
+        inline[t].__filterId = t;
+    }
+}
+
+function untagFilterIds(inline) {
+    for (var u = 0; u < inline.length; u++) {
+        delete inline[u].__filterId;
+    }
+}
+
+/**
+ * The machine demotion provenance note for a filter demote — the gh-1053
+ * demotion head (so the gh-1332 registry strips the machine tail from the
+ * cross-round claim) with the filter's own provenance + reason.
+ */
+function demotionNote(reason) {
+    return reviewSpecClaims.DEMOTION_NOTE_HEAD +
+        ': review-filter demotion (gh-1403)** — fresh-context verification: ' + String(reason || '');
+}
+
+/**
+ * The demotion provenance appended to an INLINE body. File-referenced
+ * findings get the note appended to their comment file by the runner (file
+ * writes stay out of this module).
+ */
+function stampDemotionBody(entry, note) {
+    if (typeof entry.body === 'string' && entry.body.trim()) {
+        entry.body = entry.body.replace(/\s*$/, '') + '\n' + note;
+    }
+}
+
+/**
+ * The keep outcome: the finding posts unchanged.
+ */
+function applyKeepVerdict(v, applied) {
+    applied.push({ id: v.id, decision: 'keep', reason: v.reason || null });
+}
+
+/**
+ * A demote, or null when refused — a target that does not rank strictly
+ * below the finding's tier is refused with a note (fail-open to keep), and
+ * a thread that vanished under an earlier drop has nothing to demote.
+ */
+function demoteOutcomeOf(reviewData, candidate, v, notes) {
+    if (tierRank(v.tier) <= tierRank(candidate.severity)) {
+        notes.push('demote refused for candidate ' + v.id + ': ' + v.tier +
+            ' does not rank below ' + candidate.severity);
+        return null;
+    }
+    var idx = inlineIndexOf(reviewData, v.id);
+    if (idx === -1) return null;
+    var note = demotionNote(v.reason);
+    var entry = inlineListOf(reviewData)[idx];
+    entry.severity = v.tier;
+    stampDemotionBody(entry, note);
+    return {
+        id: v.id, decision: 'demote', from: candidate.severity, to: v.tier,
+        reason: v.reason, note: note,
+        path: candidate.path, line: candidate.line
+    };
+}
+
+/**
+ * A drop: the thread is spliced out of inlineComments (it re-surfaces as a
+ * digest line). A thread that vanished under an earlier drop has nothing to
+ * drop.
+ */
+function applyDropVerdict(reviewData, candidate, v, dropped, applied) {
+    var dropIdx = inlineIndexOf(reviewData, v.id);
+    if (dropIdx === -1) return;
+    inlineListOf(reviewData).splice(dropIdx, 1);
+    dropped.push({
+        id: v.id, path: candidate.path, line: candidate.line,
+        severity: candidate.severity, claim: candidate.claim, reason: v.reason
+    });
+    applied.push({ id: v.id, decision: 'drop', reason: v.reason });
+}
+
+/**
+ * One verdict dispatched to its decision handler. Unknown candidate ids and
+ * vanished threads are noted/skipped — never fatal.
+ */
+function applyOneVerdict(reviewData, candidates, v, applied, dropped, notes) {
+    var candidate = candidateById(candidates, v.id);
+    if (!candidate) {
+        notes.push('verdict for unknown candidate ' + v.id + ' ignored');
+        return;
+    }
+    if (v.decision === 'keep') {
+        applyKeepVerdict(v, applied);
+        return;
+    }
+    if (v.decision === 'demote') {
+        var demoted = demoteOutcomeOf(reviewData, candidate, v, notes);
+        if (demoted) applied.push(demoted);
+        return;
+    }
+    applyDropVerdict(reviewData, candidate, v, dropped, applied);
 }
 
 /**
@@ -225,64 +405,18 @@ function inlineIndexOf(reviewData, id) {
  * { applied, dropped, notes, changed }.
  */
 function applyFilterVerdicts(reviewData, candidates, verdicts) {
-    var inline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
+    var inline = inlineListOf(reviewData);
     // Tag the live entries once so a drop-by-id splices the right object
     // even when the array shifted under an earlier drop.
-    for (var t = 0; t < inline.length; t++) {
-        inline[t].__filterId = t;
-    }
+    tagFilterIds(inline);
     var applied = [];
     var dropped = [];
     var notes = [];
-    for (var i = 0; i < (verdicts || []).length; i++) {
-        var v = verdicts[i] || {};
-        var candidate = candidateById(candidates, v.id);
-        if (!candidate) {
-            notes.push('verdict for unknown candidate ' + v.id + ' ignored');
-            continue;
-        }
-        if (v.decision === 'keep') {
-            applied.push({ id: v.id, decision: 'keep', reason: v.reason || null });
-            continue;
-        }
-        if (v.decision === 'demote') {
-            if (tierRank(v.tier) <= tierRank(candidate.severity)) {
-                notes.push('demote refused for candidate ' + v.id + ': ' + v.tier +
-                    ' does not rank below ' + candidate.severity);
-                continue;
-            }
-            var idx = inlineIndexOf(reviewData, v.id);
-            if (idx === -1) continue;
-            var note = demotionNote(v.reason);
-            var entry = inline[idx];
-            entry.severity = v.tier;
-            // The posted body carries the provenance when the finding is
-            // inline; file-referenced findings get the note appended to
-            // their comment file by the runner (file writes stay out of
-            // this module).
-            if (typeof entry.body === 'string' && entry.body.trim()) {
-                entry.body = entry.body.replace(/\s*$/, '') + '\n' + note;
-            }
-            applied.push({
-                id: v.id, decision: 'demote', from: candidate.severity, to: v.tier,
-                reason: v.reason, note: note,
-                path: candidate.path, line: candidate.line
-            });
-            continue;
-        }
-        // drop
-        var dropIdx = inlineIndexOf(reviewData, v.id);
-        if (dropIdx === -1) continue;
-        inline.splice(dropIdx, 1);
-        dropped.push({
-            id: v.id, path: candidate.path, line: candidate.line,
-            severity: candidate.severity, claim: candidate.claim, reason: v.reason
-        });
-        applied.push({ id: v.id, decision: 'drop', reason: v.reason });
+    var list = Array.isArray(verdicts) ? verdicts : [];
+    for (var i = 0; i < list.length; i++) {
+        applyOneVerdict(reviewData, candidates, list[i] || {}, applied, dropped, notes);
     }
-    for (var u = 0; u < inline.length; u++) {
-        delete inline[u].__filterId;
-    }
+    untagFilterIds(inline);
     return {
         applied: applied,
         dropped: dropped,
@@ -294,29 +428,44 @@ function applyFilterVerdicts(reviewData, candidates, verdicts) {
 // ── Post-filter census recomputation ─────────────────────────────────────────
 
 /**
+ * The census bucket name for one thread severity. An unknown severity never
+ * gates — it counts as a digest line (visible, never an approval gate).
+ */
+function censusSevKey(sev) {
+    if (sev === 'BLOCKING') return 'blocking';
+    if (sev === 'IMPORTANT') return 'important';
+    if (sev === 'SUGGESTION') return 'suggestions';
+    if (sev === 'NIT') return 'nits';
+    return 'digest';
+}
+
+/**
+ * The digest bucket: the agent's digest census preserved, plus one digest
+ * line per dropped candidate.
+ */
+function digestCensusOf(reviewData, droppedCount) {
+    var counts = (reviewData && reviewData.issueCounts) || {};
+    return reviewVerdicts.censusCount(counts.digest) + reviewVerdicts.censusCount(droppedCount);
+}
+
+/**
  * The census recomputed AFTER filtering (gh-1403 machine semantics; the
  * gh-1351 verdict machinery reads it unchanged): threads counted by their
  * structured severity, the agent's digest census preserved, plus one digest
- * line per dropped candidate. An unknown severity never gates — it counts
- * as a digest line (visible, never an approval gate).
+ * line per dropped candidate.
  */
 function recomputeCensus(reviewData, droppedCount) {
-    var inline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
-    var counts = (reviewData && reviewData.issueCounts) || {};
+    var inline = inlineListOf(reviewData);
     var census = {
         blocking: 0,
         important: 0,
         suggestions: 0,
         nits: 0,
-        digest: reviewVerdicts.censusCount(counts.digest) + reviewVerdicts.censusCount(droppedCount)
+        digest: digestCensusOf(reviewData, droppedCount)
     };
     for (var i = 0; i < inline.length; i++) {
         var sev = String((inline[i] || {}).severity || '').trim().toUpperCase();
-        if (sev === 'BLOCKING') census.blocking++;
-        else if (sev === 'IMPORTANT') census.important++;
-        else if (sev === 'SUGGESTION') census.suggestions++;
-        else if (sev === 'NIT') census.nits++;
-        else census.digest++;
+        census[censusSevKey(sev)]++;
     }
     return census;
 }

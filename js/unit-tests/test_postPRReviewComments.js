@@ -4401,4 +4401,95 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         assert.equal(result.filter, undefined, 'no filter outcome on the default policy');
         assert.equal(cliCalls.length, 0, 'verification none costs nothing');
     });
+
+    test('applyReviewFilter — a throwing verdict-file read degrades to unfiltered (fail-open)', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({}, writes, function(args) {
+            var p = args && (args.path || args);
+            if (p === 'outputs/pr_review_filter.json') throw new Error('disk boom');
+            return 'cli output';
+        });
+        var data = filteredReviewData();
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(outcome, null, 'unreadable verdicts → unfiltered');
+        assert.equal(data.inlineComments.length, 4, 'review data untouched');
+        assert.equal(data.issueCounts.important, 2, 'census untouched');
+    });
+
+    test('applyReviewFilter — a non-file generalComment skips the drop listing, stats still ride', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({ 'outputs/pr_review_filter.json': dropDemoteKeepVerdicts() }, writes, null);
+        var data = filteredReviewData();
+        data.generalComment = '## General review\n\ninline text, not a file reference';
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome, 'filter outcome still returned');
+        assert.equal(outcome.stats.candidates, 3);
+        assert.equal(outcome.dropped.length, 1);
+        var gcWrites = writes.filter(function(w) { return w.path === 'outputs/pr_review_general.md'; });
+        assert.equal(gcWrites.length, 0, 'no general-comment file write without a file path');
+    });
+
+    test('applyReviewFilter — an unreadable general-comment file skips the injection (non-fatal)', function() {
+        var writes = [];
+        var loaded = loadFilterRunner({ 'outputs/pr_review_filter.json': dropDemoteKeepVerdicts() }, writes, null);
+        var data = filteredReviewData();
+        data.generalComment = 'outputs/pr_review_comments/missing.md';
+        var outcome = loaded.mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.ok(outcome, 'filter outcome still returned');
+        assert.equal(writes.filter(function(w) { return w.path === 'outputs/pr_review_comments/missing.md'; }).length, 0,
+            'nothing written when the general comment file does not exist');
+    });
+
+    test('stampDemotionNotesOnFiles — a stamp whose severity no longer matches is skipped (consume-once)', function() {
+        var writes = [];
+        var fileMap = { 'outputs/pr_review_comments/c1.md': 'original claim prose' };
+        var loaded = loadFilterRunner(fileMap, writes, null);
+        var data = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 0, important: 1, suggestions: 0, nits: 0, digest: 0 },
+            inlineComments: [
+                { path: 'b.js', line: 20, severity: 'IMPORTANT', comment: 'outputs/pr_review_comments/c1.md' }
+            ]
+        };
+        loaded.mod.stampDemotionNotesOnFiles(data, [
+            { decision: 'demote', path: 'b.js', line: 20, to: 'SUGGESTION', note: 'demotion note' }
+        ], filterCtx(filterPolicy()));
+        var fileWrite = writes.filter(function(w) { return w.path === 'outputs/pr_review_comments/c1.md'; })[0];
+        assert.equal(fileWrite, undefined, 'severity mismatch → the comment file is NOT rewritten');
+        assert.equal(data.inlineComments[0].severity, 'IMPORTANT', 'the entry severity is untouched');
+        assert.ok(!data.inlineComments[0].__filterNoted, 'no stamp tag left behind');
+    });
+
+    test('applyReviewFilter — an unexpected internal error degrades to unfiltered (catch-all fail-open)', function() {
+        var writes = [];
+        var realFilter = loadModule('js/common/reviewFilter.js', makeRequire({
+            './reviewPolicy.js': loadReviewPolicyModule(),
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './reviewSpecClaims.js': loadSpecClaimsWithRegistry()
+        }), {});
+        var brokenFilter = {};
+        for (var k in realFilter) { brokenFilter[k] = realFilter[k]; }
+        brokenFilter.buildFilterInputJson = function() { throw new Error('input boom'); };
+        var cliCalls = [];
+        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), { file_read: mapFileRead({}) });
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': outputFiles,
+                './common/reviewFilter.js': brokenFilter
+            })),
+            {
+                file_read: mapFileRead({ 'outputs/pr_review_filter.json': dropDemoteKeepVerdicts() }),
+                file_write: function(a, b) { writes.push(typeof a === 'string' ? { path: a, content: b } : a); },
+                cli_execute_command: function(args) { cliCalls.push(args); return 'cli'; }
+            }
+        );
+        var data = filteredReviewData();
+        var outcome = mod.applyReviewFilter(data, filterCtx(filterPolicy()), 'input/PROJ-1/pr_diff.txt');
+        assert.equal(outcome, null, 'internal filter error → unfiltered, never fatal');
+        assert.equal(data.inlineComments.length, 4, 'review data untouched');
+        assert.equal(data.issueCounts.important, 2, 'census untouched');
+    });
 });

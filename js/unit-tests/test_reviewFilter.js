@@ -352,6 +352,130 @@ suite('reviewFilter — digest lines + comment injection', function() {
     });
 });
 
+suite('reviewFilter — verdict parse robustness (structural garbage is noted, never fatal)', function() {
+
+    test('non-object verdict entries are skipped with a note', function() {
+        var raw = JSON.stringify({ verdicts: [
+            'a plain string entry',
+            null,
+            { id: 0, decision: 'keep' }
+        ] });
+        var out = mod.parseFilterVerdicts(raw);
+        assert.equal(out.verdicts.length, 1, 'only the structurally valid entry survives');
+        assert.equal(out.verdicts[0].id, 0);
+        assert.equal(out.notes.length, 2, 'both non-object entries noted');
+        assert.ok(out.notes[0].indexOf('non-object') !== -1, 'note names the reason: ' + out.notes[0]);
+    });
+
+    test('verdicts without a numeric id are skipped with a note', function() {
+        var raw = JSON.stringify({ verdicts: [
+            { id: 'abc', decision: 'drop', reason: 'id is not a number' },
+            { decision: 'drop', reason: 'no id at all' },
+            { id: '2', decision: 'keep' }
+        ] });
+        var out = mod.parseFilterVerdicts(raw);
+        assert.equal(out.verdicts.length, 1, 'the numeric-string id parses (parseInt fallback)');
+        assert.equal(out.verdicts[0].id, 2);
+        assert.equal(out.notes.length, 2, 'both id-less entries noted');
+        assert.ok(out.notes[0].indexOf('numeric id') !== -1, 'note names the reason: ' + out.notes[0]);
+    });
+
+    test('parseFilterVerdicts on a parsed object skips the JSON.parse branch', function() {
+        var out = mod.parseFilterVerdicts({ verdicts: [{ id: 0, decision: 'keep' }] });
+        assert.equal(out.verdicts.length, 1);
+        assert.equal(out.notes.length, 0);
+    });
+});
+
+suite('reviewFilter — verdict application guards (defensive paths)', function() {
+
+    test('a verdict for an unknown candidate id is ignored with a note (changed stays false)', function() {
+        var data = reviewDataWith([inline('a.js', 10, 'IMPORTANT')]);
+        var candidates = mod.selectFilterCandidates(data, reviewPolicy.defaultPolicy(), bodyClaimResolver);
+        var verdicts = mod.parseFilterVerdicts(JSON.stringify({ verdicts: [
+            { id: 99, decision: 'drop', reason: 'no such candidate' }
+        ] })).verdicts;
+        var out = mod.applyFilterVerdicts(data, candidates, verdicts);
+        assert.equal(out.applied.length, 0, 'nothing applied');
+        assert.equal(out.dropped.length, 0);
+        assert.equal(out.notes.length, 1, 'the unknown-candidate verdict is noted');
+        assert.ok(out.notes[0].indexOf('99') !== -1, 'note names the id: ' + out.notes[0]);
+        assert.equal(out.changed, false, 'no applicable verdicts → unfiltered round');
+        assert.equal(data.inlineComments.length, 1, 'review data untouched');
+    });
+
+    test('a demote whose inline entry vanished is skipped silently (concurrent-modification guard)', function() {
+        var data = reviewDataWith([
+            inline('a.js', 10, 'IMPORTANT'),
+            inline('b.js', 20, 'IMPORTANT')
+        ]);
+        var candidates = mod.selectFilterCandidates(data, reviewPolicy.defaultPolicy(), bodyClaimResolver);
+        data.inlineComments.splice(1, 1); // the id-1 thread is gone before verdicts apply
+        var verdicts = mod.parseFilterVerdicts(JSON.stringify({ verdicts: [
+            { id: 1, decision: 'demote', tier: 'SUGGESTION', reason: 'real but cosmetic' }
+        ] })).verdicts;
+        var out = mod.applyFilterVerdicts(data, candidates, verdicts);
+        assert.equal(out.applied.length, 0, 'nothing to demote — the thread is gone');
+        assert.equal(out.changed, false);
+    });
+
+    test('a drop whose inline entry vanished is skipped silently (concurrent-modification guard)', function() {
+        var data = reviewDataWith([
+            inline('a.js', 10, 'IMPORTANT'),
+            inline('b.js', 20, 'IMPORTANT')
+        ]);
+        var candidates = mod.selectFilterCandidates(data, reviewPolicy.defaultPolicy(), bodyClaimResolver);
+        data.inlineComments.splice(1, 1); // the id-1 thread is gone before verdicts apply
+        var verdicts = mod.parseFilterVerdicts(JSON.stringify({ verdicts: [
+            { id: 1, decision: 'drop', reason: 'verified wrong' }
+        ] })).verdicts;
+        var out = mod.applyFilterVerdicts(data, candidates, verdicts);
+        assert.equal(out.dropped.length, 0, 'nothing to drop — the thread is gone');
+        assert.equal(out.changed, false);
+        assert.equal(data.inlineComments.length, 1);
+    });
+
+    test('drops splice the right entry when an earlier drop shifted the array (multi-item)', function() {
+        var data = reviewDataWith([
+            inline('a.js', 10, 'IMPORTANT'),
+            inline('b.js', 20, 'IMPORTANT'),
+            inline('c.js', 30, 'IMPORTANT')
+        ]);
+        var candidates = mod.selectFilterCandidates(data, reviewPolicy.defaultPolicy(), bodyClaimResolver);
+        var verdicts = mod.parseFilterVerdicts(JSON.stringify({ verdicts: [
+            { id: 0, decision: 'drop', reason: 'first' },
+            { id: 2, decision: 'drop', reason: 'second — id 2 shifted to index 1 after the first splice' }
+        ] })).verdicts;
+        var out = mod.applyFilterVerdicts(data, candidates, verdicts);
+        assert.equal(data.inlineComments.length, 1);
+        assert.equal(data.inlineComments[0].path, 'b.js', 'the kept middle entry survives both splices');
+        assert.deepEqual(out.dropped.map(function(d) { return d.path; }), ['a.js', 'c.js']);
+    });
+});
+
+suite('reviewFilter — census buckets (all severities counted)', function() {
+
+    test('BLOCKING threads count into the blocking bucket', function() {
+        var data = reviewDataWith([
+            inline('a.js', 10, 'BLOCKING'),
+            inline('b.js', 20, 'IMPORTANT')
+        ], { blocking: 0, important: 0, suggestions: 0, nits: 0, digest: 4 });
+        var census = mod.recomputeCensus(data, 0);
+        assert.equal(census.blocking, 1, 'the blocking thread gates');
+        assert.equal(census.important, 1);
+        assert.equal(census.digest, 4, 'agent digest preserved');
+    });
+
+    test('null reviewData rides an empty census with the dropped count as digest', function() {
+        var census = mod.recomputeCensus(null, 2);
+        assert.equal(census.digest, 2);
+        assert.equal(census.blocking, 0);
+        assert.equal(census.important, 0);
+        assert.equal(census.suggestions, 0);
+        assert.equal(census.nits, 0);
+    });
+});
+
 suite('reviewFilter — filter input + prompt builders', function() {
 
     test('input JSON carries id/path/line/claim and NEVER severity or rationale fields', function() {
