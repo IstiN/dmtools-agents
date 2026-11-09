@@ -1,12 +1,25 @@
 # SM GitLab
 
-The GitLab state engine for the machine loop. It evaluates configured GitLab merge-request and issue rules on each tick to reconcile review and validation state, rerun cancelled checks, update branches, and merge eligible changes.
+`sm_gitlab.json` is a parked configuration, not a runnable GitLab state engine. Every rule is explicitly disabled because `js/smAgent.js` does not yet register a GitLab rule source and its local actions still use GitHub APIs. Enabling these rules before that engine support lands can fail the SM tick or target the wrong forge.
+
+## Engine Gaps
+
+- GitLab machine-verdict records are unavailable. `latestVerdict` rules cannot match, and `notLatestVerdict` merge vetoes fail open. Do not enable the reconcile, merge, or validation rules until verdict records are supported.
+- GitLab issue closure is unavailable. The `close-on-merge` rule must remain disabled; the provider never posts an MR note using an issue IID.
+- GitLab's active-pipeline probe cannot map a pipeline to an issue, so busy detection is conservative.
+- `runAsync` worker fan-out and several local-action probes are GitHub-only.
+- `smGuestTransplant` is disabled explicitly; an empty object would arm its defaults.
+
+## Deployment
+
+Select the forge in the consuming repository's `.dmtools/config.js` with `scm: { provider: 'gitlab' }`, or use the supported `customParams.scmProvider` override. `jobParams.scm` in an SM JSON file is not read by `js/smAgent.js`.
+
+The rules reference their `sm_github.json` twins for shared operational rationale. GitLab-specific limitations must be resolved before enabling them.
 
 ## Parameters
 
-Configured in `jobParams` in `sm_gitlab.json`.
+The parked configuration retains these intended settings in `jobParams`:
 
 - `maxTriggeredWorkflows` — maximum workflows dispatched during one tick.
 - `validationConcurrency` — maximum number of concurrent validation runs when the approved queue reaches its configured watermark.
 - `validationConcurrencyQueueWatermark` — approved queue depth that enables concurrent validation.
-- `rules` — GitLab-backed issue and merge-request rules processed by `js/smAgent.js`.

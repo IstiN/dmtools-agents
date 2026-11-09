@@ -1666,7 +1666,7 @@ suite('smProvider — gh-1009 CRAP characterization (paths touched by the provid
         ]);
     });
 
-    test('gitlab: closeIssue warns, posts the note when a comment is given, stays non-fatal on note failure', function () {
+    test('gitlab: closeIssue warns and never posts an MR note using an issue iid', function () {
         var notes = [];
         var p = loadProvider('gitlab', {
             gitlab_create_mr_note: function (a) { notes.push(a); return 'ok'; }
@@ -1676,16 +1676,7 @@ suite('smProvider — gh-1009 CRAP characterization (paths touched by the provid
         });
         assert.equal(warnings.length, 1);
         assert.contains(warnings[0], 'gitlab close-issue tool not available');
-        assert.deepEqual(notes, [{ workspace: 'mygroup', repository: 'my-repo',
-                                  pullRequestId: '4', text: 'bye' }]);
-        var p2 = loadProvider('gitlab', {
-            gitlab_create_mr_note: function () { throw new Error('boom'); }
-        });
-        warnings = captureWarn(function () {
-            assert.equal(p2.closeIssue(5, 'x'), null);
-        });
-        assert.equal(warnings.length, 2);
-        assert.contains(warnings[1], 'close-issue comment failed');
+        assert.deepEqual(notes, []);
     });
 });
 
