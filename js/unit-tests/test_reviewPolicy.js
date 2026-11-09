@@ -543,3 +543,63 @@ suite('reviewPolicy — bounds validation branches (gh-1351 ratchet)', function(
         assert.deepEqual(p.identity, {}, 'null identity becomes an empty object');
     });
 });
+
+suite('reviewPolicy — verification knob (gh-1403: none | filter)', function() {
+
+    test('missing verification rides the default none (owners opt in)', function() {
+        assert.equal(mod.defaultPolicy().verification, 'none');
+        assert.equal(mod.resolveReviewPolicy({}, {}).verification, 'none');
+        assert.equal(mod.presetPolicy('relaxed').verification, 'none');
+    });
+
+    test('verification filter resolves from projectConfig.reviewPolicy', function() {
+        var p = mod.resolveReviewPolicy({ reviewPolicy: { verification: 'filter' } }, {});
+        assert.equal(p.verification, 'filter');
+        assert.equal(p.preset, 'default', 'partial config rides the default preset');
+    });
+
+    test('verification none resolves explicitly', function() {
+        var p = mod.resolveReviewPolicy({ reviewPolicy: { verification: 'none' } }, {});
+        assert.equal(p.verification, 'none');
+    });
+
+    test('verification rides the jobParams JSON-string path too', function() {
+        var p = mod.resolveReviewPolicy({}, { reviewPolicy: JSON.stringify({ verification: 'filter' }) });
+        assert.equal(p.verification, 'filter');
+    });
+
+    test('unknown verification value is a hard validation error', function() {
+        var e = validationErrorMessage(function() {
+            mod.resolveReviewPolicy({ reviewPolicy: { verification: 'vote' } }, {});
+        });
+        assert.ok(e, 'unknown verification must throw');
+        assert.equal(e.name, 'ReviewPolicyValidationError');
+        assert.ok(e.message.indexOf('none | filter') !== -1, 'error names the enum: ' + e.message);
+    });
+
+    test('non-string verification is a hard validation error', function() {
+        var e = validationErrorMessage(function() {
+            mod.resolveReviewPolicy({ reviewPolicy: { verification: true } }, {});
+        });
+        assert.ok(e, 'boolean verification must throw');
+        assert.equal(e.name, 'ReviewPolicyValidationError');
+    });
+
+    test('verification stays case-sensitive (FILTER rejected)', function() {
+        var e = validationErrorMessage(function() {
+            mod.resolveReviewPolicy({ reviewPolicy: { verification: 'FILTER' } }, {});
+        });
+        assert.ok(e, 'uppercase verification must throw');
+    });
+
+    test('policy stamps carry the verification mode', function() {
+        var filtered = mod.validateReviewPolicy({ verification: 'filter' }, 'test');
+        var plain = mod.defaultPolicy();
+        assert.ok(mod.policyTableMarkdown(filtered).indexOf('Verification: `filter`') !== -1,
+            'table stamp names the filter mode');
+        assert.ok(mod.policyTableMarkdown(plain).indexOf('Verification: `none`') !== -1,
+            'table stamp names the none mode');
+        assert.ok(mod.policyInputContextMarkdown(filtered).indexOf('Verification: `filter`') !== -1,
+            'run-context stamp names the filter mode');
+    });
+});
