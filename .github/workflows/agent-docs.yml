@@ -58,7 +58,7 @@ jobs:
 
       - name: Run crap4dart similarity gate
         run: |
-          curl -fsSL --retry 5 --retry-delay 2 --retry-max-time 60 https://github.com/IstiN/crap4dart/releases/download/v0.15.0/crap4dart-linux-x64 \
+          curl -fsSL https://github.com/IstiN/crap4dart/releases/download/v0.15.0/crap4dart-linux-x64 \
             -o "$RUNNER_TEMP/crap4dart-linux-x64"
           chmod +x "$RUNNER_TEMP/crap4dart-linux-x64"
           "$RUNNER_TEMP/crap4dart-linux-x64" check --only similarity --baseline
