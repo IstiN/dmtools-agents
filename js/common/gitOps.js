@@ -347,6 +347,51 @@ function getPRDiff(baseBranch, headBranch, workingDir) {
     }
 }
 
+// ── gh-1404: the diff-of-diff (re-review rounds review new hunks only) ───────
+
+// The sha shape both diff-of-diff heads must have before they may reach the
+// command string (gh-1404 rework, review thread ⚠️): fromSha/toSha are read
+// back from PR comment CONTENT (the verdict-record head field) at review
+// time, and the verdict record stores `String(parsed.head)` with no shape
+// check. The author allowlist validates who posted the comment, not its
+// payload, so the format check here is the defense-in-depth line: a
+// git short/full sha is 7–40 hex chars; anything else (branch name,
+// injection payload, truncated garbage) never reaches a command.
+var DIFF_SHA_RE = /^[0-9a-fA-F]{7,40}$/;
+
+function isDiffSha(value) {
+    return DIFF_SHA_RE.test(String(value));
+}
+
+/**
+ * The raw code delta between two commits — the content of pr_new_hunks.txt:
+ * what changed since the last review concluded. Two explicit SHAs, no branch
+ * fallback ladder: a missing SHA (force-push, pruned object) fails the single
+ * command and the '' return degrades the caller to the full-diff review.
+ */
+function getDiffBetweenCommits(fromSha, toSha, workingDir) {
+    var cmd = dirScopedCmd(workingDir);
+    try {
+        if (!isDiffSha(fromSha) || !isDiffSha(toSha)) {
+            console.warn('Diff-of-diff skipped — non-sha head value in verdict record:',
+                JSON.stringify(String(fromSha)), '→', JSON.stringify(String(toSha)));
+            return '';
+        }
+        console.log('Generating diff between commits', fromSha, 'and', toSha,
+            workingDir ? '(in ' + workingDir + ')' : '');
+        var result = _runDiffCommand(cmd, 'git diff ' + fromSha + ' ' + toSha);
+        if (result.ok) {
+            console.log('Diff-of-diff size:', result.raw.length, 'chars');
+            return result.diff;
+        }
+        console.warn('Diff-of-diff failed (last reviewed head may be missing locally):', result.error);
+        return '';
+    } catch (e) {
+        console.warn('Failed to get diff between commits:', e);
+        return '';
+    }
+}
+
 /**
  * Detects merge conflicts between the current branch and `origin/{baseBranch}`.
  *
@@ -615,6 +660,7 @@ module.exports = {
     cleanCommandOutput: cleanCommandOutput,
     checkoutPRBranch: checkoutPRBranch,
     getPRDiff: getPRDiff,
+    getDiffBetweenCommits: getDiffBetweenCommits,
     detectMergeConflicts: detectMergeConflicts,
     trimLargeTextForInput: trimLargeTextForInput,
     writeInputFile: writeInputFile,

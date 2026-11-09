@@ -17,6 +17,9 @@ const commentMarkup = require('./common/commentMarkup.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var trackersModule = require('./common/trackers.js');
 var forkCheckout = require('./common/forkCheckout.js');
+// gh-1404 (hoisted, never lazy — the gh-823 pack-require rule): the
+// diff-of-diff input — the re-review round's frozen already-reviewed code.
+var prNewHunks = require('./common/prNewHunks.js');
 // gh-1332 (hoisted, never lazy — the gh-823 pack-require rule): the
 // finding-identity registry — the review-round dedup. The registry's
 // previously-raised-findings injection tells a review round what earlier
@@ -271,14 +274,41 @@ function machineAuthorLoginsOf(ctx) {
         machineAuthorModule.resolveMachineAuthor(ctx.jp, ctx.config));
 }
 
-// The PR comments list shape, or null when the provider cannot list comments
-// (no getPrComments, transport failure) — the injection then skips quietly.
+// The normalized PR comment list shape, or null when the provider cannot
+// list comments (no getPrComments) — the injections then skip quietly.
 // The shape ladder is the shared normalizePrCommentList; unlike the stamping
-// site there is no catch here — a broken payload throws into this step's own
-// non-fatal catch (writeFindingRegistryContext below).
-function prCommentListForRegistry(scm, prNumber) {
+// site there is no catch here — a broken payload throws into the caller's
+// own non-fatal catch (prCommentsForContextSteps below). Serves BOTH context
+// injections now (gh-1404 rework), hence the provider-neutral name.
+function normalizedPrComments(scm, prNumber) {
     if (!scm || typeof scm.getPrComments !== 'function') return null;
     return findingRegistry.normalizePrCommentList(scm.getPrComments(prNumber));
+}
+
+// gh-1404 rework (review thread ⚠️): steps 6.5 and 6.6 parse the SAME PR
+// comment payload — registry records and verdict records ride the identical
+// list — so action() fetches it ONCE through this wrapper and threads the
+// result through both steps. The read stays non-fatal: a transport failure
+// yields null and both steps skip quietly, exactly as when the provider has
+// no getPrComments at all.
+function prCommentsForContextSteps(scm, prNumber) {
+    try {
+        return normalizedPrComments(scm, prNumber);
+    } catch (e) {
+        console.warn('PR comment list read failed (non-fatal):', e.message || e);
+        return null;
+    }
+}
+
+/**
+ * The comment list the registry step parses: the shared, already-fetched
+ * list (gh-1404 rework); omitted → the step fetches its own (direct-call
+ * shape, exercised by the unit tests). Null (or a null prNumber) → the step
+ * skips quietly.
+ */
+function resolveRegistryComments(ctx, prNumber, comments) {
+    if (!prNumber) return null;
+    return comments === undefined ? normalizedPrComments(ctx.scm, prNumber) : comments;
 }
 
 /**
@@ -288,12 +318,11 @@ function prCommentListForRegistry(scm, prNumber) {
  * thread. Non-fatal end to end: without a registry (or when the provider
  * cannot list comments) the input prep looks exactly as before.
  */
-function writeFindingRegistryContext(ctx, prNumber) {
+function writeFindingRegistryContext(ctx, prNumber, comments) {
     try {
-        if (!prNumber) return false;
-        var comments = prCommentListForRegistry(ctx.scm, prNumber);
-        if (comments === null) return false;
-        var record = findingRegistry.latestRegistry(comments,
+        var list = resolveRegistryComments(ctx, prNumber, comments);
+        if (list === null) return false;
+        var record = findingRegistry.latestRegistry(list,
             { authorLogins: machineAuthorLoginsOf(ctx) });
         var markdown = record ? findingRegistry.buildFindingsInjection(record.registry) : null;
         if (!markdown) return false;
@@ -302,6 +331,65 @@ function writeFindingRegistryContext(ctx, prNumber) {
         return true;
     } catch (e) {
         console.warn('Finding-registry context injection failed (non-fatal):', e.message || e);
+        return false;
+    }
+}
+
+// ── gh-1404: the diff-of-diff injection (pr_new_hunks.txt) ───────────────────
+
+// The prDetails head pair the diff-of-diff runs on, or null when the PR
+// details carry no usable anchor (extracted for the CRAP ratchet, gh-1404
+// rework review thread 🚨: writeNewHunksContext accumulated every guard of
+// the step and crossed the threshold).
+function newHunksHeadPair(prDetails) {
+    var currentHead = prDetails && prDetails.head && prDetails.head.sha;
+    if (!prDetails || !prDetails.number || !currentHead) return null;
+    return { number: prDetails.number, currentHead: currentHead };
+}
+
+/**
+ * Resolved diff-of-diff inputs, or null when this round is NOT a re-review:
+ * a first round (no verdict record), an unchanged head, or no comment list.
+ * `comments` is the shared, already-fetched list (gh-1404 rework — no second
+ * provider round-trip); omitted → the step fetches its own (direct-call
+ * shape, exercised by the unit tests).
+ */
+function resolveNewHunksContext(ctx, prDetails, comments) {
+    var pair = newHunksHeadPair(prDetails);
+    if (!pair) return null;
+    var list = comments === undefined ? normalizedPrComments(ctx.scm, pair.number) : comments;
+    if (list === null) return null;
+    var lastHead = prNewHunks.lastReviewedHead(list,
+        { authorLogins: machineAuthorLoginsOf(ctx) });
+    if (!prNewHunks.headsDiffer(lastHead, pair.currentHead)) return null;
+    return { lastHead: lastHead, currentHead: pair.currentHead };
+}
+
+/**
+ * Step 6.6: inject the new hunks since the last reviewed head into the review
+ * input. A re-review round reviews the diff-of-diff plus the interaction
+ * neighborhood instead of whole files, and unchanged lines are frozen
+ * (gh-1404) — this is what stops findings landing on already-reviewed code.
+ * The last reviewed head is the head of the newest machine verdict record on
+ * the PR (reviewVerdicts). Non-fatal end to end: a first round (no verdict
+ * record), an unchanged head, a failed diff command or a provider without
+ * getPrComments leaves the input exactly as before — the reviewer then
+ * reviews the full PR diff.
+ */
+function writeNewHunksContext(ctx, prDetails, comments) {
+    try {
+        var heads = resolveNewHunksContext(ctx, prDetails, comments);
+        if (!heads) return false;
+        var hunks = gitOps.getDiffBetweenCommits(heads.lastHead, heads.currentHead, ctx.config.workingDir);
+        if (!hunks) return false;
+        gitOps.writeInputFile(ctx.inputFolder + '/pr_new_hunks.txt',
+            prNewHunks.buildNewHunksFile(heads.lastHead, heads.currentHead,
+                gitOps.trimLargeTextForInput(hunks, 'pr_new_hunks.txt')),
+            'pr_new_hunks.txt');
+        console.log('✅ Diff-of-diff context written (new hunks since last reviewed head)');
+        return true;
+    } catch (e) {
+        console.warn('Diff-of-diff context injection failed (non-fatal):', e.message || e);
         return false;
     }
 }
@@ -445,9 +533,19 @@ function action(params) {
         // the reviewer ranks/posts under the policy the machine enforces.
         writeReviewPolicyContext(ctx);
 
+        // Steps 6.5 + 6.6: one PR comment read serves both context injections
+        // (gh-1404 rework) — the finding registry and the diff-of-diff step
+        // parse the identical payload; a read failure is non-fatal (null →
+        // both steps skip quietly).
+        var prComments = prCommentsForContextSteps(ctx.scm, prOutcome.pr.number);
+
         // Step 6.5: inject the finding-identity registry (gh-1332) — the
         // previously raised findings this round must answer, not re-raise.
-        writeFindingRegistryContext(ctx, prOutcome.pr.number);
+        writeFindingRegistryContext(ctx, prOutcome.pr.number, prComments);
+
+        // Step 6.6: inject the diff-of-diff (gh-1404) — the hunks added since
+        // the last reviewed head, so already-reviewed code stays frozen.
+        writeNewHunksContext(ctx, prDetails, prComments);
 
         var failedChecks = detectCheckFailures(ctx, prDetails, diff);
 
@@ -488,6 +586,11 @@ if (typeof module !== 'undefined' && module.exports) {
         fetchDiscussionData: fetchDiscussionData,
         writePrContext: writePrContext,
         writeFindingRegistryContext: writeFindingRegistryContext,
+        writeNewHunksContext: writeNewHunksContext,
+        newHunksHeadPair: newHunksHeadPair,
+        resolveNewHunksContext: resolveNewHunksContext,
+        resolveRegistryComments: resolveRegistryComments,
+        prCommentsForContextSteps: prCommentsForContextSteps,
         detectCheckFailures: detectCheckFailures,
         buildFailedChecksPanel: buildFailedChecksPanel,
         buildReviewStartedComment: buildReviewStartedComment,

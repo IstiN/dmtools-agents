@@ -41,11 +41,11 @@ flowchart TD
 flowchart TD
     START([PR ready for review]) --> READ["1. Read input context:<br/>instruction.md, ticket.md, review_policy.md, pr_info.md,<br/>pr_diff.txt, pr_files.txt, ci_failures.md,<br/>ci_failures_full.log, pr_discussions.md,<br/>pr_discussions_raw.json"]
     READ --> DIFF["2. Run diff checklist on pr_diff.txt"]
-    DIFF --> FILES["3. Read full content of every changed file"]
+    DIFF --> FILES["3. Deep read:<br/>first round — every changed file;<br/>re-review (pr_new_hunks.txt present) —<br/>new hunks + interaction neighborhood<br/>(unchanged lines frozen)"]
     FILES --> CODEGRAPH["4. Use CodeGraph:<br/>callers/callees of changed symbols,<br/>search for sensitive patterns,<br/>impact analysis"]
     CODEGRAPH --> DIMS["5. Evaluate review dimensions:<br/>Security · Architecture/OOP · Code quality<br/>Test coverage · Duplication · Backward compatibility"]
     DIMS --> SEVERITY["6. Classify each finding:<br/>BLOCKING / IMPORTANT / SUGGESTION / NIT<br/>(severity census gates approval per review_policy.md)"]
-    SEVERITY --> EXHAUST["7. Exhaustive pass:<br/>re-read changed files,<br/>surface ALL remaining issues"]
+    SEVERITY --> EXHAUST["7. Necessity pass:<br/>threads only for findings that defend<br/>correctness / security / data loss / CI / ticket contract —<br/>everything else → ranked digest"]
     EXHAUST --> OUTPUT["8. Write outputs:<br/>pr_review.json · pr_review_general.md · pr_review_comments/*.md"]
     OUTPUT --> END([End])
 ```
@@ -64,7 +64,8 @@ flowchart TD
         P6["6️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
         P7["7️⃣ input/TICKET/pr_findings.md — previously raised findings (when present)"]
         P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol (gh-1351)"]
-        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8
+        P9["9️⃣ input/TICKET/pr_new_hunks.txt — the hunks added since the last reviewed head (re-review rounds; when present)"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8 --> P9
     end
 
     subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
@@ -96,11 +97,13 @@ For every hunk, ask at least these questions:
 - [ ] Is dead code, unused imports, or obvious duplication introduced?
 - [ ] Are error paths handled, or are failures silently swallowed?
 - [ ] Are new dependencies justified and compatible with the existing stack?
-- [ ] Beyond blockers: what other maintainability, correctness, or quality improvements are visible in the changed code?
+- [ ] Beyond blockers: does each candidate finding pass the §7 necessity test (defends correctness on a touched path, security, data loss, CI breakage, or the ticket contract) — or is it digest material?
 
-## 3. Changed-file deep read
+## 3. Changed-file deep read — and frozen already-reviewed code
 
-Do not review from the diff alone. Read the full content of every changed file:
+Do not review from the diff alone.
+
+**First review round** (no `pr_new_hunks.txt` in the input folder) — read the full content of every changed file:
 
 - imports and dependencies
 - class/method responsibilities and adherence to SRP / OOP principles
@@ -108,6 +111,8 @@ Do not review from the diff alone. Read the full content of every changed file:
 - error handling, logging, and edge cases
 - test coverage for changed behavior
 - backward-compatibility and migration impact
+
+**Re-review rounds** (`pr_new_hunks.txt` present — the hunks added since the last reviewed head) — read the full content of the files the new hunks touch plus their interaction neighborhood (direct callers/callees of changed symbols), not whole files. Already-reviewed lines are **frozen**: a finding on an unchanged line is valid only when the new hunks make the problem worse (the interaction test — e.g. a new call path now feeds unvalidated input into old code). Anything else on frozen lines is advisory digest at most (§7), never a thread. If `pr_new_hunks.txt` is absent from a later round (e.g. a force-push the machine could not diff), the whole diff is in scope again.
 
 ## 4. Impact analysis (CodeGraph or grep fallback)
 
@@ -138,6 +143,10 @@ Rate the PR across all relevant dimensions:
 | **Performance** | unnecessary rebuilds, heavy sync operations, missing timeouts |
 | **Workflow / CI safety** | (when `.github/workflows/` changes) secret declarations, ref pinning, permissions, timeouts |
 
+### Delegate to the measured gates (gh-1404)
+
+Complexity, duplication and style are already measured by the repo's CI — the CRAP ratchet, the duplication gate, lint. The gate is the reviewer of record for those dimensions: a passing gate is not a thread (the cost was already measured and accepted); a failing gate is CI breakage (🚨 BLOCKING). Raise a complexity/duplication/style finding only when no gate covers it **and** the concrete cost is stateable — what breaks or what the next change pays.
+
 ## 6. Severity classification
 
 Classify every finding before writing outputs:
@@ -147,7 +156,7 @@ Classify every finding before writing outputs:
 - **SUGGESTION** — optional improvement to the documented/behavioral surface (missing docs, unclear contract, better API shape). Does not block merge.
 - **NIT** — changes nothing behavioral and nothing documented: style, formatting, naming micro-preferences. Never blocks merge, never triggers a lap.
 
-When in doubt, start one level higher; downgrade only after confirming the risk is negligible.
+When in doubt, classify lower and state what evidence would raise the finding one level (the same discipline as the external-spec citation rule below — an unproven claim must not hold a PR hostage).
 
 ### Density control — post top-K, digest the overflow (gh-1351)
 
@@ -182,14 +191,21 @@ The machine applies the same discipline (and a safety net against coin-flip form
 
 This is not a strictness cut: a spec-claim finding **with** a verifiable citation keeps full 🚨 BLOCKING force.
 
-## 7. Exhaustive single-pass review
+## 7. Necessity test — what earns a thread
 
-Treat **every** review as the final and only review pass. The author will not get another chance to catch missed findings cheaply.
+A thread is expensive: each one costs a rework lap — 15–20 CI minutes — and the rework's own fresh hunks get reviewed again next round. A finding earns a thread only if it **defends** one of:
 
-- Do not defer SUGGESTION or IMPORTANT items to a later round because a BLOCKING issue exists.
-- After classifying all findings, re-read every changed file and ask: *"What else is improvable here?"*
-- Before writing outputs, verify that no obvious quality, maintainability, or correctness issue was left unreported.
-- Aim to surface the maximum number of actionable findings in this single iteration.
+- correctness on a path the change actually touches
+- security
+- data loss
+- CI breakage
+- the ticket contract
+
+Everything else — real, accurate, but not merge-relevant — goes to the **ranked digest list** in the general comment (one line each: `path:line — finding`), never a thread.
+
+- Do not defer SUGGESTION or IMPORTANT items to a later round because a BLOCKING issue exists — classify everything you found; only the necessity test decides thread vs digest.
+- The exhaustive pass keeps running (§3 defines its scope). Re-read the in-scope code and ask: *"What else does this change put at risk?"* — not *"What else is improvable here?"*
+- Before writing outputs, verify each thread you are about to open passes the necessity test; everything else is already in the digest.
 
 ## 8. Outputs
 
@@ -213,7 +229,7 @@ Answer the registry **before** raising anything new:
 - **withdraw (reason required)** — the claim is wrong or no longer applies: disposition `"withdrawn"` with the reason. A withdrawal without a reason is rejected by the machine, and BLOCKING withdrawals surface to the owner.
 - **mark re-introduced** — the defect is still there (e.g. the fix was reverted): leave the finding open and let your re-raise match it; do not re-litigate the claim from scratch.
 
-New claims always need new evidence. A finding on the registry list is answered, not re-raised as if it were news — and the reviewer instruction stays maximally ambitious: raise every actionable finding you actually see.
+New claims always need new evidence, and they pass the same §7 necessity test before they earn a thread. A finding on the registry list is answered, not re-raised as if it were news.
 
 **Candidates pending confirmation** (also listed in `pr_findings.md`): when a new finding you raised is *possibly same as F<n>*, the machine asks one word per candidate — confirm with `"same as F<n>"` or call it `"new"`. Unconfirmed candidates become new identities; nothing merges without your confirmation. This is a dedup request, not a push-back: confirming merges the threads, it does not weaken the finding (merges can only escalate severity, never de-escalate).
 

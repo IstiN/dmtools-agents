@@ -743,6 +743,165 @@ suite('gitOps.getPRDiff — characterization (gh-962)', function() {
 });
 
 
+// ── gh-1404: getDiffBetweenCommits — the diff-of-diff for pr_new_hunks.txt ──
+// A re-review round reviews the hunks added since the last reviewed head.
+// Two explicit SHAs, no fallback ladder: a missing SHA (force-push, pruned
+// object) fails the single command and '' degrades the caller to the
+// full-diff review.
+
+suite('gitOps.getDiffBetweenCommits — the diff-of-diff (gh-1404)', function() {
+
+    function makeHarness(responses) {
+        var h = { commands: [], logs: [], warns: [], errors: [] };
+        var origLog = console.log, origWarn = console.warn, origError = console.error;
+        console.log = function() { h.logs.push(Array.prototype.slice.call(arguments).join(' ')); };
+        console.warn = function() { h.warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        console.error = function() { h.errors.push(Array.prototype.slice.call(arguments).join(' ')); };
+        h.gitOps = loadGitOps({
+            cli_execute_command: function(args) {
+                h.commands.push(args);
+                var r = responses[args.command];
+                if (typeof r === 'function') return r(args);
+                if (r !== undefined) return r;
+                return 'COMMAND_EXIT_CODE=0';
+            }
+        });
+        h.commandStrings = function() {
+            return h.commands.map(function(a) { return a.command; });
+        };
+        h.restore = function() {
+            console.log = origLog; console.warn = origWarn; console.error = origError;
+        };
+        return h;
+    }
+
+    function run(h, from, to, wd) {
+        try {
+            return h.gitOps.getDiffBetweenCommits(from, to, wd);
+        } finally {
+            h.restore();
+        }
+    }
+
+    test('happy path: one plain two-SHA diff command, cleaned capture returned', function() {
+        var h = makeHarness({
+            'git diff bbb222ccc333 abc123def456': '+ rework fix\nCOMMAND_EXIT_CODE=0'
+        });
+
+        var diff = run(h, 'bbb222ccc333', 'abc123def456', '/work/dir');
+
+        assert.equal(diff, '+ rework fix');
+        assert.deepEqual(h.commandStrings(), [
+            'git diff bbb222ccc333 abc123def456'
+        ], 'exactly one command — no fetches, no fallback ladder');
+        h.commands.forEach(function(a) {
+            assert.equal(a.workingDirectory, '/work/dir', 'workingDir must reach cli_execute_command');
+        });
+        var joined = h.logs.join('\n');
+        assert.contains(joined, 'Generating diff between commits bbb222ccc333 and abc123def456 (in /work/dir)');
+    });
+
+    test('missing last-reviewed head (force-push, pruned object) → empty string, warn, no throw', function() {
+        var h = makeHarness({
+            'git diff bbb222ccc333 abc123def456': function() {
+                throw new Error('fatal: bad revision bbb222ccc333\nCOMMAND_EXIT_CODE=128');
+            }
+        });
+
+        var diff = run(h, 'bbb222ccc333', 'abc123def456', '/work/dir');
+
+        assert.equal(diff, '', 'the caller degrades to the full-diff review');
+        assert.contains(h.warns.join('\n'), 'Diff-of-diff failed');
+    });
+
+    test('identical trees (head moved, no code change) → empty string, still a success', function() {
+        var h = makeHarness({
+            'git diff bbb222ccc333 abc123def456': 'COMMAND_EXIT_CODE=0'
+        });
+
+        var diff = run(h, 'bbb222ccc333', 'abc123def456', null);
+
+        assert.equal(diff, '');
+        assert.contains(h.logs.join('\n'), 'Generating diff between commits bbb222ccc333 and abc123def456');
+        assert.ok(h.commands[0].workingDirectory === undefined || h.commands[0].workingDirectory === null,
+            'a null workingDir stays unset');
+    });
+
+    // gh-1404 rework (review thread ⚠️): fromSha/toSha are read back from PR
+    // comment CONTENT (the verdict-record head field) at review time — the
+    // author allowlist validates who posted, not the payload. Both values are
+    // format-checked before they may reach the command string: a non-sha head
+    // (branch name, injection payload, truncated garbage) skips the diff and
+    // degrades to the full-diff review, exactly like a failed command.
+    test('a non-sha fromSha is rejected before the command runs', function() {
+        var h = makeHarness({});
+
+        var diff = run(h, 'main; rm -rf /', 'abc123def456', null);
+
+        assert.equal(diff, '', 'the caller degrades to the full-diff review');
+        assert.equal(h.commands.length, 0, 'an unvalidated head value must never be interpolated into a command');
+        assert.contains(h.warns.join('\n'), 'non-sha');
+    });
+
+    test('a non-sha toSha is rejected the same way', function() {
+        var h = makeHarness({});
+
+        var diff = run(h, 'bbb222ccc333', 'HEAD~1 && echo pwned', null);
+
+        assert.equal(diff, '');
+        assert.equal(h.commands.length, 0, 'no command may run with a non-sha second head');
+        assert.contains(h.warns.join('\n'), 'non-sha');
+    });
+
+    test('a branch name is a non-sha head value (the diff-of-diff is sha-only by contract)', function() {
+        var h = makeHarness({});
+
+        var diff = run(h, 'origin/main', 'abc123def456', null);
+
+        assert.equal(diff, '');
+        assert.equal(h.commands.length, 0, 'branch names are not sha values — rejected');
+        assert.contains(h.warns.join('\n'), 'non-sha');
+    });
+
+    test('boundary shas still pass: 7-char short form and 40-char full form', function() {
+        var h = makeHarness({
+            'git diff bbb222c abc123def4567890abc123def4567890abc12345': '+ hunk\nCOMMAND_EXIT_CODE=0'
+        });
+
+        assert.equal(run(h, 'bbb222c', 'abc123def4567890abc123def4567890abc12345', null), '+ hunk',
+            'a 7-char short sha is valid');
+        assert.equal(h.commands.length, 1);
+
+        var h2 = makeHarness({
+            'git diff bbb222ccc333def4445 abc123def4567890abc123def4567890abc12345': '+ hunk\nCOMMAND_EXIT_CODE=0'
+        });
+        assert.equal(run(h2, 'bbb222ccc333def4445', 'abc123def4567890abc123def4567890abc12345', null), '+ hunk',
+            'a 17-char hex sha is valid');
+        assert.equal(h2.commands.length, 1);
+    });
+
+    test('an uppercase hex sha is accepted (shas are case-insensitive on input)', function() {
+        var h = makeHarness({
+            'git diff BBB222CCC333 abc123def456': '+ hunk\nCOMMAND_EXIT_CODE=0'
+        });
+
+        assert.equal(run(h, 'BBB222CCC333', 'abc123def456', null), '+ hunk');
+        assert.equal(h.commands.length, 1);
+    });
+
+    test('a 6-char or 41-char head value is too short/long for a sha — rejected', function() {
+        var h = makeHarness({});
+        assert.equal(run(h, 'bbb222', 'abc123def456', null), '', '6 chars is not a git short sha');
+        assert.equal(h.commands.length, 0);
+        var h2 = makeHarness({});
+        assert.equal(run(h2, 'b222ccc333def444555666777888999aaabbbccc000', 'abc123def456', null), '',
+            '41 chars is not a sha');
+        assert.equal(h2.commands.length, 0);
+    });
+
+});
+
+
 // ── gh-1011: detectMergeConflicts conflict branches ─────────────────────────
 // Pins the exact return shapes, log/warn lines and file writes of the
 // merge-failure paths (conflict markers, non-conflict failure, status probe
