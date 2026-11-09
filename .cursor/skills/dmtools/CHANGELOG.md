@@ -1,0 +1,310 @@
+## [Unreleased]
+
+### Added
+
+- **New job: `CliAgent`** — lightweight CLI-agent orchestration that runs cursor-agent / claude / copilot-style tools without requiring an `inputJql` or tracker ticket. Supports setup/cache/reset hooks, `preCliJSAction`, `cliOutputLineJSAction`, `cliExecutionErrorJSAction`, `timerJSAction`, and smart input-context building from a ticket or JQL when integrations are available.
+- **Structured `cliPrompts` with named sections** — `cliPrompts` now supports a mixed array of plain strings and named section objects (`{"id": "...", "prompts": ["..."], "mergeStrategy": "append|prepend|replace"}`). This allows:
+  - grouping related prompts (e.g., `input`, `output`, `template`) while preserving order
+  - partial overrides when inheriting configs: sections with the same `id` are merged according to `mergeStrategy`, unnamed strings keep their position, and new items are appended to the end
+  - full backward compatibility: plain string arrays are still accepted and treated as unnamed prompts
+- Updated `references/agents/teammate-configs.md`, `references/jobs/README.md`, and `SKILL.md` with `CliAgent` and structured `cliPrompts` documentation and inheritance examples
+
+## [skill-v1.0.30] - 2026-07-04
+
+### Added
+
+- **New GitLab release/artefact MCP tools** (mirroring GitHub's release-asset tools, adapted to GitLab's Generic Package Registry + Release Links model):
+  - `gitlab_get_or_create_release` — find an existing GitLab release by tag, or create one if missing.
+  - `gitlab_upload_release_asset` — publish a local file to the project's Generic Package Registry and attach it to the release as an asset link; supports `overwrite=true` to replace an existing asset (GitLab rejects duplicate uploads with 409 Conflict otherwise).
+  - `gitlab_list_release_assets` — list all asset links attached to a release.
+  - `gitlab_delete_release_asset` — delete an asset's release link and its underlying Generic Package Registry file by name.
+  - `gitlab_download_release_asset` — download a release asset to a local file path.
+  - Enables GitLab-backed repositories to use the same "stable release as artefact storage" pattern already supported for GitHub via `github_get_or_create_draft_release`/`github_upload_release_asset`.
+- Updated **Total tools** count in `gitlab-tools.md`: 23 → 28
+
+## [skill-v1.0.29] - 2026-07-03
+
+### Added
+
+- **New GitLab MCP tool**: `gitlab_get_mr_diff_text` — returns the raw unified diff text for a GitLab merge request (as a `String`), suitable for locating file/line positions (e.g. inline PR review comments). Complements the existing `gitlab_get_mr_diff` (returns `IDiffStats`, stats-only) the same way `github_get_pr_diff_text` complements `github_get_pr_diff` on the GitHub side.
+- Updated **Total tools** count in `gitlab-tools.md`: 22 → 23, and in `mcp-tools/README.md`: 270 → 271
+
+## [skill-v1.0.28] - 2026-05-01
+
+### Changed
+
+- Marked `CodeGenerator` as a deprecated compatibility shim across job/configuration docs
+- Added migration guidance that the shim is no-op, logs a deprecation warning, and is scheduled for removal before `v1.8.0`
+
+## [skill-v1.0.27] - 2026-03-26
+
+### Added
+
+- **5 new GitHub MCP tools** documented in `references/mcp-tools/github-tools.md`
+  - `github_update_pr_comment` — edit an existing PR/issue comment by comment ID
+  - `github_delete_pr_comment` — delete a PR/issue comment by comment ID
+  - `github_create_commit_status` — create a commit status dot (pending/success/failure/error) with `context` as unique key
+  - `github_create_check_run` — create a rich GitHub Check Run with Markdown output (in_progress); returns `id` for follow-up update
+  - `github_update_check_run` — complete a Check Run with conclusion and final summary
+- Updated **Total tools** count in `github-tools.md`: 22 → 27
+
+## [skill-v1.0.26] - 2026-03-20
+
+### Documentation
+
+- **Expanded JS agent testing guide** — rewrote "Debugging Agents" section in `javascript-agents.md` into a comprehensive "Testing and Debugging Agents" section
+  - **JSRunner as the primary testing tool**: `dmtools run agents/js/script.js '{"ticketKey":"PROJ-123"}'` runs inside real GraalJS with live MCP tools
+  - **Simulating post-actions**: full JSON config form with `ticket` + `response` fields to replicate `postJSAction` context
+  - **Dry-run pattern**: `dryRun: true` param guard to test end-to-end without side effects
+  - **Debug mode**: opt-in `debug: true` param for verbose output without polluting production logs
+  - **Node.js unit testing**: stubbing MCP functions for pure logic testing (with GraalJS caveat warning)
+  - **Decision table**: which approach to use for each testing scenario
+- **Expanded JSRunner section** in `jobs/README.md` with link to the new testing guide and example for testing post-actions with ticket + AI response context
+
+## [skill-v1.0.25] - 2026-03-20
+
+### Added
+
+- **`additionalInstructions` field for TeammateParams** — append project-specific instructions without replacing the base `instructions` array
+  - Defined on `TeammateParams` (top-level `params`), separate from `agentParams.instructions`
+  - Resolved by InstructionProcessor — supports the same source types: plain text, local file paths, Confluence URLs, GitHub URLs
+  - Appended **after** the resolved base `instructions` — the AI sees `[...instructions, ...additionalInstructions]`
+  - Solves the `ConfigurationMerger` limitation: array fields are replaced on override; `additionalInstructions` is always additive
+
+  **Problem it solves:**
+  When you override a shared config via encoded JSON, `ConfigurationMerger` replaces the entire `instructions` array. `additionalInstructions` lives in a separate field so project rules survive any override.
+
+  **Example:**
+  ```json
+  {
+    "name": "Teammate",
+    "params": {
+      "agentParams": {
+        "instructions": [
+          "https://github.com/your-org/shared-playbook/blob/main/instructions/default.md"
+        ]
+      },
+      "additionalInstructions": [
+        "https://yourcompany.atlassian.net/wiki/spaces/PROJ/pages/123",
+        "./instructions/project-specific-rules.md",
+        "Always use our internal API naming convention."
+      ]
+    }
+  }
+  ```
+
+### Documentation
+- Updated `teammate-configs.md` with `additionalInstructions` section including use-cases and comparison table
+- Updated Instruction Sources list to include `additionalInstructions`
+
+## [skill-v1.0.24] - 2026-02-22
+
+### Added
+
+- **GitHub URL support in InstructionProcessor** - `instructions`, `formattingRules`, `fewShots`, and `cliPrompt` fields can now reference GitHub files directly
+  - Supports standard blob URLs: `https://github.com/owner/repo/blob/branch/path/to/file.md`
+  - Supports raw URLs: `https://raw.githubusercontent.com/owner/repo/branch/path/to/file.md`
+  - Fetched via `BasicGithub` client using `SOURCE_GITHUB_TOKEN` env var
+  - Works for **public repos without a token** (anonymous GitHub API, rate-limited to 60 req/hour)
+  - Falls back to original URL string if fetch fails — no errors thrown
+  - Priority order: GitHub URL → Confluence URL → local file path → plain text
+
+  **Example — pull instructions from a shared GitHub playbook:**
+  ```json
+  {
+    "instructions": [
+      "https://github.com/your-org/playbook/blob/main/instructions/enhance-sd-api.md",
+      "./instructions/common/jira_context.md"
+    ],
+    "formattingRules": "https://github.com/your-org/playbook/blob/main/formatting/api-ticket.md"
+  }
+  ```
+
+- **`preCliJSAction` parameter for Teammate** - JS hook executed after input folder is created, before CLI commands run
+  - Receives `params.inputFolderPath` (absolute path to the created input folder)
+  - Use to inject extra context files (architecture docs, API specs, style guides) that the CLI agent should read
+  - Errors in the script are logged as warnings and do **not** stop CLI execution
+  - Only invoked when `cliCommands` is configured and non-empty
+
+  **Example — add architecture context to input folder:**
+  ```javascript
+  // agents/js/extendInputFolder.js
+  function action(params) {
+      const folder = params.inputFolderPath;
+      const guide = confluence_content_by_title("Architecture Guide");
+      file_write(folder + "/architecture.md", guide);
+  }
+  ```
+  ```json
+  {
+    "cliCommands": ["./cicd/scripts/run-cursor-agent.sh"],
+    "preCliJSAction": "agents/js/extendInputFolder.js"
+  }
+  ```
+
+### Documentation
+- Updated `teammate-configs.md` with "Instruction Sources" reference table
+- Updated AI Configuration parameter descriptions to mention all supported source types
+- Updated CLI Integration table and examples with GitHub URL option
+
+## [skill-v1.0.23] - 2026-02-15
+
+### Added
+
+- **Cross-platform CLI Prompt Passing via Temporary File** - Fixed Windows compatibility issue with `cliPrompt` parameter
+  - **Problem**: Previous implementation used POSIX-style shell escaping (`\"`, `\$`, `\``) which doesn't work on Windows cmd.exe
+  - **Solution**: Prompt content is written to temporary file, file path passed as parameter to CLI commands
+  - **Benefits**:
+    - ✅ Works on Windows (cmd.exe, PowerShell), Linux, macOS
+    - ✅ No escaping issues with special characters (`"`, `$`, `` ` ``, `\`)
+    - ✅ No length limits (supports 10K+ char prompts)
+    - ✅ Backward compatible (scripts can detect if parameter is file)
+  - **CLI Script Update Required**: Scripts should read prompt from file (see examples in cli-integration.md)
+    ```bash
+    # POSIX example
+    if [ -f "$1" ]; then PROMPT=$(cat "$1"); else PROMPT="$1"; fi
+    ```
+    ```batch
+    REM Windows cmd.exe example
+    if exist "%~1" (set /p PROMPT=<"%~1") else (set PROMPT=%~1)
+    ```
+  - Updated documentation with examples for POSIX shell, Windows cmd.exe, and PowerShell
+- **CLI Output Safety Parameters for Teammate** - Two new safety parameters protect against data loss when CLI commands fail
+  - **`requireCliOutputFile`** (boolean, default: `true`) - Strict mode requires `outputs/response.md` before updating fields
+    - ✅ If output file exists → Process normally (update field/post comment/create ticket)
+    - ❌ If output file missing → Skip field update, post error comment instead
+    - **Prevents data loss** - won't overwrite critical fields with error messages
+    - Permissive mode (`false`) uses command output as fallback (backwards compatible)
+
+  - **`cleanupInputFolder`** (boolean, default: `true`) - Controls cleanup of temporary input context folders
+    - Enabled (default): Automatically deletes `input/[TICKET-KEY]/` folder after processing
+    - Disabled: Keeps folder for debugging CLI issues (manual cleanup required)
+
+  **Production-Safe Example:**
+  ```json
+  {
+    "skipAIProcessing": true,
+    "requireCliOutputFile": true,   // Strict mode (default)
+    "cleanupInputFolder": true,     // Cleanup (default)
+    "outputType": "field",
+    "fieldName": "Description"
+  }
+  ```
+
+  **Debug Mode Example:**
+  ```json
+  {
+    "skipAIProcessing": true,
+    "cleanupInputFolder": false,    // Keep for debugging
+    "outputType": "comment"
+  }
+  ```
+
+### Changed
+- Updated Teammate configuration documentation with CLI safety parameters
+- Updated CLI Integration guide with safety best practices and troubleshooting
+
+### Documentation
+- Added 16 unit tests for CLI safety features (all passing)
+- Updated teammate-configs.md with safety parameter examples
+- Updated cli-integration.md with production-safe and debug mode examples
+
+## [skill-v1.0.22] - 2026-02-15
+
+### Added
+- **`cliPrompt` Field for Teammate Configurations** - New field separates CLI prompts from commands for cleaner, more maintainable configurations
+  - **Multiple Input Types**: Supports plain text, local file paths, and Confluence URLs
+  - **Automatic Processing**: Uses InstructionProcessor to fetch content from files or Confluence
+  - **Shell Escaping**: Automatically escapes special characters (`\`, `"`, `$`, `` ` ``) to prevent injection
+  - **Reusability**: Same prompt file or Confluence page can be used across multiple configurations
+  - **Backwards Compatible**: Existing configs with inline prompts continue to work without changes
+
+  **Example Migration:**
+  ```json
+  // Before (inline)
+  "cliCommands": ["./script.sh \"Long prompt here...\""]
+
+  // After (separate field)
+  "cliPrompt": "Long prompt here...",
+  "cliCommands": ["./script.sh"]
+
+  // Or with file
+  "cliPrompt": "./agents/prompts/dev_prompt.md",
+  "cliCommands": ["./script.sh"]
+
+  // Or with Confluence
+  "cliPrompt": "https://company.atlassian.net/wiki/...",
+  "cliCommands": ["./script.sh"]
+  ```
+
+### Changed
+- Updated CLI Integration documentation with `cliPrompt` examples and migration guide
+- Updated skill description to mention `cliPrompt` feature
+
+### Documentation
+- Updated all CLI integration examples to show new pattern
+- Added 17 unit tests for `cliPrompt` functionality (all passing)
+
+## [skill-v1.0.21] - 2026-02-06
+
+### Fixed
+- **Installer now installs to ALL detected locations in non-interactive mode** (fixes issue where only .cursor was installed when both .cursor and .claude existed)
+- Changed default behavior: `curl | bash` now installs to all detected project-level directories automatically
+- Users no longer need to use `INSTALL_LOCATION=all` when piping the installer
+- Interactive mode still allows choosing specific location
+
+### Changed
+- Updated installer documentation to reflect new automatic multi-location installation behavior
+- Clarified usage examples in README and help messages
+
+## [skill-v1.0.20] - 2026-02-06
+
+### Added
+- **Agent Best Practices** - New comprehensive guide documenting 14 critical patterns learned from real-world agent development
+  - Teammate Job Configuration Pattern (use Teammate, not standalone JS)
+  - Template References Pattern (file refs, not inline text)
+  - Output File Naming Convention (fixed names for sequential, unique for parallel)
+  - Post-Action Responsibilities (field updates + comment posting)
+  - OutputType Selection Guide (when to use "none", "field", "comment")
+  - Configuration File Naming (human-friendly names for automation)
+  - Pre-Action Usage Patterns (WIP marking, validation)
+  - Conditional File Creation (only create description.md if needed)
+  - CLI Command Structure (delegation to Copilot/Claude/Cursor)
+  - Agent ID in Comments (traceability)
+  - Attachment Preservation (CRITICAL - preserve media references)
+  - Code Reusability (common helpers reduce code by 90%)
+  - Correct MCP Tools (jira_assign_ticket_to vs jira_update_field)
+  - Skill Description Length (keep short for performance)
+
+### Changed
+- **Installation now project-level only**: Installer no longer supports global (user-level) directories
+- Updated `install.sh` to detect and install only to project-level directories (.cursor/skills, .claude/skills, .codex/skills)
+- Removed global installation paths (~/.cursor/skills, ~/.claude/skills, ~/.codex/skills) from installer
+- Default installation location is now .cursor/skills in current directory if no directories found
+- Updated documentation to reflect project-level installation approach
+- **Shortened skill description** for performance (200+ chars → ~120 chars)
+- Simplified description: "DMtools - 96+ MCP tools for Jira, Azure DevOps, Figma, Confluence, Teams. Use for integrations, JavaScript agents, test generation."
+
+### Rationale
+- Ensures skill version matches project requirements
+- Prevents conflicts between different project versions
+- Clearer dependency management per project
+- Faster skill loading with shorter description
+- Documented critical patterns to prevent common mistakes
+
+## [skill-v1.0.19] - 2026-02-02
+
+### Added
+- Comprehensive InstructionsGenerator job documentation with all parameters, use cases, and examples
+
+## [skill-v1.0.18] - 2026-02-02
+
+### Removed
+- Removed MAINTAINING.md from user-facing skill (developer documentation should be in separate skill)
+
+# Changelog
+
+All notable changes to the DMtools Agent Skill will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
