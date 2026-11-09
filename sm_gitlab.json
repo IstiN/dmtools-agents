@@ -6,12 +6,10 @@
       "maxTriggeredWorkflows": 3,
       "validationConcurrency": 3,
       "validationConcurrencyQueueWatermark": 3,
-      "smGuestTransplant": {
-        "enabled": false
-      },
+      "smGuestTransplant": {},
       "rules": [
         {
-          "description": "GitLab twin of sm_github.json rule 'rerun-cancelled-checks'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: rerun-cancelled-checks",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -36,11 +34,10 @@
             "agents-gate"
           ],
           "limit": 2,
-          "id": "rerun-cancelled-checks",
-          "enabled": false
+          "id": "rerun-cancelled-checks"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'rerun-any-cancelled-checks'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: rerun-any-cancelled-checks",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -61,12 +58,11 @@
           "localAction": "rerun_cancelled_checks",
           "anyCancelled": true,
           "limit": 2,
-          "id": "rerun-any-cancelled-checks",
-          "enabled": false
+          "id": "rerun-any-cancelled-checks"
         },
         {
           "id": "reconcile-rework-vs-approval",
-          "description": "GitLab twin of sm_github.json rule 'reconcile-rework-vs-approval'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: reconcile-rework-vs-approval",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -79,12 +75,11 @@
             "draft": false
           },
           "localAction": "reconcile_verdicts",
-          "limit": 10,
-          "enabled": false
+          "limit": 10
         },
         {
           "id": "reconcile-issue-rework-vs-approval",
-          "description": "GitLab twin of sm_github.json rule 'reconcile-issue-rework-vs-approval'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: reconcile-issue-rework-vs-approval",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -97,12 +92,11 @@
             ]
           },
           "localAction": "reconcile_verdicts",
-          "limit": 10,
-          "enabled": false
+          "limit": 10
         },
         {
           "id": "reconcile-approval-vs-changes",
-          "description": "GitLab twin of sm_github.json rule 'reconcile-approval-vs-changes'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: reconcile-approval-vs-changes",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -116,11 +110,10 @@
             "draft": false
           },
           "localAction": "reconcile_verdicts",
-          "limit": 10,
-          "enabled": false
+          "limit": 10
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'unarm-stale-validation'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: unarm-stale-validation",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -134,11 +127,10 @@
           },
           "localAction": "unarm_validation",
           "limit": 1,
-          "id": "unarm-stale-validation",
-          "enabled": false
+          "id": "unarm-stale-validation"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'silent-update-behind'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: silent-update-behind",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -152,11 +144,10 @@
           },
           "localAction": "update_branch",
           "limit": 10,
-          "id": "silent-update-behind",
-          "enabled": false
+          "id": "silent-update-behind"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'park-reset'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: park-reset",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -171,11 +162,10 @@
           },
           "localAction": "update_branch",
           "limit": 10,
-          "id": "park-reset",
-          "enabled": false
+          "id": "park-reset"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'merge-validated'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: merge-validated",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -191,11 +181,10 @@
           },
           "localAction": "merge_pr",
           "limit": 1,
-          "id": "merge-validated",
-          "enabled": false
+          "id": "merge-validated"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'merge-validated-guest'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: merge-validated-guest",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -218,11 +207,10 @@
           "localAction": "merge_pr",
           "guestZeroFailing": true,
           "limit": 1,
-          "id": "merge-validated-guest",
-          "enabled": false
+          "id": "merge-validated-guest"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'fail-validation'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: fail-validation",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -233,11 +221,10 @@
           },
           "localAction": "fail_validation",
           "limit": 10,
-          "id": "fail-validation",
-          "enabled": false
+          "id": "fail-validation"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'rework-on-red-gate-unlatched'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: rework-on-red-gate-unlatched",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -260,11 +247,10 @@
           "localAction": "arm_rework",
           "redHeadGated": true,
           "limit": 1,
-          "id": "rework-on-red-gate-unlatched",
-          "enabled": false
+          "id": "rework-on-red-gate-unlatched"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'rework-on-validation-failed'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: rework-on-validation-failed",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -283,11 +269,10 @@
           },
           "localAction": "arm_rework",
           "limit": 1,
-          "id": "rework-on-validation-failed",
-          "enabled": false
+          "id": "rework-on-validation-failed"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'sweep-stale-validating'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: sweep-stale-validating",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -302,11 +287,10 @@
           "localAction": "sweep_stale_validation",
           "staleMinutes": 15,
           "limit": 10,
-          "id": "sweep-stale-validating",
-          "enabled": false
+          "id": "sweep-stale-validating"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'validate-armed'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: validate-armed",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -337,11 +321,10 @@
           "redHeadSkip": true,
           "limit": 1,
           "id": "validate-armed",
-          "deferRedHead": true,
-          "enabled": false
+          "deferRedHead": true
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'revalidate-armed'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: revalidate-armed",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -370,11 +353,10 @@
           },
           "localAction": "validate_pr",
           "limit": 1,
-          "id": "revalidate-armed",
-          "enabled": false
+          "id": "revalidate-armed"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'revalidate-armed-green'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: revalidate-armed-green",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -404,11 +386,10 @@
           "localAction": "validate_pr",
           "limit": 1,
           "id": "revalidate-armed-green",
-          "skipIfGreenCi": true,
-          "enabled": false
+          "skipIfGreenCi": true
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'validate-fresh'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: validate-fresh",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -426,11 +407,10 @@
           },
           "localAction": "validate_pr",
           "limit": 1,
-          "id": "validate-fresh",
-          "enabled": false
+          "id": "validate-fresh"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'validate-fresh-masked-green'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: validate-fresh-masked-green",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -455,11 +435,10 @@
           "localAction": "validate_pr",
           "skipIfGreenCi": true,
           "limit": 1,
-          "id": "validate-fresh-masked-green",
-          "enabled": false
+          "id": "validate-fresh-masked-green"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'validated-green'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: validated-green",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -473,14 +452,13 @@
           },
           "localAction": "complete_validation",
           "limit": 10,
-          "id": "validated-green",
-          "enabled": false
+          "id": "validated-green"
         },
         {
           "id": "guest-transplant",
           "source": "gitlab",
           "guestTransplant": true,
-          "description": "GitLab twin of sm_github.json rule 'guest-transplant'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: guest-transplant",
           "query": {
             "type": "pr",
             "labels": [
@@ -495,11 +473,10 @@
             "allowBlockedItems": true
           },
           "localAction": "transplant_guest_pr",
-          "limit": 1,
-          "enabled": false
+          "limit": 1
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'conflict-rework'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: conflict-rework",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -510,11 +487,10 @@
           },
           "localAction": "conflict_rework",
           "limit": 5,
-          "id": "conflict-rework",
-          "enabled": false
+          "id": "conflict-rework"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'rework-on-red-ci'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: rework-on-red-ci",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -534,11 +510,10 @@
           },
           "limit": 1,
           "id": "rework-on-red-ci",
-          "workflowRef": "{branch}",
-          "enabled": false
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'rework-on-label'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: rework-on-label",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -558,11 +533,10 @@
           ],
           "limit": 1,
           "id": "rework-on-label",
-          "workflowRef": "{branch}",
-          "enabled": false
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'rework-arm-restore'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: rework-arm-restore",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -575,12 +549,11 @@
           "localAction": "restore_rework_arm",
           "staleMinutes": 30,
           "limit": 5,
-          "id": "rework-arm-restore",
-          "enabled": false
+          "id": "rework-arm-restore"
         },
         {
           "id": "dev-on-assignment",
-          "description": "GitLab twin of sm_github.json rule 'dev-on-assignment'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: dev-on-assignment",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -606,13 +579,12 @@
             "reason": "sm: assigned issue never picked up a dev leg (derive gap gh-944)"
           },
           "workflowFile": "ai-teammate.yml",
-          "limit": 3,
-          "enabled": false
+          "limit": 3
         },
         {
           "id": "develop-done",
           "source": "gitlab",
-          "description": "GitLab twin of sm_github.json rule 'develop-done'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: develop-done",
           "query": {
             "type": "issue",
             "notLabels": [
@@ -623,11 +595,10 @@
             "prChecks": "green",
             "prMachineAuthor": true
           },
-          "localAction": "mark_developed",
-          "enabled": false
+          "localAction": "mark_developed"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'review-after-dev'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: review-after-dev",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -653,11 +624,10 @@
           },
           "limit": 10,
           "id": "review-after-dev",
-          "workflowRef": "{branch}",
-          "enabled": false
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'review-external-once'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: review-external-once",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -678,11 +648,10 @@
             "pr": "{prNumber}"
           },
           "limit": 1,
-          "id": "review-external-once",
-          "enabled": false
+          "id": "review-external-once"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'review-machine-unlinked'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: review-machine-unlinked",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -711,11 +680,10 @@
           },
           "limit": 1,
           "id": "review-machine-unlinked",
-          "workflowRef": "{branch}",
-          "enabled": false
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'review-stale-verdict'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: review-stale-verdict",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -732,11 +700,10 @@
           "localAction": "arm_review",
           "limit": 5,
           "id": "review-stale-verdict",
-          "workflowRef": "{branch}",
-          "enabled": false
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'review-threads-resolved'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: review-threads-resolved",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -756,11 +723,10 @@
           "localAction": "arm_review",
           "limit": 5,
           "id": "review-threads-resolved",
-          "workflowRef": "{branch}",
-          "enabled": false
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'review-stale-verdict-unchecked'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: review-stale-verdict-unchecked",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -781,11 +747,10 @@
           "localAction": "arm_review",
           "limit": 5,
           "id": "review-stale-verdict-unchecked",
-          "workflowRef": "{branch}",
-          "enabled": false
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'rework-unresolved-threads'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: rework-unresolved-threads",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -804,11 +769,10 @@
           },
           "localAction": "arm_rework",
           "limit": 5,
-          "id": "rework-unresolved-threads",
-          "enabled": false
+          "id": "rework-unresolved-threads"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'review-on-label'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: review-on-label",
           "source": "gitlab",
           "query": {
             "type": "pr",
@@ -825,11 +789,10 @@
           },
           "limit": 1,
           "id": "review-on-label",
-          "workflowRef": "{branch}",
-          "enabled": false
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'review-on-issue-label'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: review-on-issue-label",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -843,7 +806,7 @@
               "agent:review",
               "pr_approved"
             ],
-            "prState": "OPEN",
+            "prState": "open",
             "draft": false
           },
           "workflowFile": "ai-teammate.yml",
@@ -854,11 +817,10 @@
           },
           "limit": 1,
           "id": "review-on-issue-label",
-          "workflowRef": "{branch}",
-          "enabled": false
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'close-on-merge'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: close-on-merge",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -869,11 +831,10 @@
           },
           "localAction": "close_issue",
           "limit": 5,
-          "id": "close-on-merge",
-          "enabled": false
+          "id": "close-on-merge"
         },
         {
-          "description": "GitLab twin of sm_github.json rule 'plan-advance'; see its description for the shared operating rationale.",
+          "description": "GitLab SM rule: plan-advance",
           "source": "gitlab",
           "query": {
             "type": "issue",
@@ -883,10 +844,12 @@
           },
           "localAction": "advance_plan",
           "limit": 10,
-          "id": "plan-advance",
-          "enabled": false
+          "id": "plan-advance"
         }
-      ]
+      ],
+      "scm": {
+        "provider": "gitlab"
+      }
     }
   }
 }

@@ -1360,10 +1360,16 @@ function _glActiveMachineRuns(owner, repo) {
     return api.length ? ['unknown'] : [];
 }
 
-function _glCloseIssue(issueNumber) {
-    // No native close-issue tool exists; never treat an issue iid as an MR iid.
-    console.warn('  ⚠️ gitlab close-issue tool not available — issue IID ' +
-        issueNumber + ' left open.');
+function _glCloseIssue(owner, repo, issueNumber, comment) {
+    // No native close-issue tool in the GitLab catalog yet — document
+    // the gap, stay non-fatal.
+    console.warn('  ⚠️ gitlab close-issue tool not available — issue !' +
+        issueNumber + ' left open (comment-only).');
+    if (comment) {
+        // Issue notes ride the generic note path when present.
+        try { gitlab_create_mr_note({ workspace: owner, repository: repo, pullRequestId: String(issueNumber), text: comment }); }
+        catch (e) { console.warn('  ⚠️ close-issue comment failed: ' + (e.message || e)); }
+    }
     return null;
 }
 
@@ -1427,8 +1433,8 @@ function gitlabProvider(cfg) {
             return gitlab_merge_mr({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) });
         },
 
-        closeIssue: function (issueNumber) {
-            return _glCloseIssue(issueNumber);
+        closeIssue: function (issueNumber, comment) {
+            return _glCloseIssue(owner, repo, issueNumber, comment);
         },
 
         addIssueLabel: function (issueNumber, label) {
