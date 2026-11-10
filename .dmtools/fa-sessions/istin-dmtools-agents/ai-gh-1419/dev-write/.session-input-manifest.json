@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-10T12:48:06.202Z",
+  "ticketKey": "gh-1419",
+  "headSha": "62adc721ac2462106e9eb63071b02759a588473c",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:c7201ec88605a7d7",
+      "size": 106668
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:7316f1235badcef0",
+      "size": 9301758
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:478f50cf127872a6",
+      "size": 4438
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:abc7abb24f94de56",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:6911a15a847125c8",
+      "size": 10628
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:214f0627c81b4e57",
+      "size": 4784
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:1b343355ec8845c4",
+      "size": 3253
+    },
+    "request.md": {
+      "hash": "fnv1a64:effc261ef3aa777d",
+      "size": 4555
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:53fc0cd38273372d",
+      "size": 1917
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:68d84e713f73d2a9",
+      "size": 814
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:33aa8aa6c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:4884d0c90316d15d",
+      "size": 4662
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:effc261ef3aa777d",
+      "size": 4555
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs61syOX",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_factoryReviewVerdict.js:138",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — CRAP ratchet regression (the `crap` check failed, exit 2 on head 62adc721)**\n\nThe ratchet report from `ci_failures.md` (run 42816478166):\n\n```text\nREGRESSION  js/unit-tests/test_factoryReviewVerdict.js::contractLines: 9 -> 10\nNEW > 8     js/unit-tests/test_factoryReviewVerdict.js::markerBody: 10\n1 regression(s), 1 new over threshold, 0 improvement(s), 0 removed\n```\n\n`contractLines` was already grandfathered at 9 in the baseline; the added `override` ternary pushed it to 10. `markerBody` is new code from this PR with 9 default branches (`=== undefined ? :` × 3 plus `||` × 5 plus `over || {}`). The gate allows CRAP to only decrease, so this blocks the merge.\n\nFix by extracting a tiny defaults helper — both call sites collapse to ~CC 2–4:\n\n```js\nfunction optVal(over, key, fallback) {\n    return over[key] !== undefined ? over[key] : fallback;\n}\n\nfunction contractLines(over) {\n    over = over || {};\n    return [\n        'decision=' + optVal(over, 'decision', 'unknown'),\n        'source=' + optVal(over, 'source', 'stub-source'),\n        'override=' + optVal(over, 'override', 'false'),\n        ...\n    ].join('\\n');\n}\n```\n\n`markerBody` uses the same helper for the `blocking`/`important`/`suggestions` fields; `nits`/`digest`/`at`/`source`/`head` keep their `||` fallbacks. The pure-helper suite's `rec()` (line ~1308) can ride the same helper. Re-run the gate before pushing:\n\n```bash\nnode js/unit-tests/node_testRunner.js js/unit-tests/test_factoryReviewVerdict.js\nnode js/unit-tests/parity_factoryReviewVerdict.js   # must stay 107/107\n```\n\nEverything else in this PR checks out (113/113 tests pass, parity byte-identical, GraalJS-clean) — this is the only red gate."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61syQ7",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/factory/review_verdict.js:518",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: head-probe failure silently re-opens the #1410 approve path (fail-open in the new ladder)**\n\nIn `probeMachineVerdictMarker`, when trusted marker records exist but the head-sha probe fails, the marker becomes invisible and the legacy parser decides:\n\n```js\nvar records = markerRecordsFromPayload(ctx.prCommentsPayload, logins);\nif (!records.length) return null;\nvar headSha = ctx.pr ? headShaOf(io, opts.repo, ctx.pr) : '';   // transport failure → ''\nctx.headSha = headSha;\nctx.marker = markerForHead(records, headSha);                    // latestVerdictForHead('') → null\n```\n\n`markerForHead(records, '')` returns null (`latestVerdictForHead` bails on an empty sha), so `resolveEffectiveDecision(null, contract)` falls through to `source: 'legacy-parser'` — and a genuine `approve` contract then rides `applyApproveVerdict` → green checks → `pr_approved`, while a REQUEST_CHANGES marker from a trusted machine identity may sit on the current head.\n\nThe header's \"marker invisible → legacy fallback\" list enumerates four causes: pre-gh-807 shapes, **another head**, untrusted author, no configured identity. A **failed head probe** is none of them — in that case the marker exists for *some* head, quite possibly this one, and we failed to determine which. The ticket's own goal (\"marker present → its verdict governs; no downgrade in any case\") is exactly what this path defeats, and it needs only a transient `gh pr view --json headRefOid` failure (rate limit, network blip) coinciding with an approve-shaped parser contract — i.e. the #1410 pathology re-entering through the one branch the ladder doesn't guard.\n\nSuggested fix (one guard, in this function):\n\n```js\nif (!records.length) return null;\nvar headSha = ctx.pr ? headShaOf(io, opts.repo, ctx.pr) : '';\nif (ctx.pr && !headSha) {\n    // trusted records exist but the head is unresolvable — never fail open\n    // to the legacy parser: loud escalation (gh-305/gh-1419 treatment)\n}\n```\n\n— either escalate needs-human there, or minimally force `parserVerdictClassOf` to never classify `approve` while unresolvable trusted records exist (rework is the safe side; approve still arrives on a re-run once gh recovers).\n\nAlso note the AC test set covers \"marker for a different head sha\" (AC1g) but not \"probe fails\" — that case is the gap and deserves a pinned test alongside the fix."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:d11a3263",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — CRAP ratchet regression (the `crap` check failed, exit 2 on head 62adc721)**\n\nThe ratchet report from `ci_failures.md` (run 42816478166):\n\n```text\nREGRESSION  js/unit-tests/test_factoryReviewVerdict.js::contractLines: 9 -> 10\nNEW > 8     js/unit-tests/test_factoryReviewVerdict.js::markerBody: 10\n1 regression(s), 1 new over threshold, 0 improvement(s), 0 removed\n```\n\n`contractLines` was already grandfathered at 9 in the baseline; the added `override` ternary pushed it to 10. `markerBody` is new code from this PR with 9 default branches (`=== undefined ? :` × 3 plus `||` × 5 plus `over || {}`). The gate allows CRAP to only decrease, so this blocks the merge.\n\nFix by extracting a tiny defaults helper — both call sites collapse to ~CC 2–4:\n\n```js\nfunction optVal(over, key, fallback) {\n    return over[key] !== undefined ? over[key] : fallback;\n}\n\nfunction contractLines(over) {\n    over = over || {};\n    return [\n        'decision=' + optVal(over, 'decision', 'unknown'),\n        'source=' + optVal(over, 'source', 'stub-source'),\n        'override=' + optVal(over, 'override', 'false'),\n        ...\n    ].join('\\n');\n}\n```\n\n`markerBody` uses the same helper for the `blocking`/`important`/`suggestions` fields; `nits`/`digest`/`at`/`source`/`head` keep their `||` fallbacks. The pure-helper suite's `rec()` (line ~1308) can ride the same helper. Re-run the gate before pushing:\n\n```bash\nnode js/unit-tests/node_testRunner.js js/unit-tests/test_factoryReviewVerdict.js\nnode js/unit-tests/parity_factoryReviewVerdict.js   # must stay 107/107\n```\n\nEverything else in this PR checks out (113/113 tests pass, parity byte-identical, GraalJS-clean) — this is the only red gate."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:28da94ba",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: head-probe failure silently re-opens the #1410 approve path (fail-open in the new ladder)**\n\nIn `probeMachineVerdictMarker`, when trusted marker records exist but the head-sha probe fails, the marker becomes invisible and the legacy parser decides:\n\n```js\nvar records = markerRecordsFromPayload(ctx.prCommentsPayload, logins);\nif (!records.length) return null;\nvar headSha = ctx.pr ? headShaOf(io, opts.repo, ctx.pr) : '';   // transport failure → ''\nctx.headSha = headSha;\nctx.marker = markerForHead(records, headSha);                    // latestVerdictForHead('') → null\n```\n\n`markerForHead(records, '')` returns null (`latestVerdictForHead` bails on an empty sha), so `resolveEffectiveDecision(null, contract)` falls through to `source: 'legacy-parser'` — and a genuine `approve` contract then rides `applyApproveVerdict` → green checks → `pr_approved`, while a REQUEST_CHANGES marker from a trusted machine identity may sit on the current head.\n\nThe header's \"marker invisible → legacy fallback\" list enumerates four causes: pre-gh-807 shapes, **another head**, untrusted author, no configured identity. A **failed head probe** is none of them — in that case the marker exists for *some* head, quite possibly this one, and we failed to determine which. The ticket's own goal (\"marker present → its verdict governs; no downgrade in any case\") is exactly what this path defeats, and it needs only a transient `gh pr view --json headRefOid` failure (rate limit, network blip) coinciding with an approve-shaped parser contract — i.e. the #1410 pathology re-entering through the one branch the ladder doesn't guard.\n\nSuggested fix (one guard, in this function):\n\n```js\nif (!records.length) return null;\nvar headSha = ctx.pr ? headShaOf(io, opts.repo, ctx.pr) : '';\nif (ctx.pr && !headSha) {\n    // trusted records exist but the head is unresolvable — never fail open\n    // to the legacy parser: loud escalation (gh-305/gh-1419 treatment)\n}\n```\n\n— either escalate needs-human there, or minimally force `parserVerdictClassOf` to never classify `approve` while unresolvable trusted records exist (rework is the safe side; approve still arrives on a re-run once gh recovers).\n\nAlso note the AC test set covers \"marker for a different head sha\" (AC1g) but not \"probe fails\" — that case is the gap and deserves a pinned test alongside the fix."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:5088b9e1",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: CI is red on the PR head (`crap` gate, exit 2): the CRAP ratchet regression `contractLines` 9→10 plus new over-threshold `markerBody` 10 in `test_factoryReviewVerdict.js` must be fixed before merge. One important issue: a head-sha probe failure silently degrades the new marker-primacy ladder to the legacy parser, which can still end in `pr_approved` beside a REQUEST_CHANGES marker (the #1410 pathology via a transient gh failure).\n\n**Verified locally**: 113/113 tests in the two touched suites pass; `parity_factoryReviewVerdict.js` 107/107 byte-identical; GraalJS-clean (var/plain functions, hoisted requires); ticket ACs 1–4 each map to pinned tests; sh + JS updated in the same commit with the canonical-source note.\n\n**Key Issues**:\n1. 🚨 CRAP ratchet regression in the changed test file — gate failure, merge blocked.\n2. ⚠️ Head-probe fail-open in `probeMachineVerdictMarker` — trusted marker records + failed head probe → legacy parser decides, approve still possible.\n\n**Next Steps**:\n1. Extract a shared `optVal(over, key, fallback)` helper and rebuild `contractLines`/`markerBody` defaults from it (CC drops under the 8 threshold).\n2. Treat \"trusted marker records exist but the head sha is unresolvable\" as loud (needs-human) — or never arm `pr_approved` off the parser contract in that state; add the probe-failure test case.\n\n**Digest** (not merge-relevant, for a later polish lap):\n- `js/factory/review_verdict.js:773` — `ctx.verdictSource` set but never read; the decision line still prints the legacy contract's `source` when the marker governed.\n- `js/unit-tests/test_factoryReviewVerdict.js:1357` — vacuous assertion (`... === -1 || true`) can never fail.\n- `js/factory/review_verdict.js:345` — conflicting-verdicts census omits nits/digest counts."
+    }
+  ]
+}
