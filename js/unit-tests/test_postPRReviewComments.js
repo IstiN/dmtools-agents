@@ -2794,14 +2794,98 @@ suite('postPRReviewComments — gh-926 extracted pipeline helpers', function() {
         assert.equal(mod.parseGitHubRemoteUrl(''), null);
     });
 
-    test('buildResumePrompt: names the ticket and the mandatory outputs', function() {
+    test('buildResumePrompt: names the ticket, mandatory outputs, and file-path contracts', function() {
         var mod = loadPostPRReviewComments();
         var prompt = mod.buildResumePrompt('PROJ-1');
 
         assert.contains(prompt, 'PROJ-1');
         assert.contains(prompt, 'outputs/pr_review.json');
-        assert.contains(prompt, 'outputs/pr_review_general.md');
+        assert.contains(prompt, '"generalComment" field MUST be the file path string "outputs/pr_review_general.md"');
+        assert.contains(prompt, '"outputs/pr_review_comments/<name>.md"');
         assert.contains(prompt, 'Do NOT write outputs/response.md');
+    });
+
+    test('postGeneralComment: posts inline markdown when generalComment holds prose instead of a file path', function() {
+        var posted = [];
+        var scm = {
+            addComment: function(prId, body) { posted.push({ prId: prId, body: body }); }
+        };
+        var mod = loadPostPRReviewComments();
+
+        var inlineMd = '## Review summary — MAPC-8930\n\n**Recommendation: approve.**';
+        var ok = mod.postGeneralComment(scm, 1280, inlineMd, 'MAPC-8930', 'dependencies/PostNL-commercial-mobileApp');
+        assert.equal(ok, true);
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].prId, 1280);
+        assert.equal(posted[0].body, inlineMd);
+    });
+
+    test('postGeneralComment: falls back to outputs/pr_review_general.md when a file-path reference is missing', function() {
+        var posted = [];
+        var scm = {
+            addComment: function(prId, body) { posted.push({ prId: prId, body: body }); }
+        };
+        var mod = loadPostPRReviewComments({
+            file_read: function(args) {
+                var p = args && (args.path || args);
+                if (p === 'dependencies/PostNL-commercial-mobileApp/outputs/pr_review_general.md') {
+                    return '## Summary from default general file';
+                }
+                return null;
+            }
+        });
+
+        var ok = mod.postGeneralComment(scm, 1280, 'outputs/missing_summary.md', 'MAPC-8930', 'dependencies/PostNL-commercial-mobileApp');
+        assert.equal(ok, true);
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].body, '## Summary from default general file');
+    });
+
+    test('postInlineComment: resolves relative subpath pr_review_comments/<name>.md under workingDir/outputs', function() {
+        var inlinePosted = [];
+        var scm = {
+            getPrDiff: function() {
+                return 'diff --git a/scripts/unused-files-check.sh b/scripts/unused-files-check.sh\n' +
+                    '--- a/scripts/unused-files-check.sh\n' +
+                    '+++ b/scripts/unused-files-check.sh\n' +
+                    '@@ -30,3 +30,4 @@\n' +
+                    ' line30\n' +
+                    ' line31\n' +
+                    '+line32\n' +
+                    ' line33\n';
+            },
+            addInlineComment: function(prId, path, line, body, startLine, side) {
+                inlinePosted.push({ prId: prId, path: path, line: line, body: body, side: side });
+            }
+        };
+        var mod = loadPostPRReviewComments({
+            file_read: function(args) {
+                var p = args && (args.path || args);
+                if (p === 'dependencies/PostNL-commercial-mobileApp/outputs/pr_review_comments/unused-files-check-fail-open.md') {
+                    return '⚠️ **IMPORTANT: Guard exits 0 on error**\nFix the exit code.';
+                }
+                return null;
+            }
+        });
+
+        var ok = mod.postInlineComment(
+            scm,
+            1280,
+            {
+                path: 'scripts/unused-files-check.sh',
+                line: 32,
+                side: 'RIGHT',
+                severity: 'IMPORTANT',
+                comment: 'pr_review_comments/unused-files-check-fail-open.md'
+            },
+            'MAPC-8930',
+            'dependencies/PostNL-commercial-mobileApp'
+        );
+        assert.equal(ok, true);
+        assert.equal(inlinePosted.length, 1);
+        assert.equal(inlinePosted[0].path, 'scripts/unused-files-check.sh');
+        assert.equal(inlinePosted[0].line, 32);
+        assert.contains(inlinePosted[0].body, 'Guard exits 0 on error');
     });
 });
 
