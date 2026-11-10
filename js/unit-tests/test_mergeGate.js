@@ -197,10 +197,6 @@ function escalatedHoldComment(head, at) {
     return holdComment({ total: 2, human: 2, machine: 0 }, head, at, true, at, 24);
 }
 
-// io bag over scripted providers: opts.threads / opts.comments = the served
-// payloads; opts.threadsThrows / opts.noThreads / opts.noComments /
-// opts.noCreateComment / opts.noAddLabels / opts.createCommentThrows /
-// opts.addLabelsThrows shape the failure modes. Every call lands in `calls`.
 // One scripted provider: absent (null) when opts[shape.absent], otherwise
 // a recording reader that throws on opts[shape.throwKey] and serves
 // shape.serve(opts). The shape table keeps gateIo's complexity flat when
