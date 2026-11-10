@@ -34,7 +34,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `prepareBugCreationContext.js`
 
@@ -49,6 +51,8 @@ _Prepare Bug Creation Context (preCliJSAction for bug_creation agent)_
 - Side effects:
   - post ticket comment (via tracker)
 - Parameters (customParams):
+  - `branchCreateFnPath`
+  - `dryRun`
   - `openBugsJql`
 
 
@@ -76,7 +80,9 @@ _Post Bug Creation Action (postJSAction for bug_creation agent)_
 
 - `openBugsJql`: `"project = {jiraProject} AND issuetype in (Bug) AND status not in ({status.DONE:Done})"`
 - `removeLabel`: `"sm_bug_creation_triggered"`
+- `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 
 ---

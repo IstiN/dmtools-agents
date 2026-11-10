@@ -49,7 +49,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `fetchEpicsToInput.js`
 
@@ -84,7 +86,9 @@ _Create Intake Tickets Post-Action_
 
 ## Custom params
 
+- `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 
 ---

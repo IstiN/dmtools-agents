@@ -39,7 +39,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `preCliDevelopmentSetup.js`
 
@@ -61,6 +63,7 @@ _Pre-CLI Development Setup Action_
   - `childQuestions`
   - `commentMarkup`
   - `contexts`
+  - `dryRun`
   - `feedbackLoop.qualityGates.gates`
   - `fields`
   - `jql`
@@ -135,10 +138,11 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 ## Custom params
 
 - `removeLabel`: `"sm_bug_development_triggered"`
+- `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `artefactRepository` _(used by JS action)_
-- `branchCreateFnPath` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
 - `contexts` _(used by JS action)_
@@ -158,7 +162,6 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
 - `customStatuses` _(used by JS action)_
-- `dryRun` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `managedSubmodules` _(used by JS action)_

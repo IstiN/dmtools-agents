@@ -27,6 +27,9 @@ _Move To Ready For Testing Action (postJSAction for test_cases_generator)_
 - Source: `agents/js/moveToReadyForTesting.js`
 - Side effects:
   - move ticket to status (via tracker)
+- Parameters (customParams):
+  - `branchCreateFnPath`
+  - `dryRun`
 
 
 
@@ -48,6 +51,8 @@ _Finish Test Cases Generation (postJSAction for test_cases_generator)_
 
 ## Custom params
 
+- `branchCreateFnPath` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 
 ---

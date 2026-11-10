@@ -1915,6 +1915,20 @@ suite('preCliDevelopmentSetup.action — dryRun guard (gh-1356)', function() {
         assert.equal(syncMod.action({ customParams: { dryRun: true } }), true);
         assert.equal(syncMod.action({ jobParams: { customParams: { dryRun: 'true' } } }), true);
         assert.equal(syncCli.length, 0, 'preCliSyncBaseBranch must not execute git checkout/pull in dryRun');
+
+        assert.equal(syncMod.action({ jobParams: { customParams: {} } }), true);
+        assert.equal(syncCli.length, 2, 'non-dryRun executes git checkout and git pull');
+        assert.equal(syncCli[0].command, 'git checkout main');
+        assert.equal(syncCli[1].command, 'git pull --ff-only origin main');
+
+        var errSyncMod = loadModule('js/preCliSyncBaseBranch.js', makeRequire({
+            './configLoader.js': { loadProjectConfig: function() { return { workingDir: '/tmp/w', git: {} }; } },
+            './common/pullRequest.js': PR_HELPER_REAL,
+            './common/branchSetup.js': bs
+        }), {
+            cli_execute_command: function() { throw new Error('git failed'); }
+        });
+        assert.equal(errSyncMod.action({}), false, 'returns false when git command throws');
     });
 
 });

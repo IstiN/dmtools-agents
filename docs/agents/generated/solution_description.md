@@ -37,7 +37,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `fetchParentContextToInput.js`
 
@@ -71,7 +73,9 @@ _Enhance SD CORE Description and Assess Action_
 
 ## Custom params
 
+- `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `contexts` _(used by JS action)_
 - `fields` _(used by JS action)_

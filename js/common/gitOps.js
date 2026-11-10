@@ -169,6 +169,26 @@ function _restorePreflightStashOnSwitchError(cmd, branchName, switchErr) {
     throw switchErr;
 }
 
+function _switchPRBranchOrRestoreStash(branchName, cmd, pullRef, stashed) {
+    try {
+        _switchOrPullRef(branchName, cmd, pullRef);
+    } catch (switchErr) {
+        if (stashed) _restorePreflightStashOnSwitchError(cmd, branchName, switchErr);
+        throw switchErr;
+    }
+}
+
+function _reapplyPreflightStash(cmd, branchName, stashed) {
+    if (!stashed) return false;
+    try {
+        cmd('git stash pop');
+        return false;
+    } catch (popErr) {
+        console.warn('⚠️ Reapplying local snapshot onto ' + branchName + ' produced conflicts — leaving conflict markers in place:', popErr);
+        return true;
+    }
+}
+
 function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
     console.log('Checking out PR branch:', branchName);
     var cmd = dirScopedCmd(workingDir);
@@ -201,23 +221,10 @@ function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
 
     // 2. Switch branches — tree is clean now, so this should never fail on
     //    "untracked files would be overwritten" again.
-    try {
-        _switchOrPullRef(branchName, cmd, pullRef);
-    } catch (switchErr) {
-        if (stashed) _restorePreflightStashOnSwitchError(cmd, branchName, switchErr);
-        throw switchErr;
-    }
+    _switchPRBranchOrRestoreStash(branchName, cmd, pullRef, stashed);
 
     // 3. Reapply the snapshot on top of the target branch.
-    var hadConflict = false;
-    if (stashed) {
-        try {
-            cmd('git stash pop');
-        } catch (popErr) {
-            hadConflict = true;
-            console.warn('⚠️ Reapplying local snapshot onto ' + branchName + ' produced conflicts — leaving conflict markers in place:', popErr);
-        }
-    }
+    var hadConflict = _reapplyPreflightStash(cmd, branchName, stashed);
 
     // 4. Hard invariant: never report success while parked on the base branch.
     if (baseBranch) {

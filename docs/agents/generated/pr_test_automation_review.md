@@ -39,6 +39,7 @@ _Prepare Test PR For Review Action (preJSAction for test-automation review agent
 - Parameters (customParams):
   - `allowApproveWithSuggestions`
   - `branchCreateFnPath`
+  - `dryRun`
   - `importantBlocksApproval`
   - `maxReviewThreadsBeforeForceApprove`
 
@@ -78,13 +79,13 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
 - `removeLabel`: `"sm_test_review_triggered"`
 - `allowApproveWithSuggestions` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `importantBlocksApproval` _(used by JS action)_
 - `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `configPath` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
-- `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `maxAutoReworkRounds` _(used by JS action)_
 - `projectKey` _(used by JS action)_

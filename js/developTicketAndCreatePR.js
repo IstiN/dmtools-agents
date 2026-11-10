@@ -1358,15 +1358,19 @@ function logMoveToStatusOutcome(ticketKey, statusLabel, moveResult, suffix) {
  * No-op when `dev_base_head.txt` was not recorded (preserving the no-git-work
  * fast path when no run base was captured).
  */
+function openPrDevCommitMessage(ctx) {
+    var commitTemplate = (ctx.config.formats && ctx.config.formats.commitMessage && ctx.config.formats.commitMessage.development) || '{ticketKey} {ticketSummary}';
+    return configLoader.formatTemplate(commitTemplate, {
+        ticketKey: ctx.ticketKey,
+        ticketSummary: ctx.ticketSummary || ''
+    });
+}
+
 function squashAndPushOpenPrWipCommits(ctx) {
     if (!ctx || !ctx.ticketKey || !ctx.config) return false;
     if (!readRecordedDevBaseHead(ctx.ticketKey)) return false;
     try {
-        var commitTemplate = (ctx.config.formats && ctx.config.formats.commitMessage && ctx.config.formats.commitMessage.development) || '{ticketKey} {ticketSummary}';
-        var commitMessage = configLoader.formatTemplate(commitTemplate, {
-            ticketKey: ctx.ticketKey,
-            ticketSummary: ctx.ticketSummary || ''
-        });
+        var commitMessage = openPrDevCommitMessage(ctx);
         var baseBranch = configLoader.resolvePRTargetBranch(ctx.config, ctx.ticket);
         var runStr = function (command) { return runCmd({ command: command }); };
         if (!squashDevelopmentWipCommits(runStr, ctx.ticketKey, baseBranch, commitMessage)) {

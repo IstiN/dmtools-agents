@@ -32,7 +32,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `preCliTestReworkSetup.js`
 
@@ -49,6 +51,7 @@ _Pre-CLI Test Rework Setup Action (preCliJSAction for pr_test_automation_rework)
   - `branchCreateFnPath`
   - `childQuestions`
   - `contexts`
+  - `dryRun`
   - `fields`
   - `importantBlocksApproval`
   - `jql`
@@ -91,8 +94,9 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 
 - `removeLabel`: `"sm_test_rework_triggered"`
 - `checkOpenPR`: `true`
-- `allowApproveWithSuggestions` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
+- `dryRun` _(used by JS action)_
+- `allowApproveWithSuggestions` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `contexts` _(used by JS action)_
 - `fields` _(used by JS action)_
@@ -105,7 +109,6 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 - `configPath` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
-- `dryRun` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `projectKey` _(used by JS action)_

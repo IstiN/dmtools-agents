@@ -3695,6 +3695,35 @@ suite('developTicketAndCreatePR > WIP auto-save squash (gh-1308)', function () {
             'must force-with-lease push squashed branch when PR already open');
     });
 
+    test('squashAndPushOpenPrWipCommits returns false on missing ctx, clean single commit, or push error (gh-1398)', function () {
+        var loadedNoCommit = loadForOutcomePinning({
+            file_read: function (args) {
+                if (args && args.path === 'input/2066776/dev_base_head.txt') return 'deadbeef12345678\n';
+                return null;
+            },
+            cli_execute_command: function (args) {
+                if (args.command === 'git rev-list --merges deadbeef12345678..HEAD') return '';
+                if (args.command === 'git log --format=%s deadbeef12345678..HEAD') return '2066776 Fix widget\n';
+                return '';
+            }
+        });
+        assert.equal(loadedNoCommit.mod.squashAndPushOpenPrWipCommits(null), false);
+        assert.equal(loadedNoCommit.mod.squashAndPushOpenPrWipCommits({
+            ticketKey: '2066776',
+            ticketSummary: 'Fix widget',
+            config: { formats: { commitMessage: { development: '{ticketKey} {ticketSummary}' } } },
+            expectedBranch: 'ai/2066776'
+        }), false);
+
+        var loadedThrows = loadForOutcomePinning({
+            file_read: function () { return 'deadbeef12345678\n'; }
+        });
+        assert.equal(loadedThrows.mod.squashAndPushOpenPrWipCommits({
+            ticketKey: '2066776',
+            config: { get formats() { throw new Error('boom'); } }
+        }), false);
+    });
+
     test('logMoveToStatusOutcome logs stage-label fallback honestly instead of claiming Moved to In Review (dm.ai#795)', function () {
         var logs = [];
         var mod = loadWithRealPrHelper({});

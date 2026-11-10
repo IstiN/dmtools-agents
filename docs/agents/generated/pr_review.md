@@ -62,7 +62,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `preparePRForReview.js`
 
@@ -73,9 +75,11 @@ _Prepare PR for Review Action (preCliJSAction for pr_review agent)_
   - post ticket comment (via tracker)
 - Parameters (customParams):
   - `allowApproveWithSuggestions`
+  - `branchCreateFnPath`
   - `childQuestions`
   - `commentMarkup`
   - `contexts`
+  - `dryRun`
   - `fields`
   - `importantBlocksApproval`
   - `jql`
@@ -136,6 +140,8 @@ _Post PR Review Comments Action_
 
 - `removeLabel`: `"sm_story_review_triggered"`
 - `checkOpenPR`: `true`
+- `branchCreateFnPath` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `allowApproveWithSuggestions` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
@@ -154,7 +160,6 @@ _Post PR Review Comments Action_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
 - `customStatuses` _(used by JS action)_
-- `dryRun` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `maxAutoReworkRounds` _(used by JS action)_
