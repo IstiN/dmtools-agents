@@ -166,6 +166,7 @@ function laneScm(opts, calls) {
     return {
         getRemoteRepoInfo: function () { return { owner: 'o', repo: 'n' }; },
         listPrs: function (state) {
+            if (state === 'merged' && opts.mergedPrs) return opts.mergedPrs;
             return (opts.openPrs || [{ number: 12, body: 'Closes #33', head: { ref: 'ai/gh-33' } }]);
         },
         getPr: function (prId) { return opts.prDetail || null; },
@@ -218,7 +219,7 @@ suite('retryMergeGithubPR: verdict gate at the merge instant (gh-1416)', functio
         var second = runLane(opts);
         assert.equal(second.result, false, 'still held — the verdict stands');
         assert.equal(holdsPosted(second.calls).length, 0,
-            'never a new comment per tick (refreshed in place)');
+            'never a new comment per tick (the existing marker is reused in place)');
     });
 
     test('APPROVE record on the current head -> merges', function () {
@@ -354,6 +355,27 @@ suite('retryMergeGithubPR: lane characterization (gate-neutral shapes)', functio
         assert.equal(r.calls.merges.length, 0);
         assert.equal(r.calls.branchUpdates.length, 1);
         assert.equal(r.calls.commentReads.length, 0);
+    });
+
+    test('already-merged PR -> cleanup: labels dropped, issue closed, no merge, no gate consult', function () {
+        var loaded = loadLane({
+            openPrs: [],
+            mergedPrs: [{ number: 12, body: 'Closes #33', head: { ref: 'ai/gh-33' } }],
+            comments: [verdictComment('REQUEST_CHANGES', HEAD)]
+        });
+        var result = loaded.lane.action({
+            ticket: { key: 'gh-33' }, // resolved via the branch match on the merged list
+            jobParams: { machineAuthor: BOT }
+        });
+        assert.equal(result, true, 'the merged-PR cleanup is a handled outcome');
+        assert.equal(loaded.calls.merges.length, 0, 'nothing to merge');
+        assert.equal(loaded.calls.commentReads.length, 0, 'the gate runs at the MERGE instant only');
+        assert.ok(loaded.calls.removed.some(function (x) { return x.label === 'pr_approved'; }),
+            'the approval is consumed by the cleanup');
+        assert.equal(loaded.calls.closed.length, 1, 'the issue is closed by the cleanup');
+        assert.ok(loaded.calls.comments.some(function (c) {
+            return String(c.body || '').indexOf('Merged via #12') !== -1;
+        }), 'the merged note is posted');
     });
 
     test('missing ticket issue number -> early false', function () {
