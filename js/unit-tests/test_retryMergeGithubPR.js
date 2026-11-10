@@ -150,7 +150,11 @@ function laneGlobals(opts, calls) {
         github_remove_label: function (a) { calls.removed.push(a); return '{}'; },
         github_add_labels: function (a) { calls.added.push(a); return '{}'; },
         github_create_comment: function (a) { calls.comments.push(a); return '{}'; },
-        github_get_issue: function () { return JSON.stringify({ number: 33, state: 'closed' }); },
+        github_get_issue: opts.getIssueThrows ? function () {
+            throw new Error(opts.getIssueThrows);
+        } : function () {
+            return JSON.stringify({ number: 33, state: opts.getIssueState || 'closed' });
+        },
         github_close_issue: function (a) { calls.closed.push(a); return '{}'; },
         github_get_pr_comments: opts.noCommentsPrimitive ? undefined : function (a) {
             calls.commentReads.push(a);
@@ -164,7 +168,9 @@ function laneGlobals(opts, calls) {
 // lists, the PR detail payload, and the merge/branch-update recorders.
 function laneScm(opts, calls) {
     return {
-        getRemoteRepoInfo: function () { return { owner: 'o', repo: 'n' }; },
+        getRemoteRepoInfo: function () {
+            return opts.remoteRepoNull ? null : { owner: 'o', repo: 'n' };
+        },
         listPrs: function (state) {
             if (state === 'merged' && opts.mergedPrs) return opts.mergedPrs;
             return (opts.openPrs || [{ number: 12, body: 'Closes #33', head: { ref: 'ai/gh-33' } }]);
@@ -381,5 +387,57 @@ suite('retryMergeGithubPR: lane characterization (gate-neutral shapes)', functio
     test('missing ticket issue number -> early false', function () {
         var loaded = loadLane({});
         assert.equal(loaded.lane.action({ ticket: { key: 'nope' }, jobParams: {} }), false);
+    });
+
+    test('unresolvable repo (no remote, no explicit config) -> early false', function () {
+        var loaded = loadLane({ remoteRepoNull: true });
+        var result = loaded.lane.action({
+            ticket: { key: 'gh-33', prNumber: 12 }, jobParams: { machineAuthor: BOT }
+        });
+        assert.equal(result, false, 'no owner/repo — nothing to operate on');
+        assert.equal(loaded.calls.merges.length, 0);
+        assert.equal(loaded.calls.commentReads.length, 0, 'the gate never consults without a repo');
+    });
+
+    test('no open or merged PR found -> false, lock released', function () {
+        var loaded = loadLane({ openPrs: [], mergedPrs: [] });
+        var result = loaded.lane.action({
+            ticket: { key: 'gh-40' }, // no PR links gh-40 (branch/body/merged all miss)
+            jobParams: { machineAuthor: BOT }
+        });
+        assert.equal(result, false, 'nothing to merge — the SM retries');
+        assert.equal(loaded.calls.merges.length, 0);
+        assert.equal(loaded.calls.closed.length, 0);
+    });
+
+    test('mergeable false with a clean mergeState -> conflicts path (rework flip)', function () {
+        var r = runLane({ comments: [],
+            prDetail: prDetail({ mergeable: false, mergeable_state: 'clean' }) });
+        assert.equal(r.result, false);
+        assert.ok(r.calls.added.some(function (x) {
+            return (x.labels || []).indexOf('agent:rework') !== -1;
+        }), 'mergeable false is a conflict shape even when the state string is clean');
+    });
+
+    test('mergeStateStatus fallback shape drives the decision (GraphQL-only payload)', function () {
+        var detail = { number: 12, state: 'open', mergeable: true,
+            mergeStateStatus: 'CLEAN', head: { sha: HEAD } };
+        var r = runLane({ comments: [verdictComment('APPROVE', HEAD)], prDetail: detail });
+        assert.equal(r.result, true, 'mergeStateStatus (no mergeable_state) reaches the merge');
+        assert.equal(r.calls.merges.length, 1);
+    });
+
+    test('post-merge: an open linked issue is closed by the safety net', function () {
+        var r = runLane({ comments: [verdictComment('APPROVE', HEAD)], prDetail: prDetail(),
+            getIssueState: 'open' });
+        assert.equal(r.result, true);
+        assert.ok(r.calls.closed.length >= 1, 'the open issue is closed after the merge');
+    });
+
+    test('post-merge: a failing issue read is non-fatal (safety-net catch)', function () {
+        var r = runLane({ comments: [verdictComment('APPROVE', HEAD)], prDetail: prDetail(),
+            getIssueThrows: 'get issue boom' });
+        assert.equal(r.result, true, 'the safety-net fault never fails the merged outcome');
+        assert.equal(r.calls.merges.length, 1);
     });
 });
