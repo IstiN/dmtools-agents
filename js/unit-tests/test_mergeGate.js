@@ -92,6 +92,7 @@ function mMergeBackstop(globals) {
         './findingRegistry.js': mFindingRegistry(),
         './reviewDebtLedger.js': mReviewDebtLedger(),
         './reviewDispositions.js': mReviewDispositions(),
+        './reviewPolicy.js': mReviewPolicy(),
         './machineAuthor.js': mMachineAuthor(),
         './reviewThreadInventory.js': mThreadInventory(),
         './mcpParse.js': mcpParseModule,

@@ -20,10 +20,12 @@
  *
  *   Stage 1 — machine threads reach terminal disposition (gh-1353/gh-1370,
  *   unchanged): mergeBackstop.runBackstopForPr digests + resolves the
- *   >=IMPORTANT machine threads, ack-resolves the below-threshold ones,
- *   and THROWS on any record-keeping or resolve/ack failure (today's
- *   semantics — hold, retry next tick). The throw propagates through
- *   runForPr — each caller keeps its own failure handling (the
+ *   >=IMPORTANT machine threads, ack-resolves the below-threshold ones the
+ *   resolved review policy DEFERS (gh-1418 — mandatory-fix/lap-gated tiers
+ *   and over-budget deferrable buckets hold + re-arm the polish lap), and
+ *   THROWS on any record-keeping or resolve/ack failure or policy hold
+ *   (today's semantics — hold, retry next tick). The throw propagates
+ *   through runForPr — each caller keeps its own failure handling (the
  *   mergeTrigger per-item isolation fails the job = the escalation
  *   surface; mergeBot and the retry lane absorb it as a defer).
  *

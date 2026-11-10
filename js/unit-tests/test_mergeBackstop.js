@@ -94,6 +94,7 @@ function mergeBackstopMod(configLoaderStub, globalMods) {
         './findingRegistry.js': findingRegistryMod(),
         './reviewDebtLedger.js': reviewDebtLedgerMod(),
         './reviewDispositions.js': reviewDispositionsMod(),
+        './reviewPolicy.js': reviewPolicyMod(),
         './machineAuthor.js': machineAuthorMod(),
         './reviewThreadInventory.js': threadInventoryMod(),
         './mcpParse.js': mcpParseMod(),
@@ -142,6 +143,27 @@ function nitBody(claim) {
 }
 
 /**
+ * The comments primitive of ioFixture (the ledger-base read, gh-1371).
+ * ABSENT when `noComments` — normalizedIo maps the non-function slot to
+ * null exactly like a missing bridge tool (the gh-1418 no-primitive
+ * probes). Extracted from ioFixture for the CI crap ratchet (the
+ * capability-miss ternary + the throw arm are decisions ioFixture cannot
+ * afford — it rides the measured gate).
+ */
+function commentsMockFor(f, rec) {
+    if (f.noComments) return undefined;
+    return function () {
+        rec.order.push('comments');
+        if (f.commentsThrow) throw new Error(f.commentsThrow);
+        // reality: the posts ARE the PR comment stream (write-then-read
+        // parity — the same read the next run's ledger base uses)
+        return JSON.stringify(f.comments.concat(rec.posts.map(function (p) {
+            return { body: p.body, user: { login: MACHINE } };
+        })));
+    };
+}
+
+/**
  * A scripted github bridge: every primitive recorded (rec.order keeps the
  * GLOBAL call order across primitives so the ticket's file-then-resolve
  * order is assertable), payloads served, failures injectable per primitive.
@@ -150,6 +172,7 @@ function nitBody(claim) {
  *   noThreads         — true = the threads primitive is ABSENT (capability miss)
  *   threadsThrow      — the threads read throws (fail-closed read scenario)
  *   commentsThrow     — the comments read throws (ledger-clobber scenario)
+ *   noComments        — true = the comments primitive is ABSENT (capability miss)
  *   createIssueThrow  — the digest filing throws (record-keeping failure)
  *   resolveFailIds    — thread ids whose resolve throws (per-thread failure)
  *   existingIssues    — open [debt] issues the search probe returns
@@ -159,6 +182,7 @@ function ioFixture(opts) {
         threads: [],
         comments: [],
         noThreads: false,
+        noComments: false,
         threadsThrow: null,
         commentsThrow: null,
         createIssueThrow: null,
@@ -175,15 +199,7 @@ function ioFixture(opts) {
             return JSON.stringify({ data: { repository: { pullRequest:
                 { reviewThreads: { nodes: f.threads } } } } });
         },
-        getComments: function () {
-            mark('comments');
-            if (f.commentsThrow) throw new Error(f.commentsThrow);
-            // reality: the posts ARE the PR comment stream (write-then-read
-            // parity — the same read the next run's ledger base uses)
-            return JSON.stringify(f.comments.concat(rec.posts.map(function (p) {
-                return { body: p.body, user: { login: MACHINE } };
-            })));
-        },
+        getComments: commentsMockFor(f, rec),
         createComment: function (a) { mark('post'); rec.posts.push(a); return '{}'; },
         createIssue: function (a) {
             mark('issue');
@@ -356,7 +372,7 @@ suite('mergeBackstop — buildDigestIssue', function () {
             { threadId: 'H1', rootCommentId: 9100, resolved: false, author: 'human-reviewer',
               body: nitBody('a human nit'), path: 'docs/x.md', line: 3 }
         ], ALLOW).human;
-        var ledger = m.appendCountedToLedger(null, counted, { prNumber: 42, nowIso: NOW, owner: OWNER, name: NAME });
+        var ledger = m.appendThreadsToLedger(null, counted, { prNumber: 42, nowIso: NOW, owner: OWNER, name: NAME });
         var parts = {
             owner: OWNER, name: NAME, prNumber: 42,
             prTitle: 'Backstop replay PR',
@@ -422,7 +438,7 @@ suite('mergeBackstop — buildDigestIssue', function () {
         var issue = m.buildDigestIssue({
             owner: OWNER, name: NAME, prNumber: 42, prTitle: 'x',
             counted: counted, human: [],
-            reviewRunRef: 'ref', ledger: m.appendCountedToLedger(null, counted,
+            reviewRunRef: 'ref', ledger: m.appendThreadsToLedger(null, counted,
                 { prNumber: 42, nowIso: NOW, owner: OWNER, name: NAME })
         });
         var marker = ledgerMarkerOf(issue.body);
@@ -432,7 +448,7 @@ suite('mergeBackstop — buildDigestIssue', function () {
     test('ledger dedup: the same finding counted twice stays ONE entry (occurrences 2)', function () {
         var m = mergeBackstopMod();
         var ctx = { prNumber: 42, nowIso: NOW, owner: OWNER, name: NAME };
-        var l = m.appendCountedToLedger(null, [
+        var l = m.appendThreadsToLedger(null, [
             { threadId: 'A', rootCommentId: 1, severity: 'IMPORTANT', path: 'a.js', line: 1,
               claim: 'nothing validates the merge state token' },
             { threadId: 'B', rootCommentId: 2, severity: 'IMPORTANT', path: 'a.js', line: 9,
@@ -446,10 +462,10 @@ suite('mergeBackstop — buildDigestIssue', function () {
     test('ledger dedup across backstop runs: a pre-existing entry refreshes, never duplicates', function () {
         var m = mergeBackstopMod();
         var ctx = { prNumber: 42, nowIso: NOW, owner: OWNER, name: NAME };
-        var first = m.appendCountedToLedger(null, [
+        var first = m.appendThreadsToLedger(null, [
             { threadId: 'A', severity: 'IMPORTANT', path: 'a.js', claim: 'nothing validates the merge state token' }
         ], ctx);
-        var second = m.appendCountedToLedger(first, [
+        var second = m.appendThreadsToLedger(first, [
             { threadId: 'Z', severity: 'IMPORTANT', path: 'a.js', claim: 'nothing validates the merge state token' }
         ], ctx);
         assert.equal(second.findings.length, 1, 'a repeated finding refreshes the entry');
@@ -491,10 +507,10 @@ suite('mergeBackstop — reviewRunRefOf, deferredAck, digest probe', function ()
     test('findExistingDigest reuses the open [debt] issue whose ledger marker carries this PR', function () {
         var m = mergeBackstopMod();
         var rdl = reviewDebtLedgerMod();
-        var mine = rdl.buildDebtMarker(m.appendCountedToLedger(null, [
+        var mine = rdl.buildDebtMarker(m.appendThreadsToLedger(null, [
             { threadId: 'A', severity: 'IMPORTANT', path: 'a.js', claim: 'x' }
         ], { prNumber: 42, nowIso: NOW }));
-        var other = rdl.buildDebtMarker(m.appendCountedToLedger(null, [
+        var other = rdl.buildDebtMarker(m.appendThreadsToLedger(null, [
             { threadId: 'B', severity: 'IMPORTANT', path: 'b.js', claim: 'y' }
         ], { prNumber: 43, nowIso: NOW }));
         var hit = m.findExistingDigest({ items: [
@@ -575,12 +591,12 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.equal(refreshed.occurrences, 2, 'the repeated finding refreshed its entry');
     });
 
-    test('AC2 clean replay: no >=⚠️ machine threads → no digest; the open SUGGESTION resolves with an ack (gh-1370)', function () {
+    test('AC2 replay (gh-1418): a resolved thread + an open deferrable NIT → the NIT acks, merge proceeds', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: [
-            ghThread({ id: 'PRT_1', comments: { nodes: [{ databaseId: 9001,
-                author: { login: MACHINE + '[bot]' }, body: suggestionBody() }] } }),
-            ghThread({ id: 'PRT_2', isResolved: true })
+            ghThread({ id: 'PRT_1', isResolved: true }),
+            ghThread({ id: 'PRT_2', comments: { nodes: [{ databaseId: 9002,
+                author: { login: MACHINE + '[bot]' }, body: nitBody() }] } })
         ] });
         var out = run(m, f);
         assert.equal(out.counted.length, 0);
@@ -588,8 +604,7 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
         assert.equal(f.rec.issues.length, 0, 'no digest issue');
         assert.equal(f.rec.resolves.length, 1, 'the open machine thread resolves (gh-1370 ack path)');
         assert.equal(out.ackResolved, 1);
-        assert.equal(f.rec.posts.length, 0, 'no ledger stamp');
-        assert.equal(f.rec.order.indexOf('issue'), -1);
+        assert.equal(f.rec.posts.length, 1, 'gh-1418: the ack wrote its ledger item — one stamp');
     });
 
     test('AC3 human-thread replay: humans listed open (human), never resolved', function () {
@@ -614,7 +629,7 @@ suite('mergeBackstop — runBackstop (scripted io)', function () {
     test('digest reuse: an open [debt] issue already carrying this PR is reused, not re-filed', function () {
         var m = mergeBackstopMod();
         var marker = reviewDebtLedgerMod().buildDebtMarker(
-            m.appendCountedToLedger(null, [
+            m.appendThreadsToLedger(null, [
                 { threadId: 'OLD', severity: 'IMPORTANT', path: 'a.js',
                   claim: 'nothing validates the merge state token' }
             ], { prNumber: 42, nowIso: '2026-11-01T00:00:00.000Z' }));
@@ -734,18 +749,39 @@ suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)'
             belowThread('PRT_N2', nitBody('stale link in the comment'), 66)
         ];
     }
+    // Six 🪶 NIT machine threads — a deferrable tier under every preset;
+    // the ack path's multi-item census fixture (gh-1418: the density
+    // budget must be fed additions >= 8-round or the bucket holds).
+    function sixNitThreads() {
+        return [
+            belowThread('PRT_N1', nitBody('typo in the doc comment'), 11),
+            belowThread('PRT_N2', nitBody('stale link in the comment'), 22),
+            belowThread('PRT_N3', nitBody('loose wording in the summary'), 33),
+            belowThread('PRT_N4', nitBody('comment wraps past the margin'), 44),
+            belowThread('PRT_N5', nitBody('stale doc link'), 55),
+            belowThread('PRT_N6', nitBody('markdown fence missing'), 66)
+        ];
+    }
 
-    test('AC1 replay: 4 SUGGESTION + 2 NIT machine threads → all six resolved (wontfix acks), zero open machine threads, merge proceeds', function () {
+    // The gh-1418 AC1 replay under the relaxed preset: every deferrable
+    // tier acks (within the density budget — additions 800 → allowed 8).
+    test('AC1 replay (relaxed preset): 4 SUGGESTION + 2 NIT machine threads → all six resolved (wontfix acks), zero open machine threads, merge proceeds', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: sixBelowThresholdThreads() });
-        var out = run(m, f); // must NOT throw — zero open machine threads after resolution
+        var out = run(m, f, defaultInput({
+            jobParams: { reviewPolicy: { preset: 'relaxed' } },
+            additions: 800
+        })); // must NOT throw — zero open machine threads after resolution
         assert.equal(out.counted.length, 0, 'nothing >= IMPORTANT — the digest path never runs');
-        assert.equal(out.ackThreads.length, 6, 'all six land in the ack bucket');
+        assert.equal(out.ackThreads.length, 6, 'all six land in the ack bucket (deferrable per relaxed)');
+        assert.equal(out.holdThreads.length, 0, 'nothing policy-held');
         assert.equal(out.ackResolved, 6, 'all six reach terminal resolution');
         assert.equal(f.rec.resolves.length, 6, 'zero open machine threads at merge time');
         assert.equal(f.rec.replies.length, 6, 'each resolution carries its machine ack tag');
         assert.equal(f.rec.issues.length, 0, 'nits resolve WITHOUT fixing AND without a digest issue');
-        assert.equal(f.rec.posts.length, 0, 'no ledger stamp — the debt ledger is not the nit path');
+        assert.equal(f.rec.posts.length, 1, 'gh-1418: ONE ledger stamp — every ack wrote its ledger item');
+        var marker = ledgerMarkerOf(f.rec.posts[0].body);
+        assert.equal(marker.findings.length, 6, 'all six acked findings are ledger items');
         assert.equal(out.resolveFailures + out.ackResolveFailures + out.ackReplyFailures, 0);
         var ids = f.rec.resolves.map(function (r) { return r.threadId; }).sort().join(',');
         assert.equal(ids, 'PRT_N1,PRT_N2,PRT_S1,PRT_S2,PRT_S3,PRT_S4',
@@ -764,22 +800,31 @@ suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)'
 
     test('classify: below-threshold machine threads carry their ids; an id-less one counts noThreadId', function () {
         var m = mergeBackstopMod();
-        var cls = m.classifyThreads([
+        var rows = [
             { threadId: 'S1', resolved: false, author: MACHINE, body: suggestionBody(), path: 'a.js', line: 1 },
             { threadId: null, resolved: false, author: MACHINE, body: nitBody(), path: 'a.js', line: 2 }
-        ], ALLOW);
-        assert.equal(cls.ackThreads.length, 2, 'both land in the ack bucket');
+        ];
+        var cls = m.classifyThreads(rows, ALLOW,
+            reviewPolicyMod().presetPolicy('relaxed'), 8);
+        assert.equal(cls.ackThreads.length, 2, 'both land in the ack bucket (deferrable per relaxed)');
         assert.equal(cls.ackThreads[0].threadId, 'S1');
         assert.equal(cls.ackThreads[1].threadId, null);
         assert.equal(cls.counts.belowSeverity, 2);
         assert.equal(cls.counts.noThreadId, 1, 'an id-less machine thread can never resolve — flagged');
+        var byDefault = m.classifyThreads(rows, ALLOW);
+        assert.equal(byDefault.ackThreads.length, 1,
+            'gh-1418: the NIT acks under the default preset (tier NIT is deferrable)');
+        assert.equal(byDefault.holdThreads.length, 1,
+            'gh-1418: the SUGGESTION holds under the default preset (fix mandatory, polish lap re-armed)');
+        assert.equal(byDefault.counts.noThreadId, 1,
+            'the id-less hold is flagged too — terminal resolution is impossible either way');
     });
 
     test('AC2 replay: a nit resolution call failing → merge HELD; the retry converges', function () {
         var m = mergeBackstopMod();
-        var f = ioFixture({ threads: sixBelowThresholdThreads(), resolveFailIds: ['PRT_S3'] });
+        var f = ioFixture({ threads: sixNitThreads(), resolveFailIds: ['PRT_N3'] });
         var threw = null;
-        try { run(m, f); } catch (e) { threw = e; }
+        try { run(m, f, defaultInput({ additions: 800 })); } catch (e) { threw = e; }
         assert.ok(threw, 'a partial resolution holds the merge');
         assert.contains(threw.message, 'below-threshold resolve failures 1');
         assert.contains(threw.message, 'policy violation');
@@ -787,7 +832,7 @@ suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)'
         assert.equal(f.rec.replies.length, 5, 'acks only behind successful resolves');
         assert.equal(f.rec.issues.length, 0, 'no digest — the failure is on the ack path');
         f.fixture.resolveFailIds = []; // the transient API fault clears
-        var out2 = run(m, f);
+        var out2 = run(m, f, defaultInput({ additions: 800 }));
         assert.equal(out2.ackResolved, 6, 'the retry resolves all six');
         assert.equal(f.rec.resolves.length, 11, '5 + 6 across the two ticks');
     });
@@ -817,8 +862,8 @@ suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)'
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: [
             ghThread({ id: 'PRT_1', line: 42 }),
-            belowThread('PRT_S1', suggestionBody('extract'), 11),
-            belowThread('PRT_N1', nitBody('typo'), 22)
+            belowThread('PRT_N1', nitBody('extract'), 11),
+            belowThread('PRT_N2', nitBody('typo'), 22)
         ] });
         var out = run(m, f);
         assert.equal(out.counted.length, 1, 'the IMPORTANT thread rides the digest path');
@@ -856,8 +901,8 @@ suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)'
 
     test('outcome line of the ack-only replay says what happened', function () {
         var m = mergeBackstopMod();
-        var f = ioFixture({ threads: sixBelowThresholdThreads() });
-        var line = m.outcomeLines(run(m, f))[0];
+        var f = ioFixture({ threads: sixNitThreads() });
+        var line = m.outcomeLines(run(m, f, defaultInput({ additions: 800 })))[0];
         assert.contains(line, '#42');
         assert.contains(line, 'ack-resolved');
         assert.contains(line, 'wontfix');
@@ -878,19 +923,29 @@ suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)'
             'cleanOutcomeLine keeps the pure gh-1353 wording when ackIdle — countedOutcomeLine matches it');
     });
 
-    test('a marker-less machine thread (severity none) rides the ack path — the documented fallthrough (gh-1370 rework)', function () {
+    test('a marker-less machine thread rides the POLICY tier fallback — ack under relaxed, hold under default (gh-1418)', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: [belowThread('PRT_U1', 'plain prose, no marker', 7)] });
-        var out = run(m, f); // must NOT throw — the ack path is the only terminal outcome for an unmarkable thread
+        var out = run(m, f, defaultInput({
+            jobParams: { reviewPolicy: { preset: 'relaxed' } }
+        })); // must NOT throw — the relaxed preset defers the fallback tier
         assert.equal(out.counts.machine, 1);
-        assert.equal(out.ackThreads.length, 1, 'a marker-less machine thread lands on the ack path');
+        assert.equal(out.ackThreads.length, 1, 'a marker-less machine thread lands on the ack path under relaxed');
         assert.equal(out.ackThreads[0].severity, 'SUGGESTION',
             "threadSeverity 'none' → severityClassOf fallback 'SUGGESTION' (findingRegistry)");
         assert.equal(out.ackResolved, 1,
-            'auto-acked: holding the merge on an unresolvable classification would never converge');
+            'auto-acked under a deferrable preset: the triage path closes unclassified bodies the same way');
         assert.contains(f.rec.replies[0].text, 'wontfix:',
             'the ack carries the machine-parsed wontfix disposition');
         assert.equal(f.rec.issues.length, 0, 'no digest — below the gating threshold');
+        // Under the default preset the same body is a POLICY HOLD (the
+        // fallback tier SUGGESTION is mandatory-fix — the disposition loop
+        // converges it; the backstop never fakes the convergence).
+        var held = ioFixture({ threads: [belowThread('PRT_U2', 'plain prose, no marker', 7)] });
+        var threw = null;
+        try { run(m, held); } catch (e) { threw = e; }
+        assert.ok(threw, 'default preset: the unmarked thread rides the mandatory fallback tier — hold');
+        assert.contains(threw.message, 'policy holds 1');
     });
 });
 
@@ -1120,7 +1175,7 @@ suite('mergeBackstop — gh-1371 review findings', function () {
         var m = mergeBackstopMod();
         var f = ioFixture({ threads: twoMachineImportantThreads() });
         var concurrentMarker = reviewDebtLedgerMod().buildDebtMarker(
-            m.appendCountedToLedger(null, [
+            m.appendThreadsToLedger(null, [
                 { threadId: 'RACE', severity: 'IMPORTANT', path: 'a.js',
                   claim: 'nothing validates the merge state token' }
             ], { prNumber: 42, nowIso: '2026-11-05T11:00:00.000Z' }));
@@ -1156,7 +1211,7 @@ suite('mergeBackstop — gh-1371 review findings', function () {
     test('finding 4: findExistingDigest skips the excluded (own just-filed) number', function () {
         var m = mergeBackstopMod();
         var marker = reviewDebtLedgerMod().buildDebtMarker(
-            m.appendCountedToLedger(null, [
+            m.appendThreadsToLedger(null, [
                 { threadId: 'A', severity: 'IMPORTANT', path: 'a.js', claim: 'x' }
             ], { prNumber: 42, nowIso: NOW }));
         var issues = { items: [
@@ -1208,7 +1263,7 @@ suite('mergeBackstop — gh-1371 review findings', function () {
         var issue = m.buildDigestIssue({
             owner: OWNER, name: NAME, prNumber: 42, prTitle: 'Labels',
             counted: counted, human: human, reviewRunRef: 'ref',
-            ledger: m.appendCountedToLedger(null, counted, { prNumber: 42, nowIso: NOW })
+            ledger: m.appendThreadsToLedger(null, counted, { prNumber: 42, nowIso: NOW })
         });
         assert.contains(issue.body, '🚨 BLOCKING', 'the blocking tier is labeled');
         assert.contains(issue.body, '⚠️ IMPORTANT', 'the important tier is labeled');
@@ -1242,7 +1297,7 @@ suite('mergeBackstop — gh-1371 round 2 rework (ratchet + race determinism)', f
     test('thread 2: findExistingDigest picks DETERMINISTICALLY — the lowest number wins, regardless of search order', function () {
         var m = mergeBackstopMod();
         var marker = reviewDebtLedgerMod().buildDebtMarker(
-            m.appendCountedToLedger(null, [
+            m.appendThreadsToLedger(null, [
                 { threadId: 'A', severity: 'IMPORTANT', path: 'a.js', claim: 'x' }
             ], { prNumber: 42, nowIso: NOW }));
         var dup = function (n) {
@@ -1267,7 +1322,7 @@ suite('mergeBackstop — gh-1371 round 2 rework (ratchet + race determinism)', f
     test('thread 2: the race echo lands in the PR ledger stamp — the sweep can see the abandoned duplicate', function () {
         var m = mergeBackstopMod();
         var concurrentMarker = reviewDebtLedgerMod().buildDebtMarker(
-            m.appendCountedToLedger(null, [
+            m.appendThreadsToLedger(null, [
                 { threadId: 'RACE', severity: 'IMPORTANT', path: 'a.js',
                   claim: 'nothing validates the merge state token' }
             ], { prNumber: 42, nowIso: '2026-11-05T11:00:00.000Z' }));
@@ -1294,5 +1349,327 @@ suite('mergeBackstop — gh-1371 round 2 rework (ratchet + race determinism)', f
         assert.equal(out2.digestDuplicate, null);
         assert.notContains(f2.rec.posts[0].body, 'abandoned',
             'no duplicate — no echo (the stamp stays clean)');
+    });
+});
+
+// ── gh-1418: policy-aware dispositions (presets + density + ledger) ─────────
+
+suite('mergeBackstop — gh-1418 policy-aware dispositions', function () {
+    // One machine thread node with a severity body (suite-local — each
+    // suite callback scopes its own belowThread).
+    function belowThread(id, body, line) {
+        return ghThread({ id: id, line: line, comments: { nodes: [{
+            databaseId: 8100 + line, author: { login: MACHINE + '[bot]' }, body: body }] } });
+    }
+    // The review-verdict marker comment the census sanity check reads
+    // (authorLogins-gated — the machine identity posts it).
+    function verdictComment(suggestions, nits, headSha, at) {
+        return { body: reviewVerdictsMod().MARKER_PREFIX + JSON.stringify({
+            head: headSha || 'deadbeefcafe0123456789abcdef',
+            verdict: 'APPROVE', blocking: 0, important: 0,
+            suggestions: suggestions, nits: nits, digest: 0,
+            at: at || '2026-11-05T10:00:00.000Z', source: 'pr_review.json'
+        }) + reviewVerdictsMod().MARKER_SUFFIX, user: { login: MACHINE } };
+    }
+
+    test('AC1: default preset + open SUGGESTION → hold + polish re-arm, NO ack', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_S1', suggestionBody('extract the helper'), 9)] });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'a mandatory-fix tier open at merge HOLDS the merge (never silently wontfix-ed)');
+        assert.contains(threw.message, 'policy holds 1');
+        assert.contains(threw.message, 'polish lap re-armed');
+        assert.contains(threw.message, 'the disposition loop owns them');
+        assert.equal(f.rec.resolves.length, 0, 'no ack — acking would fake convergence');
+        assert.equal(f.rec.replies.length, 0, 'no wontfix tag on a mandatory-fix thread');
+        assert.equal(f.rec.posts.length, 0, 'no ledger stamp — a hold defers nothing');
+        assert.equal(f.rec.issues.length, 0, 'no digest — the thread is below the digest threshold');
+    });
+
+    test('AC2: default preset + open NIT within budget → ack + ledger item (the gh-1332 identity)', function () {
+        var m = mergeBackstopMod();
+        var rdl = reviewDebtLedgerMod();
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('typo in the doc comment'), 5)] });
+        var out = run(m, f); // must NOT throw — the deferrable tier within the floor allowance
+        assert.equal(out.ackResolved, 1, 'the NIT acks (tier NIT is deferrable under default)');
+        assert.equal(out.holdThreads.length, 0);
+        assert.equal(f.rec.posts.length, 1, 'gh-1352: a deferral needs its ledger item — ONE stamp');
+        var marker = ledgerMarkerOf(f.rec.posts[0].body);
+        assert.equal(marker.findings.length, 1);
+        assert.equal(marker.findings[0].id,
+            rdl.debtIdentity('js/common/mergeState.js', '🪶 severity: NIT — typo in the doc comment', 'SUGGESTION'),
+            'the ledger entry carries the gh-1332 identity (file + normalized claim + severity class)');
+        assert.equal(marker.findings[0].originThread, 'PRT_N1');
+        assert.deepEqual(reviewDispositionsMod().parseDispositionTag(f.rec.replies[0].text),
+            { tag: 'wontfix', value: 'below gating threshold — epic invariant (gh-1370)' },
+            'the ack reply keeps the machine-parsed wontfix tag spelling');
+    });
+
+    test('AC2b: repeated acks of the same finding REFRESH the ledger entry, never duplicate', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('typo in the doc comment'), 5)] });
+        run(m, f, defaultInput({ nowIso: NOW }));
+        var out2 = run(m, f, defaultInput({ nowIso: '2026-11-06T12:00:00.000Z' }));
+        assert.equal(out2.ackResolved, 1, 'the retry re-acks the still-open thread');
+        var marker = ledgerMarkerOf(f.rec.posts[f.rec.posts.length - 1].body);
+        assert.equal(marker.findings.length, 1, 'the identity deduped the repeat');
+        assert.equal(marker.findings[0].occurrences, 2, 'appendDebtFinding refreshed, not duplicated');
+        assert.equal(marker.findings[0].firstSeenAt, NOW, 'first-seen sticks');
+        assert.equal(marker.findings[0].lastSeenAt, '2026-11-06T12:00:00.000Z', 'last-seen moves');
+    });
+
+    test('AC3: relaxed preset + open SUGGESTION/NIT within budget → ack + ledger items (boundary: at the floor allowance)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [
+            belowThread('PRT_S1', suggestionBody('extract the helper'), 9),
+            belowThread('PRT_N1', nitBody('typo'), 20)
+        ] });
+        var out = run(m, f, defaultInput({ jobParams: { reviewPolicy: { preset: 'relaxed' } } }));
+        assert.equal(out.ackResolved, 2, 'both ack (2 open deferrable == allowed 2 — the boundary is WITHIN)');
+        assert.equal(out.holdThreads.length, 0);
+        var marker = ledgerMarkerOf(f.rec.posts[0].body);
+        assert.equal(marker.findings.length, 2, 'both acks wrote their ledger items');
+        assert.equal(out.allowedDeferrable, 2, 'the missing additions count rides the §4.6 floor');
+    });
+
+    test('AC4: deferrable threads OVER the density allowance → hold + polish re-arm (default AND relaxed)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [
+            belowThread('PRT_N1', nitBody('typo one'), 5),
+            belowThread('PRT_N2', nitBody('typo two'), 15),
+            belowThread('PRT_N3', nitBody('typo three'), 25)
+        ] });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; } // default preset, 3 NITs > floor 2
+        assert.ok(threw, 'over budget: the whole deferrable bucket holds');
+        assert.contains(threw.message, 'policy holds 3');
+        assert.contains(threw.message, '(allowed 2)');
+        assert.contains(threw.message, 'polish lap re-armed');
+        assert.equal(f.rec.resolves.length, 0, 'nothing acks when the bucket is over budget');
+        assert.equal(f.rec.posts.length, 0, 'no ledger — the threads are held, not deferred');
+        var f2 = ioFixture({ threads: [
+            belowThread('PRT_N1', nitBody('typo one'), 5),
+            belowThread('PRT_N2', nitBody('typo two'), 15),
+            belowThread('PRT_N3', nitBody('typo three'), 25)
+        ] });
+        var threw2 = null;
+        try { run(m, f2, defaultInput({ jobParams: { reviewPolicy: { preset: 'relaxed' } } })); }
+        catch (e2) { threw2 = e2; }
+        assert.ok(threw2, 'any preset: relaxed holds the over-budget bucket too');
+        assert.contains(threw2.message, 'policy holds 3');
+    });
+
+    test('AC4b: the density budget rides pr.additions (the §4.6 formula)', function () {
+        var m = mergeBackstopMod();
+        var threads = [
+            belowThread('PRT_N1', nitBody('typo one'), 5),
+            belowThread('PRT_N2', nitBody('typo two'), 15),
+            belowThread('PRT_N3', nitBody('typo three'), 25)
+        ];
+        var wide = ioFixture({ threads: threads });
+        var out = run(m, wide, defaultInput({ additions: 800 })); // must NOT throw
+        assert.equal(out.allowedDeferrable, 8, 'allowed = clamp(round(2 + 3*sqrt(800/200)), 2, 8) = 8');
+        assert.equal(out.ackResolved, 3, 'within the widened budget — all three ack');
+        var narrow = ioFixture({ threads: [
+            belowThread('PRT_N1', nitBody('typo one'), 5),
+            belowThread('PRT_N2', nitBody('typo two'), 15),
+            belowThread('PRT_N3', nitBody('typo three'), 25)
+        ] });
+        var threw = null;
+        try { run(m, narrow, defaultInput({ additions: 2 })); } catch (e) { threw = e; }
+        assert.ok(threw, 'additions 2 → allowed round(2 + 3*sqrt(2/200)) = 2 → 3 NITs over budget → hold');
+        assert.contains(threw.message, 'policy holds 3');
+        assert.contains(threw.message, '(allowed 2)');
+    });
+
+    test('AC5: fix-everything preset + open NIT → hold (NIT is mandatory there)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('a nit'), 5)] });
+        var threw = null;
+        try { run(m, f, defaultInput({ jobParams: { reviewPolicy: { preset: 'fix-everything' } } })); }
+        catch (e) { threw = e; }
+        assert.ok(threw, 'fix-everything upgrades NIT to polish+mandatory — the backstop holds');
+        assert.contains(threw.message, 'policy holds 1');
+        assert.equal(f.rec.resolves.length, 0, 'no ack');
+        assert.equal(f.rec.replies.length, 0);
+    });
+
+    test('AC6: config absent → the built-in default preset applies (documented behavior)', function () {
+        var m = mergeBackstopMod({ loadProjectConfig: function () { return null; } });
+        var f = ioFixture({ threads: [
+            belowThread('PRT_S1', suggestionBody('extract'), 9),
+            belowThread('PRT_N1', nitBody('typo'), 20)
+        ] });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; } // no jobParams at all
+        assert.ok(threw, 'default preset: the open SUGGESTION (mandatory) holds');
+        assert.contains(threw.message, 'policy holds 1');
+        assert.equal(f.rec.resolves.length, 1, 'the NIT still acked (maximum progress before the gate)');
+        assert.equal(f.rec.replies.length, 1);
+        assert.equal(f.rec.posts.length, 1, 'the acked NIT wrote its ledger item + stamp');
+    });
+
+    test('AC7: policy resolution failure → fail-closed hold, NEVER ack-all', function () {
+        var m = mergeBackstopMod({
+            loadProjectConfig: function () { return { reviewPolicy: { preset: 'not-a-preset' } }; }
+        });
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('a nit'), 5)] });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'a malformed policy is a hard error — the merge holds');
+        assert.equal(threw.name, 'ReviewPolicyValidationError', 'the standard validation error surfaces');
+        assert.equal(f.rec.resolves.length, 0, 'no resolve attempts');
+        assert.equal(f.rec.replies.length, 0, 'no acks — never ack-all on an unresolvable policy');
+        assert.equal(f.rec.posts.length, 0, 'no ledger/stamp side effects');
+        // the jobParams leg of the chain fails closed the same way
+        var m2 = mergeBackstopMod();
+        var f2 = ioFixture({ threads: [belowThread('PRT_N1', nitBody('a nit'), 5)] });
+        var threw2 = null;
+        try { run(m2, f2, defaultInput({ jobParams: { reviewPolicy: '{not json' } })); }
+        catch (e) { threw2 = e; }
+        assert.ok(threw2, 'a junk jobParams policy string fails closed too');
+        assert.equal(threw2.name, 'ReviewPolicyValidationError');
+        assert.equal(f2.rec.resolves.length, 0);
+    });
+
+    test('a custom lap-gated (round rework) tier below IMPORTANT → policy hold (defense in depth)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('a nit'), 5)] });
+        var threw = null;
+        try { run(m, f, defaultInput({ jobParams: { reviewPolicy: {
+            preset: 'default',
+            severities: { NIT: { round: 'rework', fix: 'opportunistic' } }
+        } } })); } catch (e) { threw = e; }
+        assert.ok(threw, 'the rework lap owns a lap-gated tier — the backstop never acks it');
+        assert.contains(threw.message, 'policy holds 1');
+    });
+
+    test('census sanity: a mismatch surfaces in the digest, the stamp and the outcome lines', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [
+            ghThread({ id: 'PRT_1', line: 42 }),
+            belowThread('PRT_N1', nitBody('typo'), 20)
+        ] });
+        f.fixture.comments = [verdictComment(2, 1)]; // marker census 2 suggestions vs 0 open, 1 nit vs 1 open
+        var out = run(m, f);
+        assert.ok(out.censusNote, 'the mismatch is computed');
+        assert.contains(out.censusNote, 'suggestions=2');
+        assert.contains(out.censusNote, 'nits=1');
+        assert.contains(out.censusNote, 'suggestions 0');
+        assert.contains(f.rec.issues[0].body, 'census sanity (gh-1418)',
+            'the digest body carries the one-line note');
+        assert.contains(f.rec.posts[0].body, 'census sanity (gh-1418)',
+            'the PR ledger stamp carries it too');
+        var lines = m.outcomeLines(out);
+        assert.equal(lines.length, 2, 'the note rides as its own outcome line');
+        assert.contains(lines[1], 'census sanity');
+    });
+
+    test('census sanity: a matching census produces no note', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('typo'), 20)] });
+        f.fixture.comments = [verdictComment(0, 1)];
+        var out = run(m, f);
+        assert.equal(out.censusNote, null, 'census agrees — silent');
+        assert.equal(m.outcomeLines(out).length, 1);
+        assert.notContains(f.rec.posts[0].body, 'census sanity');
+    });
+
+    test('census sanity: the hold message carries the note (a held run never swallows it)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_S1', suggestionBody('extract'), 9)] });
+        f.fixture.comments = [verdictComment(3, 0)];
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'the mandatory suggestion holds');
+        assert.contains(threw.message, 'census sanity (gh-1418)', 'the note rides the hold message');
+        assert.contains(threw.message, 'suggestions=3');
+        // no verdict record on the head → nothing to compare, no note
+        var f2 = ioFixture({ threads: [belowThread('PRT_S1', suggestionBody('extract'), 9)] });
+        var threw2 = null;
+        try { run(m, f2); } catch (e) { threw2 = e; }
+        assert.ok(threw2);
+        assert.notContains(threw2.message, 'census sanity');
+    });
+
+    test('wiring: runBackstopForPr feeds pr.additions into the density budget and jobParams into the policy chain', function () {
+        var m = mergeBackstopMod();
+        var said = [];
+        var threads = [
+            belowThread('PRT_N1', nitBody('typo one'), 5),
+            belowThread('PRT_N2', nitBody('typo two'), 15),
+            belowThread('PRT_N3', nitBody('typo three'), 25)
+        ];
+        var wide = ioFixture({ threads: threads });
+        var out = m.runBackstopForPr(wide.io, OWNER, NAME, { machineAuthor: MACHINE }, 42,
+            { number: 42, title: 'T', headRefOid: 'deadbeefcafe0123456789abcdef', additions: 800 },
+            function (line) { said.push(line); }); // must NOT throw
+        assert.equal(out.ackResolved, 3, 'additions 800 → allowed 8 → the bucket acks');
+        var narrow = ioFixture({ threads: threads });
+        var threw = null;
+        try { m.runBackstopForPr(narrow.io, OWNER, NAME, { machineAuthor: MACHINE }, 42,
+            { number: 42, title: 'T', headRefOid: 'deadbeefcafe0123456789abcdef' },
+            function () {}); } catch (e) { threw = e; }
+        assert.ok(threw, 'no additions → the floor allowance (2) → 3 NITs hold');
+        var relaxed = ioFixture({ threads: [belowThread('PRT_S1', suggestionBody('extract'), 9)] });
+        var out2 = m.runBackstopForPr(relaxed.io, OWNER, NAME,
+            { machineAuthor: MACHINE, reviewPolicy: { preset: 'relaxed' } }, 42,
+            { number: 42, title: 'T', headRefOid: 'deadbeefcafe0123456789abcdef' },
+            function () {});
+        assert.equal(out2.ackResolved, 1, 'jobParams.reviewPolicy rides the standard chain (relaxed acks the SUGGESTION)');
+    });
+
+    test('fail-closed reads: an ack run without the comments primitive throws — the ledger base is mandatory', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('a nit'), 5)], noComments: true });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'the ledger append cannot read its base — defer the merge (the #1319 pathology never reads as clean)');
+        assert.contains(threw.message, 'no pr-comments primitive');
+        assert.equal(f.rec.resolves.length, 0, 'the read gate runs before any resolution attempt');
+        assert.equal(f.rec.replies.length, 0, 'no ack on a broken base');
+        assert.equal(f.rec.posts.length, 0, 'no ledger stamp on a broken base');
+    });
+
+    test('fail-closed reads: a counted (>=IMPORTANT) run without the comments primitive throws the same way', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [ghThread({ id: 'PRT_1', line: 42 })], noComments: true });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'the digest shares the read — one fail-closed guard for both ledger-bearing buckets');
+        assert.contains(threw.message, 'no pr-comments primitive');
+        assert.equal(f.rec.issues.length, 0, 'no digest off a clobber-prone base');
+        assert.equal(f.rec.posts.length, 0);
+    });
+
+    test('fail-closed reads: a hold-only run without the comments primitive degrades to null (the hold is the decision)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_S1', suggestionBody('extract'), 9)], noComments: true });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'the policy hold still fires — the degraded read never mutes it');
+        assert.contains(threw.message, 'policy holds 1');
+        assert.notContains(threw.message, 'no pr-comments primitive',
+            'no ledger base needed — the run degrades, not throws');
+        assert.equal(f.rec.posts.length, 0, 'a hold defers nothing, stamps nothing');
+    });
+
+    test('gh-1418 rework: the pure-clean replay (every machine thread already resolved) posts and resolves NOTHING', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [
+            ghThread({ id: 'PRT_1', line: 42, isResolved: true }),
+            ghThread({ id: 'PRT_2', line: 77, isResolved: true, comments: { nodes: [{
+                databaseId: 9002, author: { login: MACHINE + '[bot]' },
+                body: importantBody('sessions never expire') }] } })
+        ] });
+        var out = run(m, f);
+        assert.equal(f.rec.resolves.length, 0,
+            'zero open machine threads — the clean-replay branch has nothing to resolve');
+        assert.equal(f.rec.replies.length, 0,
+            'no ack replies — the ack path lives in the shared tail (ledgerPhase first, gh-1352)');
+        assert.equal(f.rec.posts.length, 0, 'no ledger stamp — nothing deferred');
+        assert.contains(m.outcomeLines(out)[0], 'no unresolved machine-owned',
+            'the branch is the pure-clean replay, not a hidden ack path');
     });
 });

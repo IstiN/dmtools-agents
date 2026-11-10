@@ -80,6 +80,7 @@ function mergeBackstopModuleFor(mods) {
         './findingRegistry.js': bsFindingRegistry(),
         './reviewDebtLedger.js': bsReviewDebtLedger(),
         './reviewDispositions.js': bsReviewDispositions(),
+        './reviewPolicy.js': bsReviewPolicy(),
         './machineAuthor.js': bsMachineAuthor(),
         './reviewThreadInventory.js': bsThreadInventory(),
         './mcpParse.js': mcpParseModule,
@@ -219,6 +220,7 @@ function fixture(opts) {
         draft: opts.draft === true,
         mergeable: opts.mergeable !== undefined ? opts.mergeable : true,
         mergeable_state: opts.mergeableState || 'clean',
+        additions: opts.additions, // gh-1418: the §4.6 density budget feed
         head: fixtureHead(opts),
         statusCheckRollup: opts.statusCheckRollup || undefined,
         labels: (opts.labels || ['ai_validating']).map(function (n) {
@@ -256,6 +258,13 @@ function fixture(opts) {
         github_add_labels: function (a) { calls.adds.push(a); return '{}'; },
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
         github_create_comment: function (c) { calls.comments.push(c); return '{}'; },
+        // gh-1418: the ack path reads its ledger base (one comments read per run).
+        // NO github_get_pr_comments entry here on purpose: backstopBridgeMocks
+        // (Object.assign below) owns the slot — opts.prCommentsByNumber — and
+        // an inline duplicate would be silently overwritten AND still cost
+        // fixture a +1 CC decision (the CI crap ratchet regression this
+        // rework fixes: the gh-1418 dev leg added a dead `opts.prComments
+        // || []` mock that never ran).
         // Self-tick (owner rule 2026-10-04): capture every cli dispatch;
         // opts.cliThrows simulates a dead gh CLI for the failure path.
         cli_execute_command: function (c) {
@@ -1640,11 +1649,11 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.merges.length, 1, 'the squash-merge still happens');
     });
 
-    test('gh-1370: a lone SUGGESTION machine thread → wontfix ack-resolved, no digest, merge proceeds', function () {
+    test('gh-1370 + gh-1418: a lone NIT machine thread (deferrable under default) → wontfix ack + ledger item, merge proceeds', function () {
         var fx = fixture({
             labels: ['pr_approved', 'ai_validating'],
             threadsByNumber: { 42: [
-                ghThread('PRT_1', '💡 severity: SUGGESTION — extract this', { line: 7 }),
+                ghThread('PRT_1', '🪶 severity: NIT — typo in the doc comment', { line: 7 }),
                 ghThread('PRT_2', '', { isResolved: true })
             ] }
         });
@@ -1654,10 +1663,29 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.threadResolves.length, 1, 'the open machine thread resolves (terminal)');
         assert.contains(fx.calls.threadReplies[0].text, 'wontfix:',
             'the ack carries the machine-parsed wontfix disposition');
+        assert.ok(fx.calls.comments.some(function (c) {
+            return String(c.body || '').indexOf('dmtools:review-debt-ledger') !== -1;
+        }), 'gh-1418: the ack wrote its ledger item — the PR stamp is posted');
         assert.equal(fx.calls.merges.length, 1);
     });
 
-    test('gh-1370 AC1 funnel replay: 4 SUGGESTION + 2 NIT → all six ack-resolved, no digest, merge proceeds', function () {
+    test('gh-1418: a lone SUGGESTION machine thread under default (mandatory fix) → policy hold, merge defers aloud', function () {
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating'],
+            threadsByNumber: { 42: [
+                ghThread('PRT_1', '💡 severity: SUGGESTION — extract this', { line: 7 })
+            ] }
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 0, 'no merge — a mandatory-fix tier is open at merge time');
+        assert.equal(fx.calls.threadResolves.length, 0, 'nothing acks — the disposition loop owns it');
+        assert.equal(fx.calls.merges.length, 0);
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('merge gate failed') !== -1;
+        }), 'the policy hold defers aloud: ' + JSON.stringify(result.log));
+    });
+
+    test('gh-1370 + gh-1418 AC1 funnel replay: 4 SUGGESTION + 2 NIT under the relaxed preset (jobParams.reviewPolicy) → all six ack-resolved, merge proceeds', function () {
         var threads = [
             ghThread('PRT_S1', '💡 severity: SUGGESTION — a', { line: 1 }),
             ghThread('PRT_S2', '💡 severity: SUGGESTION — b', { line: 2 }),
@@ -1668,9 +1696,10 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         ];
         var fx = fixture({
             labels: ['pr_approved', 'ai_validating'],
+            additions: 800, // §4.6: allowed = min(8, round(2+3*sqrt(4))) = 8 ≥ 6
             threadsByNumber: { 42: threads }
         });
-        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT, reviewPolicy: { preset: 'relaxed' } } });
         assert.equal(result.success, true);
         assert.equal(result.acted, 1, 'zero open machine threads → merge proceeds');
         assert.equal(fx.calls.debtIssues.length, 0, 'no digest for below-threshold threads');

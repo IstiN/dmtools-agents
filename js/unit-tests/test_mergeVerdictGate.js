@@ -88,6 +88,7 @@ function bsMergeBackstop(mods) {
         './findingRegistry.js': bsFindingRegistry(),
         './reviewDebtLedger.js': bsReviewDebtLedger(),
         './reviewDispositions.js': bsReviewDispositions(),
+        './reviewPolicy.js': bsReviewPolicy(),
         './machineAuthor.js': bsMachineAuthor(),
         './reviewThreadInventory.js': bsThreadInventory(),
         './mcpParse.js': mcpParseModule,
