@@ -208,22 +208,31 @@ function basenameNoJson(p) {
  * The gh-728 allowlist gates trust: no configured machine identity → no
  * records (the machineAuthor doctrine — unconfigured trusts nothing).
  */
+function normalizedMarkerComment(item) {
+    var it = item || {};
+    var author = it.author;
+    return {
+        author: (author && typeof author === 'object') ? author : { login: String(author || '') },
+        body: it.body
+    };
+}
+
+function normalizedMarkerComments(list) {
+    var normalized = [];
+    for (var i = 0; i < list.length; i++) {
+        normalized.push(normalizedMarkerComment(list[i]));
+    }
+    return normalized;
+}
+
 function markerRecordsFromPayload(payload, authorLogins) {
     if (!payload) return [];
     var list;
     try { list = JSON.parse(payload); } catch (e) { return []; }
     if (!Array.isArray(list)) return [];
-    var normalized = [];
-    for (var i = 0; i < list.length; i++) {
-        var item = list[i] || {};
-        var author = item.author;
-        normalized.push({
-            author: (author && typeof author === 'object') ? author : { login: String(author || '') },
-            body: item.body
-        });
-    }
     try {
-        return reviewVerdicts.parseVerdictRecords(normalized, { authorLogins: authorLogins || [] });
+        return reviewVerdicts.parseVerdictRecords(normalizedMarkerComments(list),
+            { authorLogins: authorLogins || [] });
     } catch (e) { return []; }
 }
 
@@ -243,6 +252,13 @@ function verdictClassOfVerdict(verdict) {
     return String(verdict || '').toUpperCase() === 'APPROVE' ? 'approve' : 'rework';
 }
 
+/** The gh-71 downgrade key: a truthy override (true | 'true') marks a
+ * REQUEST_CHANGES the old parser downgraded by zero blocking — it can
+ * never classify approve (gh-1419 AC2). */
+function isDowngradeOverride(override) {
+    return override === true || override === 'true';
+}
+
 /**
  * The legacy parser's verdict class from its contract, or null when it
  * found no verdict. The `override` key IS the gh-71 downgrade (REQUEST_
@@ -252,10 +268,24 @@ function verdictClassOfVerdict(verdict) {
 function parserVerdictClassOf(contract) {
     var decision = String((contract && contract.decision) || '');
     if (decision === 'approve') {
-        var override = contract && contract.override;
-        return (override === true || override === 'true') ? 'rework' : 'approve';
+        return isDowngradeOverride(contract && contract.override) ? 'rework' : 'approve';
     }
     return decision === 'rework' ? 'rework' : null;
+}
+
+function parserContractField(contract, field, fallback) {
+    return String((contract && contract[field]) || fallback);
+}
+
+function verdictSourcesDisagree(markerClass, parserClass) {
+    return !!(markerClass && parserClass && markerClass !== parserClass);
+}
+
+/** The raw no-class fallback: the parser's contract token rides through
+ * ('unknown' default) so the log line and the loud no-verdict path keep
+ * the legacy shape byte-for-byte (gh-1419 parity note). */
+function rawParserDecisionOf(contract) {
+    return String((contract && contract.decision) || 'unknown');
 }
 
 /**
@@ -268,23 +298,19 @@ function parserVerdictClassOf(contract) {
 function resolveEffectiveDecision(marker, contract) {
     var markerClass = marker ? verdictClassOfVerdict(marker.verdict) : null;
     var parserClass = parserVerdictClassOf(contract);
-    if (markerClass && parserClass && markerClass !== parserClass) {
+    if (verdictSourcesDisagree(markerClass, parserClass)) {
         return { conflict: {
             marker: marker,
             parserClass: parserClass,
-            parserSource: String((contract && contract.source) || 'none'),
-            parserOverride: String((contract && contract.override) || 'false')
+            parserSource: parserContractField(contract, 'source', 'none'),
+            parserOverride: parserContractField(contract, 'override', 'false')
         } };
     }
     if (markerClass) {
         return { decision: markerClass, source: 'machine-verdict-marker', marker: marker };
     }
-    // No class anywhere: the RAW contract token rides through (default
-    // 'unknown') so the log line and the loud no-verdict path keep the
-    // legacy shape byte-for-byte — a non-verdict token ('cancelled', '')
-    // dispatches to applyMissingVerdict exactly as before (gh-1419).
     return {
-        decision: parserClass || String((contract && contract.decision) || 'unknown'),
+        decision: parserClass || rawParserDecisionOf(contract),
         source: 'legacy-parser',
         marker: null
     };
@@ -721,25 +747,48 @@ function applyReviewVerdict(opts, io) {
     var ctx = buildReviewContext(opts, io);
     var probed = probeVerdictContract(opts, io, ctx);
     ctx.contract = probed.contract;
-    // gh-1419: the machine marker governs; the legacy parser is the
-    // fallback and the cross-check.
-    probeMachineVerdictMarker(opts, io, ctx);
-    var resolved = resolveEffectiveDecision(ctx.marker, ctx.contract);
-    if (resolved.conflict) {
-        ctx.conflict = resolved.conflict;
-        return applyConflictingVerdicts(opts, io, ctx);
-    }
-    if (resolved.decision === 'rework' && String(ctx.contract.decision || '') !== 'rework') {
-        // The sh computes its round cap only under its own rework decision —
-        // a marker-governed (or override-neutralized) rework recomputes it.
-        reworkRoundBookeeping(ctx.contract, opts.maxRounds);
-    }
-    ctx.decision = resolved.decision;
-    ctx.verdictSource = resolved.source;
+    wireEffectiveDecision(opts, io, ctx);
     logDecisionLine(ctx.log, { contract: ctx.contract, decision: ctx.decision });
     if (ctx.decision === 'rework') return applyReworkVerdict(opts, io, ctx);
     if (ctx.decision !== 'approve') return applyMissingVerdict(io, ctx);
     return applyApproveVerdict(opts, io, ctx);
+}
+
+// ── gh-1419: the post-probe decision wiring (marker primacy) ────────────────
+
+/** The rework round-cap recompute guard: the sh computes its cap only under
+ * its own rework decision — a marker-governed (or override-neutralized)
+ * rework over an approve/unknown contract recomputes it. */
+function decisionNeedsRoundRecompute(resolved, contract) {
+    return resolved.decision === 'rework' && String((contract && contract.decision) || '') !== 'rework';
+}
+
+/** Wires the resolved decision onto ctx (decision + verdict source +
+ * round bookeeping). */
+function applyDecisionToContext(ctx, resolved, opts) {
+    if (decisionNeedsRoundRecompute(resolved, ctx.contract)) {
+        reworkRoundBookeeping(ctx.contract, opts.maxRounds);
+    }
+    ctx.decision = resolved.decision;
+    ctx.verdictSource = resolved.source;
+}
+
+/**
+ * gh-1419: probe the machine marker, resolve the ladder, and wire the
+ * effective decision onto ctx. Contradictory verdict sources escalate
+ * LOUDLY here (needs-human + diagnosis comment) and THROW — applyReview
+ * Verdict never returns on that path (the gh-305 exit-1 contract extended
+ * to contradictory sources).
+ */
+function wireEffectiveDecision(opts, io, ctx) {
+    probeMachineVerdictMarker(opts, io, ctx);
+    var resolved = resolveEffectiveDecision(ctx.marker, ctx.contract);
+    if (resolved.conflict) {
+        ctx.conflict = resolved.conflict;
+        applyConflictingVerdicts(opts, io, ctx);
+        return;
+    }
+    applyDecisionToContext(ctx, resolved, opts);
 }
 
 // ── gh-1101: kick one SM tick on approval when the head is already green ──
@@ -833,6 +882,8 @@ module.exports = {
     buildConflictingVerdictsComment: buildConflictingVerdictsComment,
     applyConflictingVerdicts: applyConflictingVerdicts,
     probeMachineVerdictMarker: probeMachineVerdictMarker,
+    wireEffectiveDecision: wireEffectiveDecision,
+    decisionNeedsRoundRecompute: decisionNeedsRoundRecompute,
     stripRoundLabels: stripRoundLabels,
     ensureLabel: ensureLabel,
     addLabel: addLabel,
