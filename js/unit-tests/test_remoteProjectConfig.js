@@ -708,4 +708,45 @@ suite('scm provider twins — getFileContents', function() {
         assert.equal(calls, 1); // the Date.now()-timestamped miss cached for the TTL
     });
 
+    test('gitlab singular spelling (gitlab_get_file_content) serves the capability', function() {
+        var mod = makeRemoteModule(function() { return 'var x = 1;'; }, 'gitlab_get_file_content');
+        var bag = mod.remoteConfigIo('gitlab');
+        assert.equal(bag.provider, 'gitlab');
+        assert.equal(bag.getFileContents({ owner: 'grp', repo: 'proj' }, '.dmtools/config.js'), 'var x = 1;');
+    });
+
+    test('payload corners: non-JSON result string, non-string/empty content, non-config types', function() {
+        var mod = makeRemoteModule(null);
+        // {result: 'not json'} → the result string IS the payload (unwraps to a string source)
+        assert.equal(mod.remoteConfigSourceOf({ result: 'var machineAuthor = "";' }), 'var machineAuthor = "";');
+        // {result: {content: 42}} → content not a string → null
+        assert.equal(mod.remoteConfigSourceOf({ result: { content: 42 } }), null);
+        // {result: {content: '   '}} → whitespace content → null
+        assert.equal(mod.remoteConfigSourceOf({ result: { content: '   ' } }), null);
+        // {result: 42} → unwrap lands on a non-string non-object → null
+        assert.equal(mod.remoteConfigSourceOf({ result: 42 }), null);
+        // a bare number payload → null (not string, not object)
+        assert.equal(mod.remoteConfigSourceOf(42), null);
+    });
+
+    test('cache eviction: expired entries drop first, then the map drops wholesale', function() {
+        var mod = makeRemoteModule(null);
+        var io = { provider: 'github', getFileContents: function() { return 'src'; } };
+        var i;
+        // fill to the max (16 entries) at t=1000
+        for (i = 0; i < mod.REMOTE_CONFIG_CACHE_MAX; i++) {
+            mod.fetchRemoteConfigSource({ repo: 'o/r' + i }, {}, { io: io, nowMs: 1000 });
+        }
+        // t=1700: everything expired → the 17th fetch evicts (the delete path),
+        // empties the map, then caches the new entry
+        var src = mod.fetchRemoteConfigSource({ repo: 'o/rX' }, {}, { io: io, nowMs: 1700 });
+        assert.equal(src, 'src');
+        // another 16 fresh entries at t=1700 → the 17th evicts wholesale (no deletes)
+        for (i = 1; i <= mod.REMOTE_CONFIG_CACHE_MAX; i++) {
+            mod.fetchRemoteConfigSource({ repo: 'o/q' + i }, {}, { io: io, nowMs: 1700 });
+        }
+        assert.equal(mod.fetchRemoteConfigSource({ repo: 'o/last' }, {}, { io: io, nowMs: 1700 }), 'src');
+        mod._clearRemoteConfigCache();
+    });
+
 });
