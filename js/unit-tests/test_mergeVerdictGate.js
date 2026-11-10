@@ -426,6 +426,25 @@ suite('mergeVerdictGate: runGate decomposition and honest skip reasons', functio
         assert.equal(out.commentsSkipped, false);
     });
 
+    test('effectiveVerdictOf: a direct call with NO logins trusts nothing (fail-closed default)', function () {
+        // PR #1422 round-2 review: the exported helper parsed with
+        // { authorLogins: inp.logins } — a missing list makes
+        // reviewVerdicts.authorAllowlist return null = no filter at all =
+        // EVERY comment trusted as a verdict record (a forged
+        // REQUEST_CHANGES marker would hold merges). The module doctrine
+        // (header + runGate's short-circuit) is fail-closed-on-trust, and
+        // the export must carry it: no configured identity = nothing
+        // trusted, even on a direct call that bypasses runGate's guard.
+        var mod = loadGate();
+        var out = { head: HEAD, commentsSkipped: false, commentsUnreadable: false };
+        var found = mod.effectiveVerdictOf(
+            { getComments: function () { return JSON.stringify([verdictComment('REQUEST_CHANGES', HEAD)]); } },
+            'o', 'n', { prNumber: 12 }, out);
+        assert.equal(found, null, 'a forged marker must not resolve without an allowlist');
+        assert.equal(out.commentsUnreadable, false, 'the null is the trust filter, not a read fault');
+        assert.equal(out.commentsSkipped, false, 'the read happened — the records were just not trusted');
+    });
+
     test('capability miss is named as such — never mislabeled "no verdict records"', function () {
         // Digest finding (PR #1422 review): a missing get-comments primitive
         // used to say "no verdict records for head … — fail-open", a label

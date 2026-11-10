@@ -225,7 +225,7 @@ function effectiveVerdictOf(io, owner, name, inp, out) {
     try {
         var effective = reviewVerdicts.latestVerdictForHead(
             reviewVerdicts.parseVerdictRecords(comments,
-                { authorLogins: inp.logins }),
+                { authorLogins: inp.logins || [] }),
             out.head);
         return effective ? { record: effective.record, comments: comments } : null;
     } catch (eParse) {
