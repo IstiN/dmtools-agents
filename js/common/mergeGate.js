@@ -105,7 +105,6 @@ var mergeVerdictGate = require('./mergeVerdictGate.js');
 // grow and diverge).
 var MARKER_PREFIX = mergeVerdictGate.MARKER_PREFIX;
 var MARKER_SUFFIX = mergeVerdictGate.MARKER_SUFFIX;
-var shortSha = mergeBackstop.shortSha;
 
 // The escalation label (the gh-957 pattern — the same label the SM's
 // rework-exhaustion escalation uses; machineSmAgent skips items carrying
@@ -232,9 +231,9 @@ function buildHoldMarker(census, headSha, nowIso, escalated, heldSince, humanHol
     var note = escalated
         ? '\uD83E\uDD16 Merge hold ESCALATED (gh-1417): the open review thread(s) have held' +
           ' this PR beyond mergeGate.humanHoldHours (' + humanHoldHours + 'h, held since ' +
-          shortSha(heldSince ? heldSince : '') + (heldSince ? ')' : '?)') + ' — needs-human;' +
-          ' the automatic merge lanes skip this PR until a human resolves the discussion' +
-          ' (manual merge via the UI stays available).'
+          (heldSince || 'an unknown time') + ') — needs-human; the automatic merge lanes' +
+          ' skip this PR until a human resolves the discussion (manual merge via the UI' +
+          ' stays available).'
         : '\uD83E\uDD16 Merge hold (gh-1417): ' + census.total + ' unresolved review thread(s)' +
           ' (human ' + census.human + ', machine ' + census.machine + ') — the merge is deferred' +
           ' until every discussion reaches resolution (machine notices excluded).' +
@@ -311,11 +310,11 @@ function escalationDue(hold, nowIso, humanHoldHours) {
  * bounded state transition: the escalated marker is a SECOND comment for
  * the head (the plain one cannot be edited — no comment-update primitive
  * on the bridge), deduped by its own escalated flag, so repeated
- * escalation-state ticks grow nothing.
+ * escalation-state ticks grow nothing. `holds` is the pre-parsed
+ * existing-hold list (ONE comments read per gate run — the caller owns it).
  */
-function stampHold(io, owner, name, comments, input, out, census, escalated, heldSince) {
+function stampHold(io, owner, name, input, out, census, holds, escalated, heldSince) {
     try {
-        var holds = existingHolds(comments);
         if (escalated) {
             if (escalatedHoldForHead(holds, out.head)) {
                 out.escalationDeduped = true;
@@ -409,39 +408,29 @@ function runGate(io, owner, name, input) {
     out.machine = census.machine;
     if (!censusHolds(census, inp.holdOnHumanThreads)) return out; // merge proceeds
     out.held = true;
+    // The escalation valve keys on HUMAN threads actually holding the
+    // merge (a machine-only hold waits on stage 1's retry loop — its
+    // repeated failures escalate through the funnel job surface, never
+    // through needs-human).
     var escalate = inp.holdOnHumanThreads !== false && census.human > 0;
-    if (!escalate && census.machine > 0) {
-        // Machine-only holds wait on stage 1's retry loop — no marker
-        // churn: the backstop's own failure lines own the observability.
-        return out;
-    }
     if (typeof io.getComments !== 'function') {
         out.commentsSkipped = true; // hold stands — no dedup-safe marker
         return out;
     }
-    // Fail-closed dedup read: posting without it would comment-spam.
-    var comments = mergeVerdictGate.prCommentList(io.getComments, owner, name, inp.prNumber);
-    var holds = existingHolds(comments);
+    // Fail-closed dedup read: posting without it would comment-spam. ONE
+    // comments read per gate run — the hold lookup, the escalation clock
+    // and the stamp share it.
+    var holds = existingHolds(
+        mergeVerdictGate.prCommentList(io.getComments, owner, name, inp.prNumber));
     var existing = holdForHead(holds, out.head);
-    if (!escalate) {
-        stampHold(io, owner, name, comments, inp, out, census, false, null);
-        return out;
-    }
-    if (!existing) {
-        // First hold tick for this head — the escalation clock starts here.
-        stampHold(io, owner, name, comments, inp, out, census, false, null);
-        return out;
-    }
-    out.holdDeduped = true;
-    if (!escalationDue(existing, inp.nowIso, inp.humanHoldHours)) return out;
-    out.escalated = true;
-    var escalatedHold = escalatedHoldForHead(holds, out.head);
-    if (!escalatedHold) {
-        stampHold(io, owner, name, comments, inp, out, census, true, existing.at);
+    if (existing && escalate && escalationDue(existing, inp.nowIso, inp.humanHoldHours)) {
+        out.holdDeduped = true;
+        out.escalated = true;
+        stampHold(io, owner, name, inp, out, census, holds, true, existing.at);
         stampEscalationLabel(io, owner, name, inp, out);
         return out;
     }
-    out.escalationDeduped = true;
+    stampHold(io, owner, name, inp, out, census, holds, false, null);
     return out;
 }
 
