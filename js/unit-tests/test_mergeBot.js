@@ -187,6 +187,14 @@ function debtSearchMock(calls) {
     return function (a) { calls.debtSearches.push(a); return JSON.stringify({ items: [] }); };
 }
 
+// gh-1417: the gate's own hold markers land through github_create_comment —
+// filter them out of the shared calls.comments bucket.
+function mergeHoldComments(fx) {
+    return fx.calls.comments.filter(function (c) {
+        return c.body.indexOf('dmtools:merge-hold') !== -1;
+    });
+}
+
 // gh-1371 round 2 (CI crap ratchet): the head shape of the fixture PR —
 // `bareHead` mimics the older bridge shape (a bare sha string instead of
 // the { sha } object). Extracted from fixture() to restore its baseline CC.
@@ -1765,9 +1773,12 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
             threadsByNumber: { 42: [ghThread('PRT_1', importantBody('machine finding'))] }
         });
         var result = fx.bot.action({ jobParams: { repo: 'a/b' } }); // no machineAuthor
-        assert.equal(result.acted, 1);
         assert.equal(fx.calls.debtIssues.length, 0, 'no logins = nothing is machine-owned');
         assert.equal(fx.calls.threadResolves.length, 0);
+        assert.equal(result.acted, 0, 'gh-1417 AC4: the open thread STILL holds the merge — fail closed');
+        var holds = mergeHoldComments(fx);
+        assert.equal(holds.length, 1, 'the open-threads hold marker is stamped');
+        assert.contains(holds[0].body, '"reason":"open-threads"');
     });
 
     test('gh-1371 finding 2: a bare-string head PR rides the shared headShaOf — merge still proceeds', function () {
