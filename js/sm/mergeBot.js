@@ -45,6 +45,14 @@ var mcpParse = require('../common/mcpParse.js');
 // violation; the next tick retries).
 var mergeBackstop = require('../common/mergeBackstop.js');
 
+// gh-1416: the verdict-freshness probe rides every squash-merge — the
+// newest dmtools:review-verdict record for the CURRENT head being
+// REQUEST_CHANGES/BLOCK defers the merge and stamps a deduped
+// machine-parseable hold marker. Runs BEFORE the backstop (a held merge
+// skips the thread work entirely); the gh-807 tick reconciler stays (it
+// repairs the labels), this gate protects the merge instant.
+var mergeVerdictGate = require('../common/mergeVerdictGate.js');
+
 // Thin wrapper keeps every call site unchanged.
 function parseMcp(raw) { return mcpParse.parseMcp(raw); }
 
@@ -596,6 +604,21 @@ function latchValidated(owner, name, pr, say) {
  * fails its own job. Returns the acted credit (1 or 0).
  */
 function mergeApprovedHead(run, pr, mergedLine) {
+    // gh-1416 verdict-freshness gate BEFORE the backstop: the newest
+    // verdict record for the CURRENT head being REQUEST_CHANGES/BLOCK
+    // defers the merge (acted 0 — the queue keeps moving; the next tick /
+    // event retries and the SM's rework lap lands the fresh verdict). The
+    // gate never throws (it fails open internally); a wiring-level fault
+    // is absorbed fail-open too — the probe adds no new merge-blocking
+    // surface (gh-1416 contract).
+    try {
+        var verdictGate = mergeVerdictGate.runGateForPr(mergeVerdictGate.githubBridgeIo(),
+            run.owner, run.name, run.job, pr.number, pr, run.say);
+        if (verdictGate.held) return 0;
+    } catch (eGate) {
+        run.say('⚠️ pr-' + pr.number + ' verdict gate fault — fail-open (gh-1416): ' +
+            (eGate.message || eGate));
+    }
     try {
         mergeBackstop.runBackstopForPr(mergeBackstop.githubBridgeIo(),
             run.owner, run.name, run.job, pr.number, pr, run.say);
