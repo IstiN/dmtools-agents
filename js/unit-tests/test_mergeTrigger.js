@@ -271,6 +271,30 @@ function holdCommentsPosted(fx) {
     });
 }
 
+// A standalone mergeGate instance (module-closure level, not per-fixture) —
+// only its PURE marker builder is used, to seed PR comments with the exact
+// bodies the gate posts.
+function standaloneMergeGate() {
+    if (!_bsMods.mg) {
+        var backstop = mergeBackstopModuleFor(null);
+        _bsMods.mg = loadModule('js/common/mergeGate.js', makeRequire({
+            './mcpParse.js': mcpParseModule,
+            './reviewVerdicts.js': bsReviewVerdicts(),
+            './machineAuthor.js': bsMachineAuthor(),
+            './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {}),
+            '../configLoader.js': { loadProjectConfig: function () { return null; } },
+            './mergeBackstop.js': backstop,
+            './mergeVerdictGate.js': mergeVerdictGateModuleFor(null, backstop)
+        }), {});
+    }
+    return _bsMods.mg;
+}
+
+function mergeGateHoldMarkerForFixture(census, head, at, escalated, heldSince) {
+    return standaloneMergeGate().buildHoldMarker(census, head, at,
+        escalated === true, heldSince || null, 24);
+}
+
 suite('mergeTrigger', function () {
     test('clean path: labeled issue + Closes #N PR + CLEAN -> squash-merge, labels off, comment', function () {
         var fx = fixture({
@@ -1003,6 +1027,10 @@ suite('mergeTrigger: extracted helpers (gh-1081)', function () {
 
 suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
     var BOT = 'merge-bot';
+    // gh-1417: the stage-2 hold marker is head-scoped — the scenarios that
+    // hold must carry a headRefOid on the get_pr payload (the gh-1416
+    // convention: set only when the scenario needs it).
+    var HEAD_BOT = '0c2732dfeedface0deadbeefcafe0123456789ab';
     function ghThread(id, body, over) {
         var t = {
             id: id,
@@ -1107,6 +1135,7 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         var fx = fixture({
             labeledIssues: [5],
             prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD_BOT } },
             threadsByNumber: { 12: [
                 ghThread('PRT_1', importantBody('machine finding')),
                 ghThread('H1', importantBody('a human finding'),
@@ -1135,6 +1164,7 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         var fx = fixture({
             labeledIssues: [5],
             prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD_BOT } },
             threadsByNumber: { 12: [ghThread('H1', importantBody('a human finding'),
                 { comments: { nodes: [{ databaseId: 9100,
                     author: { login: 'human-reviewer' }, body: importantBody('a human finding') }] } })] }
@@ -1184,6 +1214,7 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         var fx = fixture({
             labeledIssues: [5],
             prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD_BOT } },
             threadsByNumber: { 12: [ghThread('PRT_1', importantBody('machine finding'))] }
         });
         var result = run(fx); // no machineAuthor in jobParams
@@ -1261,20 +1292,8 @@ suite('mergeTrigger — merge gate wiring (gh-1417)', function () {
         assert.equal(holdCommentsPosted(fx).length, 0);
     });
 
-    test('holdOnHumanThreads=false: a machine survivor still holds', function () {
+    test('holdOnHumanThreads=false: the machine path still gates — stage 1 resolves, the delegated human does not hold', function () {
         var fx = fixture({
-            labeledIssues: [5],
-            prs: [CLEAN_PR],
-            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD } },
-            threadsByNumber: { 12: [{ id: 'M1', isResolved: true, path: 'src/x.js', line: 7,
-                comments: { nodes: [{ databaseId: 9200, author: { login: BOT },
-                    body: '⚠️ severity: IMPORTANT — race' }] } }] }
-        });
-        // Stage 1 counts nothing (the allowlist is empty → not machine),
-        // stage 2 census: the thread is authored by the bare-machine login
-        // 'merge-bot' with an empty allowlist → human → delegated... this
-        // scenario needs a configured allowlist for the machine class.
-        fx = fixture({
             labeledIssues: [5],
             prs: [CLEAN_PR],
             prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD } },
@@ -1289,16 +1308,16 @@ suite('mergeTrigger — merge gate wiring (gh-1417)', function () {
     });
 
     test('escalation: a same-head hold past humanHoldHours escalates (needs-human label + escalated marker)', function () {
-        var oldMarker = { body: mMergeGateModuleFor(null, null) ? '' : '' }; // placeholder, replaced below
-        var fx = openThreadFixture();
-        var heldAt = '2026-11-08T10:00:00Z'; // ~2 days before the run's real clock
-        fx = openThreadFixture();
-        // Seed the PR with a plain hold marker posted 2 days ago for the
-        // CURRENT head (the clock is real — the marker's age carries the
-        // scenario).
-        var gate = fx.mod; // not needed for the marker; build via the module closure
-        var markerBody = mergeGateHoldMarkerForFixture({ total: 1, human: 1, machine: 0 }, HEAD, heldAt);
-        fx.opts.prCommentsByNumber = { 12: [{ body: markerBody, user: { login: BOT + '[bot]' } }] };
+        // The wiring's clock is real (runProbeForPr stamps now), so the
+        // scenario rides the SEEDED marker's age: a plain hold for the
+        // current head posted 48h ago.
+        var heldAt = new Date(Date.now() - 48 * 3600000).toISOString();
+        var fx = openThreadFixture({
+            prCommentsByNumber: { 12: [
+                { body: mergeGateHoldMarkerForFixture({ total: 1, human: 1, machine: 0 }, HEAD, heldAt),
+                  user: { login: BOT + '[bot]' } }
+            ] }
+        });
         var result = run(fx, { repo: 'a/b', machineAuthor: BOT, mergeGate: { humanHoldHours: 24 } });
         assert.equal(result.merged, 0, 'escalated — the automatic lane skips');
         assert.equal(result.skipped, 1);
@@ -1311,7 +1330,7 @@ suite('mergeTrigger — merge gate wiring (gh-1417)', function () {
     });
 
     test('escalation dedups: the escalated marker already present -> no label, no comment growth', function () {
-        var heldAt = '2026-11-08T10:00:00Z';
+        var heldAt = new Date(Date.now() - 48 * 3600000).toISOString();
         var fx = openThreadFixture({
             prCommentsByNumber: { 12: [
                 { body: mergeGateHoldMarkerForFixture({ total: 1, human: 1, machine: 0 }, HEAD, heldAt),
@@ -1328,10 +1347,11 @@ suite('mergeTrigger — merge gate wiring (gh-1417)', function () {
     });
 
     test('a fresh head restarts the escalation clock (new marker budget, no label)', function () {
-        var heldAt = '2026-11-08T10:00:00Z';
+        var heldAt = new Date(Date.now() - 48 * 3600000).toISOString();
         var fx = openThreadFixture({
             prCommentsByNumber: { 12: [
-                { body: mergeGateHoldMarkerForFixture({ total: 1, human: 1, machine: 0 }, 'aaaa1111feedface0deadbeefcafe0123456789ab', heldAt),
+                { body: mergeGateHoldMarkerForFixture({ total: 1, human: 1, machine: 0 },
+                    'aaaa1111feedface0deadbeefcafe0123456789ab', heldAt),
                   user: { login: BOT + '[bot]' } }
             ] }
         });

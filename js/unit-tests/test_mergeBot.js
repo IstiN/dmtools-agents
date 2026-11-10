@@ -110,13 +110,39 @@ function mergeVerdictGateModuleFor(mods, backstop) {
     });
 }
 
+// gh-1417: the two-stage merge gate shares the backstop instance (stage 1
+// delegates to it) and the fixture's bridge tools — the SAME engine-global
+// set in production, one require closure here.
+function mergeGateModuleFor(mods, backstop) {
+    var bridge = mods || {};
+    return loadModule('js/common/mergeGate.js', makeRequire({
+        './mcpParse.js': mcpParseModule,
+        './reviewVerdicts.js': bsReviewVerdicts(),
+        './machineAuthor.js': bsMachineAuthor(),
+        './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {}),
+        '../configLoader.js': { loadProjectConfig: function () { return null; } },
+        './mergeBackstop.js': backstop,
+        './mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop)
+    }), {
+        github_get_pr_review_threads: bridge.github_get_pr_review_threads,
+        github_get_pr_comments: bridge.github_get_pr_comments,
+        github_create_comment: bridge.github_create_comment,
+        github_search_issues: bridge.github_search_issues,
+        github_create_issue: bridge.github_create_issue,
+        github_resolve_pr_thread: bridge.github_resolve_pr_thread,
+        github_reply_to_pr_thread: bridge.github_reply_to_pr_thread,
+        github_add_labels: bridge.github_add_labels
+    });
+}
+
 function loadMergeBot(mods) {
     var backstop = mergeBackstopModuleFor(mods);
     return loadModule('js/sm/mergeBot.js',
         makeRequire({
             '../common/mcpParse.js': mcpParseModule,
             '../common/mergeBackstop.js': backstop,
-            '../common/mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop)
+            '../common/mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop),
+            '../common/mergeGate.js': mergeGateModuleFor(mods, backstop)
         }), mods);
 }
 
@@ -1657,7 +1683,7 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         assert.equal(result.acted, 0, 'no merge with an open machine thread');
         assert.equal(fx.calls.merges.length, 0);
         assert.ok(result.log.some(function (l) {
-            return l.indexOf('merge backstop failed') !== -1;
+            return l.indexOf('merge gate failed') !== -1;
         }), 'the deferral is said aloud: ' + JSON.stringify(result.log));
         fx.opts.resolveFailIds = []; // the transient API fault clears
         var retry = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
@@ -1678,11 +1704,32 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
             ] }
         });
         var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
-        assert.equal(result.acted, 1, 'the merge follows branch protection as before');
-        assert.equal(fx.calls.debtIssues.length, 1);
+        assert.equal(fx.calls.debtIssues.length, 1, 'stage 1 digested the machine thread');
         assert.contains(fx.calls.debtIssues[0].body, 'open (human)');
-        assert.equal(fx.calls.threadResolves.length, 1, 'only the machine thread resolves');
+        assert.equal(fx.calls.threadResolves.length, 1, 'only the machine thread resolves (gh-744 unchanged)');
         assert.equal(fx.calls.threadResolves[0].threadId, 'PRT_1');
+        assert.equal(result.acted, 0, 'gh-1417: the open human thread holds the merge');
+        var holds = mergeHoldComments(fx);
+        assert.equal(holds.length, 1, 'the open-threads hold marker is stamped');
+        assert.contains(holds[0].body, '"reason":"open-threads"');
+    });
+
+    test('human-thread replay round 2: the thread resolves -> the merge proceeds', function () {
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating'],
+            threadsByNumber: { 42: [ghThread('H1', importantBody('a human finding'),
+                { comments: { nodes: [{ databaseId: 9100,
+                    author: { login: 'human-reviewer' }, body: importantBody('a human finding') }] } })] }
+        });
+        var first = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(first.acted, 0, 'held on the open human thread');
+        fx.opts.threadsByNumber[42][0].isResolved = true;
+        fx.opts.prCommentsByNumber = { 42: [{ body: mergeHoldComments(fx)[0].body,
+            user: { login: BOT + '[bot]' } }] };
+        var second = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(second.acted, 1, 'after the thread resolves the merge proceeds');
+        assert.equal(fx.calls.merges.length, 1);
+        assert.equal(mergeHoldComments(fx).length, 1, 'no fresh marker on the resolved census');
     });
 
     test('digest-filing failure: the merge is deferred (acted 0), the queue keeps moving', function () {
@@ -1697,7 +1744,7 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.merges.length, 0);
         assert.equal(fx.calls.threadResolves.length, 0, 'no thread closes without its digest');
         assert.ok(result.log.some(function (l) {
-            return l.indexOf('merge backstop failed') !== -1;
+            return l.indexOf('merge gate failed') !== -1;
         }), 'the deferral is said aloud: ' + JSON.stringify(result.log));
     });
 
@@ -1712,7 +1759,7 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.merges.length, 1);
     });
 
-    test('unconfigured machineAuthor counts nothing (fail closed): merge as today', function () {
+    test('unconfigured machineAuthor: stage 1 counts nothing, stage 2 still HOLDS (gh-1417 AC4)', function () {
         var fx = fixture({
             labels: ['pr_approved', 'ai_validating'],
             threadsByNumber: { 42: [ghThread('PRT_1', importantBody('machine finding'))] }
