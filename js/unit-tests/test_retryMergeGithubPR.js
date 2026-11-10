@@ -76,21 +76,26 @@ function mMergeBackstop(globals) {
     // typeof guards read the eval context — so the instance the gate
     // delegates to must see the SAME bridge mocks the lane injected, or
     // its guards map null and every gate scenario silently skips.
+    // Reference-equality pairs, NOT object property keys — every globals
+    // object stringifies to "[object Object]" and would bind the first
+    // fixture's comment read forever.
     var key = globals || null;
-    if (!_m.mb) _m.mb = {};
-    if (!_m.mb[key]) {
-        _m.mb[key] = loadModule('js/common/mergeBackstop.js', makeRequire({
-            './reviewVerdicts.js': mReviewVerdicts(),
-            './findingRegistry.js': mFindingRegistry(),
-            './reviewDebtLedger.js': mReviewDebtLedger(),
-            './reviewDispositions.js': mReviewDispositions(),
-            './machineAuthor.js': mMachineAuthor(),
-            './reviewThreadInventory.js': mThreadInventory(),
-            './mcpParse.js': mcpParseModule,
-            '../configLoader.js': { loadProjectConfig: function () { return null; } }
-        }), globals || {});
+    if (!_m.mb) _m.mb = [];
+    for (var i = 0; i < _m.mb.length; i++) {
+        if (_m.mb[i].key === key) return _m.mb[i].mod;
     }
-    return _m.mb[key];
+    var inst = loadModule('js/common/mergeBackstop.js', makeRequire({
+        './reviewVerdicts.js': mReviewVerdicts(),
+        './findingRegistry.js': mFindingRegistry(),
+        './reviewDebtLedger.js': mReviewDebtLedger(),
+        './reviewDispositions.js': mReviewDispositions(),
+        './machineAuthor.js': mMachineAuthor(),
+        './reviewThreadInventory.js': mThreadInventory(),
+        './mcpParse.js': mcpParseModule,
+        '../configLoader.js': { loadProjectConfig: function () { return null; } }
+    }), globals || {});
+    _m.mb.push({ key: key, mod: inst });
+    return inst;
 }
 function mGate(globals) {
     // Per-call load: the gate must SEE the lane's own bridge mocks (one

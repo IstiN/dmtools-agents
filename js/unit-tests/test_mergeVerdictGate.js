@@ -11,13 +11,14 @@ var mcpParseModule = loadModule('js/common/mcpParse.js', makeRequire({}), {});
 // wiring's require needs the module's full dependency closure, with the
 // configLoader stubbed (the real one probes .dmtools/config).
 var _bsMods = {};
-var _bsMb = {}; // mergeBackstop per injected-global set (gh-1416): the
+var _bsMb = []; // mergeBackstop per injected-global set (gh-1416): the
                 // gate's githubBridgeIo is the SUBSET VIEW of the
                 // backstop's, and the typeof guards read the eval context —
                 // the instance the gate delegates to must see the SAME
-                // injected globals the gate sees, or its guards map the
-                // runner's network-guard throwers instead of this suite's
-                // mocks.
+                // injected globals the gate sees. Reference-equality pairs
+                // (NOT object property keys — every globals object
+                // stringifies to "[object Object]" and would bind the
+                // first fixture's mocks forever).
 function bsMachineAuthor() {
     if (!_bsMods.ma) _bsMods.ma = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
     return _bsMods.ma;
@@ -79,26 +80,28 @@ function bsThreadInventory() {
 }
 function bsMergeBackstop(mods) {
     var key = mods || null;
-    if (!_bsMb[key]) {
-        _bsMb[key] = loadModule('js/common/mergeBackstop.js', makeRequire({
-            './reviewVerdicts.js': bsReviewVerdicts(),
-            './findingRegistry.js': bsFindingRegistry(),
-            './reviewDebtLedger.js': bsReviewDebtLedger(),
-            './reviewDispositions.js': bsReviewDispositions(),
-            './machineAuthor.js': bsMachineAuthor(),
-            './reviewThreadInventory.js': bsThreadInventory(),
-            './mcpParse.js': mcpParseModule,
-            '../configLoader.js': { loadProjectConfig: function () { return null; } }
-        }), mods || {});
+    for (var i = 0; i < _bsMb.length; i++) {
+        if (_bsMb[i].key === key) return _bsMb[i].mod;
     }
-    return _bsMb[key];
+    var inst = loadModule('js/common/mergeBackstop.js', makeRequire({
+        './reviewVerdicts.js': bsReviewVerdicts(),
+        './findingRegistry.js': bsFindingRegistry(),
+        './reviewDebtLedger.js': bsReviewDebtLedger(),
+        './reviewDispositions.js': bsReviewDispositions(),
+        './machineAuthor.js': bsMachineAuthor(),
+        './reviewThreadInventory.js': bsThreadInventory(),
+        './mcpParse.js': mcpParseModule,
+        '../configLoader.js': { loadProjectConfig: function () { return null; } }
+    }), mods || {});
+    _bsMb.push({ key: key, mod: inst });
+    return inst;
 }
 
 function loadGate(mods) {
     return loadModule('js/common/mergeVerdictGate.js', makeRequire({
         './mcpParse.js': mcpParseModule,
         './reviewVerdicts.js': bsReviewVerdicts(),
-        './mergeBackstop.js': bsMergeBackstop()
+        './mergeBackstop.js': bsMergeBackstop(mods || null)
     }), mods || {});
 }
 
