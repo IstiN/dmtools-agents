@@ -151,6 +151,7 @@ function nitBody(claim) {
  *   noThreads         — true = the threads primitive is ABSENT (capability miss)
  *   threadsThrow      — the threads read throws (fail-closed read scenario)
  *   commentsThrow     — the comments read throws (ledger-clobber scenario)
+ *   noComments        — true = the comments primitive is ABSENT (capability miss)
  *   createIssueThrow  — the digest filing throws (record-keeping failure)
  *   resolveFailIds    — thread ids whose resolve throws (per-thread failure)
  *   existingIssues    — open [debt] issues the search probe returns
@@ -160,6 +161,7 @@ function ioFixture(opts) {
         threads: [],
         comments: [],
         noThreads: false,
+        noComments: false,
         threadsThrow: null,
         commentsThrow: null,
         createIssueThrow: null,
@@ -176,7 +178,7 @@ function ioFixture(opts) {
             return JSON.stringify({ data: { repository: { pullRequest:
                 { reviewThreads: { nodes: f.threads } } } } });
         },
-        getComments: function () {
+        getComments: f.noComments ? undefined : function () {
             mark('comments');
             if (f.commentsThrow) throw new Error(f.commentsThrow);
             // reality: the posts ARE the PR comment stream (write-then-read
