@@ -15,6 +15,7 @@
 
 var resolveRepo = require('./resolveRepoFromTicket.js');
 var setupDev    = require('./preCliDevelopmentSetup.js');
+var branchSetup = require('./common/branchSetup.js');
 
 function action(params) {
     // 1. Resolve target repo from ticket and mutate params in-place
@@ -31,7 +32,7 @@ function action(params) {
         var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
         var targetRepo = customParams.targetRepository || {};
         var workingDir = targetRepo.workingDir || '';
-        if (workingDir) {
+        if (workingDir && !branchSetup.isDryRunParams(params)) {
             file_write({ path: '.dmtools-target-workingdir', content: workingDir });
             console.log('preCliDevelopmentSetupDynamicRepo: wrote workingDir to .dmtools-target-workingdir:', workingDir);
         }

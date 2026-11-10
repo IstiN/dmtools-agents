@@ -206,6 +206,7 @@ function prLoad(opts) {
         './configLoader.js': prConfigLoader(opts, record),
         './common/githubHelpers.js': Object.assign(prGhMocks(opts, record), opts.gh || {}),
         './common/gitOps.js': Object.assign(prGitOpsMocks(opts, record), opts.gitOps || {}),
+        './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
         './common/commentMarkup.js': prCommentMarkup(),
         './fetchParentContextToInput.js': prParentMock(opts, record),
         './common/trackers.js': prTrackersWith(globalMocks),
@@ -1085,4 +1086,58 @@ suite('preparePRForReview — gh-1351 reviewPolicy: hard validation + run-contex
         assert.contains(writes[0].content, 'default');
     });
 
+});
+
+suite('preparePRForReview — dryRun guard across all flag locations and error/skip paths (gh-1413)', function() {
+
+    function dryRunLoad(opts) {
+        return prLoad(Object.assign({
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' } },
+            scm: { getPrComments: function() { return []; } }
+        }, opts || {}));
+    }
+
+    test('honours params.dryRun, jobParams.dryRun, customParams.dryRun, and jobParams.customParams.dryRun: writes input context without checkout or tracker comments', function() {
+        var shapes = [
+            { inputFolderPath: 'input/TS-42', dryRun: true, jobParams: { customParams: { trackerProvider: 'jira' } } },
+            { inputFolderPath: 'input/TS-42', jobParams: { dryRun: true, customParams: { trackerProvider: 'jira' } } },
+            { inputFolderPath: 'input/TS-42', customParams: { dryRun: true, trackerProvider: 'jira' } },
+            { inputFolderPath: 'input/TS-42', jobParams: { customParams: { dryRun: 'true', trackerProvider: 'jira' } } }
+        ];
+        shapes.forEach(function(params, idx) {
+            var rec = prRecorder();
+            var loaded = dryRunLoad({ record: rec });
+            var result = loaded.module.action(params);
+            assert.ok(result && result.success, 'shape #' + idx + ' succeeds');
+            assert.equal(rec.comments.length, 0, 'shape #' + idx + ' posts zero tracker comments');
+            assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'checkoutPRBranch'; }).length, 0,
+                'shape #' + idx + ' skips checkoutPRBranch');
+            assert.equal(rec.gitOps.filter(function(g) { return g.fn === 'writePRContext'; }).length, 1,
+                'shape #' + idx + ' still writes PR context');
+        });
+    });
+
+    test('dryRun suppresses failure and error comments on missing PR and malformed reviewPolicy', function() {
+        var recNoPr = prRecorder();
+        var noPr = dryRunLoad({ record: recNoPr, findPRResult: null });
+        assert.equal(noPr.module.action({
+            inputFolderPath: 'input/TS-42',
+            jobParams: { customParams: { dryRun: true, trackerProvider: 'jira' } }
+        }), false);
+        assert.equal(recNoPr.comments.length, 0, 'missing PR in dryRun posts no failure comment');
+
+        var recBadPolicy = prRecorder();
+        var badPolicy = dryRunLoad({
+            record: recBadPolicy,
+            config: {
+                repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' },
+                reviewPolicy: { severities: { BOGUS: { round: 'rework', fix: 'mandatory' } } }
+            }
+        });
+        assert.equal(badPolicy.module.action({
+            inputFolderPath: 'input/TS-42',
+            jobParams: { customParams: { dryRun: true, trackerProvider: 'jira' } }
+        }), false);
+        assert.equal(recBadPolicy.comments.length, 0, 'policy validation failure in dryRun posts no setup error comment');
+    });
 });

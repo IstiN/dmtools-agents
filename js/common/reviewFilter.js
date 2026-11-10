@@ -311,7 +311,7 @@ function parseFilterVerdicts(raw) {
  */
 function demotionNote(reason) {
     return reviewSpecClaims.DEMOTION_NOTE_HEAD +
-        ': review-filter demotion (gh-1403)** — fresh-context verification: ' + String(reason || '');
+        ': review-filter demotion** — fresh-context verification: ' + String(reason || '');
 }
 
 function candidateById(candidates, id) {
@@ -548,7 +548,7 @@ function buildOverSuppressionWarning(stats) {
     if (!stats || stats.candidates === 0) return null;
     if (stats.kept > 0) return null;
     if (stats.demoted + stats.dropped < stats.candidates) return null;
-    return '🧯 review filter (gh-1403): ' + stats.dropped + '/' + stats.candidates + ' dropped, ' +
+    return '🧯 review filter: ' + stats.dropped + '/' + stats.candidates + ' dropped, ' +
         stats.demoted + ' demoted — every candidate of the run was suppressed (0 kept). A filter that ' +
         'suppresses everything is MISCONFIGURED, not a better reviewer. Check reviewPolicy.verification ' +
         'on this repo: the trial bar is fewer laps AND kept precision, not silence.';
@@ -601,7 +601,7 @@ function buildGeneralCommentInjection(stats, dropped) {
     var lines = buildDroppedDigestLines(dropped);
     if (lines.length === 0) return null;
     var out = [];
-    out.push('## 🧯 Review filter (gh-1403)');
+    out.push('## 🧯 Review filter');
     out.push('');
     out.push(buildFilterStampLine(stats));
     out.push('');
@@ -622,7 +622,7 @@ function buildFilterStampLine(stats) {
     var s = stats || filterStats(0, []);
     var percent = Math.round((s.dropRate || 0) * 100);
     var unaccounted = (s.candidates || 0) - ((s.kept || 0) + (s.demoted || 0) + (s.dropped || 0));
-    var line = '🧯 Review filter (gh-1403): ' + s.candidates + ' candidate(s) → kept ' + s.kept +
+    var line = '🧯 Review filter: ' + s.candidates + ' candidate(s) → kept ' + s.kept +
         ' · demoted ' + s.demoted + ' · dropped ' + s.dropped;
     if (unaccounted > 0) {
         line += ' · unaccounted ' + unaccounted + ' (incomplete verdict file — riding as keep)';
@@ -653,7 +653,7 @@ function buildFilterInputJson(candidates) {
  */
 function buildFilterPrompt(diffPath, codeRoot) {
     var lines = [];
-    lines.push('# Review Filter pass (gh-1403) — verify candidate findings before they are posted');
+    lines.push('# Review Filter pass — verify candidate findings before they are posted');
     lines.push('');
     lines.push('You are a SEPARATE verification pass, NOT the reviewer. A first-pass review of this PR ' +
         'produced the candidate findings below. Your job is to verify each candidate against the actual ' +

@@ -21,6 +21,7 @@
 
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
+var branchSetup = require('./common/branchSetup.js');
 
 // Canonical copy (gh-823/gh-912 + gh-1248): the last-non-empty-line helper
 // lives in common/pullRequest.js once — this delegate keeps the local call
@@ -156,8 +157,8 @@ function resolveTargetWorkingDir(config) {
     return workingDir;
 }
 
-function shouldSkipSnapshotForDryRun(actualParams) {
-    return String(actualParams && actualParams.dryRun) === 'true';
+function shouldSkipSnapshotForDryRun(params, actualParams) {
+    return branchSetup.isDryRunParams(params) || branchSetup.isDryRunParams(actualParams);
 }
 
 function syncSnapshotWorkspace(config) {
@@ -180,13 +181,14 @@ function action(params) {
         var actualParams = resolveActualParams(params);
         var customParams = resolveCustomParams(params, actualParams);
 
+        if (shouldSkipSnapshotForDryRun(params, actualParams)) {
+            console.log('[dryRun] preCliSnapshotSetup: skipping snapshot branch checkout and codegraph sync');
+            return true;
+        }
+
         // 1. Preserve existing preCliJSAction behavior by chaining.
         if (runChainedAction(customParams.chainedPreCliJSAction, params) === false) {
             return false;
-        }
-        if (shouldSkipSnapshotForDryRun(actualParams)) {
-            console.log('[dryRun] preCliSnapshotSetup: skipping snapshot branch checkout and codegraph sync');
-            return true;
         }
 
         // 2. Resolve config. paramsForConfigLoad re-attaches params.ticket (sibling of

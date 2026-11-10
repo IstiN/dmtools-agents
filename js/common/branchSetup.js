@@ -444,14 +444,22 @@ function checkoutTestBranchHead(ticketKey, config, deps) {
 }
 
 /**
- * gh-1356: returns true when `params` carries dryRun: true (or 'true') at the
- * top level, under `jobParams`, or under `customParams`.
+ * gh-1356 / gh-1413: returns true when `params` carries dryRun: true (or 'true')
+ * at the top level, under `jobParams`, under `customParams`, or under
+ * `jobParams.customParams`.
  */
+function isDryRunFlag(val) {
+    return val === true || val === 'true';
+}
+
 function isDryRunParams(params) {
     if (!params) return false;
-    if (params.dryRun === true || params.dryRun === 'true') return true;
-    var jp = params.jobParams || {};
-    return jp.dryRun === true || jp.dryRun === 'true';
+    if (isDryRunFlag(params.dryRun)) return true;
+    if (params.customParams && isDryRunFlag(params.customParams.dryRun)) return true;
+    var jp = params.jobParams;
+    if (!jp) return false;
+    if (isDryRunFlag(jp.dryRun)) return true;
+    return !!(jp.customParams && isDryRunFlag(jp.customParams.dryRun));
 }
 
 if (typeof module !== 'undefined' && module.exports) {

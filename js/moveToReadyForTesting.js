@@ -4,9 +4,14 @@
  */
 
 var actionTicketContext = require('./common/actionTicketContext.js');
+var branchSetup = require('./common/branchSetup.js');
 
 function action(params) {
     try {
+        if (branchSetup.isDryRunParams(params)) {
+            console.log('[dryRun] moveToReadyForTesting: skipping status move');
+            return { success: true, dryRun: true };
+        }
         var ctx = actionTicketContext.resolveTicketContext(params, { statusKey: 'READY_FOR_TESTING' });
         if (!ctx.ok) {
             return ctx.failure;

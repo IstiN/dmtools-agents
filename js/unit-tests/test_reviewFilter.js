@@ -611,7 +611,7 @@ suite('reviewFilter — filter input + prompt builders', function() {
         ]));
         assert.ok(line.indexOf('4') !== -1 && line.indexOf('1') !== -1 && line.indexOf('2') !== -1);
         assert.ok(line.indexOf('50%') !== -1, 'drop rate rendered as a percentage: ' + line);
-        assert.ok(line.indexOf('gh-1403') !== -1);
+        assert.ok(line.indexOf('Review filter:') !== -1);
     });
 
     test('an incomplete verdict file names its unaccounted candidates (digest list review note)', function() {

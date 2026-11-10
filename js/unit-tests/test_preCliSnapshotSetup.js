@@ -17,7 +17,8 @@ function loadPreCliSnapshotSetup(configLoaderStub, mocks) {
         makeRequire({
             './configLoader.js': configLoaderStub || makeConfigLoaderStub(),
             './config.js': NOOP_CONFIG_JS,
-            './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT
+            './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT,
+            './common/branchSetup.js': loadModule('js/common/branchSetup.js')
         }),
         mocks || {}
     );
@@ -94,7 +95,8 @@ suite('preCliSnapshotSetup', function() {
                 './configLoader.js': makeConfigLoaderStub('develop/3.9.0'),
                 './config.js': NOOP_CONFIG_JS,
                 './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT,
-                './fetchQuestionsToInput.js': makeChainedAction(chainedCalls)
+                './fetchQuestionsToInput.js': makeChainedAction(chainedCalls),
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js')
             }),
             { cli_execute_command: makeCliMock(calls, {}) }
         );
@@ -120,7 +122,8 @@ suite('preCliSnapshotSetup', function() {
                 './configLoader.js': makeConfigLoaderStub('develop/3.9.0'),
                 './config.js': NOOP_CONFIG_JS,
                 './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT,
-                './fetchQuestionsToInput.js': makeChainedAction(chainedCalls)
+                './fetchQuestionsToInput.js': makeChainedAction(chainedCalls),
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js')
             }),
             { cli_execute_command: makeCliMock(calls, {}) }
         );
@@ -213,6 +216,7 @@ suite('preCliSnapshotSetup — action branches', function() {
                 './configLoader.js': loader,
                 './config.js': NOOP_CONFIG_JS,
                 './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT,
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './fetchQuestionsToInput.js': chainedModule(function() {
                     chainedCalls.push('chained');
                     return false;
@@ -254,6 +258,7 @@ suite('preCliSnapshotSetup — action branches', function() {
                 './configLoader.js': makeConfigLoaderStub('develop/3.9.0'),
                 './config.js': NOOP_CONFIG_JS,
                 './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT,
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './notAnAction.js': { notAction: function() {} }
             }),
             { cli_execute_command: makeCliMock(calls, { 'git rev-parse --abbrev-ref HEAD': 'master' }) }
@@ -275,6 +280,7 @@ suite('preCliSnapshotSetup — action branches', function() {
                 './configLoader.js': makeConfigLoaderStub('develop/3.9.0'),
                 './config.js': NOOP_CONFIG_JS,
                 './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT,
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './throwingChain.js': chainedModule(function() { throw new Error('chain boom'); })
             }),
             { cli_execute_command: makeCliMock(calls, { 'git rev-parse --abbrev-ref HEAD': 'master' }) }
@@ -523,6 +529,32 @@ suite('preCliSnapshotSetup — dryRun guard (gh-1356)', function() {
         });
         assert.equal(result, true);
         assert.equal(calls.length, 0, 'dryRun must not execute CLI commands');
+    });
+
+    test('nested customParams.dryRun and jobParams.customParams.dryRun skip chained action and snapshot checkout (gh-1413)', function() {
+        var calls = [];
+        var chainedCalls = [];
+        var mod = loadModule(
+            'js/preCliSnapshotSetup.js',
+            makeRequire({
+                './configLoader.js': makeConfigLoaderStub('develop/3.9.0'),
+                './config.js': NOOP_CONFIG_JS,
+                './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT,
+                './fetchQuestionsToInput.js': makeChainedAction(chainedCalls),
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js')
+            }),
+            { cli_execute_command: makeCliMock(calls, {}) }
+        );
+        assert.equal(mod.action({
+            ticket: TICKET,
+            customParams: { dryRun: true, chainedPreCliJSAction: 'fetchQuestionsToInput.js' }
+        }), true);
+        assert.equal(mod.action({
+            ticket: TICKET,
+            jobParams: { customParams: { dryRun: 'true', chainedPreCliJSAction: 'fetchQuestionsToInput.js' } }
+        }), true);
+        assert.equal(chainedCalls.length, 0, 'chained action must not execute when dryRun is set');
+        assert.equal(calls.length, 0, 'no git/codegraph CLI commands in dryRun');
     });
 
 });

@@ -41,7 +41,7 @@ flowchart TD
         P5_FULL["5️⃣ input/TICKET/ci_failures_full.log — full CI logs"]
         P6["6️⃣ input/TICKET/review_state.md — reviewer verdict + decision state (CHANGES_REQUESTED = blocking)"]
         P7["7️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
-        P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: which severities trigger this lap, density cap, downgrade protocol (gh-1351)"]
+        P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: which severities trigger this lap, density cap, downgrade protocol"]
         P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8
     end
 
@@ -84,7 +84,7 @@ A reply entry does NOT always imply a code commit:
 
 When every open thread has a targeted reply and the pass pushed no commits, the post-action resolves the threads with an explanatory audit line (rework run URL) per thread — this is the ONLY permitted resolution-without-changes path. Partial coverage resolves NOTHING: the pass is reported blocked. Never leave an open thread without a reply entry.
 
-## 4. Downgrade protocol — ⚠️→💡 only with a written justification (gh-1351)
+## 4. Downgrade protocol — ⚠️→💡 only with a written justification
 
 `review_policy.md` carries the resolved severity table: the tiers whose round is `rework` gate approval and trigger this lap; polish/none tiers do not. Fix in that order (🚨 first, then ⚠️).
 
@@ -94,7 +94,7 @@ You may downgrade a **specific** ⚠️ IMPORTANT finding to 💡 SUGGESTION **o
 - Downgrade the finding, not the conversation: still reply to the thread (the reply IS the justification carrier).
 - Never downgrade 🚨 BLOCKING — only the reviewer (or the project `reviewPolicy` config) can weaken a blocking finding.
 
-## 5. Opportunistic pickup — cheap 💡/🪶 ride the lap (gh-1352)
+## 5. Opportunistic pickup — cheap 💡/🪶 ride the lap
 
 While the lap fixes its mandatory set (🚨/⚠️), pick up the cheap findings you pass anyway:
 

@@ -377,6 +377,52 @@ suite('instructionRefs — pack reference integrity', function () {
             'prompts/ and instructions/ must stay stack-agnostic (no Flutter/Dart/WidgetTester references): ' +
             violators.join(', '));
     });
+
+    test('R11 (gh-1414): codegraph_tools.md and codegraph_first.md prohibit ticket keys in queries and start with codegraph query', function () {
+        var cgTools = readText('prompts/codegraph_tools.md') || '';
+        var cgFirst = readText('instructions/common/codegraph_first.md') || '';
+        var storyQuestions = readText('instructions/story_questions/general_guidelines.md') || '';
+        assert.ok(cgTools.indexOf('<ticket key>') === -1 && cgTools.indexOf('TICKET feature summary') === -1,
+            'prompts/codegraph_tools.md must not instruct putting the ticket key in codegraph context');
+        assert.ok(cgTools.indexOf('codegraph query') !== -1,
+            'prompts/codegraph_tools.md must instruct starting with codegraph query');
+        assert.ok(cgFirst.indexOf('<ticket key>') === -1,
+            'instructions/common/codegraph_first.md must not instruct putting the ticket key in codegraph context');
+        assert.ok(storyQuestions.indexOf("codegraph context 'ticket-key") === -1,
+            'instructions/story_questions/general_guidelines.md must not instruct putting ticket-key in codegraph context');
+    });
+
+    test('R12 (gh-1412): generated review policy, filter, and finding-registry markdown/comments contain no repo-specific gh-NNN references', function () {
+        var rvStub = { censusCount: function (v) { return Number(v) || 0; }, fnv1a: function () { return 0; }, hex8: function () { return '00000000'; }, markerSafe: function (s) { return String(s || ''); }, parseMarkerComments: function () { return []; } };
+        var reviewPolicy = loadModule('js/common/reviewPolicy.js', makeRequire({ './reviewVerdicts.js': rvStub }));
+        var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': loadModule('js/common/machineAuthor.js'), './reviewPolicy.js': reviewPolicy }));
+        var findingRegistry = loadModule('js/common/findingRegistry.js', makeRequire({ './reviewVerdicts.js': rv }));
+        var reviewSpecClaims = loadModule('js/common/reviewSpecClaims.js', makeRequire({ './findingRegistry.js': findingRegistry }));
+        var reviewFilter = loadModule('js/common/reviewFilter.js', makeRequire({
+            './reviewVerdicts.js': rv,
+            './reviewPolicy.js': reviewPolicy,
+            './reviewSpecClaims.js': reviewSpecClaims
+        }));
+        var samples = [
+            reviewPolicy.policyTableMarkdown(reviewPolicy.defaultPolicy()),
+            reviewPolicy.policyInputContextMarkdown(reviewPolicy.defaultPolicy()),
+            reviewFilter.buildFilterPrompt('input/T-1/pr_diff.txt'),
+            reviewFilter.buildFilterStampLine(reviewFilter.filterStats(2, [{ decision: 'keep' }, { decision: 'drop' }])),
+            reviewFilter.buildGeneralCommentInjection(
+                reviewFilter.filterStats(1, [{ decision: 'drop' }]),
+                [{ path: 'a.js', line: 1, claim: 'c', reason: 'r' }]
+            ),
+            findingRegistry.buildRegistryComment(findingRegistry.emptyRegistry()),
+            findingRegistry.buildEscalationPacketComment({
+                rounds: [{ round: 1, newIdentities: 1 }],
+                items: [{ n: 1, id: 'a', file: 'f.js', severity: 'IMPORTANT', claim: 'c', status: 'open', demotion: { reason: 'r', claimMatchedTicket: 'no' } }]
+            })
+        ];
+        samples.forEach(function (text) {
+            assert.ok(!/\bgh-[0-9]+\b/i.test(String(text || '')),
+                'generated review/prompt text must not leak repo-specific gh-NNN references: ' + text);
+        });
+    });
 });
 
 // ── gh-1230 CRAP characterization: reference-queue helpers ───────────────────

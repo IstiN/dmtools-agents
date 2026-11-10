@@ -4303,7 +4303,7 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         // The general comment gains the dropped section (one line per drop).
         var gcWrite = writes.filter(function(w) { return w.path === 'outputs/pr_review_general.md'; })[0];
         assert.ok(gcWrite, 'general comment rewritten');
-        assert.ok(gcWrite.content.indexOf('Review filter (gh-1403)') !== -1);
+        assert.ok(gcWrite.content.indexOf('Review filter') !== -1);
         assert.ok(gcWrite.content.indexOf('`a.js:10`') !== -1, 'dropped candidate listed');
         assert.ok(gcWrite.content.indexOf('guard exists upstream') !== -1, 'drop reason listed');
         assert.ok(gcWrite.content.indexOf(GENERAL_MD) !== -1, 'original comment preserved');
@@ -4500,7 +4500,7 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         assert.equal(scmInlineCalls.length, 0, 'the dropped finding never posts as a thread');
         assert.ok(scmAddLabelCalls.indexOf('pr_approved') !== -1, 'approval flows through');
         var postedGeneral = scmCommentCalls.filter(function(b) {
-            return b.indexOf('Review filter (gh-1403)') !== -1;
+            return b.indexOf('Review filter') !== -1;
         });
         assert.equal(postedGeneral.length, 1, 'the general comment carries the dropped section');
         assert.ok(postedGeneral[0].indexOf('verified wrong against the caller guard') !== -1);

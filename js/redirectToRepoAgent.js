@@ -24,6 +24,7 @@
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
+var branchSetup = require('./common/branchSetup.js');
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) {}
 var trackerHolder = trackersModule.createTrackerHolder();
@@ -117,6 +118,11 @@ function action(params) {
     var agent = scope.agentsDir + '/' + repoName + '/' + scope.targetAgentName;
 
     console.log('redirectToRepoAgent: ' + ticketKey + ' \u2192 ' + agent);
+
+    if (branchSetup.isDryRunParams(params) || branchSetup.isDryRunParams(scope.actualParams)) {
+        console.log('[dryRun] redirectToRepoAgent: skipping nested dmtools run for ' + agent);
+        return false;
+    }
 
     try {
         cli_execute_command({ command: buildRunCommand(agent, ticketKey, scope.ciRunUrl) });

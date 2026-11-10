@@ -5,7 +5,7 @@ flowchart TD
 
     subgraph CODEGRAPH["⚠️ MANDATORY: Investigate codebase BEFORE writing any question"]
         CG1["Run codegraph BEFORE writing questions — no exceptions"]
-        CG2["codegraph context 'ticket-key feature-name'"]
+        CG2["codegraph query 'SymbolName' / codegraph context '2-5 code identifiers' (no ticket key)"]
         CG3["Read relevant source files returned by codegraph"]
         CG4["ONLY ask questions about things NOT already implemented or NOT clear from code"]
         CG5["Questions already answered by the code = stupid questions — FORBIDDEN"]

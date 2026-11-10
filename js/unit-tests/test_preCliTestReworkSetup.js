@@ -907,4 +907,38 @@ suite('preCliTestReworkSetup — dryRun guard (gh-1356)', function() {
         assert.equal(ctx.tracker.calls.moveToStatus.length, 0, 'dryRun must not move ticket status');
     });
 
+    test('nested customParams.dryRun and jobParams.customParams.dryRun are honoured and error comments are suppressed in dryRun (gh-1413)', function() {
+        [
+            { inputFolderPath: 'input/PROJ-12', customParams: { dryRun: true } },
+            { inputFolderPath: 'input/PROJ-12', jobParams: { inputFolderPath: 'input/PROJ-12', customParams: { dryRun: 'true' } } }
+        ].forEach(function(p) {
+            var cliCalls = [];
+            var ctx = loadPreCliTestReworkSetup({
+                cli_execute_command: function(opts) { cliCalls.push(opts && opts.command); return ''; }
+            });
+            var res = ctx.module.action(p);
+            assert.deepEqual(res, { success: true, dryRun: true });
+            assert.equal(cliCalls.length, 0);
+            assert.equal(ctx.tracker.calls.postComment.length, 0);
+            assert.equal(ctx.tracker.calls.moveToStatus.length, 0);
+        });
+
+        var badCtx = loadPreCliTestReworkSetup({
+            configLoader: {
+                loadProjectConfig: function() {
+                    return Object.assign({}, REWORK_SETUP_CONFIG, {
+                        reviewPolicy: { severities: { NOPE: { round: 'rework', fix: 'mandatory' } } }
+                    });
+                },
+                createScm: function() { return makeScmMock(); }
+            }
+        });
+        var badRes = badCtx.module.action({
+            inputFolderPath: 'input/PROJ-12',
+            jobParams: { inputFolderPath: 'input/PROJ-12', customParams: { dryRun: true } }
+        });
+        assert.equal(badRes.success, false);
+        assert.equal(badCtx.tracker.calls.postComment.length, 0, 'policy validation error in dryRun must not post tracker comment');
+    });
+
 });

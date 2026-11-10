@@ -22,6 +22,7 @@ function loadMoveToReadyForTesting(mocks) {
         './config.js': configModule,
         './configLoader.js': makeDefaultConfigLoaderMock(),
         './common/actionTicketContext.js': loadActionTicketContext(_m)
+        , './common/branchSetup.js': loadModule('js/common/branchSetup.js')
     }, { './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
@@ -87,5 +88,25 @@ suite('moveToReadyForTesting', function() {
         });
 
         assert.equal(result.success, false);
+    });
+
+    test('dryRun skips status move and stage-label fallback across all four flag locations (gh-1413)', function() {
+        [
+            { ticket: { key: 'TS-403' }, dryRun: true },
+            { ticket: { key: 'TS-403' }, jobParams: { dryRun: true } },
+            { ticket: { key: 'TS-403' }, customParams: { dryRun: true } },
+            { ticket: { key: 'TS-403' }, jobParams: { customParams: { dryRun: 'true' } } }
+        ].forEach(function(params) {
+            var moved = [];
+            var added = [];
+            var x = moveToReadyForTestingCapturingLogs({
+                jira_move_to_status: function(args) { moved.push(args); },
+                jira_add_label: function(args) { added.push(args); }
+            });
+            var res = x.module.action(params);
+            assert.deepEqual(res, { success: true, dryRun: true });
+            assert.equal(moved.length, 0, 'dryRun must not move ticket status');
+            assert.equal(added.length, 0, 'dryRun must not add stage labels');
+        });
     });
 });

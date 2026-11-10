@@ -38,7 +38,8 @@ function loadBugFixBatchContext(mocks) {
             './fetchLinkedTestsToInput.js': g.__fetchTests || { action: function() {} },
             './config.js': configModule,
             './common/trackers.js': { createTracker: function(config, customParams) { return tracker; } },
-            './common/bugFixBatchContext.js': shared
+            './common/bugFixBatchContext.js': shared,
+            './common/branchSetup.js': loadModule('js/common/branchSetup.js')
         }),
         g
     );
@@ -463,5 +464,25 @@ suite('common/bugFixBatchContext — resolveBatchActionContext', function() {
         shared.resolveBatchActionContext({ inputFolderPath: 'input/PROJ-1', ticket: { key: 'PROJ-1', fields: {} } });
         shared.runCmd('ls');
         assert.deepEqual(calls, [{ command: 'ls', workingDirectory: '/tmp/epic-ws' }], 'workingDir applied');
+    });
+
+    test('dryRun across all four flag locations writes batch_bugs.md without moving epic status (gh-1413)', function() {
+        [
+            { inputFolderPath: 'input/PROJ-1', dryRun: true, ticket: { key: 'PROJ-1', fields: { summary: 'Epic' } } },
+            { inputFolderPath: 'input/PROJ-1', jobParams: { dryRun: true }, ticket: { key: 'PROJ-1', fields: { summary: 'Epic' } } },
+            { inputFolderPath: 'input/PROJ-1', customParams: { dryRun: true }, ticket: { key: 'PROJ-1', fields: { summary: 'Epic' } } },
+            { inputFolderPath: 'input/PROJ-1', jobParams: { customParams: { dryRun: 'true' } }, ticket: { key: 'PROJ-1', fields: { summary: 'Epic' } } }
+        ].forEach(function(params) {
+            var writes = [];
+            var tracker = batchTracker();
+            var mod = loadBugFixBatchContext({
+                __tracker: tracker,
+                file_write: function(args) { writes.push(args); }
+            });
+            mod.action(params);
+            assert.equal(tracker.calls.moveToStatus.length, 0, 'dryRun must not move epic status');
+            assert.ok(writes.some(function(w) { return String(w.path || w).indexOf('batch_bugs.md') !== -1; }),
+                'dryRun still writes batch_bugs.md');
+        });
     });
 });

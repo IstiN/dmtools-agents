@@ -691,7 +691,7 @@ function openItemCount(items) {
 }
 
 function registryNote(open, pendingCount) {
-    return '\uD83E\uDD16 Finding-identity registry (gh-1332) — ' + open +
+    return '\uD83E\uDD16 Finding-identity registry — ' + open +
         ' open finding identit' + (open === 1 ? 'y' : 'ies') + ', ' + pendingCount +
         ' candidate(s) pending confirmation. Machine-managed review-round bookkeeping; please do not edit or reply.';
 }
@@ -880,7 +880,7 @@ function buildEscalationPacket(registry) {
 function buildEscalationPacketComment(registry) {
     var packet = buildEscalationPacket(registry);
     if (!packet.rounds.length) return null;
-    var lines = ['\uD83D\uDD0D Finding-identity census (gh-1332) — new identities per review round: ' +
+    var lines = ['\uD83D\uDD0D Finding-identity census — new identities per review round: ' +
         packet.rounds.map(function(r) { return 'round ' + r.round + ': ' + r.newIdentities; }).join(', ') + '.'];
     packet.blockingWithdrawals.forEach(function(w) {
         lines.push('\uD83D\uDEA8 F' + w.n + ' (' + w.severity + ') ' + w.file +
@@ -889,7 +889,7 @@ function buildEscalationPacketComment(registry) {
     packet.demotions.forEach(function(d) {
         lines.push('\u26A0\uFE0F F' + d.n + ' (' + d.file + ') demoted from BLOCKING \u2014 ' +
             d.reason + ', claimMatchedTicket: ' + d.claimMatchedTicket +
-            ' (gh-1334; a cited re-raise re-elevates it)');
+            ' (a cited re-raise re-elevates it)');
     });
     return lines.join('\n');
 }

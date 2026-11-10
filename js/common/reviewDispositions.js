@@ -88,13 +88,13 @@ function tagLine(disposition) {
  */
 function buildThreadAckReply(disposition) {
     if (!disposition) {
-        return '\uD83E\uDD16 non-blocking suggestion \u2014 resolved per APPROVE verdict (gh-828). ' +
+        return '\uD83E\uDD16 non-blocking suggestion \u2014 resolved per APPROVE verdict. ' +
             'The machine resolves its own non-blocking threads in-tick so the ' +
-            'conversation gate cannot hold an approved PR (see gh-807/gh-828).';
+            'conversation gate cannot hold an approved PR.';
     }
     var line = tagLine(disposition);
     var tier = disposition.tier ? String(disposition.tier) : 'unclassified';
-    var lead = '\uD83E\uDD16 triage closure (gh-1352) \u2014 ' + tier +
+    var lead = '\uD83E\uDD16 triage closure \u2014 ' + tier +
         ' thread resolved per the APPROVE verdict and the review policy';
     if (disposition.tag === 'deferred') {
         lead += '; the finding lives in the review debt ledger (batched sweep PR)';

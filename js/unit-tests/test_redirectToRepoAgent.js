@@ -40,7 +40,7 @@ function loadRedirectToRepoAgent(opts) {
 
     var mod = loadModule(
         'js/redirectToRepoAgent.js',
-        makeRequire({ './common/trackers.js': trackersMock }),
+        makeRequire({ './common/trackers.js': trackersMock, './common/branchSetup.js': loadModule('js/common/branchSetup.js') }),
         globalMocks
     );
 
@@ -202,6 +202,20 @@ suite('redirectToRepoAgent.action', function () {
         assert.deepEqual(plain.calls.cli, [
             { command: 'dmtools --debug run "repo-agents/a/story_development.json" --inputJql "key=PROJ-6"' }
         ]);
+    });
+
+    test('dryRun skips launching nested dmtools run across all four flag locations (gh-1413)', function () {
+        [
+            { ticket: { key: 'PROJ-7', fields: { summary: '[r] ok' } }, dryRun: true },
+            { ticket: { key: 'PROJ-7', fields: { summary: '[r] ok' } }, jobParams: { dryRun: true } },
+            { ticket: { key: 'PROJ-7', fields: { summary: '[r] ok' } }, customParams: { dryRun: true } },
+            { ticket: { key: 'PROJ-7', fields: { summary: '[r] ok' } }, jobParams: { customParams: { dryRun: 'true' } } }
+        ].forEach(function (params) {
+            var loaded = loadRedirectToRepoAgent({});
+            var result = loaded.mod.action(params);
+            assert.equal(result, false);
+            assert.deepEqual(loaded.calls.cli, [], 'dryRun must not execute nested dmtools run');
+        });
     });
 
 });

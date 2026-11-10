@@ -12,6 +12,7 @@
 // pack js/ root only — hoist every require to the top of the module.
 var trackersModule = require('./common/trackers.js');
 var configLoader = require('./configLoader.js');
+var branchSetup = require('./common/branchSetup.js');
 /**
  * gh-1188: the actual-params resolution extracted from action — params that
  * already carry inputFolderPath win, else jobParams, else the bare params.
@@ -225,8 +226,10 @@ function action(params) {
 
         writeOpenBugsFiles(inputFolder, bugs);
 
-        // Post Jira comment
-        postStartComment(tracker, ticketKey, bugs.length, historicalDoneCount);
+        // Post Jira comment (skipped in dryRun — gh-1413)
+        if (!branchSetup.isDryRunParams(params) && !branchSetup.isDryRunParams(actualParams)) {
+            postStartComment(tracker, ticketKey, bugs.length, historicalDoneCount);
+        }
 
         return {
             success: true,

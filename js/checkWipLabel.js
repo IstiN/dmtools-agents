@@ -15,6 +15,7 @@
 
 var configLoader = require('./configLoader.js');
 var gh = require('./common/githubHelpers.js');
+var branchSetup = require('./common/branchSetup.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -73,7 +74,8 @@ function logStart(ticket, metadata) {
 }
 
 // Post a skip comment best-effort; successLog is only printed when provided.
-function postSkipComment(ticketKey, comment, successLog) {
+function postSkipComment(ticketKey, comment, successLog, dryRun) {
+    if (dryRun) return;
     try {
         getTracker().postComment(ticketKey, comment);
         if (successLog) {
@@ -86,7 +88,7 @@ function postSkipComment(ticketKey, comment, successLog) {
 
 // The WIP-label gate: true when the ticket carries the context WIP label and
 // processing must stop (the skip notification has been posted best-effort).
-function wipLabelGate(ticket, wipLabel) {
+function wipLabelGate(ticket, wipLabel, dryRun) {
     const ticketKey = ticket.key;
     const labels = labelsOf(ticket);
     console.log('Expected WIP label:', wipLabel);
@@ -94,7 +96,7 @@ function wipLabelGate(ticket, wipLabel) {
 
     if (labels.includes(wipLabel)) {
         console.log('⏸️  Ticket ' + ticketKey + ' has WIP label "' + wipLabel + '" - skipping processing');
-        postSkipComment(ticketKey, wipSkipComment(wipLabel), 'Posted skip notification comment to ' + ticketKey);
+        postSkipComment(ticketKey, wipSkipComment(wipLabel), 'Posted skip notification comment to ' + ticketKey, dryRun);
         console.log('checkWipLabel result: stop processing');
         return true;
     }
@@ -114,7 +116,7 @@ function loadConfigBestEffort(params) {
 // Optional: verify an open PR exists for review/rework agents. Returns the
 // gate's decision ({skip: boolean}) when it applied, null when the guard is
 // disabled or failed non-fatally (fail-open).
-function openPrGuardResult(params, ticketKey) {
+function openPrGuardResult(params, ticketKey, dryRun) {
     var customParams = resolveCustomParams(params);
     if (!customParams.checkOpenPR) {
         return null;
@@ -126,7 +128,7 @@ function openPrGuardResult(params, ticketKey) {
         var pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
         if (!pr) {
             console.log('⏸️  No open PR found for ' + ticketKey + ' - skipping processing');
-            postSkipComment(ticketKey, noOpenPrSkipComment());
+            postSkipComment(ticketKey, noOpenPrSkipComment(), null, dryRun);
             console.log('checkWipLabel result: stop processing (no open PR)');
             return { skip: true };
         }
@@ -153,13 +155,14 @@ function action(params) {
 
         // Dynamically generate WIP label from contextId
         const wipLabel = wipLabelFor(metadata.contextId);
+        var dryRun = branchSetup.isDryRunParams(params);
         initTracker(loadConfigBestEffort(params), resolveCustomParams(params));
 
-        if (wipLabelGate(ticket, wipLabel)) {
+        if (wipLabelGate(ticket, wipLabel, dryRun)) {
             return false; // Stop processing
         }
 
-        var guard = openPrGuardResult(params, ticket.key);
+        var guard = openPrGuardResult(params, ticket.key, dryRun);
         if (guard) {
             return !guard.skip;
         }

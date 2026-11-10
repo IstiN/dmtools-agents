@@ -211,6 +211,42 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         assert.ok(cliCalls.some(function(c) { return c.indexOf('git push') === 0; }), 'push resumes too');
     });
 
+    test('gh-1424: MERGE_HEAD present without unmerged paths (clean unconcluded merge) allows auto-save to run', function() {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    return '9a7e2aecommitsha\n'; // MERGE_HEAD present
+                }
+                if (args.command.indexOf('git diff --name-only --diff-filter=U') !== -1) {
+                    return ''; // no unmerged paths
+                }
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
+                if (args.command.indexOf('git status') !== -1) return 'M edited_by_agent.js\n';
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir' }
+                },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: ''
+        });
+        assert.ok(cliCalls.some(function(c) { return c.indexOf('git diff --name-only --diff-filter=U') !== -1; }),
+            'must check for unmerged paths when MERGE_HEAD exists');
+        assert.ok(cliCalls.some(function(c) { return c.indexOf('git commit') === 0; }),
+            'a clean merge without unmerged paths must not block timer auto-save');
+        assert.ok(cliCalls.some(function(c) { return c.indexOf('git push') === 0; }),
+            'timer push must proceed after committing');
+    });
+
     test('gh-761: a skipped auto-commit still uploads the session artefact — crash-safety is git-independent', function() {
         var fileWriteCalls = [];
         var m = loadTimer({
@@ -1060,14 +1096,23 @@ suite('timerAutoCommitAndSave — pure helpers (gh-119)', function() {
         assert.equal(onTicket.baseBranchGuardSkips({ baseBranch: 'main' }, '/repo'), false);
     });
 
-    test('mergeInProgressSkips mirrors mergeState.isMergeInProgress', function() {
+    test('mergeInProgressSkips mirrors mergeState.isMergeInProgress + hasUnmergedPaths', function() {
         var merging = loadTimer({
             cli_execute_command: function(args) {
-                // mergeState probes MERGE_HEAD via git rev-parse / ls probe
-                return args.command.indexOf('MERGE_HEAD') !== -1 ? 'MERGE_HEAD' : '';
+                if (args.command.indexOf('MERGE_HEAD') !== -1) return 'MERGE_HEAD';
+                if (args.command.indexOf('git diff --name-only --diff-filter=U') !== -1) return 'src/conflict.js\n';
+                return '';
             }
         });
         assert.equal(merging.mergeInProgressSkips('/repo'), true);
+
+        var cleanMerge = loadTimer({
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('MERGE_HEAD') !== -1) return 'MERGE_HEAD';
+                return '';
+            }
+        });
+        assert.equal(cleanMerge.mergeInProgressSkips('/repo'), false);
 
         var clean = loadTimer({
             cli_execute_command: function() { throw new Error('no MERGE_HEAD'); }

@@ -195,12 +195,16 @@ function baseBranchGuardSkips(targetRepo, workingDir) {
  * artefact upload in action() is git-independent and still runs.
  */
 function mergeInProgressSkips(workingDir) {
-    if (!mergeState.isMergeInProgress(function (command) {
+    var runInDir = function (command) {
         return cli_execute_command({ command: command, workingDirectory: workingDir });
-    }, workingDir)) {
+    };
+    if (!mergeState.isMergeInProgress(runInDir, workingDir)) {
         return false;
     }
-    console.warn('⏱️ timer: MERGE_HEAD exists — merge in progress, skipping auto-commit/push this tick ' +
+    if (!mergeState.hasUnmergedPaths(runInDir, workingDir)) {
+        return false;
+    }
+    console.warn('⏱️ timer: MERGE_HEAD exists with unmerged paths — merge in progress, skipping auto-commit/push this tick ' +
         '(a blind add/commit would finalize the conflicted merge and bake conflict markers into a WIP auto-save)');
     return true;
 }

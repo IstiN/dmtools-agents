@@ -451,7 +451,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         assert.equal(out.resolved, 4);
         assert.equal(out.deferred, 4, 'default policy: suggestion fix is mandatory — the threads defer to the review debt ledger');
         assert.equal(p.calls.replies.length, 4, 'one ack reply per resolved thread');
-        assert.contains(p.calls.replies[0].text, 'triage closure (gh-1352)');
+        assert.contains(p.calls.replies[0].text, 'triage closure');
         assert.contains(p.calls.replies[0].text, 'deferred: ');
         assert.contains(p.calls.replies[0].text, 'review debt ledger');
         assert.equal(p.calls.resolves.length, 4);
@@ -1188,8 +1188,8 @@ suite('machineSm executeAction', function () {
         assert.equal(out.resolved, 2, 'both non-blocking machine threads resolved');
         assert.deepEqual(resolved, ['RT_1', 'RT_2']);
         assert.equal(replies.length, 2, 'an ack reply follows each resolve');
-        assert.ok(replies[0].ack.indexOf('triage closure (gh-1352)') !== -1,
-            'the ack carries the gh-1352 triage wording');
+        assert.ok(replies[0].ack.indexOf('triage closure') !== -1,
+            'the ack carries the triage wording');
         assert.ok(replies[0].ack.indexOf('deferred: ') !== -1,
             'default policy: suggestion fix is mandatory — the ack defers to the ledger');
     });

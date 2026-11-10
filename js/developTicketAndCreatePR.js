@@ -189,19 +189,21 @@ function readDevBaseHead(runCommand, ticketKey, baseBranch) {
 }
 
 /**
- * gh-1308: true when every non-empty commit subject in the list is either a
- * timer `WIP auto-save` commit or the target development commit message, and
- * the list is not already a single clean target commit.
+ * gh-1308 / gh-1398: true when `<base>..HEAD` contains at least one timer
+ * `WIP auto-save` commit, or multiple commits produced during this development
+ * pass that are not already a single clean target commit. Because `base` is the
+ * setup-time `dev_base_head.txt` (or `git merge-base origin/<baseBranch> HEAD`),
+ * every commit in `<base>..HEAD` belongs to this development run — mixed
+ * histories (WIP auto-save commits plus an agent-authored commit) must also be
+ * squashed into the single target development commit.
  */
 function canSquashDevWipSubjects(subjects, safeMessage) {
     if (!subjects || subjects.length === 0) return false;
     if (subjects.length === 1 && subjects[0] === safeMessage) return false;
     for (var i = 0; i < subjects.length; i++) {
-        if (!/WIP auto-save/.test(subjects[i]) && subjects[i] !== safeMessage) {
-            return false;
-        }
+        if (/WIP auto-save/.test(subjects[i])) return true;
     }
-    return true;
+    return false;
 }
 
 /**
@@ -1347,9 +1349,41 @@ function logMoveToStatusOutcome(ticketKey, statusLabel, moveResult, suffix) {
     console.log('✅ Moved ' + ticketKey + ' to ' + statusLabel + tail);
 }
 
+/**
+ * gh-1398: when an open PR already exists for the branch (e.g. created by the
+ * CLI agent during the run or left open from an earlier attempt) and this run
+ * recorded a `dev_base_head.txt` with WIP auto-save commits in `<base>..HEAD`,
+ * squash those run commits into the configured development commit message and
+ * push with `--force-with-lease` before taking the `pr_already_open` early exit.
+ * No-op when `dev_base_head.txt` was not recorded (preserving the no-git-work
+ * fast path when no run base was captured).
+ */
+function squashAndPushOpenPrWipCommits(ctx) {
+    if (!ctx || !ctx.ticketKey || !ctx.config) return false;
+    if (!readRecordedDevBaseHead(ctx.ticketKey)) return false;
+    try {
+        var commitTemplate = (ctx.config.formats && ctx.config.formats.commitMessage && ctx.config.formats.commitMessage.development) || '{ticketKey} {ticketSummary}';
+        var commitMessage = configLoader.formatTemplate(commitTemplate, {
+            ticketKey: ctx.ticketKey,
+            ticketSummary: ctx.ticketSummary || ''
+        });
+        var baseBranch = configLoader.resolvePRTargetBranch(ctx.config, ctx.ticket);
+        var runStr = function (command) { return runCmd({ command: command }); };
+        if (!squashDevelopmentWipCommits(runStr, ctx.ticketKey, baseBranch, commitMessage)) {
+            return false;
+        }
+        pushBranchToRemote(runStr, ctx.expectedBranch, true);
+        return true;
+    } catch (e) {
+        console.warn('squashAndPushOpenPrWipCommits skipped (non-fatal):', String(e));
+        return false;
+    }
+}
+
 function reuseOpenPrResult(ctx, existingPr) {
     var existingUrl = existingPr.html_url || existingPr.url || '';
     console.log('⚠️  PR already open for', ctx.ticketKey, ':', existingUrl || ('#' + existingPr.number), '— skipping re-development');
+    squashAndPushOpenPrWipCommits(ctx);
     var m = commentMarkup.forTicket(ctx.ticketKey);
     try {
         getTracker().postComment(ctx.ticketKey, m.h(3, 'ℹ️ PR Already Open') + '\n\n' +
@@ -2127,7 +2161,7 @@ if (typeof module !== 'undefined' && module.exports) {
         // characterization tests.
         isHardPushRejection, retryForcePushAfterRejection, performPushOnly,
         isValidGitSha, readRecordedDevBaseHead, readDevBaseHead,
-        canSquashDevWipSubjects, readNonMergeSubjects, squashDevelopmentWipCommits,
+        canSquashDevWipSubjects, readNonMergeSubjects, squashDevelopmentWipCommits, squashAndPushOpenPrWipCommits,
         logMoveToStatusOutcome,
         prepareDevelopmentGitStage, stageOutcomeOf, runPublishPipeline,
         createDevelopmentPr, finalizeDevelopmentSuccess, concludeActionFailure,

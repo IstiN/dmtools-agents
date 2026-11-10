@@ -3580,13 +3580,14 @@ suite('developTicketAndCreatePR > WIP auto-save squash (gh-1308)', function () {
         assert.equal(mod2.readDevBaseHead(function () { throw new Error('no git'); }, null, 'main'), null);
     });
 
-    test('canSquashDevWipSubjects accepts WIP auto-save and target message, rejects foreign or single clean commit', function () {
+    test('canSquashDevWipSubjects accepts WIP auto-save (pure or mixed with agent commits), rejects non-WIP or single clean commit (gh-1308 / gh-1398)', function () {
         var mod = loadWithRealPrHelper({});
         assert.equal(mod.canSquashDevWipSubjects([], 'AB#42 Fix login'), false);
         assert.equal(mod.canSquashDevWipSubjects(['AB#42 Fix login'], 'AB#42 Fix login'), false);
+        assert.equal(mod.canSquashDevWipSubjects(['Custom agent commit'], 'AB#42 Fix login'), false);
         assert.equal(mod.canSquashDevWipSubjects(['AB#42: WIP auto-save 2026-04-19T14:58:58Z'], 'AB#42 Fix login'), true);
         assert.equal(mod.canSquashDevWipSubjects(['AB#42: WIP auto-save 2026-04-19T14:58:58Z', 'AB#42 Fix login'], 'AB#42 Fix login'), true);
-        assert.equal(mod.canSquashDevWipSubjects(['AB#42: WIP auto-save 2026-04-19T14:58:58Z', 'Custom agent commit'], 'AB#42 Fix login'), false);
+        assert.equal(mod.canSquashDevWipSubjects(['AB#42: WIP auto-save 2026-04-19T14:58:58Z', 'Custom agent commit'], 'AB#42 Fix login'), true);
     });
 
     test('squashDevelopmentWipCommits resets softly to base and creates one clean commit when all commits are WIP', function () {
@@ -3651,6 +3652,47 @@ suite('developTicketAndCreatePR > WIP auto-save squash (gh-1308)', function () {
         assert.ok(calls.indexOf('git reset --soft deadbeef12345678') !== -1);
         assert.ok(calls.indexOf('git commit -m "AB#2010283 Clean feature commit"') !== -1);
         assert.ok(calls.indexOf('git push -u origin ai/2010283 --force-with-lease') !== -1);
+    });
+
+    test('pr_already_open squashes recorded WIP auto-save + agent commits and force-with-lease pushes before early return (gh-1398)', function () {
+        var commands = [];
+        var fakeScm = {
+            listPrs: function () {
+                return [{
+                    number: 77,
+                    html_url: 'https://github.com/acme/widgets/pull/77',
+                    head: { ref: 'ai/2066776' }
+                }];
+            }
+        };
+        var loaded = loadForOutcomePinning({
+            file_read: function (args) {
+                if (args.path === 'input/2066776/dev_base_head.txt') return 'deadbeef12345678';
+                return '';
+            },
+            cli_execute_command: function (args) {
+                var c = args.command;
+                commands.push(c);
+                if (c === 'git rev-list --merges deadbeef12345678..HEAD') return '';
+                if (c === 'git log --format=%s deadbeef12345678..HEAD') {
+                    return 'feat: agent commit\n2066776 WIP auto-save 2026-11-10T10-00-00\n';
+                }
+                return '';
+            }
+        }, { scm: fakeScm });
+        var res = loaded.mod.action({
+            ticket: { key: '2066776', fields: { summary: 'Fix widget', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {}
+        });
+        assert.equal(res.success, true);
+        assert.equal(res.path, 'pr_already_open');
+        assert.ok(commands.indexOf('git reset --soft deadbeef12345678') !== -1,
+            'must soft-reset to dev_base_head.txt before returning pr_already_open');
+        assert.ok(commands.some(function (c) { return c.indexOf('git commit -m "') === 0 && c.indexOf('2066776') !== -1; }),
+            'must commit squashed changes with development commit message');
+        assert.ok(commands.indexOf('git push -u origin ai/2066776 --force-with-lease') !== -1,
+            'must force-with-lease push squashed branch when PR already open');
     });
 
     test('logMoveToStatusOutcome logs stage-label fallback honestly instead of claiming Moved to In Review (dm.ai#795)', function () {

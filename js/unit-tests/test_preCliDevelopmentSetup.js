@@ -1881,6 +1881,42 @@ suite('preCliDevelopmentSetup.action — dryRun guard (gh-1356)', function() {
         assert.equal(parentContextFetched, 1, 'read-only context fetch (parent context) still runs');
     });
 
+    test('nested customParams.dryRun and jobParams.customParams.dryRun are honoured by branchSetup.isDryRunParams, preCliDevelopmentSetupDynamicRepo, and preCliSyncBaseBranch (gh-1413)', function() {
+        var bs = loadModule('js/common/branchSetup.js');
+        assert.equal(bs.isDryRunParams({ dryRun: true }), true);
+        assert.equal(bs.isDryRunParams({ jobParams: { dryRun: 'true' } }), true);
+        assert.equal(bs.isDryRunParams({ customParams: { dryRun: true } }), true);
+        assert.equal(bs.isDryRunParams({ jobParams: { customParams: { dryRun: 'true' } } }), true);
+        assert.equal(bs.isDryRunParams({ jobParams: { customParams: { dryRun: false } } }), false);
+
+        var writes = [];
+        var dynMod = loadModule('js/preCliDevelopmentSetupDynamicRepo.js', makeRequire({
+            './resolveRepoFromTicket.js': { action: function(p) {
+                p.customParams = Object.assign({}, p.customParams || {}, { targetRepository: { workingDir: '/tmp/wt' } });
+                return true;
+            } },
+            './preCliDevelopmentSetup.js': { action: function(p) { return { success: true, dryRun: bs.isDryRunParams(p) }; } },
+            './common/branchSetup.js': bs
+        }), {
+            file_write: function(args) { writes.push(args); }
+        });
+        var dynRes = dynMod.action({ jobParams: { customParams: { dryRun: true } } });
+        assert.deepEqual(dynRes, { success: true, dryRun: true });
+        assert.equal(writes.length, 0, 'preCliDevelopmentSetupDynamicRepo must not write .dmtools-target-workingdir in dryRun');
+
+        var syncCli = [];
+        var syncMod = loadModule('js/preCliSyncBaseBranch.js', makeRequire({
+            './configLoader.js': { loadProjectConfig: function() { return { git: { baseBranch: 'main' } }; } },
+            './common/pullRequest.js': PR_HELPER_REAL,
+            './common/branchSetup.js': bs
+        }), {
+            cli_execute_command: function(args) { syncCli.push(args); return ''; }
+        });
+        assert.equal(syncMod.action({ customParams: { dryRun: true } }), true);
+        assert.equal(syncMod.action({ jobParams: { customParams: { dryRun: 'true' } } }), true);
+        assert.equal(syncCli.length, 0, 'preCliSyncBaseBranch must not execute git checkout/pull in dryRun');
+    });
+
 });
 
 // ── gh-1363: leg-failure reports that carry context ──────────────────────────

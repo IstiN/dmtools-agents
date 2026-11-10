@@ -54,6 +54,7 @@ function loadPreCliReworkSetup(configLoaderStub, mocks) {
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': mocks.__ghStub,
             './forkCheckout.js': forkCheckoutModule,
+            './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
             './common/gitOps.js': NOOP_MODULE,
             './common/commentMarkup.js': reworkCommentMarkupModule,
             './fetchQuestionsToInput.js': NOOP_MODULE,
@@ -462,6 +463,7 @@ function makeActionHarness(overides) {
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': ghStub,
             './forkCheckout.js': forkCheckoutModule,
+            './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
             './common/gitOps.js': gitOpsStub,
             './common/commentMarkup.js': reworkCommentMarkupModule,
             './fetchQuestionsToInput.js': NOOP_MODULE,
@@ -530,6 +532,7 @@ function makeContractHarness(opts) {
             './configLoader.js': { loadHookFn: function() { return null; } },
             './common/githubHelpers.js': makeGhStub(),
             './forkCheckout.js': forkCheckoutModule,
+            './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
             './common/gitOps.js': gitOpsStub,
             './common/commentMarkup.js': reworkCommentMarkupModule,
             './fetchQuestionsToInput.js': NOOP_MODULE,
@@ -702,6 +705,7 @@ suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-79
                 },
                 './common/githubHelpers.js': ghStub,
                 './forkCheckout.js': forkCheckoutModule,
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './common/gitOps.js': {
                     checkoutPRBranch: function() {},
                     detectMergeConflicts: function() { return []; },
@@ -781,6 +785,7 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
                 },
                 './common/githubHelpers.js': ghStub,
                 './forkCheckout.js': forkCheckoutModule,
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './common/gitOps.js': {
                     checkoutPRBranch: function() {},
                     detectMergeConflicts: function() { return []; },
@@ -859,6 +864,7 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
                     },
                     './common/githubHelpers.js': ghStub,
                     './forkCheckout.js': forkCheckoutModule,
+                    './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
                     './common/gitOps.js': {
                         checkoutPRBranch: function() {},
                         detectMergeConflicts: function() { return []; },
@@ -1453,6 +1459,7 @@ suite('preCliReworkSetup.action — diff-before-CI-detection (gh-1119 AC7)', fun
                 },
                 './common/githubHelpers.js': ghStub,
                 './forkCheckout.js': forkCheckoutModule,
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './common/gitOps.js': gitOpsStub,
                 './common/commentMarkup.js': reworkCommentMarkupModule,
                 './fetchQuestionsToInput.js': NOOP_MODULE,
@@ -1706,6 +1713,7 @@ suite('preCliReworkSetup.action — context-assembly branches (gh-1220 character
                 },
                 './common/githubHelpers.js': ghStub,
                 './forkCheckout.js': forkCheckoutModule,
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './common/gitOps.js': {
                     checkoutPRBranch: function() {},
                     detectMergeConflicts: function() { return []; },
@@ -1828,6 +1836,28 @@ suite('preCliReworkSetup — dryRun guard (gh-1356)', function() {
         assert.equal(h.calls.runSetupCommands, 0, 'dryRun must not run setup commands');
         assert.equal(h.calls.postComment.length, 0, 'dryRun must not post comments');
         assert.equal(h.calls.moveToStatus.length, 0, 'dryRun must not move ticket status');
+    });
+
+    test('nested customParams.dryRun and jobParams.customParams.dryRun are honoured and policy-error comments are suppressed in dryRun (gh-1413)', function() {
+        [
+            { inputFolderPath: 'input/PROJ-123', customParams: { dryRun: true } },
+            { inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', customParams: { dryRun: 'true' } } }
+        ].forEach(function(p) {
+            var h = makeActionHarness({});
+            var res = h.module.action(p);
+            assert.deepEqual(res, { success: true, dryRun: true });
+            assert.equal(h.calls.checkoutPRBranch.length, 0);
+            assert.equal(h.calls.postComment.length, 0);
+            assert.equal(h.calls.moveToStatus.length, 0);
+        });
+
+        var hErr = makeActionHarness({ configPatch: { reviewPolicy: { preset: 'nope' } } });
+        var errRes = hErr.module.action({
+            inputFolderPath: 'input/PROJ-123',
+            jobParams: { inputFolderPath: 'input/PROJ-123', customParams: { dryRun: true } }
+        });
+        assert.equal(errRes.success, false);
+        assert.equal(hErr.calls.postComment.length, 0, 'policy validation error in dryRun must not post tracker comment');
     });
 
 });

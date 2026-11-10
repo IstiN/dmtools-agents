@@ -220,7 +220,7 @@ function downgradeNote(originalBody) {
     var target = phrase
         ? 'the source the finding references ("' + phrase + '")'
         : 'the source the finding references';
-    return DEMOTION_NOTE_HEAD + ': unverified external-spec claim (gh-1053)** \u2014 this ' +
+    return DEMOTION_NOTE_HEAD + ': unverified external-spec claim** \u2014 this ' +
         'finding asserts what an external spec/reference says without quoting the ' +
         'exact source (file:line, `#L` anchor, or trusted doc URL) read during the ' +
         'review. Please confirm against ' + target + '; if confirmed, re-raise with ' +
@@ -616,7 +616,7 @@ function rebalanceReviewData(reviewData, out) {
 function appendCitationToBody(body, citation) {
     var text = String(body || '');
     return text + '\nSource: ' + citation +
-        ' — requirement verified against the ticket text (gh-1334 citation auto-append).';
+        ' — requirement verified against the ticket text (citation auto-append).';
 }
 
 /**

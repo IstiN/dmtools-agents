@@ -154,6 +154,21 @@ function nonFactoryKitDirtyLines(porcelain) {
         .join('\n').trim();
 }
 
+// gh-1413: when _switchOrPullRef throws after we stashed local changes,
+// restore that invocation's snapshot before propagating the checkout error
+// so uncommitted developer edits are never stranded in git stash.
+function _restorePreflightStashOnSwitchError(cmd, branchName, switchErr) {
+    try {
+        cmd('git stash pop');
+    } catch (restoreErr) {
+        var restoreMsg = restoreErr && restoreErr.message ? restoreErr.message : String(restoreErr);
+        console.error('❌ Failed to restore preflight stash (preflight-checkout-' + branchName + ') after checkout failure:', restoreMsg);
+        var switchMsg = switchErr && switchErr.message ? switchErr.message : String(switchErr);
+        throw new Error(switchMsg + ' (also failed to restore preflight stash preflight-checkout-' + branchName + ': ' + restoreMsg + ')');
+    }
+    throw switchErr;
+}
+
 function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
     console.log('Checking out PR branch:', branchName);
     var cmd = dirScopedCmd(workingDir);
@@ -186,7 +201,12 @@ function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
 
     // 2. Switch branches — tree is clean now, so this should never fail on
     //    "untracked files would be overwritten" again.
-    _switchOrPullRef(branchName, cmd, pullRef);
+    try {
+        _switchOrPullRef(branchName, cmd, pullRef);
+    } catch (switchErr) {
+        if (stashed) _restorePreflightStashOnSwitchError(cmd, branchName, switchErr);
+        throw switchErr;
+    }
 
     // 3. Reapply the snapshot on top of the target branch.
     var hadConflict = false;
@@ -506,6 +526,18 @@ function _handleMergeError(cmd, inputFolder, baseBranch, mergeError) {
     }
 }
 
+// Conclude a clean --no-commit base-branch merge when it staged changes
+// (gh-1424): leaving MERGE_HEAD open disabled timer auto-save for the entire
+// rework run and blocked post-action syncBranchWithBase.
+function _concludeCleanMergeIfStaged(cmd, stagedChanges) {
+    if (!stagedChanges) return;
+    try {
+        cmd('git commit --no-edit');
+    } catch (commitErr) {
+        console.warn('Could not conclude clean base-branch merge:', commitErr.message || commitErr);
+    }
+}
+
 function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
     var cmd = dirScopedCmd(workingDir);
     try {
@@ -528,6 +560,8 @@ function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
         console.log(stagedChanges
             ? 'No merge conflicts — base branch changes staged'
             : 'No merge conflicts — branch already up to date with origin/' + baseBranch);
+        _concludeCleanMergeIfStaged(cmd, stagedChanges);
+
         return [];
 
     } catch (mergeError) {

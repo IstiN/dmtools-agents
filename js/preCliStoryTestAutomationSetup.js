@@ -342,19 +342,19 @@ function writeReviewReplies(replies) {
     }
 }
 
-function writePrDiscussions(inputDir, discussions) {
+function writePrDiscussions(inputDir, discussions, dryRun) {
     writePrDiscussionsMarkdown(inputDir, discussions);
-    if (discussions && discussions.rawThreads && discussions.rawThreads.threads) {
+    if (!dryRun && discussions && discussions.rawThreads && discussions.rawThreads.threads) {
         writeReviewReplies(openThreadReplies(discussions.rawThreads));
     }
 }
 
-function writePrContext(storyKey, scm, pr) {
+function writePrContext(storyKey, scm, pr, dryRun) {
     var inputDir = 'input/' + storyKey;
     writePrInfo(inputDir, pr);
     writePrDiff(inputDir, scm, pr);
     try {
-        writePrDiscussions(inputDir, scm.fetchDiscussions(pr.number));
+        writePrDiscussions(inputDir, scm.fetchDiscussions(pr.number), dryRun);
     } catch (e) {
         console.warn('Could not write PR discussions:', e);
     }
@@ -478,13 +478,13 @@ function stepCheckoutTestBranch(ctx) {
 }
 
 /** Step 3: fetch PR context for rework when an open test PR exists (non-fatal). */
-function stepWriteTestPrContext(ctx) {
+function stepWriteTestPrContext(ctx, dryRun) {
     try {
         var scm = scmModule.createScm(ctx.projectConfig);
         var pr = findTestPr(scm, ctx.storyKey, ctx.config);
         if (pr && pr.number) {
             console.log('Open test PR found:', pr.number, '— fetching diff and discussions');
-            writePrContext(ctx.storyKey, scm, pr);
+            writePrContext(ctx.storyKey, scm, pr, dryRun);
         } else {
             console.log('No open test PR found for', ctx.storyKey);
         }
@@ -517,7 +517,7 @@ function action(params) {
         var testCases = stepFetchLinkedTestCases(ctx);
         if (branchSetup.isDryRunParams(params)) {
             console.log('[dryRun] Skipping mutating story test automation setup for', ctx.storyKey);
-            stepWriteTestPrContext(ctx);
+            stepWriteTestPrContext(ctx, true);
             return { success: true, dryRun: true };
         }
         stepCheckoutTestBranch(ctx);

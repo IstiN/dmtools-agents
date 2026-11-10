@@ -36,7 +36,7 @@ function loadPrepareBugCreationContext(mocks) {
 
     var mod = loadModule(
         'js/prepareBugCreationContext.js',
-        makeRequire({ './common/trackers.js': d2Trackers(Object.assign({}, defaults, mocks || {})), './configLoader.js': configLoaderModule }),
+        makeRequire({ './common/trackers.js': d2Trackers(Object.assign({}, defaults, mocks || {})), './configLoader.js': configLoaderModule, './common/branchSetup.js': loadModule('js/common/branchSetup.js') }),
         Object.assign({}, defaults, mocks || {})
     );
 
@@ -273,7 +273,7 @@ suite('creation automation queries follow jira.statuses when the project opts in
             jira_get_ticket: function() { return JSON.stringify({ key: 'TS-1', fields: { summary: 's' } }); },
             file_write: function() {} };
         var mod = loadModule('js/prepareBugCreationContext.js', makeRequire({
-            './common/trackers.js': trackersFor(searches), './configLoader.js': loaderWith(jiraOverrides)
+            './common/trackers.js': trackersFor(searches), './configLoader.js': loaderWith(jiraOverrides), './common/branchSetup.js': loadModule('js/common/branchSetup.js')
         }), mocks);
         mod.action({ inputFolderPath: 'input/TS-614', customParams: customParams || {} });
         return searches;
@@ -941,7 +941,8 @@ suite('prepareBugCreationContext — gh-1188 extracted step helpers', function()
             return loadModule('js/prepareBugCreationContext.js',
                 makeRequire({
                     './common/trackers.js': d2Trackers(Object.assign({ file_write: fileWrite }, mocks)),
-                    './configLoader.js': configLoaderModule
+                    './configLoader.js': configLoaderModule,
+                    './common/branchSetup.js': loadModule('js/common/branchSetup.js')
                 }),
                 Object.assign({ file_write: fileWrite }, mocks));
         })({});
@@ -996,7 +997,8 @@ suite('prepareBugCreationContext — gh-1188 extracted step helpers', function()
             return loadModule('js/prepareBugCreationContext.js',
                 makeRequire({
                     './common/trackers.js': d2Trackers(Object.assign({ file_write: fileWrite }, mocks)),
-                    './configLoader.js': configLoaderModule
+                    './configLoader.js': configLoaderModule,
+                    './common/branchSetup.js': loadModule('js/common/branchSetup.js')
                 }),
                 Object.assign({ file_write: fileWrite }, mocks));
         })({});
@@ -1042,7 +1044,8 @@ suite('prepareBugCreationContext — gh-1188 extracted step helpers', function()
             return loadModule('js/prepareBugCreationContext.js',
                 makeRequire({
                     './common/trackers.js': d2Trackers(Object.assign({ file_write: fileWrite }, mocks)),
-                    './configLoader.js': configLoaderModule
+                    './configLoader.js': configLoaderModule,
+                    './common/branchSetup.js': loadModule('js/common/branchSetup.js')
                 }),
                 Object.assign({ file_write: fileWrite }, mocks));
         })({});
@@ -1096,5 +1099,20 @@ suite('prepareBugCreationContext — gh-1188 extracted step helpers', function()
         var harness = loadPrepareBugCreationContext({});
         var result = harness.mod.action({ customParams: {} });
         assert.equal(result, false);
+
+    test('dryRun across all four flag locations writes context files but skips start comment (gh-1413)', function() {
+        [
+            { inputFolderPath: '/in/TS-1', dryRun: true, customParams: {} },
+            { inputFolderPath: '/in/TS-1', jobParams: { dryRun: true, customParams: {} } },
+            { inputFolderPath: '/in/TS-1', customParams: { dryRun: true } },
+            { inputFolderPath: '/in/TS-1', jobParams: { inputFolderPath: '/in/TS-1', customParams: { dryRun: 'true' } } }
+        ].forEach(function(params) {
+            var harness = loadPrepareBugCreationContext({});
+            var res = harness.mod.action(params);
+            assert.equal(res.success, true);
+            assert.equal(harness.calls.comments.length, 0, 'dryRun must not post start comment');
+            assert.ok(harness.calls.writes.length > 0, 'dryRun still writes bug context files');
+        });
+    });
     });
 });
