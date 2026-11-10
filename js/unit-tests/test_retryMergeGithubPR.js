@@ -711,4 +711,24 @@ suite('retryMergeGithubPR: merge-decision observability (gh-1420)', function () 
         assert.equal(warnings.length, 1);
         assert.contains(warnings[0], 'merge gate faulted (gh-1370/gh-1417)');
     });
+
+    test('a THROWN merge (scm fault) defers with its own line — lock released, labels stay', function () {
+        var r = withLogSpy(function () {
+            return runLane({
+                comments: [verdictComment('APPROVE', HEAD)],
+                prDetail: prDetail(),
+                mergeThrows: 'scm 504'
+            });
+        });
+        assert.equal(r.out.result, false, 'the failed merge is a handled deferral');
+        assert.equal(r.out.calls.merges.length, 1, 'the merge was attempted');
+        assert.equal(r.out.calls.removed.length, 0,
+            'pr_approved stays — a thrown merge consumes no approval');
+        var lines = decisionLines(r.logs);
+        assert.equal(lines.length, 1);
+        assert.contains(lines[0], 'action=defered');
+        assert.contains(lines[0], 'verdict=APPROVE');
+        var warnings = r.logs.filter(function (l) { return l.indexOf('::warning::') === 0; });
+        assert.equal(warnings.length, 0, 'a refused merge defers without the hold annotation');
+    });
 });
