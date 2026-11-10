@@ -29,12 +29,54 @@
  *      deferral spelling; the tag round-trips parseDispositionTag);
  *   3. the merge proceeds — but ONLY when every machine-owned thread
  *      reached terminal resolution (gh-1370): machine threads BELOW the
- *      threshold resolve WITHOUT a fix (the `wontfix` ack path — no
- *      digest, no ledger entry), and ANY failed resolution holds the
- *      merge. Human-authored threads are never resolved (gh-744) and
- *      never digested as resolved — they are listed in the digest as
- *      `open (human)` and the merge follows the current branch
- *      -protection state (the epic's final owner action, not this part).
+ *      threshold resolve WITHOUT a fix when the RESOLVED REVIEW POLICY
+ *      defers their tier (gh-1418 — see below), and ANY failed
+ *      resolution holds the merge. Human-authored threads are never
+ *      resolved (gh-744) and never digested as resolved — they are
+ *      listed in the digest as `open (human)` and the merge follows the
+ *      current branch-protection state (the epic's final owner action,
+ *      not this part).
+ *
+ * gh-1418 (policy-aware dispositions): the ack path no longer closes
+ * every below-threshold machine thread with an unconditional `wontfix`
+ * ("no digest, no ledger" — that downgraded every resolved preset to
+ * `relaxed` below IMPORTANT). The backstop now reads the epic's own
+ * policy layer (js/common/reviewPolicy.js — gh-1351):
+ *
+ *   - the review policy resolves through the standard chain
+ *     (projectConfig.reviewPolicy → workflow jobParams → built-in
+ *     `default`); a config load failure falls back to the chain with
+ *     null config (the machineLoginsOf pattern); a MALFORMED policy is
+ *     a hard ReviewPolicyValidationError that throws through — the
+ *     merge HOLDS (fail-closed: never ack-all on a policy the machine
+ *     could not resolve);
+ *   - per-thread ack eligibility comes from the resolved preset table:
+ *     a below-threshold thread rides the ack path only when its tier is
+ *     deferrable (fix `opportunistic`/`never`, not lap-gated
+ *     `rework`); a MANDATORY-fix tier still open at merge time
+ *     (💡 SUGGESTION under `default`/`fix-everything`) HOLDS the merge
+ *     and re-arms the polish lap — the disposition loop (gh-1352 part
+ *     3) owns those threads (fix, or defer into the review debt
+ *     ledger); the threads stay open so the PR keeps its BLOCKED state
+ *     and the loop keeps running (the same defer machinery as
+ *     gh-1417's open-discussion hold);
+ *   - the density budget (epic §4.6) decides "many vs few" for the
+ *     deferrable bucket: open deferrable threads > allowedSuggestion
+ *     Threads(pr.additions, bounds) → the WHOLE bucket holds + re-arms
+ *     the polish lap (they are over budget — fix them); within budget →
+ *     ack each one;
+ *   - every ack writes the gh-1352 ledger item (the gh-1332 identity —
+ *     file + normalized claim + severity class; a repeated finding
+ *     refreshes its entry instead of duplicating) — "a deferral needs
+ *     its ledger item" (gh-1352) holds for acks too;
+ *   - census sanity: the PR's newest verdict-marker census
+ *     (`"suggestions":N,"nits":N`) vs the actual open machine-thread
+ *     census — a mismatch surfaces as a one-line note in the digest /
+ *     the PR ledger stamp / the outcome lines / the hold message
+ *     (threads posted outside the policy are never swallowed).
+ *
+ * The ack reply keeps the machine-parsed `wontfix` tag spelling
+ * (parseDispositionTag round-trips; BELOW_GATE_ACK_VALUE is stable).
  *
  * gh-1370 (owner directive 2026-11-05) tightens gh-1353's "never block
  * the merge" semantics: the backstop is now a GATE on machine-owned
@@ -84,6 +126,7 @@ var reviewVerdicts = require('./reviewVerdicts.js');
 var findingRegistry = require('./findingRegistry.js');
 var reviewDebtLedger = require('./reviewDebtLedger.js');
 var reviewDispositions = require('./reviewDispositions.js');
+var reviewPolicy = require('./reviewPolicy.js');
 var machineAuthor = require('./machineAuthor.js');
 var threadInventory = require('./reviewThreadInventory.js');
 var mcpParse = require('./mcpParse.js');
@@ -112,7 +155,7 @@ var SEVERITY_LABELS = { BLOCKING: '🚨 BLOCKING', IMPORTANT: '⚠️ IMPORTANT'
 var IO_KEYS = ['getThreads', 'getComments', 'createComment', 'searchIssues',
     'createIssue', 'resolveThread', 'replyToThread'];
 
-// ── machine identity ─────────────────────────────────────────────────────────
+// ── machine identity + review policy ─────────────────────────────────────────
 
 /**
  * The machine logins for the caller's deployment: the gh-728 resolution
@@ -129,6 +172,24 @@ function machineLoginsOf(jobParams) {
     }
     return machineAuthor.machineAuthorLogins(
         machineAuthor.resolveMachineAuthor(jobParams, config));
+}
+
+/**
+ * The gh-1418 review policy for the merge decision: the standard chain
+ * (projectConfig.reviewPolicy → workflow jobParams → built-in `default`).
+ * A config LOAD failure falls back to the chain with null config (the
+ * machineLoginsOf pattern — default rides). A MALFORMED policy throws the
+ * hard ReviewPolicyValidationError THROUGH — the merge HOLDS (fail-closed:
+ * a policy the machine cannot resolve must never degrade to ack-all).
+ */
+function reviewPolicyOf(jobParams) {
+    var config = null;
+    try {
+        config = configLoader.loadProjectConfig(jobParams || {});
+    } catch (eConfig) {
+        config = null;
+    }
+    return reviewPolicy.resolveReviewPolicy(config, jobParams);
 }
 
 // ── thread rows + the counter ────────────────────────────────────────────────
@@ -159,6 +220,42 @@ function severityAtLeastImportant(severityClass) {
         findingRegistry.severityRank(MIN_SEVERITY_CLASS);
 }
 
+/**
+ * The gh-1418 per-thread ack eligibility (the resolved preset table): a
+ * below-threshold thread is deferrable only when its tier's fix is not
+ * mandatory AND the tier is not lap-gated (`round: rework` — the rework
+ * lap owns those, defense in depth: a rework-tier thread should have kept
+ * the PR un-approved). Everything else is a POLICY HOLD: acking a
+ * mandatory-fix or lap-gated thread at merge time would fake convergence —
+ * the disposition loop (polish lap / triage) owns it instead. An
+ * unclassified tier rides the gh-828 parity (the triage path closes it).
+ */
+function isDeferrableTier(entry) {
+    if (!entry) return true;
+    if (entry.round === 'rework') return false;
+    return entry.fix !== 'mandatory';
+}
+
+// One tier bump in the open-machine-thread census (the gh-1418 sanity check).
+function bumpTier(map, tier) {
+    map[tier] = (map[tier] || 0) + 1;
+}
+
+/**
+ * The POLICY tier of a thread body (gh-1418): the raw severity word the
+ * review leg stamped, uppercased into the 4-tier enum. Distinct from the
+ * gh-1332 registry class (findingRegistry collapses NIT → SUGGESTION — the
+ * identity predates the nit tier): the POLICY table is 4-tier, so a 🪶 NIT
+ * thread must resolve against severities.NIT (deferrable under `default`),
+ * not severities.SUGESTION (mandatory). An unmarked/junk body rides the
+ * SUGGESTION fallback — the same fallback severityClassOf applies (the
+ * gh-1370 documented fallthrough).
+ */
+function policyTierOf(body) {
+    var word = String(reviewVerdicts.threadSeverity(body) || 'none').toUpperCase();
+    return reviewPolicy.TIERS.indexOf(word) !== -1 ? word : 'SUGGESTION';
+}
+
 // One digest/ledger row from a normalized thread row + its severity class.
 function digestRowOf(row, severityClass) {
     return {
@@ -173,47 +270,101 @@ function digestRowOf(row, severityClass) {
 }
 
 /**
- * The classifier (gh-1353 + gh-1370): walks unresolved review threads and
- * splits machine-owned open threads into the digest path (>=IMPORTANT —
- * digested + resolved `deferred:`) from the ack path (SUGGESTION / NIT —
- * resolved WITHOUT a fix, no digest, no ledger). Human-authored open
- * threads (any severity) land in `human` — never resolved, listed
- * `open (human)`. A thread without a resolve id is flagged (noThreadId —
- * the resolve loops skip it and the gate holds the merge: terminal
- * resolution is impossible). An empty allowlist counts nothing (gh-744
- * fail closed).
- *
- * Deliberate fallthrough (gh-1370 rework): a machine-owned thread whose
- * body carries no recognizable severity marker classifies as 'none'
- * (reviewVerdicts.threadSeverity) → severityClassOf's 'SUGGESTION'
- * fallback and rides the ack path. Intended, not a misclassification:
- * holding the merge on an unresolvable classification would never
- * converge, so the public `wontfix` ack is the only terminal outcome for
- * such a thread (a later audit reading the digest/ack trail sees WHY a
- * marker-less thread closed as `wontfix`).
+ * The gh-1418 density budget (epic §4.6) for the deferrable bucket:
+ * allowed = clamp(round(base + k*sqrt(additions/unit)), min, max) from the
+ * RESOLVED policy's bounds; a missing additions count rides the floor
+ * (fail closed to the minimum — unknown diff size must not widen the
+ * bucket).
  */
-function classifyThreads(threads, logins) {
-    var out = { counted: [], ackThreads: [], human: [],
-        counts: { total: 0, resolved: 0, machine: 0, belowSeverity: 0, noThreadId: 0 } };
+function densityAllowanceOf(inp, policy) {
+    var additions = (inp && typeof inp.additions === 'number') ? inp.additions : null;
+    return reviewPolicy.allowedSuggestionThreads(additions, policy.bounds);
+}
+
+/**
+ * One open MACHINE row's below-threshold bucket (gh-1418): the ack path for
+ * deferrable tiers, the policy-hold path for everything else. Both flag an
+ * id-less row (terminal resolution impossible — the gate holds).
+ */
+function bucketBelowThresholdRow(t, severityClass, policyTier, out, policy) {
+    if (!t.threadId) out.counts.noThreadId++;
+    var entry = policy.severities[policyTier] || null;
+    if (isDeferrableTier(entry)) out.ackThreads.push(digestRowOf(t, severityClass));
+    else out.holdThreads.push(digestRowOf(t, severityClass));
+}
+
+// One row of the classification walk (resolved / human / machine buckets).
+function classifyRow(row, out, logins, policy) {
+    var t = row || {};
+    out.counts.total++;
+    if (t.resolved === true) { out.counts.resolved++; return; }
+    var severityClass = severityClassOfThread(t.body);
+    var policyTier = policyTierOf(t.body);
+    if (!machineAuthor.loginMatchesList(t.author, logins)) {
+        out.human.push(digestRowOf(t, severityClass));
+        return;
+    }
+    out.counts.machine++;
+    bumpTier(out.counts.machineByTier, policyTier);
+    if (!severityAtLeastImportant(severityClass)) {
+        out.counts.belowSeverity++;
+        bucketBelowThresholdRow(t, severityClass, policyTier, out, policy);
+        return;
+    }
+    out.counted.push(digestRowOf(t, severityClass));
+    if (!t.threadId) out.counts.noThreadId++;
+}
+
+/**
+ * The gh-1418 density rule for the deferrable bucket ("many vs few"):
+ * open deferrable-tier threads OVER the allowance hold as one bucket (fix
+ * them — they are over budget); within budget every thread acks.
+ */
+function applyDensityHold(out, allowed) {
+    if (out.ackThreads.length <= allowed) return;
+    out.holdThreads = out.holdThreads.concat(out.ackThreads);
+    out.ackThreads = [];
+}
+
+/**
+ * The classifier (gh-1353 + gh-1370 + gh-1418): walks unresolved review
+ * threads and splits machine-owned open threads into the digest path
+ * (>=IMPORTANT — digested + resolved `deferred:`), the ack path
+ * (deferrable tiers within the density budget — resolved WITHOUT a fix,
+ * each with its ledger item) and the policy-hold path (mandatory-fix /
+ * lap-gated tiers, or a deferrable bucket over the density budget — the
+ * merge HELDS and the polish lap re-arms). Human-authored open threads
+ * (any severity) land in `human` — never resolved, listed `open (human)`.
+ * A thread without a resolve id is flagged (noThreadId — the resolve loops
+ * skip it and the gate holds the merge: terminal resolution is
+ * impossible). An empty allowlist counts nothing (gh-744 fail closed).
+ *
+ * Deliberate fallthrough (gh-1370 rework, retuned by gh-1418): a
+ * machine-owned thread whose body carries no recognizable severity marker
+ * classifies as 'none' (reviewVerdicts.threadSeverity) → severityClassOf's
+ * 'SUGGESTION' fallback and rides the RESOLVED POLICY like any suggestion:
+ * deferrable under `relaxed`/`investigation`, a policy HOLD under
+ * `default`/`fix-everything` (the disposition loop converges it — its
+ * triage path closes unclassified bodies). Intended, not a
+ * misclassification: the public trail (hold or ack) always says WHY the
+ * thread closed the way it did.
+ *
+ * policy/allowed are optional for direct callers (tests): an absent policy
+ * rides the built-in `default` preset; an absent allowance rides the
+ * §4.6 floor.
+ */
+function classifyThreads(threads, logins, policy, allowed) {
+    var p = policy || reviewPolicy.defaultPolicy();
+    var out = { counted: [], ackThreads: [], holdThreads: [], human: [],
+        counts: { total: 0, resolved: 0, machine: 0, belowSeverity: 0, noThreadId: 0,
+            machineByTier: {} } };
     (Array.isArray(threads) ? threads : []).forEach(function (row) {
-        var t = row || {};
-        out.counts.total++;
-        if (t.resolved === true) { out.counts.resolved++; return; }
-        var severityClass = severityClassOfThread(t.body);
-        if (!machineAuthor.loginMatchesList(t.author, logins)) {
-            out.human.push(digestRowOf(t, severityClass));
-            return;
-        }
-        out.counts.machine++;
-        if (!severityAtLeastImportant(severityClass)) {
-            out.counts.belowSeverity++;
-            out.ackThreads.push(digestRowOf(t, severityClass));
-            if (!t.threadId) out.counts.noThreadId++;
-            return;
-        }
-        out.counted.push(digestRowOf(t, severityClass));
-        if (!t.threadId) out.counts.noThreadId++;
+        classifyRow(row, out, logins, p);
     });
+    var cap = (typeof allowed === 'number' && isFinite(allowed)) ? allowed
+        : densityAllowanceOf({ additions: null }, p);
+    out.counts.allowedDeferrable = cap;
+    applyDensityHold(out, cap);
     return out;
 }
 
@@ -249,14 +400,16 @@ function threadUrlOf(row, ctx) {
 }
 
 /**
- * Appends every counted thread into the review debt ledger (deep-copied —
- * the input is never mutated). The ledger core dedups by the gh-1332
- * identity: the same finding counted again refreshes its entry
+ * Appends threads into the review debt ledger (deep-copied — the input is
+ * never mutated). Serves BOTH the counted (>=IMPORTANT, gh-1353) and the
+ * acked (deferrable-tier, gh-1418) buckets: "a deferral needs its ledger
+ * item" (gh-1352) holds for acks too. The ledger core dedups by the
+ * gh-1332 identity: the same finding appended again refreshes its entry
  * (occurrences++, newest thread pointer) instead of duplicating.
  */
-function appendCountedToLedger(prev, counted, ctx) {
+function appendThreadsToLedger(prev, threads, ctx) {
     var ledger = prev || reviewDebtLedger.emptyLedger();
-    (Array.isArray(counted) ? counted : []).forEach(function (t) {
+    (Array.isArray(threads) ? threads : []).forEach(function (t) {
         ledger = reviewDebtLedger.appendDebtFinding(ledger, {
             threadId: t.threadId,
             path: t.path || '',
@@ -268,6 +421,46 @@ function appendCountedToLedger(prev, counted, ctx) {
         });
     });
     return ledger;
+}
+
+// The ctx bag the ledger append needs (owner/name ride the thread permalinks).
+function ledgerCtxOf(owner, name, inp) {
+    return { owner: owner, name: name, prNumber: inp.prNumber, nowIso: inp.nowIso };
+}
+
+// ── the gh-1418 census sanity note ───────────────────────────────────────────
+
+/**
+ * The one-line census sanity note (or null): the newest verdict marker on
+ * the merge head carries the review run's posted-thread census
+ * (`"suggestions":N,"nits":N`); the backstop's open machine-thread census
+ * is derived from the threads themselves. A mismatch means census drift —
+ * threads resolved since the review, or posted outside the census. The
+ * note SURFACES (digest / ledger stamp / outcome lines / hold message);
+ * it is never swallowed — and it never gates: the hold decision is the
+ * policy's, the note is observability. No verdict record on the head (or
+ * a fail-closed parse on an absent allowlist) compares nothing.
+ */
+function censusNoteOf(comments, headSha, logins, machineByTier) {
+    var effective = reviewVerdicts.latestVerdictForHead(
+        reviewVerdicts.parseVerdictRecords(comments || [],
+            { authorLogins: logins || [] }),
+        headSha);
+    if (!effective) return null;
+    var markerSuggestions = reviewVerdicts.censusCount(effective.record.suggestions);
+    var markerNits = reviewVerdicts.censusCount(effective.record.nits);
+    var openSuggestions = machineByTier.SUGGESTION || 0;
+    var openNits = machineByTier.NIT || 0;
+    if (markerSuggestions === openSuggestions && markerNits === openNits) return null;
+    return '⚠️ census sanity (gh-1418): review verdict census suggestions=' + markerSuggestions +
+        ' nits=' + markerNits + ' vs ' + (openSuggestions + openNits) +
+        ' open machine thread(s) (suggestions ' + openSuggestions + ', nits ' + openNits +
+        ') — census drift (threads resolved since the review, or posted outside the census); investigate.';
+}
+
+// The stamp/digest suffix form of the census note (empty when absent).
+function censusNoteSuffix(note) {
+    return note ? ('\n' + note) : '';
 }
 
 // ── the digest issue ─────────────────────────────────────────────────────────
@@ -357,6 +550,7 @@ function buildDigestIssue(parts) {
             '## Open human threads — never machine-resolved (gh-744)'],
             humanTableRows(human, ctx));
     }
+    if (p.censusNote) lines = lines.concat(['', p.censusNote]);
     lines = lines.concat(['', DIGEST_FOOTER]);
     return { title: '[debt] ' + titleText, body: lines.join('\n') };
 }
@@ -382,11 +576,13 @@ function deferredAck(digestNumber) {
 var BELOW_GATE_ACK_VALUE = 'below gating threshold — epic invariant (gh-1370)';
 
 /**
- * The ack reply posted into a resolved below-threshold (SUGGESTION / NIT)
- * machine thread: resolved WITHOUT a fix — resolution is mandatory,
- * fixing is not. The tag line is the canonical machine-parsed disposition
- * `wontfix: <value>` (reviewDispositions.TAGS; parseDispositionTag
- * round-trips it).
+ * The ack reply posted into a resolved deferrable-tier (gh-1418) machine
+ * thread: resolved WITHOUT a fix — resolution is mandatory, fixing is not.
+ * Only tiers the RESOLVED review policy defers (fix opportunistic/never,
+ * not lap-gated) reach this ack; mandatory-fix tiers hold + re-arm the
+ * polish lap instead. The tag line is the canonical machine-parsed
+ * disposition `wontfix: <value>` (reviewDispositions.TAGS;
+ * parseDispositionTag round-trips it; the value spelling is stable).
  */
 function belowThresholdAck() {
     return '🤖 merge backstop (gh-1370) — machine-owned below-gating-threshold review thread' +
@@ -547,8 +743,11 @@ function emptyOutcome(prNumber) {
         skipped: null,
         counted: [],
         ackThreads: [],
+        holdThreads: [],
         human: [],
         counts: null,
+        censusNote: null,
+        allowedDeferrable: null,
         digest: null,
         digestReused: false,
         digestDuplicate: null,
@@ -564,6 +763,21 @@ function emptyOutcome(prNumber) {
     };
 }
 
+// Copies the classification into the outcome (one place, gh-1418 buckets).
+function bookClassification(out, cls) {
+    out.counted = cls.counted;
+    out.ackThreads = cls.ackThreads;
+    out.holdThreads = cls.holdThreads;
+    out.human = cls.human;
+    out.counts = cls.counts;
+    out.allowedDeferrable = cls.counts.allowedDeferrable;
+}
+
+// The open machine-thread count of a classification (the comments-read gate).
+function openMachineCount(cls) {
+    return cls.counted.length + cls.ackThreads.length + cls.holdThreads.length;
+}
+
 // The ledger base for the append — fails closed on a broken read: stamping
 // a partial ledger would clobber the marker family's newest-wins state.
 // Takes the ALREADY-READ comments (gh-1371: one pr-comments read per
@@ -576,14 +790,16 @@ function ledgerBaseOf(comments, logins) {
 // The PR-side ledger stamp (marker + async digest, part 3's defer pattern).
 // Soft: the digest issue body carries the same ledger payload. Posted AFTER
 // the digest filing (gh-1371 round 2) so the race outcome is known and the
-// abandoned duplicate can be echoed for the sweep.
+// abandoned duplicate can be echoed for the sweep. The gh-1418 census note
+// rides the stamp when present (never swallowed).
 function stampLedger(t, prNumber, ledger, out) {
     if (typeof t.postPrComment !== 'function') return;
     try {
         t.postPrComment(prNumber,
             reviewDebtLedger.buildDebtMarker(ledger) + '\n' +
             reviewDebtLedger.buildDebtDigest(ledger) +
-            duplicateStampNote(out && out.digestDuplicate));
+            duplicateStampNote(out && out.digestDuplicate) +
+            censusNoteSuffix(out && out.censusNote));
         out.ledgerStampPosted = true;
     } catch (eStamp) { /* soft — the digest issue carries the marker */ }
 }
@@ -651,6 +867,7 @@ function fileDigest(t, comments, owner, name, input, out, ledger) {
         owner: owner, name: name, prNumber: input.prNumber,
         prTitle: input.prTitle, counted: out.counted, human: out.human,
         reviewRunRef: reviewRunRefOf(comments, input.headSha, input.logins),
+        censusNote: out.censusNote,
         ledger: ledger
     });
     var created = digestNumberOf(t.createIssue(issue.title, issue.body));
@@ -728,39 +945,98 @@ function resolveAckThreads(t, prNumber, ackThreads, out) {
     });
 }
 
-// The gh-1370 gate: the merge proceeds ONLY when every machine-owned
-// thread reached terminal resolution this run (or was already resolved).
-// Any failure leaves an open machine thread — throwing here holds THAT
-// merge; the caller defers it to the next tick (the retry), and a repeat
-// failure keeps failing the merge funnel job (the escalation surface).
-// The loops never abort on a per-thread failure — every thread attempts
-// on every tick (maximum progress per replay).
+// The hold message (gh-1370 gate + gh-1418 policy holds): one sentence per
+// failure family, the census note appended when present — never swallowed.
+function holdMessage(out, failed, held) {
+    var m = 'mergeBackstop: ' + (failed + held) +
+        ' machine-owned review thread(s) left open at merge time' +
+        ' (>=IMPORTANT resolve failures ' + out.resolveFailures +
+        ', ack failures ' + out.ackFailures +
+        '; below-threshold resolve failures ' + out.ackResolveFailures +
+        ', ack-reply failures ' + out.ackReplyFailures;
+    if (held > 0) {
+        m += '; policy holds ' + held +
+            ' — mandatory-fix/lap-gated tier(s) open at merge, or deferrable threads over the' +
+            ' density budget (allowed ' + out.allowedDeferrable + '): polish lap re-armed' +
+            ' (gh-1418) — the disposition loop owns them';
+    }
+    m += ') — merge HELD (gh-1370: merging with open machine threads is a policy violation);' +
+        ' the next tick retries';
+    if (out.censusNote) m += '. ' + out.censusNote;
+    return m;
+}
+
+/**
+ * The gh-1370 gate, extended by gh-1418: the merge proceeds ONLY when every
+ * machine-owned thread reached terminal resolution this run (or was
+ * already resolved) and NO thread is policy-held. A resolve/ack failure or
+ * a policy hold (mandatory-fix tier open, deferrable bucket over budget)
+ * throws here — THAT merge is held; the caller defers it to the next tick
+ * (the retry), and a repeat failure keeps failing the merge funnel job
+ * (the escalation surface). The loops never abort on a per-thread failure
+ * — every thread attempts on every tick (maximum progress per replay),
+ * and the policy holds throw AFTER the ack loop for the same reason.
+ */
 function requireZeroOpenMachineThreads(out) {
     var failed = out.resolveFailures + out.ackFailures +
         out.ackResolveFailures + out.ackReplyFailures;
-    if (failed > 0) {
-        throw new Error('mergeBackstop: ' + failed +
-            ' machine-owned review thread(s) failed terminal resolution' +
-            ' (>=IMPORTANT resolve failures ' + out.resolveFailures +
-            ', ack failures ' + out.ackFailures +
-            '; below-threshold resolve failures ' + out.ackResolveFailures +
-            ', ack-reply failures ' + out.ackReplyFailures + ')' +
-            ' — merge HELD (gh-1370: merging with open machine threads is a policy violation);' +
-            ' the next tick retries');
+    var held = (out.holdThreads || []).length;
+    if (!failed && !held) return out;
+    throw new Error(holdMessage(out, failed, held));
+}
+
+// ONE comments read per run with open machine threads (gh-1371): the
+// payload is shared by the ledger append (its base), the digest (its
+// review-run reference) and the gh-1418 census sanity check. Fail-closed
+// when the LEDGER needs it (counted/ack buckets append findings — a broken
+// read defers the merge, the #1319 pathology never reads as clean); a
+// hold-only run degrades — the note is observability, the hold is the
+// decision.
+function commentsForRun(t, cls, inp) {
+    var needsLedger = cls.counted.length > 0 || cls.ackThreads.length > 0;
+    if (!t.prComments) {
+        if (needsLedger) {
+            throw new Error('mergeBackstop: no pr-comments primitive — the ledger append cannot read its base');
+        }
+        return null;
     }
-    return out;
+    var comments = t.prComments(inp.prNumber);
+    if (!comments && needsLedger) {
+        throw new Error('mergeBackstop: no pr-comments primitive — the ledger append cannot read its base');
+    }
+    return comments;
+}
+
+// The record-keeping phase: ledger append (counted + acked buckets —
+// identity-deduped), digest filing (counted path), PR ledger stamp. A
+// hold-only run defers nothing and stamps nothing.
+function ledgerPhase(t, cls, comments, owner, name, inp, out) {
+    if (!cls.counted.length && !cls.ackThreads.length) return;
+    var ledger = appendThreadsToLedger(ledgerBaseOf(comments, inp.logins),
+        cls.counted, ledgerCtxOf(owner, name, inp));
+    ledger = appendThreadsToLedger(ledger, cls.ackThreads, ledgerCtxOf(owner, name, inp));
+    out.ledgerFindings = Array.isArray(ledger.findings) ? ledger.findings.length : 0;
+    // Filing runs BEFORE the stamp (gh-1371 round 2): the stamp then knows
+    // the race outcome and echoes an abandoned duplicate for the sweep.
+    // Record-keeping survives a filing failure — the merge defers and the
+    // next tick re-derives the same ledger (identity dedup) and stamps it.
+    if (cls.counted.length) fileDigest(t, comments, owner, name, inp, out, ledger);
+    stampLedger(t, inp.prNumber, ledger, out);
 }
 
 /**
  * The backstop for one PR about to merge. Returns the outcome; throws on
  * record-keeping failures (a broken threads/comments read, a digest
- * filing failure) AND on resolution failures (gh-1370 — any resolve/ack
- * failure leaves an open machine thread): the caller defers THAT merge to
+ * filing failure, a malformed review policy — gh-1418 fail-closed) AND on
+ * resolution failures / policy holds (gh-1370 + gh-1418 — any unresolved
+ * or policy-held thread blocks): the caller defers THAT merge to
  * the next tick and the queue keeps moving. A clean resolution returns
  * immediately (zero open machine threads — merge proceeds).
  *
  * io: the raw bridge primitives (or mocks) — see githubTools.
- * input: { prNumber, prTitle, headSha, logins, owner?, name?, nowIso? }.
+ * input: { prNumber, prTitle, headSha, logins, jobParams?, additions?,
+ *          owner?, name?, nowIso? } — jobParams feeds the gh-1418 policy
+ *          resolution chain, additions feeds the §4.6 density budget.
  */
 function runBackstop(io, owner, name, input) {
     var inp = input || {};
@@ -770,38 +1046,26 @@ function runBackstop(io, owner, name, input) {
         out.skipped = 'no-thread-primitive';
         return out;
     }
+    // gh-1418: the review policy resolves FIRST — a malformed policy is a
+    // hard ReviewPolicyValidationError that throws through (fail-closed
+    // hold, never ack-all on an unresolvable policy).
+    var policy = reviewPolicyOf(inp.jobParams);
     // Fail-closed reads: the counted path never merges blind (the #1319
     // pathology). A throw here defers the merge to the next tick.
     var rows = threadRowsOf(t.listThreads(inp.prNumber));
-    var cls = classifyThreads(rows, inp.logins);
-    out.counted = cls.counted;
-    out.ackThreads = cls.ackThreads;
-    out.human = cls.human;
-    out.counts = cls.counts;
-    if (!cls.counted.length) {
-        // gh-1370: below-threshold machine threads still resolve (the
-        // wontfix ack path — no digest, no ledger), and the merge may
+    var cls = classifyThreads(rows, inp.logins, policy, densityAllowanceOf(inp, policy));
+    bookClassification(out, cls);
+    if (!openMachineCount(cls)) {
+        // gh-1370 + gh-1418: deferrable-tier machine threads resolve (the
+        // wontfix ack path, each with its ledger item), and the merge may
         // proceed ONLY on zero open machine threads.
         resolveAckThreads(t, inp.prNumber, cls.ackThreads, out);
         return requireZeroOpenMachineThreads(out);
     }
-    // ONE comments read per counted run (gh-1371): the payload is shared by
-    // the ledger append (its base) and the digest (its review-run
-    // reference). Fail-closed: a broken read defers the merge to the next
-    // tick — the #1319 pathology never reads as clean.
-    var comments = t.prComments ? t.prComments(inp.prNumber) : null;
-    if (!comments) {
-        throw new Error('mergeBackstop: no pr-comments primitive — the ledger append cannot read its base');
-    }
-    var ledger = appendCountedToLedger(ledgerBaseOf(comments, inp.logins),
-        cls.counted, { owner: owner, name: name, prNumber: inp.prNumber, nowIso: inp.nowIso });
-    out.ledgerFindings = Array.isArray(ledger.findings) ? ledger.findings.length : 0;
-    // Filing runs BEFORE the stamp (gh-1371 round 2): the stamp then knows
-    // the race outcome and echoes an abandoned duplicate for the sweep.
-    // Record-keeping survives a filing failure — the merge defers and the
-    // next tick re-derives the same ledger (identity dedup) and stamps it.
-    fileDigest(t, comments, owner, name, inp, out, ledger);
-    stampLedger(t, inp.prNumber, ledger, out);
+    var comments = commentsForRun(t, cls, inp);
+    out.censusNote = comments ? censusNoteOf(comments, inp.headSha, inp.logins,
+        cls.counts.machineByTier) : null;
+    ledgerPhase(t, cls, comments, owner, name, inp, out);
     resolveCountedThreads(t, inp.prNumber, cls.counted, out.digest, out);
     resolveAckThreads(t, inp.prNumber, cls.ackThreads, out);
     return requireZeroOpenMachineThreads(out);
@@ -831,6 +1095,13 @@ function githubBridgeIo() {
 // PR title across payload shapes (GraphQL and REST both carry `title`).
 function prTitleOf(pr) {
     return (pr && pr.title) || '';
+}
+
+// The diff-size feed of the §4.6 density budget (gh-1418): the PR payload's
+// additions count (REST + GraphQL both carry it); anything else is null —
+// the budget rides the floor (fail closed).
+function additionsOf(pr) {
+    return (pr && typeof pr.additions === 'number') ? pr.additions : null;
 }
 
 // Head sha across payload shapes (the ONE derivation, shared with the
@@ -881,12 +1152,18 @@ function runProbeForPr(run, linesOf, bridges, owner, name, job, prNumber, pr, sa
  * records everyone, the gate throws after it).
  *
  *   bridges — the io bag (githubBridgeIo() in production; test mocks).
- *   job     — the caller's jobParams (machineAuthor allowlist lives there).
- *   pr      — the parsed get_pr payload (either shape).
+ *   job     — the caller's jobParams (the machineAuthor allowlist and the
+ *             gh-1418 review-policy chain both resolve from it).
+ *   pr      — the parsed get_pr payload (either shape; `additions` feeds
+ *             the §4.6 density budget).
  */
 function runBackstopForPr(bridges, owner, name, job, prNumber, pr, say) {
     return runProbeForPr(runBackstop, outcomeLines, bridges, owner, name, job,
-        prNumber, pr, say, function (input) { input.prTitle = prTitleOf(pr); });
+        prNumber, pr, say, function (input) {
+            input.prTitle = prTitleOf(pr);
+            input.jobParams = job || null;      // the gh-1418 policy chain
+            input.additions = additionsOf(pr);  // the §4.6 density budget
+        });
 }
 
 // ── caller-facing log lines ──────────────────────────────────────────────────
@@ -943,8 +1220,9 @@ function outcomeLines(out) {
     if (out.skipped) {
         return ['⏭️ merge backstop skipped on PR #' + out.prNumber + ' (' + out.skipped + ')'];
     }
-    if (!out.counted.length) return [cleanOutcomeLine(out)];
-    return [countedOutcomeLine(out)];
+    var lines = [out.counted.length ? countedOutcomeLine(out) : cleanOutcomeLine(out)];
+    if (out.censusNote) lines.push(out.censusNote);
+    return lines;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -953,10 +1231,14 @@ if (typeof module !== 'undefined' && module.exports) {
         SUMMARY_MAX: SUMMARY_MAX,
         BELOW_GATE_ACK_VALUE: BELOW_GATE_ACK_VALUE,
         machineLoginsOf: machineLoginsOf,
+        reviewPolicyOf: reviewPolicyOf,
+        densityAllowanceOf: densityAllowanceOf,
+        isDeferrableTier: isDeferrableTier,
         threadRowsOf: threadRowsOf,
         classifyThreads: classifyThreads,
         reviewRunRefOf: reviewRunRefOf,
-        appendCountedToLedger: appendCountedToLedger,
+        appendThreadsToLedger: appendThreadsToLedger,
+        censusNoteOf: censusNoteOf,
         buildDigestIssue: buildDigestIssue,
         deferredAck: deferredAck,
         belowThresholdAck: belowThresholdAck,
@@ -966,6 +1248,7 @@ if (typeof module !== 'undefined' && module.exports) {
         githubTools: githubTools,
         githubBridgeIo: githubBridgeIo,
         headShaOf: headShaOf,
+        additionsOf: additionsOf,
         shortSha: shortSha,
         resolveAckThreads: resolveAckThreads,
         requireZeroOpenMachineThreads: requireZeroOpenMachineThreads,

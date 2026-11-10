@@ -81,6 +81,7 @@ function mergeBackstopModuleFor(mods) {
         './findingRegistry.js': bsFindingRegistry(),
         './reviewDebtLedger.js': bsReviewDebtLedger(),
         './reviewDispositions.js': bsReviewDispositions(),
+        './reviewPolicy.js': bsReviewPolicy(),
         './machineAuthor.js': bsMachineAuthor(),
         './reviewThreadInventory.js': bsThreadInventory(),
         './mcpParse.js': mcpParseModule,
@@ -160,10 +161,12 @@ function prPayload(a, st) {
             mergeable_state: String(st.state).toLowerCase()
         };
         if (st.headRefOid) rest.headRefOid = st.headRefOid;
+        if (st.additions !== undefined) rest.additions = st.additions;
         return rest;
     }
     var p = { number: a.pullRequestId, mergeable: st.mergeable, mergeStateStatus: st.state };
     if (st.headRefOid) p.headRefOid = st.headRefOid;
+    if (st.additions !== undefined) p.additions = st.additions;
     return p;
 }
 
@@ -244,6 +247,8 @@ function fixture(opts) {
         },
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
         github_create_comment: function (c) { calls.comments.push(c); return '{}'; },
+        // gh-1418: the ack path reads its ledger base (one comments read per run)
+        github_get_pr_comments: function () { return JSON.stringify(opts.prComments || []); },
         // gh-1417: the escalation label primitive (the merge gate's
         // needs-human stamp) — recorded for the wiring assertions.
         github_add_labels: function (l) { calls.labels.push(l); return '{}'; }
@@ -1069,12 +1074,12 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.merges.length, 1, 'the squash-merge still happens');
     });
 
-    test('gh-1370: a lone SUGGESTION machine thread → wontfix ack-resolved, no digest, merge proceeds', function () {
+    test('gh-1370 + gh-1418: a lone NIT machine thread (deferrable under default) → wontfix ack + ledger item, merge proceeds', function () {
         var fx = fixture({
             labeledIssues: [5],
             prs: [CLEAN_PR],
             threadsByNumber: { 12: [
-                ghThread('PRT_1', '💡 severity: SUGGESTION — extract this', { line: 7 }),
+                ghThread('PRT_1', '🪶 severity: NIT — typo in the doc comment', { line: 7 }),
                 ghThread('PRT_2', '', { isResolved: true })
             ] }
         });
@@ -1084,10 +1089,29 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.threadResolves.length, 1, 'the open machine thread resolves (terminal)');
         assert.contains(fx.calls.threadReplies[0].text, 'wontfix:',
             'the ack carries the machine-parsed wontfix disposition');
+        assert.ok(fx.calls.comments.some(function (c) {
+            return String(c.body || '').indexOf('dmtools:review-debt-ledger') !== -1;
+        }), 'gh-1418: the ack wrote its ledger item — the PR stamp is posted');
         assert.equal(fx.calls.merges.length, 1);
     });
 
-    test('gh-1370 AC1 funnel replay: 4 SUGGESTION + 2 NIT → all six ack-resolved, no digest, merge proceeds', function () {
+    test('gh-1418: a lone SUGGESTION machine thread under default (mandatory fix) → policy hold, merge defers', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            threadsByNumber: { 12: [
+                ghThread('PRT_1', '💡 severity: SUGGESTION — extract this', { line: 7 })
+            ] }
+        });
+        var err = null;
+        try { run(fx, { repo: 'a/b', machineAuthor: BOT }); } catch (e) { err = e; }
+        assert.ok(err, 'failed=1 → the JSRunner job failure is the escalation surface');
+        assert.contains(err.message, 'failed=1');
+        assert.equal(fx.calls.threadResolves.length, 0, 'nothing acks — the disposition loop owns it');
+        assert.equal(fx.calls.merges.length, 0);
+    });
+
+    test('gh-1370 + gh-1418 AC1 funnel replay: 4 SUGGESTION + 2 NIT under the relaxed preset (jobParams.reviewPolicy) → all six ack-resolved, merge proceeds', function () {
         var threads = [
             ghThread('PRT_S1', '💡 severity: SUGGESTION — a', { line: 1 }),
             ghThread('PRT_S2', '💡 severity: SUGGESTION — b', { line: 2 }),
@@ -1099,9 +1123,10 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         var fx = fixture({
             labeledIssues: [5],
             prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', additions: 800 } }, // §4.6: allowed = min(8, round(2+3*sqrt(4))) = 8 ≥ 6
             threadsByNumber: { 12: threads }
         });
-        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT, reviewPolicy: { preset: 'relaxed' } });
         assert.equal(result.success, true);
         assert.equal(result.merged, 1, 'zero open machine threads → merge proceeds');
         assert.equal(result.failed, 0);

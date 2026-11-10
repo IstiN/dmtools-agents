@@ -600,8 +600,10 @@ function latchValidated(owner, name, pr, say) {
  * js/common/mergeGate.js runForPr — identical in all three funnels):
  * stage 1 is the gh-1353/gh-1370 backstop — it GATES the merge on
  * machine-owned threads: >=IMPORTANT threads ride the digest
- * (`deferred:` resolutions), SUGGESTION/NIT threads resolve WITHOUT a fix
- * (`wontfix` ack tags); stage 2 is the classification-independent hold —
+ * (`deferred:` resolutions), below-threshold threads resolve WITHOUT a
+ * fix (`wontfix` ack tags) when the resolved review policy defers their
+ * tier (gh-1418 — mandatory-fix/lap-gated tiers hold + re-arm the polish
+ * lap); stage 2 is the classification-independent hold —
  * after stage 1, ANY unresolved review thread (any author, machine
  * notices excluded) defers the merge behind a deduped per-head
  * dmtools:merge-hold marker (needs-human escalation past
