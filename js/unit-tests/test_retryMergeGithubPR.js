@@ -97,6 +97,23 @@ function mMergeBackstop(globals) {
     _m.mb.push({ key: key, mod: inst });
     return inst;
 }
+function mTwoStageGate(globals) {
+    // gh-1417: the lane's SECOND gate require (./common/mergeGate.js — the
+    // two-stage engine). Same per-call load + full global set as the other
+    // lanes' test loaders (mergeTrigger/test_mergeBot): the gate delegates
+    // stage 1 to the SAME backstop instance the verdict gate rides (one
+    // per injected-global set, see mMergeBackstop).
+    return loadModule('js/common/mergeGate.js', makeRequire({
+        './mcpParse.js': mcpParseModule,
+        './reviewVerdicts.js': mReviewVerdicts(),
+        './machineAuthor.js': mMachineAuthor(),
+        './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {}),
+        '../configLoader.js': { loadProjectConfig: function () { return null; } },
+        './mergeBackstop.js': mMergeBackstop(globals || null),
+        './mergeVerdictGate.js': mGate(globals || null)
+    }), globals || {});
+}
+
 function mGate(globals) {
     // Per-call load: the gate must SEE the lane's own bridge mocks (one
     // engine-global set per fixture — memoizing would bind the first
@@ -135,7 +152,7 @@ function prDetail(over) {
 function loadLane(opts) {
     opts = opts || {};
     var calls = { merges: [], removed: [], added: [], comments: [], closed: [],
-        commentReads: [], branchUpdates: [] };
+        commentReads: [], branchUpdates: [], threads: [] };
     var globals = laneGlobals(opts, calls);
     var scmStub = {
         createScm: function () {
@@ -149,7 +166,8 @@ function loadLane(opts) {
         './common/mergeVerdictGate.js': opts.gateModule || mGate({
             github_get_pr_comments: globals.github_get_pr_comments,
             github_create_comment: globals.github_create_comment
-        })
+        }),
+        './common/mergeGate.js': mTwoStageGate(globals)
     }), globals);
     return { lane: lane, calls: calls };
 }
@@ -172,6 +190,18 @@ function laneGlobals(opts, calls) {
             calls.commentReads.push(a);
             if (opts.getCommentsThrows) throw new Error(opts.getCommentsThrows);
             return JSON.stringify(opts.comments || []);
+        },
+        // gh-1417: the two-stage merge gate reads the threads census on
+        // every merge attempt — the gate-neutral scenarios serve the EMPTY
+        // production payload (census 0 → merge proceeds). The undeclared
+        // global here is the test-runner network guard (it throws), not a
+        // missing capability, so the gate's skip path never sees these
+        // fixtures. opts.threadsByNumber injects open threads for the
+        // lane's own hold wiring test.
+        github_get_pr_review_threads: function (a) {
+            calls.threads.push(a);
+            return JSON.stringify({ data: { repository: { pullRequest:
+                { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
         }
     };
 }
@@ -254,6 +284,25 @@ suite('retryMergeGithubPR: verdict gate at the merge instant (gh-1416)', functio
         var r = runLane({ comments: [], prDetail: prDetail() });
         assert.equal(r.result, true);
         assert.equal(r.calls.merges.length, 1);
+    });
+
+    // gh-1417 AC3 lane coverage: stage 2 rides the SAME two-stage engine —
+    // an open (human-authored) review thread holds THIS lane's merge too,
+    // marker deduped per head, and the lane defers (the SM retries).
+    test('gh-1417: an open review thread holds the lane merge (stage 2)', function () {
+        var r = runLane({
+            comments: [],
+            prDetail: prDetail(),
+            threadsByNumber: { 12: [{ id: 'PRT_H1', isResolved: false,
+                comments: { nodes: [{ databaseId: 9100,
+                    author: { login: 'human-reviewer' }, body: 'a human finding' }] } }] }
+        });
+        assert.equal(r.result, false, 'the lane defers — the merge is held');
+        assert.equal(r.calls.merges.length, 0, 'no merge while a thread is open');
+        var holds = holdsPosted(r.calls);
+        assert.equal(holds.length, 1, 'exactly ONE hold marker on the PR');
+        assert.contains(holds[0].body, '"reason":"open-threads"');
+        assert.contains(holds[0].body, '"human":1');
     });
 
     test('stale-head record only -> merges (fail-open, asserted)', function () {

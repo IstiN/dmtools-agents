@@ -111,13 +111,39 @@ function mergeVerdictGateModuleFor(mods, backstop) {
     });
 }
 
+// gh-1417: the two-stage merge gate shares the backstop instance (stage 1
+// delegates to it) and the fixture's bridge tools — the SAME engine-global
+// set in production, one require closure here.
+function mergeGateModuleFor(mods, backstop) {
+    var bridge = mods || {};
+    return loadModule('js/common/mergeGate.js', makeRequire({
+        './mcpParse.js': mcpParseModule,
+        './reviewVerdicts.js': bsReviewVerdicts(),
+        './machineAuthor.js': bsMachineAuthor(),
+        './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {}),
+        '../configLoader.js': { loadProjectConfig: function () { return null; } },
+        './mergeBackstop.js': backstop,
+        './mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop)
+    }), {
+        github_get_pr_review_threads: bridge.github_get_pr_review_threads,
+        github_get_pr_comments: bridge.github_get_pr_comments,
+        github_create_comment: bridge.github_create_comment,
+        github_search_issues: bridge.github_search_issues,
+        github_create_issue: bridge.github_create_issue,
+        github_resolve_pr_thread: bridge.github_resolve_pr_thread,
+        github_reply_to_pr_thread: bridge.github_reply_to_pr_thread,
+        github_add_labels: bridge.github_add_labels
+    });
+}
+
 function loadMergeTrigger(mods) {
     var backstop = mergeBackstopModuleFor(mods);
     return loadModule('js/mergeTrigger.js',
         makeRequire({
             './common/mcpParse.js': mcpParseModule,
             './common/mergeBackstop.js': backstop,
-            './common/mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop)
+            './common/mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop),
+            './common/mergeGate.js': mergeGateModuleFor(mods, backstop)
         }), mods);
 }
 
@@ -194,7 +220,8 @@ var backstopBridgeMocks = loadModule('js/unit-tests/_fixtures/backstopBridgeMock
 function fixture(opts) {
     opts = opts || {};
     var calls = { merges: [], removes: [], comments: [], gets: [], issueGets: [],
-        threads: [], threadResolves: [], threadReplies: [], debtIssues: [] };
+        threads: [], threadResolves: [], threadReplies: [], debtIssues: [],
+        labels: [] };
     var labeledIssues = opts.labeledIssues || [];      // numbers returned by the label search
     var issueStates = opts.issueStates || {};          // number -> 'OPEN' | 'CLOSED' | null (404 body)
     var prs = (opts.prs || []).map(fixturePrEntry);
@@ -216,7 +243,10 @@ function fixture(opts) {
             return fixtureMergePr(opts, calls, m);
         },
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
-        github_create_comment: function (c) { calls.comments.push(c); return '{}'; }
+        github_create_comment: function (c) { calls.comments.push(c); return '{}'; },
+        // gh-1417: the escalation label primitive (the merge gate's
+        // needs-human stamp) — recorded for the wiring assertions.
+        github_add_labels: function (l) { calls.labels.push(l); return '{}'; }
     };
     // gh-1353 merge-backstop bridge tools (named builder — see there).
     Object.assign(mods, backstopBridgeMocks(opts, calls));
@@ -231,6 +261,38 @@ function run(fx, jobParams) {
     jobParams = jobParams || {};
     if (!jobParams.repo) jobParams.repo = 'a/b';
     return fx.mod.action({ jobParams: jobParams });
+}
+
+// The merge-hold marker comments posted to PR 12 (shared by the gh-1353,
+// gh-1416 and gh-1417 wiring suites).
+function holdCommentsPosted(fx) {
+    return fx.calls.comments.filter(function (c) {
+        return String(c.body || '').indexOf('dmtools:merge-hold') !== -1;
+    });
+}
+
+// A standalone mergeGate instance (module-closure level, not per-fixture) —
+// only its PURE marker builder is used, to seed PR comments with the exact
+// bodies the gate posts.
+function standaloneMergeGate() {
+    if (!_bsMods.mg) {
+        var backstop = mergeBackstopModuleFor(null);
+        _bsMods.mg = loadModule('js/common/mergeGate.js', makeRequire({
+            './mcpParse.js': mcpParseModule,
+            './reviewVerdicts.js': bsReviewVerdicts(),
+            './machineAuthor.js': bsMachineAuthor(),
+            './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {}),
+            '../configLoader.js': { loadProjectConfig: function () { return null; } },
+            './mergeBackstop.js': backstop,
+            './mergeVerdictGate.js': mergeVerdictGateModuleFor(null, backstop)
+        }), {});
+    }
+    return _bsMods.mg;
+}
+
+function mergeGateHoldMarkerForFixture(census, head, at, escalated, heldSince) {
+    return standaloneMergeGate().buildHoldMarker(census, head, at,
+        escalated === true, heldSince || null, 24);
 }
 
 suite('mergeTrigger', function () {
@@ -965,6 +1027,10 @@ suite('mergeTrigger: extracted helpers (gh-1081)', function () {
 
 suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
     var BOT = 'merge-bot';
+    // gh-1417: the stage-2 hold marker is head-scoped — the scenarios that
+    // hold must carry a headRefOid on the get_pr payload (the gh-1416
+    // convention: set only when the scenario needs it).
+    var HEAD_BOT = '0c2732dfeedface0deadbeefcafe0123456789ab';
     function ghThread(id, body, over) {
         var t = {
             id: id,
@@ -1065,10 +1131,11 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         assert.contains(fx.calls.threadReplies[0].text, 'wontfix:');
     });
 
-    test('human-thread replay: humans listed open (human) in the digest, never resolved', function () {
+    test('human-thread replay: digest records the human thread open (human); the merge then HOLDS on it (gh-1417)', function () {
         var fx = fixture({
             labeledIssues: [5],
             prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD_BOT } },
             threadsByNumber: { 12: [
                 ghThread('PRT_1', importantBody('machine finding')),
                 ghThread('H1', importantBody('a human finding'),
@@ -1077,12 +1144,42 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
             ] }
         });
         var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
-        assert.equal(result.merged, 1);
-        assert.equal(fx.calls.debtIssues.length, 1);
+        assert.equal(fx.calls.debtIssues.length, 1, 'stage 1 digested the machine thread');
         assert.contains(fx.calls.debtIssues[0].body, 'open (human)');
         assert.contains(fx.calls.debtIssues[0].body, 'a human finding');
-        assert.equal(fx.calls.threadResolves.length, 1, 'only the machine thread resolves');
+        assert.equal(fx.calls.threadResolves.length, 1, 'only the machine thread resolves (gh-744 unchanged)');
         assert.equal(fx.calls.threadResolves[0].threadId, 'PRT_1');
+        assert.equal(result.merged, 0, 'gh-1417: the open human thread holds the merge');
+        assert.equal(result.skipped, 1);
+        assert.equal(result.failed, 0, 'a hold is a skip, not a failure');
+        assert.equal(fx.calls.merges.length, 0);
+        var holds = holdCommentsPosted(fx);
+        assert.equal(holds.length, 1, 'the open-threads hold marker is stamped');
+        assert.contains(holds[0].body, '"reason":"open-threads"');
+        assert.contains(holds[0].body, '"total":1');
+        assert.contains(holds[0].body, '"human":1');
+    });
+
+    test('human-thread replay, round 2: the resolved census merges (hold -> merge)', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD_BOT } },
+            threadsByNumber: { 12: [ghThread('H1', importantBody('a human finding'),
+                { comments: { nodes: [{ databaseId: 9100,
+                    author: { login: 'human-reviewer' }, body: importantBody('a human finding') }] } })] }
+        });
+        var first = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(first.merged, 0, 'held on the open human thread');
+        // The human resolves the thread — the next tick's census reads zero
+        // open threads and the merge proceeds.
+        fx.opts.threadsByNumber[12][0].isResolved = true;
+        fx.opts.prCommentsByNumber = { 12: [{ body: holdCommentsPosted(fx)[0].body,
+            user: { login: BOT + '[bot]' } }] };
+        var second = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(second.merged, 1, 'after the thread resolves, the merge proceeds');
+        assert.equal(fx.calls.merges.length, 1);
+        assert.equal(holdCommentsPosted(fx).length, 1, 'no fresh marker on the resolved census');
     });
 
     test('digest-filing failure: the merge is NOT attempted this tick (never merges undigested)', function () {
@@ -1113,16 +1210,155 @@ suite('mergeTrigger — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.merges.length, 1);
     });
 
-    test('unconfigured machineAuthor counts nothing (fail closed): machine threads ignored, merge as today', function () {
+    test('unconfigured machineAuthor: stage 1 counts nothing, but stage 2 still HOLDS on the open thread (gh-1417 AC4)', function () {
         var fx = fixture({
             labeledIssues: [5],
             prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD_BOT } },
             threadsByNumber: { 12: [ghThread('PRT_1', importantBody('machine finding'))] }
         });
         var result = run(fx); // no machineAuthor in jobParams
-        assert.equal(result.merged, 1);
-        assert.equal(fx.calls.debtIssues.length, 0, 'no logins = nothing is machine-owned');
+        assert.equal(fx.calls.debtIssues.length, 0, 'no logins = nothing is machine-owned (stage 1 unchanged)');
         assert.equal(fx.calls.threadResolves.length, 0);
+        assert.equal(result.merged, 0, 'gh-1417: the misclassified thread still blocks — misclassification only affects WHICH disposition runs');
+        assert.equal(result.skipped, 1);
+        assert.equal(holdCommentsPosted(fx).length, 1);
+        assert.contains(holdCommentsPosted(fx)[0].body, '"reason":"open-threads"');
+    });
+});
+
+// ── gh-1417 merge gate wiring (the classification-independent hold) ──────────
+
+suite('mergeTrigger — merge gate wiring (gh-1417)', function () {
+    var BOT = 'merge-bot';
+    var HEAD = '0c2732dfeedface0deadbeefcafe0123456789ab';
+    var CLEAN_PR = { number: 12, labels: [], body: 'What it does\n\nCloses #5\n', headRefName: 'feature/x' };
+
+    function humanThreadNode(id, body) {
+        return { id: id, isResolved: false, path: 'src/x.js', line: 7,
+            comments: { nodes: [{ databaseId: 9100,
+                author: { login: 'human-reviewer' }, body: body || 'Please reconsider this API' }] } };
+    }
+
+    function openThreadFixture(extra) {
+        var o = extra || {};
+        return fixture(Object.assign({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD } },
+            threadsByNumber: { 12: [humanThreadNode('H1')] }
+        }, o));
+    }
+
+    test('open human thread on a green CLEAN PR -> the merge holds behind the per-head marker', function () {
+        var fx = openThreadFixture();
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.merged, 0);
+        assert.equal(result.skipped, 1);
+        assert.equal(result.failed, 0, 'a hold is a skip (the verdict-gate defer shape), not a failure');
+        assert.equal(fx.calls.merges.length, 0);
+        var holds = holdCommentsPosted(fx);
+        assert.equal(holds.length, 1);
+        assert.contains(holds[0].body, '"reason":"open-threads"');
+        assert.contains(holds[0].body, '"head":"' + HEAD + '"');
+        assert.ok(result.log.some(function (l) { return l.indexOf('merge held (gh-1417)') !== -1; }),
+            'the hold is said on the funnel log');
+    });
+
+    test('repeated ticks never grow comments (refresh-in-place), the resolved census merges', function () {
+        var fx = openThreadFixture();
+        run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(holdCommentsPosted(fx).length, 1);
+        // Tick 2: same head, thread still open, the posted marker now on
+        // the PR — zero comment growth.
+        fx.opts.prCommentsByNumber = { 12: [{ body: holdCommentsPosted(fx)[0].body,
+            user: { login: BOT + '[bot]' } }] };
+        var commentsBefore = fx.calls.comments.length;
+        var second = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(second.merged, 0, 'still held');
+        assert.equal(fx.calls.comments.length, commentsBefore, 'zero comment growth across repeated ticks');
+        // Tick 3: the human resolves the thread — the merge proceeds.
+        fx.opts.threadsByNumber[12][0].isResolved = true;
+        var third = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(third.merged, 1);
+        assert.equal(fx.calls.merges.length, 1);
+    });
+
+    test('holdOnHumanThreads=false: the human thread delegates, the merge proceeds', function () {
+        var fx = openThreadFixture();
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT,
+            mergeGate: { holdOnHumanThreads: false } });
+        assert.equal(result.merged, 1, 'gh-744 delegation restored for human threads');
+        assert.equal(holdCommentsPosted(fx).length, 0);
+    });
+
+    test('holdOnHumanThreads=false: the machine path still gates — stage 1 resolves, the delegated human does not hold', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD } },
+            threadsByNumber: { 12: [humanThreadNode('H1'), { id: 'M1', isResolved: false,
+                path: 'src/x.js', line: 8, comments: { nodes: [{ databaseId: 9200,
+                    author: { login: BOT + '[bot]' }, body: '⚠️ severity: IMPORTANT — race' }] } }] }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT,
+            mergeGate: { holdOnHumanThreads: false } });
+        assert.equal(fx.calls.threadResolves.length, 1, 'stage 1 resolved the machine thread');
+        assert.equal(result.merged, 1, 'the human thread delegated, the machine thread resolved — merge proceeds');
+    });
+
+    test('escalation: a same-head hold past humanHoldHours escalates (needs-human label + escalated marker)', function () {
+        // The wiring's clock is real (runProbeForPr stamps now), so the
+        // scenario rides the SEEDED marker's age: a plain hold for the
+        // current head posted 48h ago.
+        var heldAt = new Date(Date.now() - 48 * 3600000).toISOString();
+        var fx = openThreadFixture({
+            prCommentsByNumber: { 12: [
+                { body: mergeGateHoldMarkerForFixture({ total: 1, human: 1, machine: 0 }, HEAD, heldAt),
+                  user: { login: BOT + '[bot]' } }
+            ] }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT, mergeGate: { humanHoldHours: 24 } });
+        assert.equal(result.merged, 0, 'escalated — the automatic lane skips');
+        assert.equal(result.skipped, 1);
+        assert.equal(fx.calls.labels.length, 1, 'the needs-human label is added');
+        assert.equal(fx.calls.labels[0].labels[0], 'needs-human');
+        var holds = holdCommentsPosted(fx);
+        assert.equal(holds.length, 1, 'the escalated marker names the state (a bounded transition comment)');
+        assert.contains(holds[0].body, '"escalated":true');
+        assert.contains(holds[0].body, '"heldSince":"' + heldAt + '"');
+    });
+
+    test('escalation dedups: the escalated marker already present -> no label, no comment growth', function () {
+        var heldAt = new Date(Date.now() - 48 * 3600000).toISOString();
+        var fx = openThreadFixture({
+            prCommentsByNumber: { 12: [
+                { body: mergeGateHoldMarkerForFixture({ total: 1, human: 1, machine: 0 }, HEAD, heldAt),
+                  user: { login: BOT + '[bot]' } },
+                { body: mergeGateHoldMarkerForFixture({ total: 1, human: 1, machine: 0 }, HEAD, heldAt, true, heldAt),
+                  user: { login: BOT + '[bot]' } }
+            ] }
+        });
+        var commentsBefore = fx.calls.comments.length;
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT, mergeGate: { humanHoldHours: 24 } });
+        assert.equal(result.merged, 0);
+        assert.equal(fx.calls.labels.length, 0, 'no repeated label');
+        assert.equal(fx.calls.comments.length, commentsBefore, 'zero comment growth');
+    });
+
+    test('a fresh head restarts the escalation clock (new marker budget, no label)', function () {
+        var heldAt = new Date(Date.now() - 48 * 3600000).toISOString();
+        var fx = openThreadFixture({
+            prCommentsByNumber: { 12: [
+                { body: mergeGateHoldMarkerForFixture({ total: 1, human: 1, machine: 0 },
+                    'aaaa1111feedface0deadbeefcafe0123456789ab', heldAt),
+                  user: { login: BOT + '[bot]' } }
+            ] }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT, mergeGate: { humanHoldHours: 24 } });
+        assert.equal(result.merged, 0, 'still held (the thread is open)');
+        assert.equal(fx.calls.labels.length, 0, 'the old head\'s hold does not escalate the new head');
+        assert.equal(holdCommentsPosted(fx).length, 1, 'a fresh marker for the new head');
     });
 });
 
@@ -1152,12 +1388,9 @@ suite('mergeTrigger — verdict gate wiring (gh-1416)', function () {
         });
     }
 
-    function holdCommentsPosted(fx) {
-        return fx.calls.comments.filter(function (c) {
-            return c.number === 12 &&
-                String(c.body || '').indexOf('dmtools:merge-hold') !== -1;
-        });
-    }
+    // (holdCommentsPosted lives at file scope — shared with the gh-1417
+    // wiring suite; the number filter is unnecessary here, the fixture
+    // only ever comments on the PR under test.)
 
     test('REQUEST_CHANGES record on the current head -> merge deferred, hold marker posted', function () {
         var fx = gateFixture([verdictComment('REQUEST_CHANGES', HEAD)]);

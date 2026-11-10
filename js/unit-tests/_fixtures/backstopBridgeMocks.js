@@ -32,6 +32,14 @@ function resolveThreadMock(opts, calls) {
             throw new Error('422 ' + a.threadId);
         }
         calls.threadResolves.push(a);
+        // gh-1417: a successful resolve MUTATES the served payload — the
+        // stage-2 census re-reads the threads and must see the
+        // post-resolution reality (a static payload would hold every
+        // backstop replay forever).
+        var prs = (opts.threadsByNumber || {})[String(a.pullRequestId)];
+        (prs || []).forEach(function (n) {
+            if (n && String(n.id) === String(a.threadId)) n.isResolved = true;
+        });
         return '{}';
     };
 }
@@ -48,7 +56,11 @@ function backstopBridgeMocks(opts, calls, searchIssuesMock) {
     // gh-1353 merge-backstop bridge tools: the threads read serves
     // opts.threadsByNumber (PR number → reviewThread nodes) — empty by
     // default (clean replay, merges as today); noThreads removes the
-    // primitive entirely (capability miss).
+    // primitive entirely (capability miss). The node arrays serve BY
+    // REFERENCE and resolveThread MUTATES them (gh-1417: the stage-2
+    // census re-reads the threads and must see the post-resolution
+    // reality — a static payload would hold every backstop replay
+    // forever; tests flip isResolved through the same opts objects).
     var bag = {
         github_get_pr_review_threads: opts.noThreads ? undefined : function (a) {
             calls.threads.push(a);

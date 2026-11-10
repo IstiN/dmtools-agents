@@ -27,6 +27,11 @@ var configLoader = require('./configLoader.js');
 // event-driven merge bot (js/sm/mergeBot.js) run. Requires hoisted (gh-823).
 var mcpParse = require('./common/mcpParse.js');
 var mergeVerdictGate = require('./common/mergeVerdictGate.js');
+// gh-1417: the TWO-STAGE merge gate (stage 1: the gh-1353/gh-1370 backstop;
+// stage 2: the classification-independent open-threads hold) — the same
+// ONE shared helper the other two merge funnels call, so all three gate
+// identically.
+var mergeGate = require('./common/mergeGate.js');
 
 function issueNumberFromKey(ticketKey) {
     var m = /(\d+)$/.exec(String(ticketKey || ''));
@@ -258,6 +263,43 @@ function verdictGateHoldsMerge(jobParams, owner, repo, prNumber, prDetail) {
     return false;
 }
 
+/**
+ * gh-1417: the TWO-STAGE merge gate at the squash-merge instant — stage 1
+ * is the gh-1353/gh-1370 backstop (machine-owned threads to terminal
+ * disposition), stage 2 the classification-independent hold (after stage
+ * 1, ANY unresolved review thread — any author, machine notices excluded —
+ * holds the merge behind a deduped per-head dmtools:merge-hold marker,
+ * needs-human escalation past mergeGate.humanHoldHours). The same ONE
+ * shared helper mergeTrigger's runStateMachine and the mergeBot probe
+ * call — the three funnels gate identically (gh-1417 AC3). Returns true
+ * when the caller must defer (a held stage-2 outcome, or a THROWN
+ * stage-1/2 fault — the merge gate is fail-CLOSED: a broken census or a
+ * failed resolution defers the merge, never merges blind, gh-1370
+ * semantics; unlike the verdict gate above it, faults are NOT absorbed
+ * fail-open).
+ */
+function mergeGateHoldsMerge(jobParams, owner, repo, prNumber, prDetail) {
+    try {
+        var gate = mergeGate.runForPr(
+            mergeGate.githubBridgeIo(),
+            owner, repo, jobParams, prNumber,
+            mcpParse.parseMcp(prDetail),
+            function (line) { console.log(line); });
+        if (gate.held) {
+            console.warn('PR #' + prNumber + ' merge deferred — ' + gate.total +
+                ' unresolved review thread(s) (human ' + gate.human + ', machine ' +
+                gate.machine + ') remain open (gh-1417); the threads resolving' +
+                ' (or a human taking it past mergeGate.humanHoldHours) owns the merge');
+            return true;
+        }
+    } catch (eGate) {
+        console.warn('Merge gate failed — merge deferred (gh-1370/gh-1417):',
+            eGate.message || eGate);
+        return true; // fail-closed: the fault holds THAT merge, the SM retries
+    }
+    return false;
+}
+
 // Fixes-#N usually closes the issue on merge; this is the safety net.
 function closeIssueSafetyNet(issueNumber) {
     try {
@@ -277,6 +319,13 @@ function squashAndFinalize(ctx, pr) {
     // retries next cycle, the rework lap / a human resolution lands the
     // fresh verdict; pr_approved stays (the deferral is not a rework flip).
     if (verdictGateHoldsMerge(ctx.jobParams, ctx.owner, ctx.repo, pr.number, pr.detail)) {
+        releaseLock(ctx);
+        return false;
+    }
+    // gh-1417: the two-stage merge gate — held or faulted, the merge
+    // defers the same way (the lock releases, pr_approved stays, the SM
+    // retries next cycle).
+    if (mergeGateHoldsMerge(ctx.jobParams, ctx.owner, ctx.repo, pr.number, pr.detail)) {
         releaseLock(ctx);
         return false;
     }
@@ -336,5 +385,6 @@ function action(params) {
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { action: action, issueNumberFromKey: issueNumberFromKey,
-        verdictGateHoldsMerge: verdictGateHoldsMerge };
+        verdictGateHoldsMerge: verdictGateHoldsMerge,
+        mergeGateHoldsMerge: mergeGateHoldsMerge };
 }

@@ -45,6 +45,15 @@ var mcpParse = require('../common/mcpParse.js');
 // violation; the next tick retries).
 var mergeBackstop = require('../common/mergeBackstop.js');
 
+// gh-1417: the classification-independent merge gate — the TWO-STAGE rule
+// (stage 1: the backstop above; stage 2: after it, ANY unresolved review
+// thread — any author, machine notices excluded — holds the merge behind a
+// deduped per-head dmtools:merge-hold marker, with a needs-human
+// escalation valve past mergeGate.humanHoldHours). The ONE shared helper
+// all three merge funnels call; human threads are never machine-resolved
+// (gh-744 unchanged) — the gate only waits for them.
+var mergeGate = require('../common/mergeGate.js');
+
 // gh-1416: the verdict-freshness probe rides every squash-merge — the
 // newest dmtools:review-verdict record for the CURRENT head being
 // REQUEST_CHANGES/BLOCK defers the merge and stamps a deduped
@@ -587,21 +596,27 @@ function latchValidated(owner, name, pr, say) {
 
 /**
  * Squash-merge attempt for an approved head (gh-1040 extraction):
- * gh-1353 merge backstop FIRST — since gh-1370 it GATES the merge on
- * machine-owned threads: >=IMPORTANT threads ride the digest (`deferred:`
- * resolutions), SUGGESTION/NIT threads resolve WITHOUT a fix (`wontfix`
- * ack tags), human threads stay untouched (branch protection owns them).
- * Then merges through squashMerge (one transparent retry) and logs the
- * caller's merged line on success or the verbatim refusal on failure. A
- * record-keeping OR resolution failure defers the merge — said aloud,
- * acted 0, the queue keeps moving; the retry is the next tick, and a
- * repeat failure just keeps saying the deferral: the gate throw is
- * CAUGHT here, so this funnel's job stays green by design (gh-952
- * self-heal) — no failure, label or comment fires from this path. The
- * escalation surface for a persistently failing resolution is the
- * sibling pr_approved merge sweep (mergeTrigger.js — the factory-
- * merge-trigger.yml funnel, fired per tick), whose aggregate throw
- * fails its own job. Returns the acted credit (1 or 0).
+ * gh-1417 TWO-STAGE merge gate FIRST (the ONE shared helper,
+ * js/common/mergeGate.js runForPr — identical in all three funnels):
+ * stage 1 is the gh-1353/gh-1370 backstop — it GATES the merge on
+ * machine-owned threads: >=IMPORTANT threads ride the digest
+ * (`deferred:` resolutions), SUGGESTION/NIT threads resolve WITHOUT a fix
+ * (`wontfix` ack tags); stage 2 is the classification-independent hold —
+ * after stage 1, ANY unresolved review thread (any author, machine
+ * notices excluded) defers the merge behind a deduped per-head
+ * dmtools:merge-hold marker (needs-human escalation past
+ * mergeGate.humanHoldHours). Human threads stay untouched (gh-744 — the
+ * gate only waits for them). Then merges through squashMerge (one
+ * transparent retry) and logs the caller's merged line on success or the
+ * verbatim refusal on failure. A record-keeping OR resolution failure
+ * defers the merge — said aloud, acted 0, the queue keeps moving; the
+ * retry is the next tick, and a repeat failure just keeps saying the
+ * deferral: the gate throw is CAUGHT here, so this funnel's job stays
+ * green by design (gh-952 self-heal) — no failure, label or comment fires
+ * from this path. The escalation surface for a persistently failing
+ * resolution is the sibling pr_approved merge sweep (mergeTrigger.js —
+ * the factory-merge-trigger.yml funnel, fired per tick), whose aggregate
+ * throw fails its own job. Returns the acted credit (1 or 0).
  */
 function mergeApprovedHead(run, pr, mergedLine) {
     // gh-1416 verdict-freshness gate BEFORE the backstop: the newest
@@ -619,12 +634,24 @@ function mergeApprovedHead(run, pr, mergedLine) {
         run.say('⚠️ pr-' + pr.number + ' verdict gate fault — fail-open (gh-1416): ' +
             (eGate.message || eGate));
     }
+    // gh-1417 two-stage gate: stage 1 (the backstop) throws on any
+    // record-keeping or resolution failure — caught here as a defer
+    // (gh-952 self-heal); stage 2 returns held for the
+    // classification-independent open-threads hold — acted 0, the next
+    // tick retries.
     try {
-        mergeBackstop.runBackstopForPr(mergeBackstop.githubBridgeIo(),
+        var gate = mergeGate.runForPr(mergeGate.githubBridgeIo(),
             run.owner, run.name, run.job, pr.number, pr, run.say);
-    } catch (eBackstop) {
-        run.say('❌ pr-' + pr.number + ' merge backstop failed — merge deferred' +
-            ' (gh-1370: every machine-owned thread must resolve first): ' + (eBackstop.message || eBackstop));
+        if (gate.held) {
+            run.say('⏳ pr-' + pr.number + ' ' + gate.total + ' unresolved review thread(s)' +
+                ' (human ' + gate.human + ', machine ' + gate.machine + ') — merge held' +
+                ' (gh-1417), next tick retries');
+            return 0;
+        }
+    } catch (eGate2) {
+        run.say('❌ pr-' + pr.number + ' merge gate failed — merge deferred' +
+            ' (gh-1370/gh-1417: every open review thread must resolve first): ' +
+            (eGate2.message || eGate2));
         return 0;
     }
     var m = squashMerge(run.owner, run.name, pr.number);
