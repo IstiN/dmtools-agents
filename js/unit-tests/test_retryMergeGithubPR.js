@@ -124,7 +124,29 @@ function loadLane(opts) {
     opts = opts || {};
     var calls = { merges: [], removed: [], added: [], comments: [], closed: [],
         commentReads: [], branchUpdates: [] };
-    var globals = {
+    var globals = laneGlobals(opts, calls);
+    var scmStub = {
+        createScm: function () {
+            return laneScm(opts, calls);
+        }
+    };
+    var lane = loadModule('js/retryMergeGithubPR.js', makeRequire({
+        './common/scm.js': scmStub,
+        './configLoader.js': { loadProjectConfig: function () { return null; } },
+        './common/mcpParse.js': mcpParseModule,
+        './common/mergeVerdictGate.js': opts.gateModule || mGate({
+            github_get_pr_comments: globals.github_get_pr_comments,
+            github_create_comment: globals.github_create_comment
+        })
+    }), globals);
+    return { lane: lane, calls: calls };
+}
+
+// The bridge-primitive globals (the payload shaping of the lane's comment
+// read): which comments are served, whether the read primitive is absent,
+// and whether it throws. Every call lands in `calls`.
+function laneGlobals(opts, calls) {
+    return {
         github_remove_label: function (a) { calls.removed.push(a); return '{}'; },
         github_add_labels: function (a) { calls.added.push(a); return '{}'; },
         github_create_comment: function (a) { calls.comments.push(a); return '{}'; },
@@ -136,33 +158,24 @@ function loadLane(opts) {
             return JSON.stringify(opts.comments || []);
         }
     };
-    var scmStub = {
-        createScm: function () {
-            return {
-                getRemoteRepoInfo: function () { return { owner: 'o', repo: 'n' }; },
-                listPrs: function (state) {
-                    return (opts.openPrs || [{ number: 12, body: 'Closes #33', head: { ref: 'ai/gh-33' } }]);
-                },
-                getPr: function (prId) { return opts.prDetail || null; },
-                mergePr: function (prId, owner, repo, method) {
-                    calls.merges.push({ prId: prId, owner: owner, repo: repo, method: method });
-                    if (opts.mergeThrows) throw new Error(opts.mergeThrows);
-                    return { merged: true };
-                },
-                updateBranch: function () { calls.branchUpdates.push(1); }
-            };
-        }
+}
+
+// The scm provider stub (the lane's PR-source wiring): the open/merged PR
+// lists, the PR detail payload, and the merge/branch-update recorders.
+function laneScm(opts, calls) {
+    return {
+        getRemoteRepoInfo: function () { return { owner: 'o', repo: 'n' }; },
+        listPrs: function (state) {
+            return (opts.openPrs || [{ number: 12, body: 'Closes #33', head: { ref: 'ai/gh-33' } }]);
+        },
+        getPr: function (prId) { return opts.prDetail || null; },
+        mergePr: function (prId, owner, repo, method) {
+            calls.merges.push({ prId: prId, owner: owner, repo: repo, method: method });
+            if (opts.mergeThrows) throw new Error(opts.mergeThrows);
+            return { merged: true };
+        },
+        updateBranch: function () { calls.branchUpdates.push(1); }
     };
-    var lane = loadModule('js/retryMergeGithubPR.js', makeRequire({
-        './common/scm.js': scmStub,
-        './configLoader.js': { loadProjectConfig: function () { return null; } },
-        './common/mcpParse.js': mcpParseModule,
-        './common/mergeVerdictGate.js': mGate({
-            github_get_pr_comments: globals.github_get_pr_comments,
-            github_create_comment: globals.github_create_comment
-        })
-    }), globals);
-    return { lane: lane, calls: calls };
 }
 
 function runLane(opts, jobParams) {
@@ -268,6 +281,48 @@ suite('retryMergeGithubPR: verdict gate at the merge instant (gh-1416)', functio
         assert.equal(result, false, 'the branch-matched PR is held the same way');
         assert.equal(loaded.calls.merges.length, 0);
         assert.equal(holdsPosted(loaded.calls).length, 1);
+    });
+});
+
+// ── verdictGateHoldsMerge: the extracted merge-instant wiring (gh-1416
+// rework: the helper the action delegates to — directly unit-testable
+// without driving the whole lane, mergeTrigger's verdictGateBeforeMerge
+// shape) ─────────────────────────────────────────────────────────────────────
+
+suite('retryMergeGithubPR: verdictGateHoldsMerge helper (gh-1416 rework)', function () {
+
+    test('held: REQUEST_CHANGES on the current head -> true, hold marker posted', function () {
+        var loaded = loadLane({ comments: [verdictComment('REQUEST_CHANGES', HEAD)] });
+        var held = loaded.lane.verdictGateHoldsMerge(
+            { machineAuthor: BOT }, 'o', 'n', 12, prDetail());
+        assert.equal(held, true, 'the caller defers the merge');
+        assert.equal(holdsPosted(loaded.calls).length, 1,
+            'the hold marker posts through the shared bridge primitives');
+        assert.equal(loaded.calls.merges.length, 0, 'the helper only probes — it never merges');
+    });
+
+    test('not held: APPROVE on the current head -> false, no comment', function () {
+        var loaded = loadLane({ comments: [verdictComment('APPROVE', HEAD)] });
+        var held = loaded.lane.verdictGateHoldsMerge(
+            { machineAuthor: BOT }, 'o', 'n', 12, prDetail());
+        assert.equal(held, false);
+        assert.equal(holdsPosted(loaded.calls).length, 0);
+    });
+
+    test('fail-open: a gate-level throw is absorbed -> false', function () {
+        var loaded = loadLane({ gateModule: {
+            githubBridgeIo: function () { return {}; },
+            runGateForPr: function () { throw new Error('gate boom'); }
+        } });
+        var held = loaded.lane.verdictGateHoldsMerge(
+            { machineAuthor: BOT }, 'o', 'n', 12, prDetail());
+        assert.equal(held, false, 'a wiring-level fault proceeds as today');
+    });
+
+    test('the action still defers through the helper (held lane shape intact)', function () {
+        var r = runLane({ comments: [verdictComment('REQUEST_CHANGES', HEAD)], prDetail: prDetail() });
+        assert.equal(r.result, false, 'held — the SM retries next cycle');
+        assert.equal(r.calls.merges.length, 0);
     });
 });
 

@@ -94,6 +94,20 @@ function loadGate(mods) {
     }), mods || {});
 }
 
+// The gate module with a require-level override — the paranoia parse-catch
+// test injects a reviewVerdicts stub whose parser throws (the real one
+// never does, so the catch arm is otherwise unreachable in a suite).
+function loadGateWithRequire(requireOverrides) {
+    var base = {
+        './mcpParse.js': mcpParseModule,
+        './reviewVerdicts.js': bsReviewVerdicts(),
+        './mergeBackstop.js': bsMergeBackstop()
+    };
+    var over = requireOverrides || {};
+    for (var k in over) base[k] = over[k];
+    return loadModule('js/common/mergeVerdictGate.js', makeRequire(base), {});
+}
+
 // ── fixture builders ─────────────────────────────────────────────────────────
 
 var BOT = 'merge-bot';
@@ -348,6 +362,91 @@ suite('mergeVerdictGate: fail-open shapes', function () {
             { getComments: mk([comment]), createComment: function () { return '{}'; } },
             'o', 'n', { prNumber: 1, headSha: HEAD, logins: [BOT], nowIso: 'x' });
         assert.equal(held3.held, true, 'bare array');
+    });
+});
+
+// ── runGate decomposition (gh-1416 rework: CRAP ratchet + honest labels) ────
+
+suite('mergeVerdictGate: runGate decomposition and honest skip reasons', function () {
+
+    test('a throwing verdict parser is absorbed: the paranoia catch fails open, logged', function () {
+        // The real parser never throws — inject one that does (require-level
+        // stub) so the paranoia catch arm is exercised: garbage markers are
+        // "absent" at the parser level, a THROWING parser is still fail-open.
+        var throwing = { parseVerdictRecords: function () { throw new Error('parser boom'); } };
+        var mod = loadGateWithRequire({ './reviewVerdicts.js': throwing });
+        var posted = [];
+        var out = mod.runGate({
+            getComments: function () {
+                return JSON.stringify([{ body: 'x', user: { login: BOT + '[bot]' } }]);
+            },
+            createComment: function (c) { posted.push(c); return '{}'; }
+        }, 'o', 'n', { prNumber: 12, headSha: HEAD, logins: [BOT], nowIso: 't' });
+        assert.equal(out.held, false, 'the merge proceeds as today (fail-open)');
+        assert.equal(out.commentsUnreadable, true, 'the paranoia catch surfaces the fault');
+        assert.equal(posted.length, 0, 'no hold marker from a broken parse');
+    });
+
+    test('runGate with no input object at all: the {} fallback holds (fail-open)', function () {
+        var out = loadGate().runGate({ getComments: null, createComment: null }, 'o', 'n');
+        assert.equal(out.held, false);
+        assert.equal(out.head, null, 'no head on the defaulted input — nothing to consult');
+    });
+
+    test('effectiveVerdictOf: the read->parse->resolve walk returns the newest same-head record', function () {
+        var mod = loadGate();
+        var out = { head: HEAD, commentsSkipped: false, commentsUnreadable: false };
+        var found = mod.effectiveVerdictOf(
+            { getComments: function () { return JSON.stringify([verdictComment('REQUEST_CHANGES', HEAD)]); } },
+            'o', 'n', { prNumber: 12, logins: [BOT] }, out);
+        assert.equal(found.record.verdict, 'REQUEST_CHANGES', 'the walk resolves the newest record');
+        assert.equal(found.record.head, HEAD);
+        assert.equal(out.commentsSkipped, false, 'a real read is not a capability miss');
+        assert.equal(out.commentsUnreadable, false);
+    });
+
+    test('effectiveVerdictOf: no get-comments primitive -> null + commentsSkipped (capability miss)', function () {
+        var mod = loadGate();
+        var out = { head: HEAD, commentsSkipped: false, commentsUnreadable: false };
+        var found = mod.effectiveVerdictOf({ getComments: null }, 'o', 'n',
+            { prNumber: 12, logins: [BOT] }, out);
+        assert.equal(found, null, 'the walk fails open');
+        assert.equal(out.commentsSkipped, true, 'the skip reason is recorded — not mislabeled');
+        assert.equal(out.commentsUnreadable, false, 'a capability miss is not a read failure');
+    });
+
+    test('effectiveVerdictOf: a broken comment read -> null + commentsUnreadable', function () {
+        var mod = loadGate();
+        var out = { head: HEAD, commentsSkipped: false, commentsUnreadable: false };
+        var found = mod.effectiveVerdictOf(
+            { getComments: function () { throw new Error('500 boom'); } },
+            'o', 'n', { prNumber: 12, logins: [BOT] }, out);
+        assert.equal(found, null, 'the walk fails open');
+        assert.equal(out.commentsUnreadable, true, 'a broken read stays a read failure');
+        assert.equal(out.commentsSkipped, false);
+    });
+
+    test('capability miss is named as such — never mislabeled "no verdict records"', function () {
+        // Digest finding (PR #1422 review): a missing get-comments primitive
+        // used to say "no verdict records for head … — fail-open", a label
+        // that lies about which fail-open shape fired.
+        var r = run({ noGetComments: true });
+        assert.equal(r.out.held, false);
+        assert.equal(r.out.commentsSkipped, true, 'the capability miss is surfaced on the outcome');
+        var lines = loadGate().outcomeLines(r.out);
+        assert.contains(lines[0], 'capability miss');
+        assert.notContains(lines[0], 'no verdict records', 'the mislabel must not come back');
+    });
+
+    test('the deduped-hold line does not overstate: the marker is REUSED, not refreshed', function () {
+        // Digest finding (PR #1422 review): there is no comment-update
+        // primitive on the bridge — a same-head hold is reused as-is, its
+        // payload/at never actually refresh.
+        var lines = loadGate().outcomeLines({ prNumber: 12, held: true,
+            verdict: 'REQUEST_CHANGES', head: HEAD, holdDeduped: true });
+        assert.contains(lines[0], 'dedup');
+        assert.notContains(lines[0], 'refreshed', 'no update primitive exists — the payload never refreshes');
+        assert.contains(lines[0], 'reused');
     });
 });
 
