@@ -279,7 +279,15 @@ function resolveEffectiveDecision(marker, contract) {
     if (markerClass) {
         return { decision: markerClass, source: 'machine-verdict-marker', marker: marker };
     }
-    return { decision: parserClass || 'unknown', source: 'legacy-parser', marker: null };
+    // No class anywhere: the RAW contract token rides through (default
+    // 'unknown') so the log line and the loud no-verdict path keep the
+    // legacy shape byte-for-byte — a non-verdict token ('cancelled', '')
+    // dispatches to applyMissingVerdict exactly as before (gh-1419).
+    return {
+        decision: parserClass || String((contract && contract.decision) || 'unknown'),
+        source: 'legacy-parser',
+        marker: null
+    };
 }
 
 /**
