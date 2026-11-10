@@ -317,9 +317,20 @@ global.cli_execute_command = function(args) {
 
 // Network guard, same contract as installNetworkGuard_ in testRunner.js: an unmocked network-backed
 // integration tool throws a recognisable error instead of a ReferenceError / a real request.
+// The GraalJS guard is prefix-driven (every github_*/jira_*/... global), this one is a fixed
+// list — keep it in parity with the primitives the production bridge modules typeof-guard
+// (mergeBackstop/mergeGate/mergeVerdictGate: the full review-threads family below). A name
+// missing here makes the identifiers resolve undefined under THIS harness only (typeof
+// 'undefined' vs the GraalJS thrower's 'function') and breaks suites like test_mergeGate's
+// githubBridgeIo superview test (the gh-1417 crap-job red).
 ['github_list_prs', 'github_get_pr', 'github_add_pr_comment', 'confluence_content_by_id',
  'confluence_content_by_title', 'jira_get_ticket', 'jira_post_comment', 'jira_search_by_jql',
- 'ado_get_work_item', 'ado_add_work_item_comment', 'tracker_get_ticket', 'tracker_post_comment'
+ 'ado_get_work_item', 'ado_add_work_item_comment', 'tracker_get_ticket', 'tracker_post_comment',
+ // the review-threads family the merge modules guard (mergeBackstop.githubBridgeIo
+ // + mergeGate.githubBridgeIo + mergeVerdictGate.githubBridgeIo):
+ 'github_get_pr_review_threads', 'github_get_pr_comments', 'github_create_comment',
+ 'github_resolve_pr_thread', 'github_reply_to_pr_thread', 'github_search_issues',
+ 'github_create_issue'
 ].forEach(function(name) {
     global[name] = function() {
         throw new Error('unit-test network guard: ' + name + '() is not mocked — unit tests must not call real services');
