@@ -458,11 +458,13 @@ function action(params) {
         var reviewThreadInventoryModule = loadModule('js/common/reviewThreadInventory.js',
             makeRequire({ './machineNotice.js': machineNoticeModule }));
         var scmModule = scmReal();
+        var remoteProjectConfigModule = loadModule('js/common/remoteProjectConfig.js');
         configLoaderModule = loadModule(
             'js/configLoader.js',
             makeRequire({
                 './config.js': configModule, 'config': configModule,
-                './common/scm.js': scmModule, 'scm': scmModule
+                './common/scm.js': scmModule, 'scm': scmModule,
+                './common/remoteProjectConfig.js': remoteProjectConfigModule
             })
         );
         console.log('  Base modules loaded ✓');

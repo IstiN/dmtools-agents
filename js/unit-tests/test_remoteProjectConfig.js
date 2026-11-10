@@ -116,12 +116,25 @@ function githubReviewFetchMod() {
     return _mods.grf;
 }
 function scmMod(globalMods) {
+    // The four primitive names are nulled FIRST so the "absent" scenarios are
+    // deterministic even though the engine declares real github_* globals
+    // (the network guard turns unmocked names into throwing stubs).
+    var globals = {
+        github_get_file_contents: null,
+        github_get_file_content: null,
+        gitlab_get_file_contents: null,
+        gitlab_get_file_content: null
+    };
+    var provided = globalMods || {};
+    for (var k in provided) {
+        if (provided.hasOwnProperty(k)) globals[k] = provided[k];
+    }
     return loadModule('js/common/scm.js', makeRequire({
         './reviewThreadInventory.js': threadInventoryMod(),
         './loseJson.js': loseJsonMod(),
         './pullRequest.js': pullRequestMod(),
         './githubReviewFetch.js': githubReviewFetchMod()
-    }), globalMods || {});
+    }), globals);
 }
 
 // The module under test. primitiveFn (when given) is exposed as the
