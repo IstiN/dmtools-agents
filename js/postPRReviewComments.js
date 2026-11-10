@@ -270,8 +270,9 @@ function buildResumePrompt(ticketKey) {
         'pr_discussions_raw.json when present, ci_failures.md and ci_failures_full.log when present, and the current PR context.\n\n' +
         'Write these files before stopping:\n' +
         '1. outputs/pr_review.json with fields recommendation, generalComment, resolvedThreadIds, inlineComments, issueCounts.\n' +
+        '   The "generalComment" field MUST be the file path string "outputs/pr_review_general.md" (never inline markdown text).\n' +
         '2. outputs/pr_review_general.md with a short GitHub Markdown review summary.\n' +
-        '3. outputs/pr_review_comments/*.md for every inline comment; reference each via the "comment" field in pr_review.json.\n' +
+        '3. outputs/pr_review_comments/*.md for every inline comment; reference each via the "comment" field in pr_review.json as "outputs/pr_review_comments/<name>.md".\n' +
         '   Never put comment text inline in the JSON (no "body" field).\n\n' +
         'Do NOT write outputs/response.md.\n\n' +
         'If you found a BLOCK or REQUEST_CHANGES result, still write the files. Do not return only plain text.\n' +
@@ -416,9 +417,21 @@ function repoNameFromMatch(repo) {
     return repo.replace(/\.git$/, '');
 }
 
+var DEFAULT_GENERAL_COMMENT_PATH = 'outputs/pr_review_general.md';
+
+function resolveGeneralCommentText(commentPath, ticketKey, workingDir) {
+    var fromRef = readMarkdownFile(commentPath, ticketKey, workingDir);
+    if (fromRef) return fromRef;
+    if (!isCommentFilePath(commentPath)) {
+        var inline = String(commentPath || '').trim();
+        if (inline) return inline;
+    }
+    return readMarkdownFile(DEFAULT_GENERAL_COMMENT_PATH, ticketKey, workingDir);
+}
+
 function postGeneralComment(scm, pullRequestId, commentPath, ticketKey, workingDir) {
     try {
-        const comment = readMarkdownFile(commentPath, ticketKey, workingDir);
+        const comment = resolveGeneralCommentText(commentPath, ticketKey, workingDir);
         if (!comment) {
             console.warn('No general comment content found at', commentPath);
             return false;
@@ -932,10 +945,10 @@ function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation,
 
 function formalReviewContent(generalComment, ticketKey, workingDir) {
     // generalComment follows the file-path contract (postGeneralComment
-    // reads it via readMarkdownFile): resolve path → CONTENT before
-    // submitting, or the review body is the literal "outputs/..." string
+    // resolves path → CONTENT or inline markdown / outputs/pr_review_general.md fallback):
+    // resolve before submitting, or the review body is the literal "outputs/..." string
     // (live: flutter_agent_harness #720 APPROVE body was the file path).
-    return resolveCommentFileReference(generalComment, ticketKey, workingDir) || generalComment;
+    return resolveGeneralCommentText(generalComment, ticketKey, workingDir);
 }
 
 function nonEmptyBody(content, fallback) {
@@ -3021,6 +3034,7 @@ if (typeof module !== 'undefined' && module.exports) {
         countReviewThreads,
         postInlineComment,
         postGeneralComment,
+        resolveGeneralCommentText,
         postVerdictRecord,
         findingsFromReviewData,
         findingReviewOf,

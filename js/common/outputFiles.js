@@ -23,9 +23,30 @@ function readRaw(path) {
 
 function normalizeToOutputsPath(pathOrName) {
     if (!pathOrName) return '';
+    if (pathOrName.indexOf('/') === 0) return pathOrName;
     if (pathOrName.indexOf('outputs/') === 0) return pathOrName;
-    if (pathOrName.indexOf('/') === -1) return 'outputs/' + pathOrName;
-    return pathOrName;
+    return 'outputs/' + pathOrName;
+}
+
+function addOutputsCandidates(candidates, outputsPath, ticketKey, workingDir) {
+    candidates.push(outputsPath);
+    var outputName = outputsPath.substring('outputs/'.length);
+    if (ticketKey) {
+        candidates.push('outputs/' + ticketKey + '/' + outputName);
+    }
+    if (!workingDir) return;
+    candidates.push(workingDir + '/' + outputsPath);
+    if (ticketKey) {
+        candidates.push(workingDir + '/outputs/' + ticketKey + '/' + outputName);
+    }
+}
+
+function addDirectRelativeCandidates(candidates, rawPath, normalized, workingDir) {
+    if (!rawPath || rawPath === normalized) return;
+    candidates.push(rawPath);
+    if (workingDir) {
+        candidates.push(workingDir + '/' + rawPath);
+    }
 }
 
 function buildOutputCandidates(pathOrName, options) {
@@ -41,21 +62,10 @@ function buildOutputCandidates(pathOrName, options) {
         return candidates;
     }
 
-    candidates.push(normalized);
+    addOutputsCandidates(candidates, normalized, ticketKey, workingDir);
+    addDirectRelativeCandidates(candidates, pathOrName, normalized, workingDir);
 
-    if (normalized.indexOf('outputs/') === 0 && ticketKey) {
-        var outputName = normalized.substring('outputs/'.length);
-        candidates.push('outputs/' + ticketKey + '/' + outputName);
-    }
-
-    if (workingDir) {
-        candidates.push(workingDir + '/' + normalized);
-        if (normalized.indexOf('outputs/') === 0 && ticketKey) {
-            var outputNameInWd = normalized.substring('outputs/'.length);
-            candidates.push(workingDir + '/outputs/' + ticketKey + '/' + outputNameInWd);
-        }
-    }
-
+    return candidates;
     return candidates;
 }
 

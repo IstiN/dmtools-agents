@@ -90,4 +90,51 @@ suite('outputFiles', function() {
         assert.equal(mod.hasOutputFile('blank.md', {}), false);
         assert.equal(mod.hasOutputFile('missing.md', { ticketKey: 'AITS-1' }), false);
     });
+
+    test('normalizes relative subpath (e.g. pr_review_comments/foo.md) under outputs/ and workingDir', function() {
+        var mod = loadOutputFiles({
+            file_read: function(opts) {
+                if (opts.path === '/tmp/repo/outputs/pr_review_comments/foo.md') return '⚠️ finding text';
+                return null;
+            }
+        });
+
+        assert.equal(mod.normalizeToOutputsPath('pr_review_comments/foo.md'), 'outputs/pr_review_comments/foo.md');
+        assert.equal(mod.normalizeToOutputsPath('/abs/path/foo.md'), '/abs/path/foo.md');
+        assert.deepEqual(
+            mod.buildOutputCandidates('pr_review_comments/foo.md', {
+                ticketKey: 'MAPC-8930',
+                workingDir: '/tmp/repo'
+            }),
+            [
+                'outputs/pr_review_comments/foo.md',
+                'outputs/MAPC-8930/pr_review_comments/foo.md',
+                '/tmp/repo/outputs/pr_review_comments/foo.md',
+                '/tmp/repo/outputs/MAPC-8930/pr_review_comments/foo.md',
+                'pr_review_comments/foo.md',
+                '/tmp/repo/pr_review_comments/foo.md'
+            ]
+        );
+        assert.equal(
+            mod.readOutputFile('pr_review_comments/foo.md', {
+                ticketKey: 'MAPC-8930',
+                workingDir: '/tmp/repo'
+            }),
+            '⚠️ finding text'
+        );
+    });
+
+    test('falls back to raw relative subpath when file sits outside outputs/', function() {
+        var mod = loadOutputFiles({
+            file_read: function(opts) {
+                if (opts.path === '/tmp/repo/pr_review_comments/foo.md') return 'direct subpath';
+                return null;
+            }
+        });
+
+        assert.equal(
+            mod.readOutputFile('pr_review_comments/foo.md', { workingDir: '/tmp/repo' }),
+            'direct subpath'
+        );
+    });
 });
