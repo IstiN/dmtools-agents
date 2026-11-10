@@ -756,6 +756,29 @@ suite('agentDocGenerator.renderActionSection (gh-119 characterization)', functio
         assert.notContains(md, '`trackerProvider`', 'the tracker plumbing channel is not attributed');
     });
 
+    test('the merge-backstop plumbing module does not leak its channels into the action section (gh-1416 docs drift)', function() {
+        // The gh-1416 gate wiring requires ./common/mergeVerdictGate.js →
+        // ./mergeBackstop.js → reviewPolicy/… — mergeBackstop is the generic
+        // merge-path module reading its own machineAuthor channel, exactly
+        // the configLoader/trackers plumbing shape (gh-1346). Following it
+        // attributed review-policy knobs the merge jobs never read, so
+        // docs/agents/generated/retry_merge_github.md drifted with 5 phantom
+        // customParams (docs-freshness gate red on PR #1422).
+        var mod = loadRenderHarness({
+            'agents/js/retryLane.js':
+                "var mergeVerdictGate = require('./common/mergeVerdictGate.js');\n" +
+                'function action(params) { return params.jobParams.customParams.approvedLabel; }',
+            'agents/js/common/mergeVerdictGate.js':
+                "var mergeBackstop = require('./mergeBackstop.js');\n" +
+                'function runGate() { return null; }',
+            'agents/js/common/mergeBackstop.js':
+                'function machineLoginsOf(jobParams) { return jobParams.customParams.reviewPolicy; }'
+        });
+        var md = mod.renderActionSection('postJSAction', 'agents/js/retryLane.js', 'post');
+        assert.contains(md, '`approvedLabel`', 'the action own read is still documented');
+        assert.notContains(md, '`reviewPolicy`', 'the merge-backstop plumbing channel is not attributed');
+    });
+
     test('an action-specific helper module still contributes its params (gh-961 unchanged)', function() {
         var mod = loadRenderHarness({
             'agents/js/doThing.js':

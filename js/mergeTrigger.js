@@ -52,6 +52,15 @@ var mcpParse = require('./common/mcpParse.js');
 // violation; the next tick retries).
 var mergeBackstop = require('./common/mergeBackstop.js');
 
+// gh-1416: the verdict-freshness probe rides every squash-merge — the
+// newest dmtools:review-verdict record for the CURRENT head being
+// REQUEST_CHANGES/BLOCK defers the merge (the BEHIND path's skip shape)
+// and stamps a deduped machine-parseable hold marker. The gh-807 tick
+// reconciler stays (it repairs the labels); this gate protects the merge
+// instant — an irreversible action can no longer be raced by a stale
+// approval arriving seconds before the funnel fires.
+var mergeVerdictGate = require('./common/mergeVerdictGate.js');
+
 // Thin wrappers keep every call site and module.exports entry unchanged.
 function parseMcp(raw) { return mcpParse.parseMcp(raw); }
 
@@ -316,6 +325,18 @@ function backstopBeforeMerge(ctx, prNumber, pr) {
 }
 
 /**
+ * gh-1416 verdict-freshness gate before a squash-merge: the newest
+ * dmtools:review-verdict record for the PR's CURRENT head being
+ * REQUEST_CHANGES/BLOCK holds the merge — the hold marker is stamped
+ * deduped per head and the caller defers (skipped, next tick retries).
+ * Never throws (the gate fails open internally); `held` decides.
+ */
+function verdictGateBeforeMerge(ctx, prNumber, pr) {
+    return mergeVerdictGate.runGateForPr(mergeVerdictGate.githubBridgeIo(),
+        ctx.owner, ctx.name, ctx.job, prNumber, pr, ctx.say);
+}
+
+/**
  * The shared state machine (bash `case "$state"` parity). Returns
  * 'merged' | 'skipped'. `onMerged(mergedPrNumber)` performs the
  * post-merge label/comment bookkeeping for the caller's path.
@@ -330,6 +351,18 @@ function runStateMachine(ctx, prNumber, onMerged) {
 
     var decision = mergeDecisionOf(ms);
     if (decision === 'merge') {
+        // gh-1416: the newest verdict for the CURRENT head being
+        // REQUEST_CHANGES/BLOCK refuses the merge instant (a stale
+        // approval arriving seconds before the funnel can no longer race
+        // it) — skip, the next tick retries, the SM's rework lap lands the
+        // fresh verdict. Runs BEFORE the backstop: a held merge skips the
+        // thread work entirely.
+        var verdictGate = verdictGateBeforeMerge(ctx, prNumber, pr);
+        if (verdictGate.held) {
+            ctx.log.push('⏳ #' + prNumber + ' newest verdict on head ' + verdictGate.head +
+                ' is ' + verdictGate.verdict + ' — merge deferred (gh-1416), next tick retries');
+            return 'skipped';
+        }
         // gh-1353 + gh-1370: every open machine-owned review thread must
         // reach terminal resolution BEFORE the merge (digest + deferred
         // resolutions for >=IMPORTANT, wontfix acks below the threshold).
@@ -516,6 +549,7 @@ if (typeof module !== 'undefined' && module.exports) {
         isIssueOpen: isIssueOpen,
         squashMerge: squashMerge,
         backstopBeforeMerge: backstopBeforeMerge,
+        verdictGateBeforeMerge: verdictGateBeforeMerge,
         tryRemoveLabel: tryRemoveLabel,
         tryComment: tryComment
     };

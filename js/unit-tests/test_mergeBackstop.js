@@ -896,6 +896,52 @@ suite('mergeBackstop — gh-1370 terminal resolution (nits resolve-without-fix)'
 
 // ── the merge-path wiring (runBackstopForPr + githubBridgeIo) ────────────────
 
+suite('mergeBackstop — runProbeForPr (the shared wiring ceremony, gh-1416)', function () {
+    test('ONE copy of the ceremony: builds the input, applies extra, runs, says the lines, returns the outcome', function () {
+        // PR #1422 round-2 review (duplication ratchet): the verdict gate's
+        // runGateForPr mirrored this module's runBackstopForPr wiring
+        // line-for-line. The ceremony now lives here ONCE and both probes
+        // delegate — this test pins the contract the gate rides.
+        var m = mergeBackstopMod();
+        var seen = {};
+        var sentinel = { prNumber: 42, marked: true };
+        var said = [];
+        var out = m.runProbeForPr(
+            function (bridges, owner, name, input) {
+                seen.bridges = bridges; seen.owner = owner; seen.name = name; seen.input = input;
+                return sentinel;
+            },
+            function (o) { return o.marked ? ['line one', 'line two'] : []; },
+            { the: 'bridges' }, OWNER, NAME,
+            { machineAuthor: MACHINE }, 42,
+            { number: 42, headRefOid: 'deadbeefcafe0123456789abcdef' },
+            function (line) { said.push(line); },
+            function (input) { input.prTitle = 'The Title'; });
+        assert.equal(out, sentinel, 'the outcome rides back to the caller');
+        assert.equal(seen.owner, OWNER);
+        assert.equal(seen.name, NAME);
+        assert.equal(seen.bridges.the, 'bridges', 'the io bag passes through untouched');
+        assert.equal(seen.input.prNumber, 42);
+        assert.equal(seen.input.headSha, 'deadbeefcafe0123456789abcdef', 'headShaOf(pr) drives the head');
+        assert.deepEqual(seen.input.logins, [MACHINE], 'the gh-728 logins chain runs');
+        assert.equal(typeof seen.input.nowIso, 'string', 'the run is timestamped');
+        assert.equal(seen.input.prTitle, 'The Title', 'extra adds the probe-specific keys');
+        assert.deepEqual(said, ['line one', 'line two'], 'the outcome lines are said verbatim');
+    });
+
+    test('runBackstopForPr delegates to it — no second ceremony copy survives', function () {
+        var m = mergeBackstopMod();
+        assert.equal(typeof m.runProbeForPr, 'function', 'the ceremony is exported for the gate');
+        var f = ioFixture({ threads: [] });
+        var said = [];
+        var out = m.runBackstopForPr(f.io, OWNER, NAME, { machineAuthor: MACHINE }, 42,
+            { number: 42, title: 'T', headRefOid: 'deadbeefcafe0123456789abcdef' },
+            function (line) { said.push(line); });
+        assert.equal(out.prNumber, 42);
+        assert.equal(said.length, 1, 'the shared say loop ran (the clean-replay line)');
+        assert.contains(said[0], 'merge backstop on PR #42');
+    });
+});
 suite('mergeBackstop — runBackstopForPr (the merge-path wiring)', function () {
     function runForPr(m, f, over) {
         var said = [];

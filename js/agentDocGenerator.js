@@ -346,7 +346,17 @@ function resolveLocalRequire(fromFile, reqPath) {
 var PLUMBING_MODULES = {
     'js/configLoader.js': true,
     'js/config.js': true,
-    'js/common/trackers.js': true
+    'js/common/trackers.js': true,
+    // gh-1416 rework: the generic merge-path module — it reads its own
+    // machineAuthor channel from whatever customParams the merge job passes
+    // (jobParams.machineAuthor → the per-repo .dmtools/config.js knob),
+    // exactly the configLoader/trackers plumbing shape above. Without the
+    // pin, the gh-1416 gate wiring (retryMergeGithubPR → mergeVerdictGate →
+    // mergeBackstop → reviewPolicy/…) extended the transitive walk into the
+    // review-policy chain and the generated retry-merge doc listed five
+    // phantom customParams (reviewPolicy, allowApproveWithSuggestions, …)
+    // the job never reads — the gh-1346 antipattern, docs-freshness red.
+    'js/common/mergeBackstop.js': true
 };
 
 // Normalize a resolved require path for the plumbing check: the canonical

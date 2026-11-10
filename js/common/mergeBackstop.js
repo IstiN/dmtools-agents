@@ -807,7 +807,7 @@ function runBackstop(io, owner, name, input) {
     return requireZeroOpenMachineThreads(out);
 }
 
-// ── the merge-path wiring (shared by mergeTrigger + sm/mergeBot) ─────────────
+// ── the merge-path wiring (shared by mergeTrigger + sm/mergeBot + the gh-1416 verdict gate) ──
 
 /**
  * The dmtools github-bridge globals → the io bag runBackstop consumes.
@@ -845,30 +845,48 @@ function headShaOf(pr) {
 }
 
 /**
+ * The shared merge-path wiring ceremony (gh-1416 duplication-ratchet
+ * extraction): ONE copy of the input build (prNumber, the ONE head-sha
+ * derivation, the gh-728 machine-logins chain, the run timestamp —
+ * `extra` adds probe-specific keys like the backstop's prTitle), the run,
+ * and the outcome-lines say loop. Both runBackstopForPr (gh-1353) and the
+ * verdict gate's runGateForPr (gh-1416) delegate; each module keeps its
+ * own probe (`run`) and line renderer (`linesOf`) — only the ceremony is
+ * shared. runBackstop still throws through (its gate semantics — the
+ * caller defers); runGate fails open inside.
+ */
+function runProbeForPr(run, linesOf, bridges, owner, name, job, prNumber, pr, say, extra) {
+    var input = {
+        prNumber: prNumber,
+        headSha: headShaOf(pr),
+        logins: machineLoginsOf(job),
+        nowIso: (new Date()).toISOString()
+    };
+    if (extra) extra(input);
+    var out = run(bridges, owner, name, input);
+    linesOf(out).forEach(function (line) { if (say) say(line); });
+    return out;
+}
+
+/**
  * The one-call wiring for a merge path about to squash-merge an approved
- * green PR (gh-1353; gh-1370 tightened it): builds the input from the PR
- * payload + jobParams, runs the backstop and says the outcome lines
- * verbatim. Throws on record-keeping failures (a broken threads/comments
- * read, a digest filing failure) AND on resolution failures (a resolve/
- * ack API error, a partial resolution) — the CALLER defers THAT merge
- * (never merges with an open machine thread); per-thread resolve/ack
- * failures never abort the loop (the digest records everyone, the gate
- * throws after it).
+ * green PR (gh-1353; gh-1370 tightened it): the shared ceremony
+ * (runProbeForPr) builds the input from the PR payload + jobParams (the
+ * prTitle rides the extra hook), runs the backstop and says the outcome
+ * lines verbatim. Throws on record-keeping failures (a broken
+ * threads/comments read, a digest filing failure) AND on resolution
+ * failures (a resolve/ack API error, a partial resolution) — the CALLER
+ * defers THAT merge (never merges with an open machine thread);
+ * per-thread resolve/ack failures never abort the loop (the digest
+ * records everyone, the gate throws after it).
  *
  *   bridges — the io bag (githubBridgeIo() in production; test mocks).
  *   job     — the caller's jobParams (machineAuthor allowlist lives there).
  *   pr      — the parsed get_pr payload (either shape).
  */
 function runBackstopForPr(bridges, owner, name, job, prNumber, pr, say) {
-    var out = runBackstop(bridges, owner, name, {
-        prNumber: prNumber,
-        prTitle: prTitleOf(pr),
-        headSha: headShaOf(pr),
-        logins: machineLoginsOf(job),
-        nowIso: (new Date()).toISOString()
-    });
-    outcomeLines(out).forEach(function (line) { if (say) say(line); });
-    return out;
+    return runProbeForPr(runBackstop, outcomeLines, bridges, owner, name, job,
+        prNumber, pr, say, function (input) { input.prTitle = prTitleOf(pr); });
 }
 
 // ── caller-facing log lines ──────────────────────────────────────────────────
@@ -948,10 +966,12 @@ if (typeof module !== 'undefined' && module.exports) {
         githubTools: githubTools,
         githubBridgeIo: githubBridgeIo,
         headShaOf: headShaOf,
+        shortSha: shortSha,
         resolveAckThreads: resolveAckThreads,
         requireZeroOpenMachineThreads: requireZeroOpenMachineThreads,
         runBackstop: runBackstop,
         runBackstopForPr: runBackstopForPr,
+        runProbeForPr: runProbeForPr,
         outcomeLines: outcomeLines
     };
 }

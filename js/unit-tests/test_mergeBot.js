@@ -95,11 +95,28 @@ function mergeBackstopModuleFor(mods) {
     });
 }
 
+// gh-1416: the verdict gate shares the backstop instance (the gh-728
+// logins chain + headShaOf live there) and the fixture's comment-read
+// bridge tool — the SAME payload the backstop fetches (one engine-global
+// set in production).
+function mergeVerdictGateModuleFor(mods, backstop) {
+    return loadModule('js/common/mergeVerdictGate.js', makeRequire({
+        './mcpParse.js': mcpParseModule,
+        './reviewVerdicts.js': bsReviewVerdicts(),
+        './mergeBackstop.js': backstop
+    }), {
+        github_get_pr_comments: (mods || {}).github_get_pr_comments,
+        github_create_comment: (mods || {}).github_create_comment
+    });
+}
+
 function loadMergeBot(mods) {
+    var backstop = mergeBackstopModuleFor(mods);
     return loadModule('js/sm/mergeBot.js',
         makeRequire({
             '../common/mcpParse.js': mcpParseModule,
-            '../common/mergeBackstop.js': mergeBackstopModuleFor(mods)
+            '../common/mergeBackstop.js': backstop,
+            '../common/mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop)
         }), mods);
 }
 
@@ -1717,6 +1734,124 @@ suite('mergeBot — merge backstop wiring (gh-1353)', function () {
         assert.equal(fx.calls.debtIssues.length, 1);
         assert.contains(fx.calls.debtIssues[0].body, 'head deadbee',
             'the head sha flowed through the shared derivation into the digest');
+        assert.equal(fx.calls.merges.length, 1);
+    });
+});
+
+// ── gh-1416 verdict-freshness gate wiring (refuse the merge while the
+// current head's newest verdict is REQUEST_CHANGES/BLOCK) ─────────────────────
+
+suite('mergeBot — verdict gate wiring (gh-1416)', function () {
+    var BOT = 'merge-bot';
+    var HEAD = 'deadbef';
+
+    function verdictComment(verdict, head, over) {
+        var body = bsReviewVerdicts().buildVerdictComment({
+            head: head, verdict: verdict, blocking: 0, important: 1,
+            suggestions: 0, at: (over && over.at) || '2026-11-09T15:42:44Z',
+            source: 'pr_review.json'
+        });
+        return { body: body, user: { login: (over && over.login) || BOT + '[bot]' } };
+    }
+
+    function gateFixture(comments) {
+        return fixture({
+            labels: ['pr_approved', 'ai_validating'],
+            headSha: HEAD,
+            threadsByNumber: {}, // clean backstop replay — the gate decides first
+            prCommentsByNumber: { 42: comments }
+        });
+    }
+
+    function holdCommentsPosted(fx) {
+        return fx.calls.comments.filter(function (c) {
+            return c.number === 42 &&
+                String(c.body || '').indexOf('dmtools:merge-hold') !== -1;
+        });
+    }
+
+    test('REQUEST_CHANGES record on the current head -> merge deferred, hold marker posted', function () {
+        var fx = gateFixture([verdictComment('REQUEST_CHANGES', HEAD)]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 0, 'the held merge is no acted motion');
+        assert.equal(fx.calls.merges.length, 0, 'a blocking verdict on the head refuses the merge');
+        var holds = holdCommentsPosted(fx);
+        assert.equal(holds.length, 1, 'exactly ONE hold marker on the PR');
+        assert.contains(holds[0].body, '"reason":"verdict"');
+        assert.contains(holds[0].body, '"head":"' + HEAD + '"');
+        assert.equal(fx.calls.threads.length, 0, 'a held merge skips the backstop thread work entirely');
+        assert.equal(fx.calls.adds.length + fx.calls.removes.length, 0,
+            'the arm is untouched — the SM rework lap owns the fresh verdict');
+    });
+
+    test('hold marker is deduped per head: the replay adds NO second comment', function () {
+        var fx = gateFixture([verdictComment('REQUEST_CHANGES', HEAD)]);
+        fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(holdCommentsPosted(fx).length, 1);
+        fx.opts.prCommentsByNumber[42].push({
+            body: holdCommentsPosted(fx)[0].body, user: { login: BOT + '[bot]' }
+        });
+        var commentsAfterFirstRun = fx.calls.comments.length;
+        var result2 = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result2.acted, 0, 'still held — the verdict stands');
+        assert.equal(fx.calls.comments.length, commentsAfterFirstRun,
+            'never a new comment per tick (refreshed in place)');
+        assert.equal(holdCommentsPosted(fx).length, 1);
+    });
+
+    test('APPROVE record on the current head -> merges', function () {
+        var fx = gateFixture([verdictComment('APPROVE', HEAD)]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 1);
+        assert.equal(fx.calls.merges.length, 1);
+        assert.equal(holdCommentsPosted(fx).length, 0, 'no hold marker for an approval');
+    });
+
+    test('no verdict records -> merges (fail-open, asserted)', function () {
+        var fx = gateFixture([{ body: 'ship it', user: { login: 'human-reviewer' } }]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 1);
+        assert.equal(fx.calls.merges.length, 1, 'validation-only / pre-gh-807 PRs merge as today');
+        assert.equal(holdCommentsPosted(fx).length, 0);
+    });
+
+    test('stale-head record only -> merges (fail-open, asserted)', function () {
+        var fx = gateFixture([verdictComment('REQUEST_CHANGES', '1111111feedface')]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 1);
+        assert.equal(fx.calls.merges.length, 1, 'a verdict for an OLDER head never holds the current one');
+        assert.equal(holdCommentsPosted(fx).length, 0);
+    });
+
+    test('unreadable/garbage markers -> merges, fail-open', function () {
+        var fx = gateFixture([
+            { body: '<!-- dmtools:review-verdict {broken -->', user: { login: BOT + '[bot]' } },
+            { body: 'REQUEST_CHANGES in prose, no marker', user: { login: BOT + '[bot]' } }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 1, 'a marker that does not parse does not exist for the gate');
+        assert.equal(fx.calls.merges.length, 1);
+    });
+
+    test('BLOCK record on the current head -> merge deferred', function () {
+        var fx = gateFixture([verdictComment('BLOCK', HEAD)]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 0);
+        assert.equal(fx.calls.merges.length, 0);
+        assert.equal(holdCommentsPosted(fx).length, 1);
+    });
+
+    test('foreign-authored verdict marker never holds (machine-identity gate)', function () {
+        var fx = gateFixture([verdictComment('REQUEST_CHANGES', HEAD, { login: 'someone-else' })]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 1, 'a forged newer record cannot steer the merge instant');
+        assert.equal(fx.calls.merges.length, 1);
+    });
+
+    test('unconfigured machineAuthor -> no trusted records, merges as today', function () {
+        var fx = gateFixture([verdictComment('REQUEST_CHANGES', HEAD)]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.acted, 1, 'empty allowlist = nothing trusted = fail-open');
         assert.equal(fx.calls.merges.length, 1);
     });
 });
