@@ -245,6 +245,36 @@ function _githubTriggerWorkflow(workspace, repository, owner, repo, workflowFile
     return github_trigger_workflow(args);
 }
 
+// ── gh-1421: the optional file-contents bridge primitive ─────────────────────
+// SCM-agnostic config acquisition: configLoader's remote fallback reads
+// .dmtools/config.js from the default branch through the provider (see
+// js/common/remoteProjectConfig.js — the io bag enumerates the capability;
+// an ABSENT primitive maps null, a capability miss, never an error). The
+// GitHub twin checks both spellings — `github_get_file_contents` (the
+// ticket-named primitive) and the shipped `github_get_file_content` (same
+// {owner, repo, path, ref?} schema). Returns the RAW payload; callers
+// normalize (remoteProjectConfig.remoteConfigSourceOf).
+function _scmGetFileContents(primitive, args, label) {
+    if (!primitive) return null;
+    try {
+        return primitive(args);
+    } catch (e) {
+        console.warn('SCM ' + label + ': getFileContents failed:', e.message || e);
+        return null;
+    }
+}
+
+function _githubFileContentsPrimitive() {
+    return (typeof github_get_file_contents === 'function') ? github_get_file_contents
+        : ((typeof github_get_file_content === 'function') ? github_get_file_content : null);
+}
+
+function _githubGetFileContents(workspace, repository, path, ref) {
+    var args = { owner: workspace, repo: repository, path: path };
+    if (ref) args.ref = ref;
+    return _scmGetFileContents(_githubFileContentsPrimitive(), args, 'GitHub');
+}
+
 // Primary diff tier: DMTools v1.7.210+ exposes a tool that returns the raw
 // diff text (see the casing note on _githubGetDiffText). Returns the usable
 // diff or null so the caller falls back gracefully.
@@ -591,6 +621,12 @@ function _createGithubProvider(workspace, repository) {
         },
         fetchDiscussions: function(prId) {
             return _githubFetchDiscussions(workspace, repository, prId);
+        },
+        // gh-1421: the optional file-contents primitive (SCM-agnostic config
+        // acquisition). Returns the raw payload, or null when the primitive
+        // is absent (capability miss) or the read failed — callers degrade.
+        getFileContents: function(path, ref) {
+            return _githubGetFileContents(workspace, repository, path, ref);
         },
         getRemoteRepoInfo: function() {
             return _githubGetRemoteRepoInfo();
@@ -983,6 +1019,21 @@ function _gitlabBuildPipelineVariables(workflowFile, payload) {
     return variables;
 }
 
+// gh-1421: the GitLab twin of the file-contents primitive — rides the
+// existing gitlab wiring bag (workspace/repository; the bridge maps it onto
+// the project path). The primitive itself lands with the GitLab runner
+// infra; until then this is a capability miss (null), never an error.
+function _gitlabFileContentsPrimitive() {
+    return (typeof gitlab_get_file_contents === 'function') ? gitlab_get_file_contents
+        : ((typeof gitlab_get_file_content === 'function') ? gitlab_get_file_content : null);
+}
+
+function _gitlabGetFileContents(workspace, repository, path, ref) {
+    var args = { workspace: workspace, repository: repository, path: path };
+    if (ref) args.ref = ref;
+    return _scmGetFileContents(_gitlabFileContentsPrimitive(), args, 'GitLab');
+}
+
 function _gitlabTriggerPipeline(owner, repo, workspace, repository, workflowFile, payload, ref) {
     return gitlab_trigger_pipeline({
         workspace: owner || workspace,
@@ -1093,6 +1144,12 @@ function _createGitLabProvider(workspace, repository) {
         },
         fetchDiscussions: function(prId) {
             return _gitlabFetchDiscussions(workspace, repository, prId);
+        },
+        // gh-1421: the optional file-contents primitive — see the GitHub
+        // provider's getFileContents (same contract; GitLab lands with the
+        // GitLab runner infra, so this is a capability miss until then).
+        getFileContents: function(path, ref) {
+            return _gitlabGetFileContents(workspace, repository, path, ref);
         },
         getRemoteRepoInfo: function() {
             return _detectRepoFromGitRemote('gitlab');
@@ -1592,6 +1649,9 @@ module.exports = {
     _gitlabBuildPipelineVariables: _gitlabBuildPipelineVariables,
     _gitlabTriggerPipeline: _gitlabTriggerPipeline,
     _gitlabCreatePr: _gitlabCreatePr,
+    // gh-1421: the optional file-contents primitives (SCM-agnostic config acquisition)
+    _githubGetFileContents: _githubGetFileContents,
+    _gitlabGetFileContents: _gitlabGetFileContents,
     // gh-925: ADO/GitLab provider internals exposed as testable pure helpers
     _gitlabThreadPosition: _gitlabThreadPosition,
     _gitlabMapDiscussionThread: _gitlabMapDiscussionThread,

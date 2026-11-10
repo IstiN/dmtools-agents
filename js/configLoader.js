@@ -9,6 +9,9 @@
  *   2. .dmtools/config.js      (target repo root layout)
  *   3. ../.dmtools/config.js   (when running directly from agents submodule)
  *   4. Built-in defaults       (backward compatible)
+ *   5. gh-1421: when ALL local candidates miss, <defaultBranch>/.dmtools/config.js
+ *      fetched through the scm layer (remoteProjectConfig — fail-open, one
+ *      fetch per job run; retires the workflow-side `gh api contents` stopgap)
  *
  * Merge strategy:
  *   - jira.statuses, jira.issueTypes: DEEP MERGE over built-in defaults — a project may
@@ -22,6 +25,14 @@
  */
 
 var DEFAULT_CONFIG = require('./config.js');
+
+// gh-1421: the SCM-agnostic remote fallback (the LAST discovery candidate).
+// Hoisted per the pack-require rule; the module itself carries no requires.
+// Optional dep (the _scmModule pattern): test environments that load this
+// module with a narrower require map get the fallback silently OFF (the
+// discovery degrades to local candidates + defaults — the same fail-open).
+var remoteProjectConfig = null;
+try { remoteProjectConfig = require('./common/remoteProjectConfig.js'); } catch (e) { /* optional dep */ }
 
 // Lazy-loaded to keep backward compat with test environments that don't provide scm.js
 var _scmModule = null;
@@ -332,22 +343,32 @@ function tryReadFile(path) {
 }
 
 /**
- * Load and evaluate a CommonJS config file.
- * Returns the module.exports object, or null on failure.
+ * Evaluate a CommonJS config source string into module.exports. The shared
+ * evaluator behind loadConfigFile (local candidates) and
+ * loadRemoteProjectConfig (the gh-1421 remote fallback). Returns the exports
+ * object, or null on failure (warn — never throws; a broken read becomes NO
+ * config, never a wrong one).
  */
-function loadConfigFile(path) {
-    var content = tryReadFile(path);
-    if (!content) return null;
-
+function evaluateConfigSource(content, label) {
     try {
         var moduleObj = { exports: {} };
         var fn = new Function('module', 'exports', 'require', content);
         fn(moduleObj, moduleObj.exports, function() { return {}; });
         return moduleObj.exports;
     } catch (e) {
-        console.warn('configLoader: Failed to evaluate ' + path + ': ' + (e.message || e));
+        console.warn('configLoader: Failed to evaluate ' + label + ': ' + (e.message || e));
         return null;
     }
+}
+
+/**
+ * Load and evaluate a CommonJS config file.
+ * Returns the module.exports object, or null on failure.
+ */
+function loadConfigFile(path) {
+    var content = tryReadFile(path);
+    if (!content) return null;
+    return evaluateConfigSource(content, path);
 }
 
 // ── Agent config "parent" inheritance (gh-1112) ──────────────────────────────
@@ -634,14 +655,37 @@ function buildConfigCandidates(params, customParams) {
 }
 
 /**
- * Probe the candidate config sources in order and return the first one that
- * loads, mirroring the historical precedence:
+ * The LAST discovery candidate (gh-1421): when every LOCAL candidate missed,
+ * fetch `.dmtools/config.js` from the target repo's default branch through
+ * the scm layer's file-contents primitive (github/gitlab twins — see
+ * js/common/remoteProjectConfig.js). Fail-open: a capability miss, an
+ * unknown target repo, a throwing fetch, an HTML page or corrupt content all
+ * read as no config (defaults) — the fetched read never overrides a local
+ * one because it only runs past the loop above. resolvedPath is the
+ * canonical in-repo path so downstream legs re-resolve it locally whenever
+ * they do have a checkout.
+ *
+ * @returns {Object|null} { loaded, resolvedPath } or null
+ */
+function loadRemoteProjectConfig(params, customParams) {
+    if (!remoteProjectConfig) return null;
+    var source = remoteProjectConfig.fetchRemoteConfigSource(params, customParams);
+    if (!source) return null;
+    var config = evaluateConfigSource(source, remoteProjectConfig.REMOTE_CONFIG_LABEL);
+    if (!config) return null;
+    console.log('configLoader: Loaded config from ' + remoteProjectConfig.REMOTE_CONFIG_PATH +
+        ' (remote scm fetch)');
+    return { loaded: config, resolvedPath: remoteProjectConfig.REMOTE_CONFIG_PATH };
+}
+
+/**
+ * Probe the LOCAL candidate config sources in order and return the first one
+ * that loads (the historical precedence):
  *   configPath → customParams.configPath → agentConfigsDir → .dmtools → ../.dmtools
  *
  * @returns {Object} { loaded: Object|null, resolvedPath: string|null }
  */
-function discoverProjectConfig(params, customParams) {
-    var candidates = buildConfigCandidates(params, customParams);
+function discoverLocalProjectConfig(candidates) {
     var loaded = null;
     var resolvedPath = null;
     for (var i = 0; i < candidates.length; i++) {
@@ -654,10 +698,29 @@ function discoverProjectConfig(params, customParams) {
             console.log('configLoader: Loaded config from ' + candidate.path + candidate.logSuffix);
         }
     }
-    if (!loaded) {
+    return { loaded: loaded, resolvedPath: resolvedPath };
+}
+
+/**
+ * Probe the candidate config sources in order and return the first one that
+ * loads, mirroring the historical precedence:
+ *   configPath → customParams.configPath → agentConfigsDir → .dmtools → ../.dmtools
+ * and — gh-1421 — when ALL of them miss, the remote scm fetch of
+ * `<defaultBranch>/.dmtools/config.js` as the LAST candidate (fail-open;
+ * one fetch per job run via the module's short-TTL cache).
+ *
+ * @returns {Object} { loaded: Object|null, resolvedPath: string|null }
+ */
+function discoverProjectConfig(params, customParams) {
+    var discovered = discoverLocalProjectConfig(buildConfigCandidates(params, customParams));
+    if (!discovered.loaded) {
+        var remote = loadRemoteProjectConfig(params, customParams);
+        if (remote) discovered = remote;
+    }
+    if (!discovered.loaded) {
         console.log('configLoader: No project config found, using defaults');
     }
-    return { loaded: loaded, resolvedPath: resolvedPath };
+    return discovered;
 }
 
 /**
@@ -1361,6 +1424,7 @@ module.exports = {
     appendTrackerPrompts: appendTrackerPrompts,
     pickAgentPatch: pickAgentPatch,
     loadConfigFile: loadConfigFile,
+    evaluateConfigSource: evaluateConfigSource,
     loadAgentConfig: loadAgentConfig,
     loadHookFn: loadHookFn,
     buildConfigCandidates: buildConfigCandidates,
