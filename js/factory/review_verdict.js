@@ -354,7 +354,9 @@ function buildConflictingVerdictsComment(conflict) {
     var m = conflict.marker;
     var census = 'blocking=' + reviewVerdicts.censusCount(m.blocking) +
         ', important=' + reviewVerdicts.censusCount(m.important) +
-        ', suggestions=' + reviewVerdicts.censusCount(m.suggestions);
+        ', suggestions=' + reviewVerdicts.censusCount(m.suggestions) +
+        ', nits=' + reviewVerdicts.censusCount(m.nits) +
+        ', digest=' + reviewVerdicts.censusCount(m.digest);
     return [
         '🛑 **Contradictory review verdicts** — the machine verdict record and the legacy verdict parser disagree, so the review cycle cannot be labeled (gh-1419).',
         '',
@@ -511,7 +513,14 @@ function probeVerdictContract(opts, io, ctx) {
 
 function logDecisionLine(log, probed) {
     var contract = probed.contract;
-    log('→ review decision: ' + probed.decision + ' (source=' + (contract.source || 'none') +
+    // gh-1419 rework pickup (digest): when the machine marker governed,
+    // the line names the GOVERNING source — the legacy contract's parser
+    // source would misattribute the decision. Pre-marker flows keep the
+    // sh byte-exact decision line (contract.source || 'none').
+    var source = probed.verdictSource === 'machine-verdict-marker'
+        ? probed.verdictSource
+        : (contract.source || 'none');
+    log('→ review decision: ' + probed.decision + ' (source=' + source +
         ', override=' + (contract.override || 'false') + ', rounds_done=' + contract.rounds_done + ')');
 }
 
@@ -769,7 +778,11 @@ function applyReviewVerdict(opts, io) {
     var probed = probeVerdictContract(opts, io, ctx);
     ctx.contract = probed.contract;
     wireEffectiveDecision(opts, io, ctx);
-    logDecisionLine(ctx.log, { contract: ctx.contract, decision: ctx.decision });
+    logDecisionLine(ctx.log, {
+        contract: ctx.contract,
+        decision: ctx.decision,
+        verdictSource: ctx.verdictSource
+    });
     if (ctx.decision === 'rework') return applyReworkVerdict(opts, io, ctx);
     if (ctx.decision !== 'approve') return applyMissingVerdict(io, ctx);
     return applyApproveVerdict(opts, io, ctx);

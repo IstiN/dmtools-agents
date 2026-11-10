@@ -128,18 +128,27 @@ function baseRules(over) {
     ];
 }
 
+// gh-1419 rework: a tiny defaults helper — the CRAP ratchet reds on chains
+// of ternary/`||` default branches (contractLines grandfathered at 9,
+// markerBody new over the threshold-8 bar); optVal collapses each default
+// to a plain call (the review thread's suggested fix). EXACT `!== undefined`
+// semantics — never the truthy `||` (a `source: ''` override must survive).
+function optVal(over, key, fallback) {
+    return over[key] !== undefined ? over[key] : fallback;
+}
+
 // the contract the stubbed parser emits (eval-safe key=value, like the
 // awf A/B scenario's setup/review-verdict.sh stub)
 function contractLines(over) {
     over = over || {};
     return [
         'decision=' + (over.decision || 'unknown'),
-        'source=' + (over.source !== undefined ? over.source : 'stub-source'),
-        'override=' + (over.override !== undefined ? over.override : 'false'),
-        'rounds_done=' + (over.roundsDone !== undefined ? over.roundsDone : '2'),
-        'next_round=' + (over.nextRound !== undefined ? over.nextRound : '3'),
+        'source=' + optVal(over, 'source', 'stub-source'),
+        'override=' + optVal(over, 'override', 'false'),
+        'rounds_done=' + optVal(over, 'roundsDone', '2'),
+        'next_round=' + optVal(over, 'nextRound', '3'),
         'escalate=' + (over.escalate || 'false'),
-        'round_labels=' + (over.roundLabels !== undefined ? over.roundLabels : 'rework-round-2'),
+        'round_labels=' + optVal(over, 'roundLabels', 'rework-round-2'),
         'diagnosis="' + (over.diagnosis || 'pr_review.json=present run-output=missing') + '"'
     ].join('\n');
 }
@@ -1231,9 +1240,9 @@ function markerBody(verdict, head, over) {
     var payload = {
         head: head || MARKER_SHA,
         verdict: verdict,
-        blocking: over.blocking === undefined ? 0 : over.blocking,
-        important: over.important === undefined ? 0 : over.important,
-        suggestions: over.suggestions === undefined ? 0 : over.suggestions,
+        blocking: optVal(over, 'blocking', 0),
+        important: optVal(over, 'important', 0),
+        suggestions: optVal(over, 'suggestions', 0),
         nits: over.nits || 0,
         digest: over.digest || 0,
         at: over.at || '2026-11-09T15:42:57Z',
@@ -1293,6 +1302,8 @@ suite('factoryReviewVerdict — machine verdict record primacy (gh-1419)', funct
       'the governing marker is named in the log');
     assert.ok(logs.indexOf('→ review decision: rework') !== -1, 'the effective decision is rework');
     assert.ok(logs.indexOf('override=true') !== -1, 'the neutralized override key stays visible in the decision line');
+    assert.ok(logs.indexOf('(source=machine-verdict-marker,') !== -1,
+      'the decision line names the GOVERNING source, not the parser contract source (digest: verdictSource was set but never read)');
   });
 
   test('AC1b: marker APPROVE governs — approve path with the green-checks gate unchanged', function () {
@@ -1357,8 +1368,11 @@ suite('factoryReviewVerdict — machine verdict record primacy (gh-1419)', funct
     var body = x.io.written[bodyPath];
     assert.ok(body.indexOf('**APPROVE**') !== -1, 'the comment names the marker verdict');
     assert.ok(body.indexOf('REQUEST_CHANGES-class') !== -1, 'the comment names the parser class');
-    assert.ok(body.indexOf('machine-reviewer[bot]') === -1 || true);
+    assert.ok(body.indexOf('machine-reviewer[bot]') === -1,
+      'the comment names the verdict sources, not the author login');
     assert.ok(body.indexOf('(gh-1419)') !== -1);
+    assert.ok(body.indexOf('nits=') !== -1 && body.indexOf('digest=') !== -1,
+      'the census names the FULL severity census — nits and digest included (digest item)');
     assert.equal(x.st.commands.join('\n').indexOf('pr_approved') !== -1, false);
     assert.equal(x.st.commands.join('\n').indexOf('agent:rework') !== -1, false,
       'no silent rework either — a disagreement is escalated, not dispatched');
@@ -1488,9 +1502,9 @@ suite('factoryReviewVerdict — gh-1419 pure helpers', function () {
     return {
       head: head || MARKER_SHA,
       verdict: verdict,
-      blocking: over.blocking || 0,
-      important: over.important || 0,
-      suggestions: over.suggestions || 0,
+      blocking: optVal(over, 'blocking', 0),
+      important: optVal(over, 'important', 0),
+      suggestions: optVal(over, 'suggestions', 0),
       nits: 0, digest: 0,
       at: over.at || '2026-11-09T15:42:57Z',
       source: over.source || 'pr_review.json'
