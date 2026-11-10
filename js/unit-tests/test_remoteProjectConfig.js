@@ -474,11 +474,17 @@ suite('remoteProjectConfig.fetchRemoteConfigSource — capability + fail-open', 
 
 suite('remoteProjectConfig.fetchRemoteConfigSource — TTL cache', function() {
 
+    test('the TTL is the documented 60s (one fetch per job run — gh-1421 review)', function() {
+        var mod = makeRemoteModule(null);
+        assert.equal(mod.REMOTE_CONFIG_TTL_MS, 60000,
+            'the module header, the ticket and the PR description all promise a 60s TTL');
+    });
+
     test('second call in one run hits the cache (single fetch asserted)', function() {
         var mod = makeRemoteModule(null);
         var io = scriptedIo(JSON.stringify({ content: B64_ALLOWLIST, encoding: 'base64' }));
         var first = fetchWith(mod, io, { repo: 'ex/repo' }, {}, { nowMs: 1000 });
-        var second = fetchWith(mod, io, { repo: 'ex/repo' }, {}, { nowMs: 1000 + mod.REMOTE_CONFIG_TL_MS - 1 });
+        var second = fetchWith(mod, io, { repo: 'ex/repo' }, {}, { nowMs: 1000 + mod.REMOTE_CONFIG_TTL_MS - 1 });
         assert.equal(first, SRC_ALLOWLIST);
         assert.equal(second, SRC_ALLOWLIST);
         assert.equal(io.calls.length, 1, 'expected exactly ONE bridge fetch for two calls');
@@ -488,7 +494,7 @@ suite('remoteProjectConfig.fetchRemoteConfigSource — TTL cache', function() {
         var mod = makeRemoteModule(null);
         var io = scriptedIo(JSON.stringify({ content: B64_REMOTE, encoding: 'base64' }));
         fetchWith(mod, io, { repo: 'ex/repo' }, {}, { nowMs: 1000 });
-        fetchWith(mod, io, { repo: 'ex/repo' }, {}, { nowMs: 1000 + mod.REMOTE_CONFIG_TL_MS });
+        fetchWith(mod, io, { repo: 'ex/repo' }, {}, { nowMs: 1000 + mod.REMOTE_CONFIG_TTL_MS });
         assert.equal(io.calls.length, 2, 'the TTL expiry must allow a refetch');
     });
 
@@ -731,21 +737,39 @@ suite('scm provider twins — getFileContents', function() {
 
     test('cache eviction: expired entries drop first, then the map drops wholesale', function() {
         var mod = makeRemoteModule(null);
-        var io = { provider: 'github', getFileContents: function() { return 'src'; } };
+        var calls = 0;
+        var io = { provider: 'github', getFileContents: function() { calls++; return 'src'; } };
         var i;
-        // fill to the max (16 entries) at t=1000
+        // Timestamps are TTL-relative so the expired-drop branch keeps coverage
+        // at any TTL (the 60s one included): t2 = fill + TTL + slack.
+        var t1 = 1000;
+        var t2 = t1 + mod.REMOTE_CONFIG_TTL_MS + 100;
+        // fill to the max (16 entries) at t1
         for (i = 0; i < mod.REMOTE_CONFIG_CACHE_MAX; i++) {
-            mod.fetchRemoteConfigSource({ repo: 'o/r' + i }, {}, { io: io, nowMs: 1000 });
+            mod.fetchRemoteConfigSource({ repo: 'o/r' + i }, {}, { io: io, nowMs: t1 });
         }
-        // t=1700: everything expired → the 17th fetch evicts (the delete path),
+        // t2: everything expired → the 17th fetch evicts (the delete path),
         // empties the map, then caches the new entry
-        var src = mod.fetchRemoteConfigSource({ repo: 'o/rX' }, {}, { io: io, nowMs: 1700 });
+        var src = mod.fetchRemoteConfigSource({ repo: 'o/rX' }, {}, { io: io, nowMs: t2 });
         assert.equal(src, 'src');
-        // another 16 fresh entries at t=1700 → the 17th evicts wholesale (no deletes)
+        // another 16 fresh entries at t2 → the 17th evicts wholesale (no deletes)
         for (i = 1; i <= mod.REMOTE_CONFIG_CACHE_MAX; i++) {
-            mod.fetchRemoteConfigSource({ repo: 'o/q' + i }, {}, { io: io, nowMs: 1700 });
+            mod.fetchRemoteConfigSource({ repo: 'o/q' + i }, {}, { io: io, nowMs: t2 });
         }
-        assert.equal(mod.fetchRemoteConfigSource({ repo: 'o/last' }, {}, { io: io, nowMs: 1700 }), 'src');
+        assert.equal(mod.fetchRemoteConfigSource({ repo: 'o/last' }, {}, { io: io, nowMs: t2 }), 'src');
+        // mixed expiry at t2: the 17th fetch must delete ONLY the expired entry
+        // ('o/old' @t1) — a fresh entry ('o/f1' @t2) SURVIVES the same eviction,
+        // which distinguishes the delete path from the wholesale drop at any TTL.
+        mod._clearRemoteConfigCache();
+        mod.fetchRemoteConfigSource({ repo: 'o/old' }, {}, { io: io, nowMs: t1 });
+        for (i = 1; i < mod.REMOTE_CONFIG_CACHE_MAX; i++) {
+            mod.fetchRemoteConfigSource({ repo: 'o/f' + i }, {}, { io: io, nowMs: t2 });
+        }
+        var callsBeforeSurvivalProbe = calls;
+        mod.fetchRemoteConfigSource({ repo: 'o/probe' }, {}, { io: io, nowMs: t2 }); // evicts 'o/old' only
+        mod.fetchRemoteConfigSource({ repo: 'o/f1' }, {}, { io: io, nowMs: t2 });
+        assert.equal(calls, callsBeforeSurvivalProbe + 1,
+            'the fresh entry must survive the eviction that deleted the expired one (cache hit, no refetch)');
         mod._clearRemoteConfigCache();
     });
 

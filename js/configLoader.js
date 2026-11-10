@@ -707,7 +707,7 @@ function discoverLocalProjectConfig(candidates) {
  *   configPath → customParams.configPath → agentConfigsDir → .dmtools → ../.dmtools
  * and — gh-1421 — when ALL of them miss, the remote scm fetch of
  * `<defaultBranch>/.dmtools/config.js` as the LAST candidate (fail-open;
- * one fetch per job run via the module's short-TL cache).
+ * one fetch per job run via the module's short-TTL cache).
  *
  * @returns {Object} { loaded: Object|null, resolvedPath: string|null }
  */

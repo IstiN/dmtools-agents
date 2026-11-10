@@ -7,7 +7,7 @@
  * config acquisition to one SCM per workflow file. This module moves the read
  * behind the scm layer: when every LOCAL config candidate misses, the engine
  * fetches `.dmtools/config.js` from the repo's DEFAULT BRANCH through the
- * provider's file-contents bridge primitive — one fetch per job run (short-TL
+ * provider's file-contents bridge primitive — one fetch per job run (short-TTL
  * cache), failing open to "no config" on any failure. The same invariants as
  * the local loader hold: a broken read never becomes a wrong config — it
  * becomes NO config, and every guard keyed on it (machineAuthor's empty
@@ -56,11 +56,11 @@ var REMOTE_CONFIG_PATH = '.dmtools/config.js';
 // The label loadConfigFile-style warnings carry for the remote source.
 var REMOTE_CONFIG_LABEL = '.dmtools/config.js (remote scm fetch)';
 
-// Short-TL cache: one fetch per job run. A job run is minutes; 60s collapses
+// Short-TTL cache: one fetch per job run. A job run is minutes; 60s collapses
 // the burst of loadProjectConfig calls one decision makes (machineLoginsOf +
 // reviewPolicy + downstream propagation) while bounding staleness for
 // long-lived engines.
-var REMOTE_CONFIG_TL_MS = 600;
+var REMOTE_CONFIG_TTL_MS = 60000;
 
 // The cache holds at most one entry per (provider, repo) a process touched;
 // past this the expired entries drop first, then the whole map (bounded —
@@ -363,7 +363,7 @@ function cacheKeyOf(provider, target) {
 function cacheGet(key, nowMs) {
     var entry = _remoteConfigCache[key];
     if (!entry) return { hit: false };
-    if (nowMs - entry.fetchedAt >= REMOTE_CONFIG_TL_MS) {
+    if (nowMs - entry.fetchedAt >= REMOTE_CONFIG_TTL_MS) {
         delete _remoteConfigCache[key];
         return { hit: false };
     }
@@ -381,7 +381,7 @@ function cachePut(key, source, nowMs) {
 function cacheEvict(nowMs) {
     var keys = Object.keys(_remoteConfigCache);
     for (var i = 0; i < keys.length; i++) {
-        if (nowMs - _remoteConfigCache[keys[i]].fetchedAt >= REMOTE_CONFIG_TL_MS) {
+        if (nowMs - _remoteConfigCache[keys[i]].fetchedAt >= REMOTE_CONFIG_TTL_MS) {
             delete _remoteConfigCache[keys[i]];
         }
     }
@@ -474,7 +474,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         REMOTE_CONFIG_PATH: REMOTE_CONFIG_PATH,
         REMOTE_CONFIG_LABEL: REMOTE_CONFIG_LABEL,
-        REMOTE_CONFIG_TL_MS: REMOTE_CONFIG_TL_MS,
+        REMOTE_CONFIG_TTL_MS: REMOTE_CONFIG_TTL_MS,
         REMOTE_CONFIG_CACHE_MAX: REMOTE_CONFIG_CACHE_MAX,
         remoteConfigIo: remoteConfigIo,
         remoteConfigRepositoryOf: remoteConfigRepositoryOf,
