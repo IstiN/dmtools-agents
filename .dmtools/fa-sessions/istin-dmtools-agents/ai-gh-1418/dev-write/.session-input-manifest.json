@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-10T10:34:44.833Z",
+  "ticketKey": "gh-1418",
+  "headSha": "bf94b5237ddc2d297d4a2a491b9905e691d85a23",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:7cf35420ee18efa5",
+      "size": 52655
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:4c378cc881a93b56",
+      "size": 4648057
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:a04b964f01f37ddd",
+      "size": 2277
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:64f01b441a1a7254",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:b2a7c365ff01c561",
+      "size": 9556
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:13281f7d7349763c",
+      "size": 3972
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:98f279618d91124d",
+      "size": 2245
+    },
+    "request.md": {
+      "hash": "fnv1a64:5026a1fccf621bb6",
+      "size": 4856
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:53fc0cd38273372d",
+      "size": 1917
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:c7a8eca4888f2a11",
+      "size": 798
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:5705ad47c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:317c0261bc589e53",
+      "size": 4971
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:5026a1fccf621bb6",
+      "size": 4856
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs61p4nr",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeBackstop.js:995",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red at HEAD `bf94b523` — the crap ratchet fails (exit 2)**\n\nThe `crap` check fails on this PR's head commit ([ci_failures.md](../ci_failures.md), run 42795874525; full log in `ci_failures_full.log`):\n\n```text\nCRAP Ratchet\n============\nREGRESSION js/unit-tests/test_mergeBot.js::fixture: 11 -> 12\nNEW > 8    js/common/mergeBackstop.js::commentsForRun: 9.2\n1 regression(s), 1 new over threshold, 0 improvement(s), 0 removed\n```\n\nThe ratchet is monotone (\"CRAP may only decrease\"), so `commentsForRun` — introduced by this hunk — must land at CRAP ≤ 8, and the `test_mergeBot.js` `fixture` must come back to 11.\n\nTwo concrete remediation paths:\n\n1. **`commentsForRun: 9.2`** — the two fail-closed throw branches are never exercised: the `ioFixture` in `test_mergeBackstop.js` always provides `getComments`, so the `!t.prComments` → return `null` path and the `!comments && needsLedger` → throw path stay uncovered. Either (a) add the two negative tests — a hold-only run without a comments primitive returns `null`; an ack/counted run without one (or with a null read) throws — which lifts the coverage term below the gate, or (b) extract the throw into a named helper (e.g. `requireLedgerBase(t, cls, inp)`), which drops the branch count under the ceiling.\n2. **`test_mergeBot.js::fixture: 11 → 12`** — the `+1` decision is the new `opts.prComments || []` default inside the `github_get_pr_comments` mock (`test_mergeBot.js:262`). Normalize the default outside the bag literal (or hoist it into a tiny helper) to restore CC 11.\n\nEverything else is green: CI shows 9416 tests passed / 0 failed, and a local re-run of the six touched suites totals 372 passed / 0 failed — only the measured complexity gate is red. Per the repo's gate doctrine, a failing measured gate is CI breakage and blocks the merge."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61p4pz",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeBackstop.js:1058",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the clean-replay branch cannot resolve acks — the call below this line is a provable no-op**\n\n`openMachineCount(cls) = counted.length + ackThreads.length + holdThreads.length`, and `ackThreads` are a subset of the open machine rows (every ack-thread row bumps `openMachineCount` via `classifyRow` → `bucketBelowThresholdRow`). So when `!openMachineCount(cls)` is true, `cls.ackThreads` is always `[]`, and the `resolveAckThreads(t, inp.prNumber, cls.ackThreads, out)` on the next line iterates nothing.\n\nThe live ack path is the shared tail after `ledgerPhase` (`mergeBackstop.js:1070`) — which is what the gh-1418 tests actually exercise (AC2/AC3 assert the ledger stamp and the resolves on that path). This branch is the pre-gh-1418 leftover: the old condition was `!cls.counted.length`, under which the call did work. The comment above it still reads \"deferrable-tier machine threads resolve (the wontfix ack path, each with its ledger item)\" — which cannot happen in this branch.\n\nSuggest deleting the dead call and re-wording the comment to name the branch what it now is: the pure-clean replay (zero open machine threads → merge proceeds). Keeping the current comment invites a future editor to \"fix\" the condition back to `!cls.counted.length`, which would silently skip the ledger phase for ack-only runs — the exact gh-1352 invariant this PR adds.\n\nBehavior is unchanged either way (81/81 `test_mergeBackstop` tests pass), so this is clarity, not correctness."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:df716bc9",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red at HEAD `bf94b523` — the crap ratchet fails (exit 2)**\n\nThe `crap` check fails on this PR's head commit ([ci_failures.md](../ci_failures.md), run 42795874525; full log in `ci_failures_full.log`):\n\n```text\nCRAP Ratchet\n============\nREGRESSION js/unit-tests/test_mergeBot.js::fixture: 11 -> 12\nNEW > 8    js/common/mergeBackstop.js::commentsForRun: 9.2\n1 regression(s), 1 new over threshold, 0 improvement(s), 0 removed\n```\n\nThe ratchet is monotone (\"CRAP may only decrease\"), so `commentsForRun` — introduced by this hunk — must land at CRAP ≤ 8, and the `test_mergeBot.js` `fixture` must come back to 11.\n\nTwo concrete remediation paths:\n\n1. **`commentsForRun: 9.2`** — the two fail-closed throw branches are never exercised: the `ioFixture` in `test_mergeBackstop.js` always provides `getComments`, so the `!t.prComments` → return `null` path and the `!comments && needsLedger` → throw path stay uncovered. Either (a) add the two negative tests — a hold-only run without a comments primitive returns `null`; an ack/counted run without one (or with a null read) throws — which lifts the coverage term below the gate, or (b) extract the throw into a named helper (e.g. `requireLedgerBase(t, cls, inp)`), which drops the branch count under the ceiling.\n2. **`test_mergeBot.js::fixture: 11 → 12`** — the `+1` decision is the new `opts.prComments || []` default inside the `github_get_pr_comments` mock (`test_mergeBot.js:262`). Normalize the default outside the bag literal (or hoist it into a tiny helper) to restore CC 11.\n\nEverything else is green: CI shows 9416 tests passed / 0 failed, and a local re-run of the six touched suites totals 372 passed / 0 failed — only the measured complexity gate is red. Per the repo's gate doctrine, a failing measured gate is CI breakage and blocks the merge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:13f064d5",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the clean-replay branch cannot resolve acks — the call below this line is a provable no-op**\n\n`openMachineCount(cls) = counted.length + ackThreads.length + holdThreads.length`, and `ackThreads` are a subset of the open machine rows (every ack-thread row bumps `openMachineCount` via `classifyRow` → `bucketBelowThresholdRow`). So when `!openMachineCount(cls)` is true, `cls.ackThreads` is always `[]`, and the `resolveAckThreads(t, inp.prNumber, cls.ackThreads, out)` on the next line iterates nothing.\n\nThe live ack path is the shared tail after `ledgerPhase` (`mergeBackstop.js:1070`) — which is what the gh-1418 tests actually exercise (AC2/AC3 assert the ledger stamp and the resolves on that path). This branch is the pre-gh-1418 leftover: the old condition was `!cls.counted.length`, under which the call did work. The comment above it still reads \"deferrable-tier machine threads resolve (the wontfix ack path, each with its ledger item)\" — which cannot happen in this branch.\n\nSuggest deleting the dead call and re-wording the comment to name the branch what it now is: the pure-clean replay (zero open machine threads → merge proceeds). Keeping the current comment invites a future editor to \"fix\" the condition back to `!cls.counted.length`, which would silently skip the ledger phase for ack-only runs — the exact gh-1352 invariant this PR adds.\n\nBehavior is unchanged either way (81/81 `test_mergeBackstop` tests pass), so this is clarity, not correctness."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:a13b175d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The `crap` gate is red at head `bf94b523` (regression `test_mergeBot.js::fixture` 11→12 + new-over-threshold `mergeBackstop.js::commentsForRun` 9.2) and must be green before merge; one suggestion-level cleanup remains (a provably-dead ack call in the clean-replay branch).\n\n**Key Issues**:\n- 🚨 BLOCKING — `crap` ratchet fails (exit 2, \"CRAP may only decrease\"): 1 regression + 1 new over threshold → [comment1.md](pr_review_comments/comment1.md)\n- 💡 SUGGESTION — `mergeBackstop.js:1058`: the `!openMachineCount(cls)` branch's `resolveAckThreads` call iterates an always-empty array (pre-gh-1418 leftover; the misleading comment invites a regression of the gh-1352 ledger invariant) → [comment2.md](pr_review_comments/comment2.md)\n\n**Verified against the ticket (gh-1418)**: all seven unit-test ACs plus the ledger-refresh (occurrences=2), the `wontfix` tag round-trip and GraalJS-cleanliness are implemented and green locally (six touched suites: 372 passed / 0 failed; CI: 9416 passed / 0 failed). Every ack appends its gh-1352 ledger item; malformed policies fail closed with `ReviewPolicyValidationError`; the density budget rides `pr.additions` and rides the floor when absent.\n\n**Digest (ranked, non-thread)**:\n- `js/common/mergeBackstop.js:233` — `isDeferrableTier(null)` → ack is fail-open for direct callers passing an unvalidated policy table (unreachable via `runBackstop`, which always resolves/validates first); a one-line comment or default-hold would pin the direct-call contract.\n- `js/common/mergeGate.js:569` — a policy hold throws from stage 1, so stage 2's PR-side hold artifacts (`dmtools:merge-hold` marker, `needs-human` label) never post for gh-1418 holds; convergence rides the SM BLOCKED→dispositionLoop route and the funnel-job failure. Consider a PR-side hold marker for parity with the gh-1417 open-discussion hold.\n\n**Next Steps**:\n1. Fix the crap gate: cover/extract the two uncovered throw branches in `commentsForRun`, and hoist the `||` decision out of `test_mergeBot.js`'s `fixture` (details in comment1.md)\n2. Delete the dead `resolveAckThreads` call in the clean-replay branch and fix its comment (comment2.md)\n3. Re-push; the re-review then only needs to confirm the gate is green"
+    }
+  ]
+}
