@@ -31,8 +31,9 @@
  *   stage 1, count the remaining unresolved review threads — ANY author,
  *   resolved and machine-notice threads excluded (the gh-808 doctrine:
  *   the machine's own bookkeeping comments must never deadlock a PR —
- *   notice-marker bodies and [bot] authors both read as notices, the same
- *   exclusion set reviewThreadInventory applies):
+ *   threads whose root body carries a harness notice marker or a hidden
+ *   dmtools marker read as notices; bot-authored threads still count —
+ *   ANY author gates, see censusOf):
  *     - 0 → merge proceeds;
  *     - > 0 → HOLD: the merge defers to the next tick and a
  *       machine-parseable hold marker is stamped on the PR
@@ -177,19 +178,24 @@ function openThreadRowsOf(raw) {
 /**
  * The classification-independent census: unresolved, non-notice review
  * threads split by author class. Resolved threads and machine notices
- * (the gh-808 exclusion set — notice-marker bodies AND [bot] authors,
- * reviewThreadInventory parity) never count; everything else is machine
- * (the machineAuthor allowlist) or human. An EMPTY allowlist reads every
- * open thread as human (gh-1417 AC: misclassification may only affect
- * WHICH auto-disposition runs — never whether the merge is blocked).
+ * (the gh-808 doctrine — threads whose ROOT BODY carries a harness notice
+ * marker or a hidden dmtools marker) never count: the machine's own
+ * bookkeeping comments must never deadlock a PR. Everything else counts —
+ * ANY AUTHOR gates (the ticket's rule). Bot-AUTHORED threads deliberately
+ * still count: a [bot]-suffixed login is exactly how GitHub reports App
+ * identities (gh-1025), so excluding them would swallow the machine's own
+ * review threads the moment the allowlist is unresolvable — the precise
+ * "nothing gates at all" pathology gh-1417 fixes (AC4). The split is
+ * machine (the machineAuthor allowlist) or human; an EMPTY allowlist
+ * reads every open thread as human — misclassification may only affect
+ * WHICH auto-disposition runs, never whether the merge is blocked.
  */
 function censusOf(rows, logins) {
     var c = { total: 0, human: 0, machine: 0, notices: 0, resolved: 0 };
     (Array.isArray(rows) ? rows : []).forEach(function (row) {
         var t = row || {};
         if (t.resolved === true) { c.resolved++; return; }
-        if (machineNotice.isMachineNoticeBody(t.body) ||
-            machineNotice.isBotAuthor(t.author)) { c.notices++; return; }
+        if (machineNotice.isMachineNoticeBody(t.body)) { c.notices++; return; }
         c.total++;
         if (machineAuthor.loginMatchesList(t.author, logins)) c.machine++;
         else c.human++;

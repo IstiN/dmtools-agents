@@ -243,7 +243,7 @@ function run(opts, input) {
 
 suite('mergeGate: census (pure)', function () {
 
-    test('resolved, notice-body and bot-author threads never count; the rest split by author', function () {
+    test('resolved and notice-body threads never count; every other author counts and splits', function () {
         var rows = mMergeBackstop().threadRowsOf(threadsPayload([
             humanThread({ resolved: true }),
             humanThread(),
@@ -252,10 +252,10 @@ suite('mergeGate: census (pure)', function () {
             botThread()
         ]));
         var c = mMergeGate().censusOf(rows, [BOT]);
-        assert.equal(c.total, 2);
-        assert.equal(c.human, 1);
+        assert.equal(c.total, 3, 'ANY author gates — [bot]-authored threads still count (gh-1025 App identities)');
+        assert.equal(c.human, 2, 'github-actions[bot] is not in the allowlist -> human');
         assert.equal(c.machine, 1);
-        assert.equal(c.notices, 2);
+        assert.equal(c.notices, 1, 'only the notice-marker body is excluded');
         assert.equal(c.resolved, 1);
     });
 
@@ -368,11 +368,18 @@ suite('mergeGate: runGate hold decision', function () {
     });
 
     test('notice-only threads -> no hold (gh-808: machine bookkeeping never deadlocks a PR)', function () {
-        var r = run({ threads: threadsPayload([noticeThread(), botThread()]) });
-        assert.equal(r.out.held, false, 'notice bodies and [bot] authors are excluded');
+        var r = run({ threads: threadsPayload([noticeThread()]) });
+        assert.equal(r.out.held, false, 'notice bodies are excluded');
         assert.equal(r.out.total, 0);
-        assert.equal(r.out.notices, 2);
+        assert.equal(r.out.notices, 1);
         assert.equal(r.calls.commentsPosted.length, 0);
+    });
+
+    test('a [bot]-authored non-notice thread still holds (any author gates)', function () {
+        var r = run({ threads: threadsPayload([botThread()]) });
+        assert.equal(r.out.held, true, 'a [bot] login is how App identities report — excluding them would re-create the gh-1417 nothing-gates bug');
+        assert.equal(r.out.human, 1);
+        assert.equal(r.calls.commentsPosted.length, 1);
     });
 
     test('empty census -> merge proceeds, one proceed line', function () {
