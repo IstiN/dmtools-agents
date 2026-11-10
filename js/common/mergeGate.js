@@ -291,13 +291,16 @@ function escalatedHoldForHead(holds, headSha) {
  * marker was first stamped). An unparseable/absent `at` reads as DUE —
  * the escalation exists so the automatic FIFO cannot stall forever on an
  * abandoned PR, and an age-less hold is exactly an unmeasurable stall.
+ * An unset knob reads as the default valve (24h).
  */
 function escalationDue(hold, nowIso, humanHoldHours) {
     if (!hold) return false;
     var start = Date.parse(hold.at);
     var now = Date.parse(nowIso);
     if (isNaN(start) || isNaN(now)) return true;
-    return (now - start) >= humanHoldHours * HOUR_MS;
+    var hours = (typeof humanHoldHours === 'number' && isFinite(humanHoldHours) &&
+        humanHoldHours >= 0) ? humanHoldHours : DEFAULT_HUMAN_HOLD_HOURS;
+    return (now - start) >= hours * HOUR_MS;
 }
 
 // ── the stamp ────────────────────────────────────────────────────────────────
@@ -382,6 +385,7 @@ function runGate(io, owner, name, input) {
         total: 0,
         human: 0,
         machine: 0,
+        notices: 0,
         head: inp.headSha || null,
         holdPosted: false,
         holdDeduped: false,
@@ -406,6 +410,7 @@ function runGate(io, owner, name, input) {
     out.total = census.total;
     out.human = census.human;
     out.machine = census.machine;
+    out.notices = census.notices;
     if (!censusHolds(census, inp.holdOnHumanThreads)) return out; // merge proceeds
     out.held = true;
     // The escalation valve keys on HUMAN threads actually holding the
@@ -413,6 +418,10 @@ function runGate(io, owner, name, input) {
     // repeated failures escalate through the funnel job surface, never
     // through needs-human).
     var escalate = inp.holdOnHumanThreads !== false && census.human > 0;
+    if (!out.head) {
+        out.markerSkipped = true; // hold stands — no dedup key, no marker
+        return out;
+    }
     if (typeof io.getComments !== 'function') {
         out.commentsSkipped = true; // hold stands — no dedup-safe marker
         return out;

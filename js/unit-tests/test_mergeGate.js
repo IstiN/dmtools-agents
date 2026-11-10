@@ -669,11 +669,22 @@ suite('mergeGate: runForPr (stage 1 + stage 2, the shared helper)', function () 
 
     // io bag over the FULL bridge surface (the githubBridgeIo superset):
     // threads, comments, create-comment, add-labels + the backstop's
-    // digest/resolve tools. Every call lands in `calls`.
+    // digest/resolve tools. The threads payload is MUTABLE — a successful
+    // resolveThread marks the node resolved, so the stage-2 census (the
+    // second read) sees the post-resolution reality. Every call lands in
+    // `calls`.
     function bridgeIo(opts, calls) {
         calls = calls || { threadsReads: [], commentReads: [], commentsPosted: [],
             labelsAdded: [], threadResolves: [], threadReplies: [], debtIssues: [], debtSearches: [] };
-        var g = gateIo(opts, calls);
+        var nodes = (opts.threads === undefined) ? [] :
+            JSON.parse(JSON.stringify(opts.threads.data.repository.pullRequest.reviewThreads.nodes));
+        var g = gateIo({}, calls);
+        g.io.getThreads = function (a) {
+            calls.threadsReads.push(a);
+            if (opts.threadsThrows) throw new Error(opts.threadsThrows);
+            return JSON.stringify({ data: { repository: { pullRequest:
+                { reviewThreads: { nodes: nodes } } } } });
+        };
         g.io.searchIssues = function () { calls.debtSearches.push({}); return JSON.stringify({ items: [] }); };
         g.io.createIssue = function (a) {
             calls.debtIssues.push(a);
@@ -684,10 +695,21 @@ suite('mergeGate: runForPr (stage 1 + stage 2, the shared helper)', function () 
                 throw new Error('422 ' + a.threadId);
             }
             calls.threadResolves.push(a);
+            nodes.forEach(function (n) { if (n && String(n.id) === String(a.threadId)) n.isResolved = true; });
             return '{}';
         };
         g.io.replyToThread = function (a) { calls.threadReplies.push(a); return '{}'; };
         return g;
+    }
+
+    // The merge-hold markers among the posted comments (stage 1's ledger
+    // stamp and ack replies share the create-comment primitive).
+    function holdMarkersPosted(calls) {
+        var n = 0;
+        calls.commentsPosted.forEach(function (c) {
+            if (String(c.body || '').indexOf('dmtools:merge-hold') !== -1) n++;
+        });
+        return n;
     }
 
     var PR = { number: 12, title: 'feat: x', headRefOid: HEAD };
@@ -702,11 +724,11 @@ suite('mergeGate: runForPr (stage 1 + stage 2, the shared helper)', function () 
         var bridge = bridgeIo({ threads: threadsPayload([machineThread(), humanThread()]) });
         var out = runForPr(bridge);
         assert.equal(bridge.calls.threadResolves.length, 1, 'stage 1 resolved the machine thread');
-        assert.equal(bridge.calls.debtIssues.length, 0, 'the ⚠️ default marker maps below IMPORTANT — ack path');
+        assert.equal(bridge.calls.debtIssues.length, 1, 'the ⚠️ IMPORTANT body rides the digest path');
         assert.equal(out.held, true, 'stage 2 holds on the human thread');
         assert.equal(out.human, 1);
         assert.equal(out.machine, 0, 'the machine thread is resolved by the time stage 2 counts');
-        assert.equal(bridge.calls.commentsPosted.length, 1, 'the open-threads marker stamped');
+        assert.equal(holdMarkersPosted(bridge.calls), 1, 'the open-threads marker stamped');
     });
 
     test('all clear: stage 1 clean + stage 2 census zero -> merge proceeds', function () {
@@ -723,7 +745,7 @@ suite('mergeGate: runForPr (stage 1 + stage 2, the shared helper)', function () 
         var threw = null;
         try { runForPr(bridge); } catch (e) { threw = e; }
         assert.ok(threw, 'the loop-throw semantics are preserved (gh-1370)');
-        assert.equal(bridge.calls.commentsPosted.length, 0, 'stage 2 never stamped');
+        assert.equal(holdMarkersPosted(bridge.calls), 0, 'stage 2 never stamped');
         assert.equal(bridge.calls.labelsAdded.length, 0);
     });
 
@@ -747,7 +769,7 @@ suite('mergeGate: runForPr (stage 1 + stage 2, the shared helper)', function () 
         assert.equal(out.held, true, 'the hold survives an unresolvable allowlist');
         assert.equal(out.human, 1, 'the misclassified machine thread reads human');
         assert.equal(out.machine, 0);
-        assert.equal(bridge.calls.commentsPosted.length, 1);
+        assert.equal(holdMarkersPosted(bridge.calls), 1);
     });
 
     test('runGateForPr honors the mergeGate knobs from jobParams (knob wiring)', function () {
