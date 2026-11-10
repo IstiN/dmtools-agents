@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-10T17:25:12.839Z",
+  "ticketKey": "gh-1421",
+  "headSha": "6e758bf1bfba6ca1741d86d1d5395ca307aed874",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:786ce1949bdb660f",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:b65f7f8f54d66cb7",
+      "size": 8594
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:74c28c90c6c29310",
+      "size": 3239
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:fa9f296debe8332e",
+      "size": 6524
+    },
+    "request.md": {
+      "hash": "fnv1a64:79cc3c551a995418",
+      "size": 3942
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:53fc0cd38273372d",
+      "size": 1917
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:3f949edabcb87960",
+      "size": 712
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:1fbd0c8bc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:b912ee2e62411273",
+      "size": 4028
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:79cc3c551a995418",
+      "size": 3942
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs610ATf",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/remoteProjectConfig.js:63",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: shipped TTL is 600ms — the module header, the ticket and the PR description all promise 60s (\"one fetch per job run\")**\n\n`js/common/remoteProjectConfig.js:59-63` documents a **60s** TTL whose purpose is\n\"one fetch per job run … while bounding staleness for long-lived engines\":\n\n```javascript\n// Short-TL cache: one fetch per job run. A job run is minutes; 60s collapses\n// the burst of loadProjectConfig calls one decision makes (machineLoginsOf +\n// reviewPolicy + downstream propagation) while bounding staleness for\n// long-lived engines.\nvar REMOTE_CONFIG_TL_MS = 600;\n```\n\nThe shipped value is **600 (ms = 0.6s)**, which contradicts:\n\n- this very header comment (\"60s collapses the burst\");\n- the PR description — \"one fetch per run via a **60s TTL cache**\" (pr_info.md:19, and the mermaid \"60s TTL cache - one fetch per run\" at pr_info.md:47);\n- the ticket design — \"Short-TL cache (**one fetch per job run**)\" (ticket.md:12).\n\nConsequences of 600ms as shipped: a job that loads config, then does real work (a\nCLI leg, a fetch), then loads config again — the exact merge-funnel shape —\n**re-fetches** after 0.6s, so the AC1/ticket invariant \"second call in one run hits\nthe TTL cache\" only holds for calls within 0.6s of each other, and the header's\n\"bounding staleness for long-lived engines\" rationale does not hold at all (600ms\nmaximizes refetches instead of bounding them). No wrong config can result (the\nfetch is fail-open and idempotent) — that is why this is ⚠️, not 🚨.\n\nSame-line evidence of the confusion: the constant is named `REMOTE_CONFIG_TL_MS`\nwhile the section header 9 lines below (line 354) spells it \"the TTL cache\" —\none of the two spellings is a typo, and the PR description's \"60s\" suggests the\nintended value is `60000`.\n\nPick one and reconcile all four surfaces (constant, header comment, PR-facing\ndocs, tests):\n\n- **If 60s is intended** (what header + PR description + ticket say): set\n  `REMOTE_CONFIG_TL_MS = 60000` (and rename to `REMOTE_CONFIG_TTL_MS`). Note the\n  eviction test (`test_remoteProjectConfig.js:738-748`) hardcodes `nowMs: 1000`\n  → `1700` (700ms elapsed) to exercise the expired-drop branch of `cacheEvict`;\n  shift those timestamps (e.g. `1000` → `1000 + REMOTE_CONFIG_TL_MS + 100`) or\n  that branch silently loses coverage with a 60s TTL (and the crap ratchet may\n  regress on `cacheEvict`).\n- **If 600ms is intended**: fix the header comment (lines 59-63) and say 600ms —\n  but then the PR description's \"60s TTL cache / one fetch per run\" claims and the\n  ticket's \"one fetch per job run\" design line are no longer true of this change\n  set, which needs a note.\n\nThe rename is mechanical: every other test references\n`mod.REMOTE_CONFIG_TL_MS` symbolically; only the eviction test hardcodes the\n700ms assumption."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:6607c74a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: shipped TTL is 600ms — the module header, the ticket and the PR description all promise 60s (\"one fetch per job run\")**\n\n`js/common/remoteProjectConfig.js:59-63` documents a **60s** TTL whose purpose is\n\"one fetch per job run … while bounding staleness for long-lived engines\":\n\n```javascript\n// Short-TL cache: one fetch per job run. A job run is minutes; 60s collapses\n// the burst of loadProjectConfig calls one decision makes (machineLoginsOf +\n// reviewPolicy + downstream propagation) while bounding staleness for\n// long-lived engines.\nvar REMOTE_CONFIG_TL_MS = 600;\n```\n\nThe shipped value is **600 (ms = 0.6s)**, which contradicts:\n\n- this very header comment (\"60s collapses the burst\");\n- the PR description — \"one fetch per run via a **60s TTL cache**\" (pr_info.md:19, and the mermaid \"60s TTL cache - one fetch per run\" at pr_info.md:47);\n- the ticket design — \"Short-TL cache (**one fetch per job run**)\" (ticket.md:12).\n\nConsequences of 600ms as shipped: a job that loads config, then does real work (a\nCLI leg, a fetch), then loads config again — the exact merge-funnel shape —\n**re-fetches** after 0.6s, so the AC1/ticket invariant \"second call in one run hits\nthe TTL cache\" only holds for calls within 0.6s of each other, and the header's\n\"bounding staleness for long-lived engines\" rationale does not hold at all (600ms\nmaximizes refetches instead of bounding them). No wrong config can result (the\nfetch is fail-open and idempotent) — that is why this is ⚠️, not 🚨.\n\nSame-line evidence of the confusion: the constant is named `REMOTE_CONFIG_TL_MS`\nwhile the section header 9 lines below (line 354) spells it \"the TTL cache\" —\none of the two spellings is a typo, and the PR description's \"60s\" suggests the\nintended value is `60000`.\n\nPick one and reconcile all four surfaces (constant, header comment, PR-facing\ndocs, tests):\n\n- **If 60s is intended** (what header + PR description + ticket say): set\n  `REMOTE_CONFIG_TL_MS = 60000` (and rename to `REMOTE_CONFIG_TTL_MS`). Note the\n  eviction test (`test_remoteProjectConfig.js:738-748`) hardcodes `nowMs: 1000`\n  → `1700` (700ms elapsed) to exercise the expired-drop branch of `cacheEvict`;\n  shift those timestamps (e.g. `1000` → `1000 + REMOTE_CONFIG_TL_MS + 100`) or\n  that branch silently loses coverage with a 60s TTL (and the crap ratchet may\n  regress on `cacheEvict`).\n- **If 600ms is intended**: fix the header comment (lines 59-63) and say 600ms —\n  but then the PR description's \"60s TTL cache / one fetch per run\" claims and the\n  ticket's \"one fetch per job run\" design line are no longer true of this change\n  set, which needs a note.\n\nThe rename is mechanical: every other test references\n`mod.REMOTE_CONFIG_TL_MS` symbolically; only the eviction test hardcodes the\n700ms assumption."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:d35684f5",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: Strong change — the SCM-agnostic config fallback is well-isolated, strictly fail-open, and exhaustively tested (60 new tests green under real GraalJS; full suite 9553 passed / 0 failed). One important issue blocks: the shipped TTL constant is **600ms** while the module header, the ticket (`ticket.md:12` \"one fetch per job run\") and the PR description (`pr_info.md:19` \"60s TTL cache\") all promise **60s**.\n\n**Key Issues**:\n- ⚠️ IMPORTANT ×1 — `js/common/remoteProjectConfig.js:63`: `REMOTE_CONFIG_TL_MS = 600` vs documented 60s; \"one fetch per job run\" unmet for jobs spanning >0.6s between config loads (details in inline thread).\n\n**Verified** (all passed): capability-miss → fail-open; remote config loads and `machineAuthor` reaches `machineLoginsOf` through the real `mergeBackstop → configLoader → scripted io` wiring; corrupt/HTML content → defaults + warn; local candidates keep absolute precedence (primitive never called on a local hit); no-throw on every failure path; GraalJS-clean (suite runs inside GraalJS); no secrets or payload bodies in logs; eval trust domain unchanged (same-repo default branch, same `new Function` evaluator as the local loader); scope matches ticket non-goals (`mergeTrigger.js` untouched, only `.dmtools/config.js` fetched); AC4 deletion note present in `docs/machine-factory-integration.md` §2 + module header (the stopgap step itself lives in IstiN/dmtools-agentic-workflows — outside this change set, per the note).\n\n**Next Steps**:\n1. Reconcile the TTL (60s constant vs 600ms docs — pick one; see inline thread; mind the eviction-test timestamps if bumping to 60s).\n\n**Digest** (real but not thread-worthy):\n- `js/common/scm.js:267` + `js/common/remoteProjectConfig.js:71-99` — primitive-spelling selection duplicated between scm.js twins and the module's io bag (require-free by design; both spellings pinned by tests — drift risk only).\n- `js/common/scm.js:1151` — provider `getFileContents` twins have no production caller yet (test-consumed only; expected until mergeBackstop/factory-sm migrate).\n- `js/common/remoteProjectConfig.js:409` — capability-miss log line fires on every `loadProjectConfig` local-miss per process (log noise on today's primitive-less runtimes; consider caching the miss like fetch outcomes are).\n- `js/common/remoteProjectConfig.js:128` — `\"group/subgroup/project\"` splits as owner=`group`, repo=`subgroup/project`; confirm the GitLab `jobParams.repo` shape for nested groups when the GitLab runner infra lands."
+    }
+  ]
+}
