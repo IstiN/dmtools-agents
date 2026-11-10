@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-10T08:22:11.415Z",
+  "ticketKey": "pr-1423",
+  "headSha": "a2b7aceaade6699d12ac8487d1b5c00cfb22b7af",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:4d63c2fb203c7de0",
+      "size": 52481
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:26eb5ce427465e82",
+      "size": 4642050
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:1dd1128301f37ddd",
+      "size": 2277
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:8c39519608f92d38",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:46584ab21171f0bb",
+      "size": 8496
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:42c830c1be69215f",
+      "size": 113
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:a77d82ace981307f",
+      "size": 2651
+    },
+    "request.md": {
+      "hash": "fnv1a64:13ae0abf7a2ba7da",
+      "size": 2306
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:53fc0cd38273372d",
+      "size": 1917
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:76316941f83c6868",
+      "size": 508
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:b733888fc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:b4562f4ea09558a8",
+      "size": 2387
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:13ae0abf7a2ba7da",
+      "size": 2306
+    }
+  },
+  "comments": [
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:07dfdbe9",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — the `crap` job fails: `mergeGate: githubBridgeIo superset view > carries the escalation label primitive plus the backstop keys` — `expected \"function\" but got \"object\"` (9390 passed, 1 failed, exit 1)**\n\nThis test passes under the GraalJS runner (`dmtools run js/unit-tests/run_mergeGate.json` → 53/53) but fails under the **node harness CI actually runs** (`quality.yml` crap job → `node_testRunner.js` over the instrumented tree — see `ci_failures_full.log`: `❌ FAIL — 9390 passed, 1 failed` → `Process completed with exit code 1`). Reproduced locally byte-for-byte.\n\n**Root cause**: the fixture leaves the backstop bridge keys undeclared (`mMergeGate({ github_add_labels: fn })` only), so `mergeBackstop.githubBridgeIo()` resolves `github_get_pr_review_threads` / `github_get_pr_comments` / `github_create_comment` / `github_resolve_pr_thread` from the **engine globals**:\n\n- `js/unit-tests/testRunner.js` (`installNetworkGuard_`) iterates **all** injected host tools and replaces each with a throwing *function* → the typeof guards map functions → pass.\n- `js/unit-tests/node_testRunner.js:320` installs throwers for a **fixed 12-name list** that contains none of those four review-threads primitives → under that harness the identifiers are `undefined` → the guards map `null` → `typeof null === 'object'` → the assertion fails.\n\n`node_testRunner.js` documents \"Network guard, same contract as installNetworkGuard_ in testRunner.js\" — the parity contract is broken for exactly the tools production modules (`mergeBackstop`/`mergeGate`) reference. Every other suite mocks its bridge tools through the `loadModule` preamble, which is why this is the first test to expose the gap.\n\n**Fix (either makes CI green; 1 is the root-cause fix):**\n\n1. **Extend the node harness guard list** (`js/unit-tests/node_testRunner.js:320`) with the review-threads family the production modules reference: `github_get_pr_review_threads`, `github_get_pr_comments`, `github_create_comment`, `github_resolve_pr_thread`, `github_reply_to_pr_thread`, `github_search_issues`, `github_create_issue` — restoring the documented parity contract for future suites too.\n2. **Or mock the keys in this test's globals bag** (the repo convention — \"mock all dmtools globals\"): `mMergeGate({ github_add_labels: fn, github_get_pr_review_threads: fn, github_get_pr_comments: fn, github_create_comment: fn, github_resolve_pr_thread: fn })`. The sibling test (`github_add_labels: undefined` → `null`) already covers the capability-miss mapping, so no coverage is lost.\n\nVerify with the command CI runs: `node js/unit-tests/node_testRunner.js $(node -e \"console.log(require('./js/unit-tests/run_all.json').params.jobParams.testFiles.join(' '))\")` → expect `PASS — 9390 passed, 0 failed`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:2c78f694",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread `PRRT_kwDORYAuYs61mVHC` — fixed (root-cause fix option 1 + the test pin)\n\n**🚨 BLOCKING — CI red (`crap` job): `mergeGate: githubBridgeIo superset view > carries the escalation label primitive plus the backstop keys` — `expected \"function\" but got \"object\"`**\n\n## What was done\n\nTook **fix option 1 — the root-cause fix** — and additionally hardened the named test so the parity contract stays pinned:\n\n1. **`js/unit-tests/node_testRunner.js` (harness guard list extended)** — the node harness now installs throwing stubs for the full review-threads family the production modules typeof-guard in `mergeBackstop.githubBridgeIo()` / `mergeGate.githubBridgeIo()` / `mergeVerdictGate.githubBridgeIo()`:\n   - `github_get_pr_review_threads`, `github_get_pr_comments`, `github_create_comment`, `github_resolve_pr_thread`, `github_reply_to_pr_thread`, `github_search_issues`, `github_create_issue`\n\n   This restores the documented parity contract (\"Network guard, same contract as `installNetworkGuard_` in `testRunner.js`\"): the GraalJS guard is prefix-driven (every `github_*` global), the node guard was a fixed 12-name list missing exactly these primitives. A comment at the list now warns that a name missing there makes identifiers resolve `undefined` under this harness only and breaks suites like this one — so future bridge tools don't re-open the gap.\n\n2. **`js/unit-tests/test_mergeGate.js:800` (the named test extended)** — the superview test now asserts the **full** backstop key set (`searchIssues`, `createIssue`, `replyToThread` added to the existing four) and carries a comment explaining it pins the harness guard parity. The previously unguarded three keys were verifiable nowhere under the node harness; now list drift for any of the seven names fails this test instead of failing CI. Capability-miss coverage is unchanged (the sibling `github_add_labels: undefined → null` test still exercises the null mapping; `test_mergeBackstop.js` already covers all seven `undefined → null` mappings).\n\nFixing in the commit: `a2b7aceaa` (\"gh-1417 [fix] node harness network guard covers the review-threads bridge family\").\n\n## Verification (TDD)\n\n- **RED (reproduced)**: `node js/unit-tests/node_testRunner.js js/unit-tests/test_mergeGate.js` failed byte-for-byte like CI — `expected \"function\" but got \"object\"` (52 passed, 1 failed, exit 1); after extending the test with the three extra assertions it still failed (the first unguarded key) under node while passing 53/53 under the GraalJS runner — the exact parity break.\n- **GREEN**: the same mergeGate suite under the node harness: `PASS — 53 passed, 0 failed` (exit 0).\n- **Full suite, the exact command CI runs**:\n  ```bash\n  node js/unit-tests/node_testRunner.js $(node -e \"console.log(require('./js/unit-tests/run_all.json').params.jobParams.testFiles.join(' '))\")\n  ```\n  → `PASS — 9391 passed, 0 failed` (exit 0; was 9390 passed / 1 failed on `c40daf51`).\n- **GraalJS canonical runner**: `dmtools run js/unit-tests/run_mergeGate.json` → `53 passed, 0 failed`; full `dmtools run js/unit-tests/run_all.json` re-run against the fixed tree — see the PR rework summary for the final count.\n\nNo production code changed — the gate modules were correct; only the test harness parity and the pinning test moved."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:a366e675",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST CHANGES\n\n**Summary**: The two-stage merge gate (gh-1417) implementation is solid — shared helper across all three funnels, fail-closed census, well-tested escalation valve — but CI is red: the `crap` job fails because `test_mergeGate.js`'s superview test passes under the GraalJS runner yet fails under the node harness CI runs (fixed 12-name network-guard list lacks the review-threads primitives → `githubBridgeIo()` maps `null`).\n\n**Key Issues**:\n- 🚨 1 blocking — CI breakage: `mergeGate: githubBridgeIo superset view` test fails under `node_testRunner.js` (9390 passed / 1 failed, exit 1). Fix the harness guard list or mock the keys in the test.\n\n**Next Steps**:\n1. Extend `js/unit-tests/node_testRunner.js:320` guard list with the review-threads family (`github_get_pr_review_threads`, `github_get_pr_comments`, `github_create_comment`, `github_resolve_pr_thread`, …) — root-cause fix for the documented harness parity contract — or mock the four bridge keys in the superset test's globals bag.\n2. Re-run the node harness command CI uses (`node js/unit-tests/node_testRunner.js <run_all.json files>`) → expect 9390 passed / 0 failed.\n\n<details><summary>Ranked digest (non-blocking, no rework required)</summary>\n\n- `js/mergeTrigger.js:383` — a hold tick logs the census twice (the gate's said outcome line + the funnel's ⏳ push); matches the gh-1416 precedent, cosmetic.\n- `js/common/mergeGate.js:159` — `existingHolds` accepts same-head hold markers from ANY author (documented); a forged marker with an old `at` can force the bounded needs-human escalation — observability-only, never enables a merge.\n- `js/common/mergeGate.js:110` — `mergeGateSettingsOf` re-reads the project config on every gate run; cheap file read, consistent with existing probes.\n- `js/unit-tests/test_mergeGate.js:800` — the failing test is the first to rely on undeclared engine-global bridge fallbacks; mocking the keys (or the guard-list fix) also removes the cross-harness fragility.\n</details>"
+    }
+  ]
+}
