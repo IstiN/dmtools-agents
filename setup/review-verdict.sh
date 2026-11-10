@@ -37,10 +37,11 @@
 #         decision=approve|rework|unknown
 #         source=pr_review_json|run_output|pr_comments|issue_comments|none
 #         override=false         always false — gh-1419 removed the gh-71
-#                                REQUEST_CHANGES-downgraded-by-zero-blocking
-#                                key (approve-with-suggestions is expressed
-#                                through reviewPolicy, not a heuristic);
-#                                the key stays for parser compatibility
+#                                downgrade of REQUEST_CHANGES with zero
+#                                blocking (approve-with-suggestions is
+#                                expressed through reviewPolicy, not a
+#                                heuristic); the key stays for parser
+#                                compatibility
 #         blocking_markers=<int> inline comments carrying a BLOCKING marker
 #                                (diagnosis only — gates nothing since gh-1419)
 #         rounds_done=<int>     completed auto-rework rounds (from labels)
