@@ -108,6 +108,7 @@
         "js/unit-tests/test_mergeStateReconcile.js",
         "js/unit-tests/test_mergeStoryTestAutomationPR.js",
         "js/unit-tests/test_mergeTrigger.js",
+        "js/unit-tests/test_mergeVerdictGate.js",
         "js/unit-tests/test_moveToDone.js",
         "js/unit-tests/test_moveToInTesting.js",
         "js/unit-tests/test_moveToReadyForTesting.js",

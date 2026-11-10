@@ -948,6 +948,7 @@ if (typeof module !== 'undefined' && module.exports) {
         githubTools: githubTools,
         githubBridgeIo: githubBridgeIo,
         headShaOf: headShaOf,
+        shortSha: shortSha,
         resolveAckThreads: resolveAckThreads,
         requireZeroOpenMachineThreads: requireZeroOpenMachineThreads,
         runBackstop: runBackstop,

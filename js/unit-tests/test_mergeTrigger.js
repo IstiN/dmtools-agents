@@ -107,14 +107,21 @@ function loadMergeTrigger(mods) {
 /* REST-vs-GraphQL get_pr payload shapes (gh-1081): kept out of fixture()
  * so its complexity stays at its baseline value. */
 function prPayload(a, st) {
+    // gh-1416: the verdict gate consumes the head sha (headRefOid) — set
+    // only when the scenario provides it, keeping the pinned default
+    // payload shapes byte-identical.
     if (st.rest) {
-        return {
+        var rest = {
             number: a.pullRequestId,
             mergeable: st.mergeable,
             mergeable_state: String(st.state).toLowerCase()
         };
+        if (st.headRefOid) rest.headRefOid = st.headRefOid;
+        return rest;
     }
-    return { number: a.pullRequestId, mergeable: st.mergeable, mergeStateStatus: st.state };
+    var p = { number: a.pullRequestId, mergeable: st.mergeable, mergeStateStatus: st.state };
+    if (st.headRefOid) p.headRefOid = st.headRefOid;
+    return p;
 }
 
 // gh-1200 CRAP refactor: the per-tool mock bodies extracted into named
