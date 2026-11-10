@@ -20,6 +20,7 @@ var commentMarkup = require('./common/commentMarkup.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 var forkCheckout = require('./common/forkCheckout.js');
+var branchSetup = require('./common/branchSetup.js');
 // gh-1351 (hoisted, never lazy — the gh-823 pack-require rule): the review
 // policy config — resolved once here so a malformed config fails the leg at
 // start, and the resolved table is stamped into the rework run context.
@@ -709,6 +710,7 @@ function postErrorComment(errorTracker, ticketKey, error, params) {
  * (gh-1002) Extracted from the action() catch block.
  */
 function reportActionError(params, tracker, error) {
+    if (branchSetup.isDryRunParams(params)) return;
     try {
         const ticketKey = errorTicketKeyOf(params);
         if (ticketKey) {
@@ -849,9 +851,7 @@ function postReworkStartedCommentOrSkip(prAnchor, tracker, ticketKey, customPara
 }
 
 function isDryRunReworkParams(params, actualParams) {
-    var topDry = Boolean(params && (params.dryRun === true || params.dryRun === 'true'));
-    var actDry = Boolean(actualParams && (actualParams.dryRun === true || actualParams.dryRun === 'true'));
-    return topDry || actDry;
+    return branchSetup.isDryRunParams(params) || branchSetup.isDryRunParams(actualParams);
 }
 
 function resolveReworkBaseBranch(prDetails, config) {

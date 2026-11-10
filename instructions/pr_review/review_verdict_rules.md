@@ -8,7 +8,7 @@ minutes). These rules govern the verdict; every other instruction
 
 ## Verdict mapping
 
-Classify findings exactly as instructed (gh-1351, 4 tiers):
+Classify findings into 4 tiers:
 
 - 🚨 **BLOCKING** — correctness/bug findings: broken behavior, failing
   gates (red CI), scope violations, security issues, data loss.
@@ -28,7 +28,7 @@ Then map to the verdict (the machine recomputes it from the census —
 | Any ⚠️ IMPORTANT (no 🚨) | `REQUEST_CHANGES` (gates approval — policy default) |
 | Only 💡 / 🪶 remain | `APPROVE` — the cycle converges |
 
-**Downgrade protocol (gh-1351):** when the rework lap downgraded a specific ⚠️ to 💡 **with a
+**Downgrade protocol:** when the rework lap downgraded a specific ⚠️ to 💡 **with a
 written justification in the census** (the thread reply states why the finding is not
 maintainability debt), classify that finding 💡 in this round's census — the false-⚠️ review
 converges to APPROVE without a code change. Without the written justification, keep ⚠️: a silent

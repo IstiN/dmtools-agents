@@ -64,7 +64,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `preCliSolutionSetup.js`
 
@@ -116,7 +118,9 @@ _Write Solution and Diagrams Post-Action_
 ## Custom params
 
 - `removeLabel`: `"sm_story_solution_triggered"`
+- `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contexts` _(used by JS action)_
@@ -129,7 +133,6 @@ _Write Solution and Diagrams Post-Action_
 - `configPath` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
 - `diagramField` _(used by JS action)_
-- `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `outputType` _(used by JS action)_
 - `projectKey` _(used by JS action)_

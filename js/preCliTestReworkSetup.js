@@ -259,7 +259,7 @@ function createErrorTracker(params, tracker) {
 /** Outer-catch reporter: best-effort error comment via a fallback tracker. */
 function reportActionError(params, tracker, error) {
     console.error('❌ Error in preCliTestReworkSetup:', error);
-    try {
+    if (!branchSetup.isDryRunParams(params)) try {
         tracker = createErrorTracker(params, tracker);
         const ticketKey = parseErrorTicketKey(params);
         if (ticketKey) {

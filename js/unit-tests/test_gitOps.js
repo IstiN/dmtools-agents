@@ -201,6 +201,7 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
     function runDetect(quietDiffExit) {
         var logs = [];
         var warns = [];
+        var commands = [];
         var origLog = console.log;
         var origWarn = console.warn;
         console.log = function() {
@@ -213,6 +214,7 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
             var gitOps = loadGitOps({
                 cli_execute_command: function(args) {
                     var c = args.command || '';
+                    commands.push(c);
                     if (c === 'git rev-parse --is-shallow-repository') return 'false\nCOMMAND_EXIT_CODE=0';
                     if (c === 'git merge origin/main --no-commit --no-ff') return 'Merge cleanup\nCOMMAND_EXIT_CODE=0';
                     if (c === 'git diff --cached --quiet HEAD') {
@@ -227,7 +229,7 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
                 }
             });
             var conflicts = gitOps.detectMergeConflicts('main', 'input/PROJ-123', null);
-            return { conflicts: conflicts, logs: logs, warns: warns };
+            return { conflicts: conflicts, logs: logs, warns: warns, commands: commands };
         } finally {
             console.log = origLog;
             console.warn = origWarn;
@@ -244,6 +246,8 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
         assert.ok(joined.indexOf('already up to date') !== -1,
             'the up-to-date case is named explicitly, got: ' + JSON.stringify(fx.logs));
         assert.equal(fx.warns.length, 0, 'the normal exit-0 quiet-diff path is silent — got: ' + JSON.stringify(fx.warns));
+        assert.equal(fx.commands.indexOf('git commit --no-edit'), -1,
+            'an up-to-date merge staged nothing and must not run git commit --no-edit');
     });
 
     test('a merge that stages base changes keeps the "base branch changes staged" wording', function() {
@@ -257,6 +261,8 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
         // it must not produce an anomaly warning.
         assert.equal(fx.warns.length, 0,
             'exit 1 is the expected staged-changes signal, no warn expected — got: ' + JSON.stringify(fx.warns));
+        assert.ok(fx.commands.indexOf('git commit --no-edit') !== -1,
+            'a clean merge that staged base changes must be concluded immediately so MERGE_HEAD does not block timer auto-save (gh-1424)');
     });
 
     test('a quiet-diff failure that is NOT exit 1 is flagged as a git error, not silently claimed as "staged"', function() {
@@ -1113,5 +1119,72 @@ suite('gitOps.detectMergeConflicts — conflict handling (gh-1011)', function() 
         });
 
         assert.deepEqual(fx.conflicts, ['src/spaced.js']);
+    });
+});
+
+// ── gh-1413: checkoutPRBranch restores preflight stash when branch switch fails ─
+
+suite('gitOps.checkoutPRBranch — preflight stash restoration on switch failure (gh-1413)', function() {
+
+    test('switch failure after stashing pops the preflight stash and rethrows the switch error', function() {
+        var commands = [];
+        var gitOps = loadGitOps({
+            cli_execute_command: function(args) {
+                var c = args.command || '';
+                commands.push(c);
+                if (c === 'git status --porcelain') return ' M src/app.js\n';
+                if (c === 'git branch --list "ai/TS-99"') return '  ai/TS-99\n';
+                if (c === 'git checkout ai/TS-99') {
+                    throw new Error("fatal: 'ai/TS-99' is already checked out at '/tmp/other-wt'");
+                }
+                return '';
+            }
+        });
+
+        var caught = null;
+        try {
+            gitOps.checkoutPRBranch('ai/TS-99', '/repo', 'main');
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'checkoutPRBranch must rethrow the switch error');
+        assert.contains(caught.message || String(caught), "already checked out at '/tmp/other-wt'");
+        assert.ok(commands.indexOf('git stash push -u -m "preflight-checkout-ai/TS-99"') !== -1,
+            'dirty tree was stashed before checkout');
+        assert.ok(commands.indexOf('git stash pop') !== -1,
+            'preflight stash must be popped when branch switch throws');
+    });
+
+    test('switch failure when stash pop also fails reports both the switch error and the restoration failure', function() {
+        var commands = [];
+        var gitOps = loadGitOps({
+            cli_execute_command: function(args) {
+                var c = args.command || '';
+                commands.push(c);
+                if (c === 'git status --porcelain') return ' M src/app.js\n';
+                if (c === 'git branch --list "ai/TS-99"') return '  ai/TS-99\n';
+                if (c === 'git checkout ai/TS-99') {
+                    throw new Error('checkout failed: worktree lock');
+                }
+                if (c === 'git stash pop') {
+                    throw new Error('stash pop conflict');
+                }
+                return '';
+            }
+        });
+
+        var caught = null;
+        try {
+            gitOps.checkoutPRBranch('ai/TS-99', '/repo', 'main');
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'checkoutPRBranch must throw combined error');
+        var msg = caught.message || String(caught);
+        assert.contains(msg, 'checkout failed: worktree lock');
+        assert.contains(msg, 'preflight-checkout-ai/TS-99');
+        assert.contains(msg, 'stash pop conflict');
     });
 });

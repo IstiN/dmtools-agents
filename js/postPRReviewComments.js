@@ -1389,7 +1389,7 @@ function applyReviewFilter(reviewData, ctx, diffPath) {
  */
 function filterStampSection(m, filterOutcome) {
     if (!filterOutcome || !filterOutcome.stats) return '';
-    var line = m.h(3, 'Review Filter (gh-1403)') + '\n' +
+    var line = m.h(3, 'Review Filter') + '\n' +
         reviewFilterModule.buildFilterStampLine(filterOutcome.stats);
     if (filterOutcome.dropped && filterOutcome.dropped.length > 0) {
         line += '\n' + reviewFilterModule.buildDroppedDigestLines(filterOutcome.dropped).join('\n');
@@ -1834,7 +1834,7 @@ function censusCrossCheckOverride(reviewData, recommendation, issueCounts) {
 }
 
 function buildCensusCrossCheckWarning(issueCounts) {
-    return '🚨 Census cross-check (gh-1350): a posted inline comment carries severity BLOCKING ' +
+    return '🚨 Census cross-check: a posted inline comment carries severity BLOCKING ' +
         'but issueCounts.blocking=' + orZero(issueCounts && issueCounts.blocking) +
         ' — overriding the verdict to REQUEST_CHANGES. Keep issueCounts accurate: ' +
         'it is the machine source of truth, not prose.';

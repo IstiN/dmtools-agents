@@ -135,7 +135,7 @@ suite('reviewSpecClaims — severity classification (gh-1053 AC2/AC3/AC4)', func
         assert.equal(down.split('dmtools:demoted-from-BLOCKING')[0].indexOf('BLOCKING'), -1,
             'BLOCKING word demoted (outside the machine provenance marker)');
         assert.ok(down.indexOf('IMPORTANT') !== -1, 'IMPORTANT word present');
-        assert.ok(down.indexOf('gh-1053') !== -1, 'downgrade note references the rule');
+        assert.ok(down.indexOf('unverified external-spec claim') !== -1, 'downgrade note references the rule');
         assert.ok(/confirm/i.test(down), 'asks the author to confirm against the source');
         assert.ok(down.indexOf('spec says') !== -1, 'original claim text preserved');
     });

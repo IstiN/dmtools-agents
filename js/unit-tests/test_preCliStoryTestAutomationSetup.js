@@ -58,7 +58,7 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
             './configLoader.js': freshConfigLoader,
             './common/pullRequest.js': prHelper,
             './common/githubHelpers.js': githubHelpers,
-            './common/scm.js': { createScm: function() { return {}; } },
+            './common/scm.js': { createScm: function() { return (mocks && mocks.scmMock) || {}; } },
             './common/tcRoleStamp.js': loadModule('js/common/tcRoleStamp.js', makeRequire({})),
             // gh-1351: the real reviewPolicy chain — leg-start validation +
             // the review_policy.md stamp read it.
@@ -1059,6 +1059,36 @@ suite('preCliStoryTestAutomationSetup — dryRun guard (gh-1356)', function() {
         assert.equal(moves.length, 0, 'dryRun must make zero tracker status moves');
         assert.ok(written['input/TS-299/review_policy.md'], 'review_policy.md context is still written');
         assert.ok(written['input/TS-299/linked_test_cases.json'], 'linked_test_cases.json context is still written');
+    });
+
+    test('dryRun with open PR and nested customParams.dryRun does not write outputs/review_replies.json or mutate workspace (gh-1413)', function() {
+        var written = {};
+        var commands = [];
+        var module = loadPreCliStoryTestAutomationSetup({
+            jira_search_by_jql: function() { return []; },
+            file_write: function(args) { written[args.path] = args.content; },
+            cli_execute_command: function(opts) { commands.push(opts.command); return ''; },
+            scmMock: {
+                listPrs: function() { return [{ number: 55, title: 'test PR', head: { ref: 'test/TS-299' }, base: { ref: 'main' } }]; },
+                getPrDiff: function() { return 'diff'; },
+                fetchDiscussions: function() {
+                    return {
+                        markdown: '## Threads',
+                        rawThreads: { threads: [{ id: 't1', resolved: false, path: 'a.js', line: 1, body: 'fix me' }] }
+                    };
+                }
+            }
+        });
+
+        var res = module.action({
+            inputFolderPath: 'input/TS-299',
+            jobParams: { customParams: { dryRun: true } }
+        });
+
+        assert.deepEqual(res, { success: true, dryRun: true });
+        assert.equal(commands.length, 0, 'dryRun must make zero cli_execute_command calls');
+        assert.equal(written['outputs/review_replies.json'], undefined, 'dryRun must not write outputs/review_replies.json');
+        assert.ok(written['input/TS-299/pr_discussions.md'], 'dryRun still writes input/TS-299/pr_discussions.md');
     });
 
 });

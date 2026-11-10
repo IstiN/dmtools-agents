@@ -63,7 +63,7 @@ flowchart TD
         P5_FULL["5️⃣ input/TICKET/ci_failures_full.log — full CI logs"]
         P6["6️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
         P7["7️⃣ input/TICKET/pr_findings.md — previously raised findings (when present)"]
-        P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol (gh-1351)"]
+        P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol"]
         P9["9️⃣ input/TICKET/pr_new_hunks.txt — the hunks added since the last reviewed head (re-review rounds; when present)"]
         P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8 --> P9
     end
@@ -143,7 +143,7 @@ Rate the PR across all relevant dimensions:
 | **Performance** | unnecessary rebuilds, heavy sync operations, missing timeouts |
 | **Workflow / CI safety** | (when `.github/workflows/` changes) secret declarations, ref pinning, permissions, timeouts |
 
-### Delegate to the measured gates (gh-1404)
+### Delegate to the measured gates
 
 Complexity, duplication and style are already measured by the repo's CI — the CRAP ratchet, the duplication gate, lint. The gate is the reviewer of record for those dimensions: a passing gate is not a thread (the cost was already measured and accepted); a failing gate is CI breakage (🚨 BLOCKING). Raise a complexity/duplication/style finding only when no gate covers it **and** the concrete cost is stateable — what breaks or what the next change pays.
 
@@ -158,7 +158,7 @@ Classify every finding before writing outputs:
 
 When in doubt, classify lower and state what evidence would raise the finding one level (the same discipline as the external-spec citation rule below — an unproven claim must not hold a PR hostage).
 
-### Density control — post top-K, digest the overflow (gh-1351)
+### Density control — post top-K, digest the overflow
 
 `review_policy.md` in the input folder carries the resolved policy and its density cap
 (`allowed = clamp(round(2 + 3*sqrt(additions/200)), 2, 8)` — 20→3 · 50→4 · 200→5 · 800→8):
@@ -169,7 +169,7 @@ When in doubt, classify lower and state what evidence would raise the finding on
 - The census counts posted threads + digest lines (`issueCounts.suggestions`/`nits` count posts, `digest` counts the overflow lines).
 - The machine audits the posted thread count against the cap (warn only — it never fails the leg).
 
-### Downgrade protocol — honor a justified ⚠️→💡 from rework (gh-1351)
+### Downgrade protocol — honor a justified ⚠️→💡 from rework
 
 A rework lap may downgrade a specific ⚠️ IMPORTANT finding to 💡 SUGGESTION **only with a written
 justification in the census** (its thread reply and response summary). When the justification is
@@ -310,7 +310,7 @@ Example PR review outputs — keep concise:
 }
 ```
 
-**Severity boundary (gh-1351, 4 tiers)**: a 🪶 NIT changes nothing behavioral and
+**Severity boundary (4 tiers)**: a 🪶 NIT changes nothing behavioral and
 nothing documented (style, naming, formatting, micro-symmetry); a 💡 SUGGESTION
 changes clarity of the documented/behavioral surface (missing docs, unclear
 contract, better API shape). Anything that changes behavior or breaks a
@@ -361,7 +361,7 @@ minutes). These rules govern the verdict; every other instruction
 
 ## Verdict mapping
 
-Classify findings exactly as instructed (gh-1351, 4 tiers):
+Classify findings into 4 tiers:
 
 - 🚨 **BLOCKING** — correctness/bug findings: broken behavior, failing
   gates (red CI), scope violations, security issues, data loss.
@@ -381,7 +381,7 @@ Then map to the verdict (the machine recomputes it from the census —
 | Any ⚠️ IMPORTANT (no 🚨) | `REQUEST_CHANGES` (gates approval — policy default) |
 | Only 💡 / 🪶 remain | `APPROVE` — the cycle converges |
 
-**Downgrade protocol (gh-1351):** when the rework lap downgraded a specific ⚠️ to 💡 **with a
+**Downgrade protocol:** when the rework lap downgraded a specific ⚠️ to 💡 **with a
 written justification in the census** (the thread reply states why the finding is not
 maintainability debt), classify that finding 💡 in this round's census — the false-⚠️ review
 converges to APPROVE without a code change. Without the written justification, keep ⚠️: a silent
@@ -525,10 +525,10 @@ flowchart TD
 
 **HARD GATE — read before any tool call:**
 
-1. Your FIRST code-investigation action MUST be `codegraph context "<ticket key> <feature summary>"` — before any grep / glob / file read of source code.
-2. Keep a running mental list of files you have already read and facts you have already established. **Never re-read a file or re-run a search you already did in this session** — quote your earlier finding instead. Re-reading the same file twice means your investigation is looping; stop investigating and start writing the output.
-3. If codegraph returns nothing useful, fall back to targeted grep/glob searches — but every search must have a specific goal, and once you have enough to write the deliverable, stop searching and write it. Do not turn the fallback into a search loop.
-
+1. **Never put ticket keys or process words (`PR rework`, `bug fix`, `test automation`) into CodeGraph queries.** Use 2–5 concrete code identifiers (class, method, table, endpoint, flag, or package) extracted from the ticket, PR diff, or review comments.
+2. **Start cheap:** begin code investigation with `codegraph query "<SymbolName>"` (sub-second symbol search). Follow with **at most one** `codegraph context "<2-5 code identifiers>"` (and at most one `codegraph explore` per session); on large indexes pass `-n <max-nodes>` or `--no-code` when only structure is needed, then narrow with `codegraph node`, `codegraph callers`, and `codegraph callees`.
+3. **PR rework and PR review agents:** start from the PR's changed files (`pr_diff.txt`) and review comments (`pr_discussions.md`), then run `codegraph query` / `node` / `callers` / `callees` on the touched symbols — never open with a blind `codegraph context` on the ticket key.
+4. Keep a running mental list of files you have already read and queries you have already run. **Never re-read a file or re-run reworded synonym queries** — quote your earlier finding instead, or fall back to targeted `grep` / `glob` searches with a specific goal.
 ```mermaid
 flowchart TD
     subgraph PURPOSE["Why investigate code"]
@@ -538,8 +538,8 @@ flowchart TD
 
     subgraph TOOLS["Two complementary code-navigation tools"]
         subgraph CG["codegraph — semantic index"]
-            CG1["codegraph context 'TICKET feature summary'\n→ entry-point symbols + related call paths"]
-            CG2["codegraph query 'SymbolName'\n→ where class / method is defined"]
+            CG2["codegraph query 'SymbolName'\n→ fast symbol lookup (start here)"]
+            CG1["codegraph context 'ClassA methodB' -n 10 --no-code\n→ entry-point symbols + call paths (at most 1 per session, NO ticket keys)"]
             CG3["codegraph callees 'Class.method' → what it calls"]
             CG4["codegraph callers 'Class.method' → who calls it"]
             CG5["codegraph node 'ClassName' → read symbol source"]
@@ -553,24 +553,25 @@ flowchart TD
     end
 
     subgraph FLOW["Investigation flow — use both tools together"]
-        F1["1️⃣ codegraph context 'ticket key + feature'\n   → semantic overview of the feature"]
+        F0["PR rework / review? Start from pr_diff.txt + pr_discussions.md symbols"]
+        F1["1️⃣ codegraph query 'SymbolName'\n   (+ at most one codegraph context '2-5 code identifiers', no ticket key)"]
         F2{"codegraph returned\nuseful symbols?"}
-        F3["✅ Follow symbols: codegraph callees / callers / node"]
+        F3["✅ Follow symbols: codegraph node / callers / callees"]
         F4["↩️ Fallback: Search grep for domain keywords\n   e.g. 'PayloadManifest|RunId|Batch'"]
         F5["2️⃣ Read source files returned by codegraph or grep"]
         F6["3️⃣ Confirm what is implemented vs what is missing / ambiguous"]
-        F1 --> F2
+        F0 --> F1 --> F2
         F2 -->|yes| F3 --> F5
         F2 -->|few results| F4 --> F5
         F5 --> F6
     end
 
     subgraph RULES["Rules"]
-        R1["✅ Dev / review / test agents — run codegraph context FIRST, always"]
-        R2["✅ BA / question agents — use grep + codegraph together; grep is equally valid"]
-        R3["❌ Never skip code investigation and invent questions about already-implemented things"]
+        R1["✅ Start with codegraph query '<symbol>'; use 2–5 code identifiers, never ticket keys"]
+        R2["✅ Limit codegraph context and explore to at most 1 call each (-n <max-nodes> / --no-code)"]
+        R3["❌ Never re-run reworded synonym queries or re-read files already read in this session"]
         R4["❌ Never use codegraph sync unless you edited source files in this session"]
-        R5["❌ Never re-read a file already read in this session — track findings, write the output"]
+        R5["❌ Never skip code investigation and invent questions about already-implemented things"]
     end
 
     PURPOSE --> TOOLS --> FLOW --> RULES

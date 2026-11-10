@@ -33,7 +33,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `preCliStoryTestAutomationSetup.js`
 
@@ -50,6 +52,7 @@ _Pre-CLI Story Test Automation Setup Action_
 - Parameters (customParams):
   - `allowApproveWithSuggestions`
   - `branchCreateFnPath`
+  - `dryRun`
   - `importantBlocksApproval`
   - `maxReviewThreadsBeforeForceApprove`
   - `testFilesGlob`
@@ -90,8 +93,9 @@ _Story Test Automation Rework Action_
 
 - `removeLabel`: `"sm_story_test_rework_triggered"`
 - `checkOpenPR`: `true`
-- `allowApproveWithSuggestions` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
+- `dryRun` _(used by JS action)_
+- `allowApproveWithSuggestions` _(used by JS action)_
 - `importantBlocksApproval` _(used by JS action)_
 - `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `testFilesGlob` _(used by JS action)_
@@ -99,7 +103,6 @@ _Story Test Automation Rework Action_
 - `configPath` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
-- `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `smFallback` _(used by JS action)_

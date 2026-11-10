@@ -18,6 +18,7 @@ var gitStaging = loadModule('js/common/gitStaging.js');
 var ALL_ARTIFACTS = [
     '.dmtools/copilot-sessions',
     '.dmtools/credential-helper.log',
+    '.dmtools/codegraph-usage.log',
     '.dmtools/fa-trace.log',
     '.dmtools/run-output.txt',
     '.dmtools/stall-capture.log',

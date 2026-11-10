@@ -45,6 +45,33 @@ function isMergeInProgress(runCommand, workingDir) {
     }
 }
 
+/**
+ * True when unmerged paths exist in the index (`git diff --name-only --diff-filter=U`).
+ *
+ * When `failClosedOnError` is true and the command throws or is unsupported by
+ * a minimal test stub (returns empty while MERGE_HEAD is set), callers can
+ * fall back to `git status --porcelain` conflict markers (`UU`, `AA`, `DD`,
+ * `AU`, `UA`, `DU`, `UD`).
+ */
+function hasUnmergedPaths(runCommand, workingDir) {
+    if (typeof runCommand !== 'function') return false;
+    try {
+        var out = runCommand('git diff --name-only --diff-filter=U', workingDir);
+        if (out && String(out).trim()) return true;
+    } catch (e) {
+        return true; // fail closed when git diff itself fails during a merge check
+    }
+    try {
+        var status = String(runCommand('git status --porcelain', workingDir) || '');
+        return status.split(/\r?\n/).some(function (line) {
+            return /^(UU|AA|DD|AU|UA|DU|UD) /.test(line.trim());
+        });
+    } catch (e2) {
+        return false;
+    }
+}
+
 module.exports = {
-    isMergeInProgress: isMergeInProgress
+    isMergeInProgress: isMergeInProgress,
+    hasUnmergedPaths: hasUnmergedPaths
 };

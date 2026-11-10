@@ -17,3 +17,4 @@
 # dmtools pipeline runtime state - never tracked (gh-1358)
 .dmtools-target-workingdir
 .fah/
+.dmtools/codegraph-usage.log

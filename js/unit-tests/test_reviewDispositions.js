@@ -106,7 +106,7 @@ suite('reviewDispositions — tagLine + buildThreadAckReply (gh-828 generalizati
     test('no disposition keeps the legacy gh-828 ack text', function () {
         var ack = rd.buildThreadAckReply();
         assert.contains(ack, 'non-blocking suggestion');
-        assert.contains(ack, 'gh-828');
+        assert.contains(ack, 'APPROVE verdict');
     });
 
     test('a disposition ack carries the machine-parsed tag line', function () {

@@ -16,7 +16,7 @@ Example PR review outputs — keep concise:
 }
 ```
 
-**Severity boundary (gh-1351, 4 tiers)**: a 🪶 NIT changes nothing behavioral and
+**Severity boundary (4 tiers)**: a 🪶 NIT changes nothing behavioral and
 nothing documented (style, naming, formatting, micro-symmetry); a 💡 SUGGESTION
 changes clarity of the documented/behavioral surface (missing docs, unclear
 contract, better API shape). Anything that changes behavior or breaks a

@@ -33,7 +33,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `prepareBugFixBatchContext.js`
 
@@ -43,8 +45,10 @@ _Pre-CLI Bug-fix Batch Context Action_
 - Side effects:
   - move ticket to status (via tracker)
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `childQuestions`
   - `contexts`
+  - `dryRun`
   - `fields`
   - `jql`
   - `parentContextFetch`
@@ -59,8 +63,10 @@ _Post-CLI Bug-fix Batch Development Action_
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `childQuestions`
   - `contexts`
+  - `dryRun`
   - `fields`
   - `jql`
   - `parentContextFetch`
@@ -74,7 +80,9 @@ _Post-CLI Bug-fix Batch Development Action_
 ## Custom params
 
 - `removeLabel`: `"sm_bug_fix_batch_development_triggered"`
+- `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `contexts` _(used by JS action)_
 - `fields` _(used by JS action)_

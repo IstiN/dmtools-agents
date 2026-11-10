@@ -28,7 +28,7 @@ flowchart TD
         P5_FULL["5️⃣ input/TICKET/ci_failures_full.log — full CI logs"]
         P6["6️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
         P7["7️⃣ input/TICKET/pr_findings.md — previously raised findings (when present)"]
-        P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol (gh-1351)"]
+        P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol"]
         P9["9️⃣ input/TICKET/pr_new_hunks.txt — the hunks added since the last reviewed head (re-review rounds; when present)"]
         P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8 --> P9
     end
@@ -108,7 +108,7 @@ Rate the PR across all relevant dimensions:
 | **Performance** | unnecessary rebuilds, heavy sync operations, missing timeouts |
 | **Workflow / CI safety** | (when `.github/workflows/` changes) secret declarations, ref pinning, permissions, timeouts |
 
-### Delegate to the measured gates (gh-1404)
+### Delegate to the measured gates
 
 Complexity, duplication and style are already measured by the repo's CI — the CRAP ratchet, the duplication gate, lint. The gate is the reviewer of record for those dimensions: a passing gate is not a thread (the cost was already measured and accepted); a failing gate is CI breakage (🚨 BLOCKING). Raise a complexity/duplication/style finding only when no gate covers it **and** the concrete cost is stateable — what breaks or what the next change pays.
 
@@ -123,7 +123,7 @@ Classify every finding before writing outputs:
 
 When in doubt, classify lower and state what evidence would raise the finding one level (the same discipline as the external-spec citation rule below — an unproven claim must not hold a PR hostage).
 
-### Density control — post top-K, digest the overflow (gh-1351)
+### Density control — post top-K, digest the overflow
 
 `review_policy.md` in the input folder carries the resolved policy and its density cap
 (`allowed = clamp(round(2 + 3*sqrt(additions/200)), 2, 8)` — 20→3 · 50→4 · 200→5 · 800→8):
@@ -134,7 +134,7 @@ When in doubt, classify lower and state what evidence would raise the finding on
 - The census counts posted threads + digest lines (`issueCounts.suggestions`/`nits` count posts, `digest` counts the overflow lines).
 - The machine audits the posted thread count against the cap (warn only — it never fails the leg).
 
-### Downgrade protocol — honor a justified ⚠️→💡 from rework (gh-1351)
+### Downgrade protocol — honor a justified ⚠️→💡 from rework
 
 A rework lap may downgrade a specific ⚠️ IMPORTANT finding to 💡 SUGGESTION **only with a written
 justification in the census** (its thread reply and response summary). When the justification is

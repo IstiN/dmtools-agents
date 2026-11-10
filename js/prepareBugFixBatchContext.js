@@ -15,6 +15,7 @@ var fetchLinkedTestsToInput = require('./fetchLinkedTestsToInput.js');
 const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
 var trackersModule = require('./common/trackers.js');
 var bugFixBatchCtx = require('./common/bugFixBatchContext.js');
+var branchSetup = require('./common/branchSetup.js');
 
 function ensureInputFolder(bugFolder) {
     try {
@@ -210,7 +211,9 @@ function action(params) {
 
         writeBatchBugsMarkdown(ctx.epicFolder, ctx.epic, bugs);
 
-        moveEpicToInDevelopment(ctx.tracker, ctx.epicKey, statuses);
+        if (!branchSetup.isDryRunParams(params) && !branchSetup.isDryRunParams(ctx.actualParams)) {
+            moveEpicToInDevelopment(ctx.tracker, ctx.epicKey, statuses);
+        }
 
     } catch (error) {
         console.error('Error in prepareBugFixBatchContext:', error);

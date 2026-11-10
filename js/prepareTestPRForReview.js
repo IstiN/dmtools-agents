@@ -184,7 +184,8 @@ function isNoCommitsError(error) {
 }
 
 // gh-965: setup-failure comment shared by every abort-before-review path.
-function postReviewSetupFailed(ticketKey, err, note) {
+function postReviewSetupFailed(ticketKey, err, note, dryRun) {
+    if (dryRun) return;
     try {
         getTracker().postComment(ticketKey, 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n' + note);
     } catch (e) {}
@@ -365,7 +366,8 @@ function resolveReviewSetup(params) {
         config: config,
         reviewPolicy: reviewPolicy,
         jiraConfig: config.jira,
-        scm: configLoader.createScm(config)
+        scm: configLoader.createScm(config),
+        dryRun: branchSetup.isDryRunParams(params)
     };
 }
 
@@ -375,18 +377,36 @@ function resolveReviewSetup(params) {
  * that must not be reviewed (already merged, WIP/draft). Returns
  * { found } to proceed or { abort: true, result } to return from action().
  */
+function resolveMissingTestPr(setup) {
+    if (setup.dryRun) {
+        console.log('[dryRun] Skipping auto-creation/re-automation for missing test PR on', setup.ticketKey);
+        return { abort: true, result: false };
+    }
+    var ensured = ensureReviewPrExists(setup.scm, setup.ticketKey, setup.config, setup.jiraConfig, setup.issueType);
+    if (ensured.result !== undefined) return { abort: true, result: ensured.result };
+    return { found: ensured.found };
+}
+
+function postWipTestPrSkipComment(setup, pr) {
+    if (setup.dryRun) return;
+    try {
+        getTracker().postComment(setup.ticketKey, 'h3. ⏸️ Test PR Review Skipped\n\nPR [#' + pr.number + '|' + (pr.html_url || '') + '] is WIP/draft. Review will run once it is ready.');
+    } catch (e) {}
+}
+
 function resolveTestPr(setup) {
     var found = findTestPRForTicket(setup.scm, setup.ticketKey);
     if (!found) {
-        // No open/merged PR — re-automate, or create a review PR for the existing branch
-        var ensured = ensureReviewPrExists(setup.scm, setup.ticketKey, setup.config, setup.jiraConfig, setup.issueType);
-        if (ensured.result !== undefined) return { abort: true, result: ensured.result };
-        found = ensured.found;
+        var missingOutcome = resolveMissingTestPr(setup);
+        if (missingOutcome.abort) return missingOutcome;
+        found = missingOutcome.found;
     }
 
     // If PR is already merged — move ticket to final status without re-reviewing
     if (found.merged) {
-        handleAlreadyMergedPr(setup.ticketKey, found.pr, setup.issueType, setup.jiraConfig);
+        if (!setup.dryRun) {
+            handleAlreadyMergedPr(setup.ticketKey, found.pr, setup.issueType, setup.jiraConfig);
+        }
         return { abort: true, result: false };
     }
 
@@ -395,9 +415,7 @@ function resolveTestPr(setup) {
     // Skip WIP / draft PRs
     if (isWip(pr, setup.ticket)) {
         console.log('PR #' + pr.number + ' is WIP/draft — skipping review for', setup.ticketKey);
-        try {
-            getTracker().postComment(setup.ticketKey, 'h3. ⏸️ Test PR Review Skipped\n\nPR [#' + pr.number + '|' + (pr.html_url || '') + '] is WIP/draft. Review will run once it is ready.');
-        } catch (e) {}
+        postWipTestPrSkipComment(setup, pr);
         return { abort: true, result: false };
     }
 
@@ -479,10 +497,38 @@ function reviewOutcome(repoInfo, prDetails, branchName) {
 
 /** Best-effort setup-error report on the ticket; failures are swallowed. */
 function postReviewSetupError(params, error) {
+    if (branchSetup.isDryRunParams(params)) return;
     try {
         const ticketKey = getTicketKey(params);
         getTracker().postComment(ticketKey, 'h3. ❌ Test PR Review Setup Error\n\n{code}' + error.toString() + '{code}');
     } catch (e) {}
+}
+
+function stampReviewPolicyContext(gitOps, setup) {
+    try {
+        gitOps.writeInputFile(
+            setup.inputFolder + '/review_policy.md',
+            reviewPolicyModule.policyInputContextMarkdown(setup.reviewPolicy),
+            'review_policy.md (resolved review policy — gh-1351)'
+        );
+        console.log('✅ Review policy stamped into the run context (review_policy.md, preset ' +
+            setup.reviewPolicy.preset + ')');
+    } catch (policyErr) {
+        console.warn('review_policy.md stamp failed (non-fatal):', policyErr.message || policyErr);
+    }
+}
+
+function finalizeTestPrReviewContext(setup, repoInfo, prDetails, branchName) {
+    if (!setup.dryRun) {
+        checkoutTestBranch(gitOps, branchName, setup.config);
+    }
+    writeReviewContext(gh, gitOps, setup.scm, setup.config, setup.inputFolder, prDetails, branchName);
+    stampReviewPolicyContext(gitOps, setup);
+    if (!setup.dryRun) {
+        postReviewStartedComment(setup.ticketKey, prDetails, branchName);
+    }
+    console.log('✅ Test PR review setup complete — PR #' + prDetails.number);
+    return reviewOutcome(repoInfo, prDetails, branchName);
 }
 
 function action(params) {
@@ -492,12 +538,14 @@ function action(params) {
         console.log('=== Preparing test PR for review:', setup.ticketKey, '===');
 
         ensureInputFolder(setup.inputFolder);
-        clearStaleReviewOutputs();
+        if (!setup.dryRun) {
+            clearStaleReviewOutputs();
+        }
 
         // Step 1: GitHub repo info
         var repoInfo = setup.scm.getRemoteRepoInfo();
         if (!repoInfo) {
-            postReviewSetupFailed(setup.ticketKey, 'Could not determine repository from git remote', '_Review cancelled._');
+            postReviewSetupFailed(setup.ticketKey, 'Could not determine repository from git remote', '_Review cancelled._', setup.dryRun);
             return false;
         }
 
@@ -510,7 +558,7 @@ function action(params) {
         // Step 3: PR details
         const prDetails = gh.getPRDetails(setup.scm, pr.number);
         if (!prDetails) {
-            postReviewSetupFailed(setup.ticketKey, 'Could not fetch details for PR #' + pr.number + '.', '_Review cancelled._');
+            postReviewSetupFailed(setup.ticketKey, 'Could not fetch details for PR #' + pr.number + '.', '_Review cancelled._', setup.dryRun);
             return false;
         }
 
@@ -519,38 +567,13 @@ function action(params) {
         // If the PR has no actual changes, the test code is already in main. Finalize and skip review.
         if (hasNoChanges(prDetails)) {
             console.log('PR #' + pr.number + ' has 0 changed files — test code is already in main');
-            finalizeAlreadyMergedTestCase(setup.ticketKey, staleBranchRef(branchName, setup.ticketKey), setup.issueType, setup.jiraConfig);
+            if (!setup.dryRun) {
+                finalizeAlreadyMergedTestCase(setup.ticketKey, staleBranchRef(branchName, setup.ticketKey), setup.issueType, setup.jiraConfig);
+            }
             return false;
         }
 
-        // Step 4: Checkout test branch
-        checkoutTestBranch(gitOps, branchName, setup.config);
-
-        // Step 5 + 6: Diff + discussions, then write context files
-        writeReviewContext(gh, gitOps, setup.scm, setup.config, setup.inputFolder, prDetails, branchName);
-
-        // gh-1351: stamp the resolved reviewPolicy into the run context so
-        // all three test-automation review legs rank/post under the policy
-        // the machine enforces. Non-fatal (the policy still governs the
-        // machine verdict in postPRReviewComments).
-        try {
-            gitOps.writeInputFile(
-                setup.inputFolder + '/review_policy.md',
-                reviewPolicyModule.policyInputContextMarkdown(setup.reviewPolicy),
-                'review_policy.md (resolved review policy — gh-1351)'
-            );
-            console.log('✅ Review policy stamped into the run context (review_policy.md, preset ' +
-                setup.reviewPolicy.preset + ')');
-        } catch (policyErr) {
-            console.warn('review_policy.md stamp failed (non-fatal):', policyErr.message || policyErr);
-        }
-
-        // Step 7: Jira comment
-        postReviewStartedComment(setup.ticketKey, prDetails, branchName);
-
-        console.log('✅ Test PR review setup complete — PR #' + prDetails.number);
-
-        return reviewOutcome(repoInfo, prDetails, branchName);
+        return finalizeTestPrReviewContext(setup, repoInfo, prDetails, branchName);
 
     } catch (error) {
         console.error('❌ Error in prepareTestPRForReview:', error);

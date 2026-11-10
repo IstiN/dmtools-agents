@@ -25,6 +25,7 @@ function loadCheckWipLabel(mocks) {
             './common/githubHelpers.js': {
                 findPRForTicket: function() { return null; }
             }
+            , './common/branchSetup.js': loadModule('js/common/branchSetup.js')
         }, { './common/trackers.js': trackersWith(_m) })), _m); })(mocks);
 }
 
@@ -93,7 +94,8 @@ suite('checkWipLabel', function() {
                 },
                 './common/githubHelpers.js': {
                     findPRForTicket: function() { return { number: 42 }; }
-                }
+                },
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js')
             }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 jira_post_comment: function() {}
             });
@@ -191,7 +193,8 @@ suite('checkWipLabel — PR-anchored start gate (githubSource pr-N, fa #1212)', 
                     loadProjectConfig: function() { return {}; },
                     createScm: function() { return scm; }
                 },
-                './common/githubHelpers.js': gh
+                './common/githubHelpers.js': gh,
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js')
             }, { './common/trackers.js': trackersWith(_m) })), _m); })(mocks || {});
     }
 
@@ -315,7 +318,8 @@ suite('checkWipLabel: ado tracker provider', function() {
             './common/githubHelpers.js': {
                 findPRForTicket: function() { return null; }
             },
-            './common/trackers.js': trackersWith(mocks)
+            './common/trackers.js': trackersWith(mocks),
+            './common/branchSetup.js': loadModule('js/common/branchSetup.js')
         }), mocks);
 
         var result = module.action({
@@ -340,7 +344,8 @@ suite('checkWipLabel — open-PR guard branch coverage (gh-1077)', function() {
                     loadProjectConfig: function() { return config || {}; },
                     createScm: function() { return {}; }
                 },
-                './common/githubHelpers.js': ghMock || { findPRForTicket: function() { return null; } }
+                './common/githubHelpers.js': ghMock || { findPRForTicket: function() { return null; } },
+                './common/branchSetup.js': loadModule('js/common/branchSetup.js')
             }, { './common/trackers.js': trackersWith(_m) })), _m); })(mocks || {});
     }
 
@@ -521,4 +526,30 @@ suite('checkWipLabel — extracted pure helpers (gh-1077)', function() {
         assert.equal(module.isTicketNotFoundError(null), false);
         assert.equal(module.isTicketNotFoundError('Ticket not found'), false);
     });
+
+suite('checkWipLabel — dryRun guard (gh-1413)', function() {
+
+    test('dryRun stops on WIP label and missing open PR without posting skip comments across all four flag locations', function() {
+        [
+            { dryRun: true, jobParams: { customParams: { checkOpenPR: true } } },
+            { jobParams: { dryRun: true, customParams: { checkOpenPR: true } } },
+            { customParams: { dryRun: true, checkOpenPR: true } },
+            { jobParams: { customParams: { dryRun: 'true', checkOpenPR: true } } }
+        ].forEach(function(extra) {
+            var comments = [];
+            var module = loadCheckWipLabel({
+                jira_post_comment: function(args) { comments.push(args); }
+            });
+            assert.equal(module.action(Object.assign({
+                ticket: makeTicket('TS-1', ['pr_review_wip']),
+                metadata: { contextId: 'pr_review' }
+            }, extra)), false);
+            assert.equal(module.action(Object.assign({
+                ticket: makeTicket('TS-1', []),
+                metadata: { contextId: 'pr_review' }
+            }, extra)), false);
+            assert.equal(comments.length, 0, 'dryRun must not post skip comments');
+        });
+    });
+});
 });

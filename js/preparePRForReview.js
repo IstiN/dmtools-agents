@@ -17,6 +17,7 @@ const commentMarkup = require('./common/commentMarkup.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var trackersModule = require('./common/trackers.js');
 var forkCheckout = require('./common/forkCheckout.js');
+var branchSetup = require('./common/branchSetup.js');
 // gh-1404 (hoisted, never lazy — the gh-823 pack-require rule): the
 // diff-of-diff input — the re-review round's frozen already-reviewed code.
 var prNewHunks = require('./common/prNewHunks.js');
@@ -54,7 +55,8 @@ function parseContext(params) {
         ticketKey: ticketKey,
         jp: jp,
         prAnchor: prAnchor,
-        noTicket: !!prAnchor
+        noTicket: !!prAnchor,
+        dryRun: branchSetup.isDryRunParams(params)
     };
 }
 
@@ -117,14 +119,14 @@ function buildDetailsFailureComment(ticketKey, prNumber) {
  * mask the original failure.
  */
 function postFailureComment(ctx, comment) {
-    if (!comment) return;
+    if (!comment || (ctx && ctx.dryRun)) return;
     try {
         ctx.tracker.postComment(ctx.ticketKey, comment);
     } catch (e) {}
 }
 
 function postSetupErrorComment(ctx, params, error) {
-    if (ctx.noTicket) return;
+    if (ctx.noTicket || ctx.dryRun || branchSetup.isDryRunParams(params)) return;
     try {
         var ticketKey = params.inputFolderPath.split('/').pop();
         ctx.tracker.postComment(ticketKey,
@@ -200,6 +202,10 @@ function fetchPrDetails(ctx, pr) {
 
 // Step 4: checkout the PR branch (non-fatal on failure)
 function checkoutPrBranch(ctx, branchName, prDetails) {
+    if (ctx && ctx.dryRun) {
+        console.log('[dryRun] Skipping PR branch checkout for:', branchName || '(missing)');
+        return;
+    }
     try {
         if (branchName) {
             var pullRef = forkCheckout.resolvePullRef(
@@ -459,7 +465,7 @@ function enrichWithParentContext(ctx) {
  * (the PR comment comes from the post action).
  */
 function finishReviewStart(ctx, prDetails, branchName, failedChecks) {
-    if (!ctx.noTicket) {
+    if (!ctx.noTicket && !ctx.dryRun) {
         postReviewStartedComment(ctx, prDetails, branchName, failedChecks);
     }
 

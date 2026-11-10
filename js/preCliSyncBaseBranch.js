@@ -20,6 +20,7 @@
 
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
+var branchSetup = require('./common/branchSetup.js');
 
 var _workingDir = null;
 function runCmd(args) {
@@ -34,7 +35,7 @@ function cleanCommandOutput(output) {
 }
 
 function action(params) {
-    if (params && (params.dryRun === true || params.dryRun === 'true' || (params.jobParams && (params.jobParams.dryRun === true || params.jobParams.dryRun === 'true')))) {
+    if (branchSetup.isDryRunParams(params)) {
         console.log('[dryRun] preCliSyncBaseBranch: skipping base branch checkout and pull');
         return true;
     }

@@ -883,3 +883,69 @@ suite('prepareTestPRForReview — gh-1351 reviewPolicy: hard validation + run-co
         assert.contains(setupError[0], 'WAT', 'the unknown tier is named');
     });
 });
+
+suite('prepareTestPRForReview — dryRun guard across all flag locations and paths (gh-1413)', function() {
+
+    test('dryRun writes input context without clearing outputs, checking out branch, or posting comments across all four flag locations', function() {
+        var shapes = [
+            { inputFolderPath: 'input/TS-90', dryRun: true, ticket: { key: 'TS-90', fields: {} }, jobParams: { customParams: {} } },
+            { inputFolderPath: 'input/TS-90', ticket: { key: 'TS-90', fields: {} }, jobParams: { dryRun: true, customParams: {} } },
+            { inputFolderPath: 'input/TS-90', ticket: { key: 'TS-90', fields: {} }, customParams: { dryRun: true } },
+            { inputFolderPath: 'input/TS-90', ticket: { key: 'TS-90', fields: {} }, jobParams: { customParams: { dryRun: 'true' } } }
+        ];
+        shapes.forEach(function(params) {
+            var comments = [];
+            var cliCalls = [];
+            var checkouts = [];
+            var contextWrites = 0;
+            var module = loadPrepareTestPRForReview({
+                jira_post_comment: function(args) { comments.push(args.comment); },
+                cli_execute_command: function(args) { cliCalls.push(args.command); return ''; },
+                gitOpsMock: {
+                    checkoutPRBranch: function(b) { checkouts.push(b); },
+                    writePRContext: function() { contextWrites++; }
+                },
+                githubHelpers: {
+                    getPRDetails: function() {
+                        return { number: 65, changed_files: 2, head: { ref: 'test/TS-90' }, base: { ref: 'main' }, html_url: 'u' };
+                    }
+                },
+                scmMock: {
+                    listPrs: function(state) {
+                        if (state === 'open') return [{ number: 65, head: { ref: 'test/TS-90' }, html_url: 'u' }];
+                        return [];
+                    }
+                }
+            });
+            var res = module.action(params);
+            assert.equal(res.success, true);
+            assert.equal(comments.length, 0, 'dryRun must not post comments');
+            assert.equal(checkouts.length, 0, 'dryRun must not checkout branch');
+            assert.equal(cliCalls.filter(function(c) { return c.indexOf('rm -') !== -1; }).length, 0, 'dryRun must not clear outputs');
+            assert.equal(contextWrites, 1, 'dryRun still writes PR context');
+        });
+    });
+
+    test('dryRun skips PR creation, status moves, branch deletion, and error comments on missing/merged/empty/malformed states', function() {
+        var comments = [];
+        var moves = [];
+        var cliCalls = [];
+        var module = loadPrepareTestPRForReview({
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_move_to_status: function(args) { moves.push(args); },
+            cli_execute_command: function(args) { cliCalls.push(args.command); return ''; },
+            scmMock: {
+                listPrs: function() { return []; }
+            }
+        });
+        assert.equal(module.action({
+            inputFolderPath: 'input/TS-90',
+            ticket: { key: 'TS-90', fields: {} },
+            jobParams: { customParams: { dryRun: true } }
+        }), false);
+        assert.equal(comments.length, 0, 'missing PR in dryRun posts no comment');
+        assert.equal(moves.length, 0, 'missing PR in dryRun moves no status');
+        assert.equal(cliCalls.filter(function(c) { return c.indexOf('git push origin --delete') !== -1; }).length, 0,
+            'dryRun never deletes remote branch');
+    });
+});

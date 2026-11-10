@@ -43,7 +43,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `preCliReworkSetup.js`
 
@@ -65,6 +67,7 @@ _Pre-CLI Rework Setup Action (preCliJSAction for pr_rework agent)_
   - `childQuestions`
   - `commentMarkup`
   - `contexts`
+  - `dryRun`
   - `feedbackLoop.qualityGates.gates`
   - `fields`
   - `importantBlocksApproval`
@@ -150,10 +153,11 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
   ]
   ```
 - `checkOpenPR`: `true`
+- `branchCreateFnPath` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `allowApproveWithSuggestions` _(used by JS action)_
 - `artefactRepository` _(used by JS action)_
-- `branchCreateFnPath` _(used by JS action)_
 - `branchSyncFnPath` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
@@ -174,7 +178,6 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `configPath` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
-- `dryRun` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `managedSubmodules` _(used by JS action)_

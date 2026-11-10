@@ -203,7 +203,7 @@ function digestLineOf(f, nowMs) {
 
 // The digest headline: counts, the sweep-queue verdict.
 function digestHeader(openCount, total, sweepDueNow) {
-    return '\uD83E\uDDFF Review debt ledger digest (gh-1352) — ' + openCount + ' deferred review finding' +
+    return '\uD83E\uDDFF Review debt ledger digest — ' + openCount + ' deferred review finding' +
         (openCount === 1 ? '' : 's') + ' (' + total + ' total), ' +
         (sweepDueNow ? 'the batched sweep PR is due now' : 'queued for a batched sweep PR') + ':';
 }
@@ -218,7 +218,7 @@ function buildDebtDigest(l, nowIso) {
     var open = openDebtFindings(l);
     var total = Array.isArray(l && l.findings) ? l.findings.length : 0;
     if (!open.length) {
-        return '\uD83E\uDDFF Review debt ledger (gh-1352) — no deferred review findings. Review-side debt is clear.';
+        return '\uD83E\uDDFF Review debt ledger — no deferred review findings. Review-side debt is clear.';
     }
     var lines = [digestHeader(open.length, total, sweepDue(l, nowIso).due)];
     open.forEach(function (f) {

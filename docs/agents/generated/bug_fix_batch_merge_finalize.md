@@ -38,8 +38,10 @@ _Finalize Bug-fix Batch Merge_
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `childQuestions`
   - `contexts`
+  - `dryRun`
   - `fields`
   - `jql`
   - `parentContextFetch`
@@ -53,8 +55,10 @@ _Finalize Bug-fix Batch Merge_
 ## Custom params
 
 - `removeLabel`: `"sm_bug_fix_batch_finalize_triggered"`
+- `branchCreateFnPath` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `contexts` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `fields` _(used by JS action)_
 - `jql` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_

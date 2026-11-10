@@ -33,6 +33,8 @@ _redirectToRepoAgent.js_
 
 - Source: `agents/js/redirectToRepoAgent.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
+  - `dryRun`
   - `repoAgentsDir`
   - `targetAgentName`
 
@@ -48,6 +50,8 @@ _redirectToRepoAgent.js_
 ## Custom params
 
 - `targetAgentName`: `"story_development.json"`
+- `branchCreateFnPath` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `repoAgentsDir` _(used by JS action)_
 
 ---

@@ -431,14 +431,14 @@ function resolveLoserLabel(verdict) {
 function nitNoteOf(newer, loserLabel) {
     var nitCount = censusCount(newer.nits);
     return (loserLabel === LABEL_REWORK && nitCount > 0)
-        ? ' (open nits stay: the polish lap owns them — gh-1352, nits never hold labels)'
+        ? ' (open nits stay: the polish lap owns them — nits never hold labels)'
         : '';
 }
 
 // The removal tail: why the loser label is being dropped.
 function removalPhraseOf(loserLabel, nitNote) {
     return loserLabel === LABEL_APPROVED
-        ? ' until re-review (approval-gated paths blocked, gh-807).'
+        ? ' until re-review (approval-gated paths blocked).'
         : ' (suggestions do not justify a rework arm; the approval stands).' + nitNote;
 }
 
@@ -447,12 +447,12 @@ function removalPhraseOf(loserLabel, nitNote) {
 function reconciliationHeadLines(effective, headSha) {
     var newer = effective.record;
     if (!effective.conflict) {
-        return ['⚖️ Verdict reconciliation (gh-807): the effective review verdict on head `' + headSha +
+        return ['⚖️ Verdict reconciliation: the effective review verdict on head `' + headSha +
             '` is **' + newer.verdict + '** (at ' + (newer.at || 'unknown time') + ', source: ' + newer.source + ').'];
     }
     var older = effective.conflict.older;
     return [
-        '⚖️ Verdict reconciliation (gh-807): two review verdicts on head `' + headSha + '` —',
+        '⚖️ Verdict reconciliation: two review verdicts on head `' + headSha + '` —',
         '- ' + older.verdict + ' at ' + (older.at || 'unknown time') + ' (source: ' + older.source + ')',
         '- ' + newer.verdict + ' at ' + (newer.at || 'unknown time') + ' (source: ' + newer.source + ')'
     ];
@@ -839,9 +839,9 @@ function selectResolvableThreads(records, headSha, threads, opts) {
  * the machine closed it.
  */
 function buildThreadAckReply() {
-    return '🤖 non-blocking suggestion — resolved per APPROVE verdict (gh-828). ' +
+    return '🤖 non-blocking suggestion — resolved per APPROVE verdict. ' +
         'The machine resolves its own non-blocking threads in-tick so the ' +
-        'conversation gate cannot hold an approved PR (see gh-807/gh-828).';
+        'conversation gate cannot hold an approved PR.';
 }
 
 if (typeof module !== 'undefined' && module.exports) {

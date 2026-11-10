@@ -34,7 +34,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 
 
@@ -72,13 +74,14 @@ _retryMergePR.js_
 - `removeLabel`: `"sm_test_merge_triggered"`
 - `testCaseMerge`: `true`
 - `checkOpenPR`: `true`
+- `branchCreateFnPath` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `autoStartRework` _(used by JS action)_
 - `autoStartReworkConfigFile` _(used by JS action)_
 - `configPath` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
-- `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `maxAutoReworkRounds` _(used by JS action)_
 - `projectKey` _(used by JS action)_

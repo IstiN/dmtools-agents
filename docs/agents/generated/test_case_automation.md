@@ -33,7 +33,9 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `checkOpenPR`
+  - `dryRun`
 
 ### preCliJSAction: `preCliTestAutomationSetup.js`
 
@@ -47,6 +49,7 @@ _Pre-CLI Test Automation Setup Action (preCliJSAction for test_case_automation)_
   - git merge
 - Parameters (customParams):
   - `branchCreateFnPath`
+  - `dryRun`
 
 
 ### postJSAction: `postTestAutomationResults.js`
@@ -80,13 +83,13 @@ _Post Test Automation Results Action (postJSAction for test_case_automation)_
 ## Custom params
 
 - `removeLabel`: `"sm_test_automation_triggered"`
-- `checkOpenPR` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
+- `checkOpenPR` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `configPath` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
-- `dryRun` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `projectKey` _(used by JS action)_
 - `smFallback` _(used by JS action)_

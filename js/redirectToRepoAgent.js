@@ -24,6 +24,7 @@
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
+var branchSetup = require('./common/branchSetup.js');
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) {}
 var trackerHolder = trackersModule.createTrackerHolder();
@@ -93,19 +94,32 @@ function buildRunCommand(agent, ticketKey, ciRunUrl) {
     return command;
 }
 
+function resolveRedirectTicket(params, scope) {
+    var ticket = params.ticket || scope.actualParams.ticket;
+    if (ticket && ticket.fields) return ticket;
+    try {
+        return getTracker().getIssue(folderKey(scope.folder));
+    } catch (e) {
+        console.error('redirectToRepoAgent: could not fetch ticket: ' + e);
+        return null;
+    }
+}
+
+function executeNestedAgentRun(agent, ticketKey, ciRunUrl) {
+    try {
+        cli_execute_command({ command: buildRunCommand(agent, ticketKey, ciRunUrl) });
+    } catch (e) {
+        console.error('redirectToRepoAgent: failed to run ' + agent + ': ' + e);
+    }
+    return false;
+}
+
 function action(params) {
     var scope = resolveRunScope(params);
     initTracker(resolveProjectConfig(params), scope.customParams);
 
-    var ticket = params.ticket || scope.actualParams.ticket;
-    if (!ticket || !ticket.fields) {
-        try {
-            ticket = getTracker().getIssue(folderKey(scope.folder));
-        } catch (e) {
-            console.error('redirectToRepoAgent: could not fetch ticket: ' + e);
-            return false;
-        }
-    }
+    var ticket = resolveRedirectTicket(params, scope);
+    if (!ticket) return false;
 
     var ticketKey = ticketKeyOf(ticket, scope.folder);
     var summary = summaryOf(ticket);
@@ -118,14 +132,12 @@ function action(params) {
 
     console.log('redirectToRepoAgent: ' + ticketKey + ' \u2192 ' + agent);
 
-    try {
-        cli_execute_command({ command: buildRunCommand(agent, ticketKey, scope.ciRunUrl) });
-    } catch (e) {
-        console.error('redirectToRepoAgent: failed to run ' + agent + ': ' + e);
+    if (branchSetup.isDryRunParams(params) || branchSetup.isDryRunParams(scope.actualParams)) {
+        console.log('[dryRun] redirectToRepoAgent: skipping nested dmtools run for ' + agent);
         return false;
     }
 
-    return false;
+    return executeNestedAgentRun(agent, ticketKey, scope.ciRunUrl);
 }
 
 if (typeof module !== 'undefined') {

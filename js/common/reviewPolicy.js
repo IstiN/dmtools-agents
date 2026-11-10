@@ -543,7 +543,7 @@ function densityAudit(census, additions, bounds) {
  */
 function policyTableMarkdown(policy) {
     var p = policy || defaultPolicy();
-    var lines = ['## Review policy (gh-1351)', ''];
+    var lines = ['## Review policy', ''];
     lines.push('Preset: `' + p.preset + '` — resolved from: ' + p.source +
         ' (resolution chain: projectConfig.reviewPolicy → workflow jobParams → built-in default).');
     lines.push('');
@@ -565,8 +565,7 @@ function policyTableBody(p) {
             (sev.round === 'rework' ? 'YES' : 'no') + ' |');
     }
     lines.push('');
-    lines.push('Verification: `' + p.verification + '` — ' + verificationPhrase(p.verification) +
-        ' (gh-1403).');
+    lines.push('Verification: `' + p.verification + '` — ' + verificationPhrase(p.verification) + '.');
     lines.push('');
     lines.push('Bounds: polishMaxThreads=' + p.bounds.polishMaxThreads +
         ' · polishMaxChangedLines=' + p.bounds.polishMaxChangedLines +
