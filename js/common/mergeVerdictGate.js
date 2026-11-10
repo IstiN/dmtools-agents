@@ -96,7 +96,7 @@ var machineLoginsOf = mergeBackstop.machineLoginsOf;
  * | {comments|items} envelope → array. A missing primitive (capability
  * miss) reads as null — the caller's gate skips degraded, never blind-holds.
  */
-function prCommentList(getComments, owner, name, prNumber, out) {
+function prCommentList(getComments, owner, name, prNumber) {
     if (typeof getComments !== 'function') return null;
     var raw = getComments({
         workspace: owner, repository: name, pullRequestId: String(prNumber)
@@ -218,7 +218,7 @@ function runGate(io, owner, name, input) {
     if (!out.head) return out; // no head on the payload — nothing to consult
     var comments;
     try {
-        comments = prCommentList(io && io.getComments, owner, name, inp.prNumber, out);
+        comments = prCommentList(io && io.getComments, owner, name, inp.prNumber);
     } catch (eRead) {
         out.commentsUnreadable = true; // fail-open, logged by the outcome line
         return out;

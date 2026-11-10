@@ -178,6 +178,7 @@
         "js/unit-tests/test_resolveRepoFromTicket.js",
         "js/unit-tests/test_restoreFromReleases.js",
         "js/unit-tests/test_retryMergePR.js",
+        "js/unit-tests/test_retryMergeGithubPR.js",
         "js/unit-tests/test_reviewDebtLedger.js",
         "js/unit-tests/test_reviewDispositions.js",
         "js/unit-tests/test_reviewFilter.js",

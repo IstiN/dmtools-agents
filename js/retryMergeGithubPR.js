@@ -16,6 +16,11 @@
 
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
+// gh-1416: the verdict-freshness probe rides the squash-merge — the same
+// merge-instant gate the merge-trigger sweep (js/mergeTrigger.js) and the
+// event-driven merge bot (js/sm/mergeBot.js) run. Requires hoisted (gh-823).
+var mcpParse = require('./common/mcpParse.js');
+var mergeVerdictGate = require('./common/mergeVerdictGate.js');
 
 function issueNumberFromKey(ticketKey) {
     var m = /(\d+)$/.exec(String(ticketKey || ''));
@@ -165,6 +170,32 @@ function action(params) {
         addIssueLabel(issueNumber, reworkLabel);
         releaseLock();
         return false;
+    }
+
+    // gh-1416: refuse the merge while the current head's newest verdict is
+    // REQUEST_CHANGES/BLOCK — the newest dmtools:review-verdict record for
+    // the CURRENT head holds the merge instant (a stale pr_approved can no
+    // longer race the funnel). Held → release the lock and return false:
+    // the SM retries next cycle, the rework lap / a human resolution lands
+    // the fresh verdict; pr_approved stays (the deferral is not a rework
+    // flip). The gate never throws (it fails open internally — no records,
+    // stale-head-only records, unreadable markers, and broken reads all
+    // proceed as today); a wiring-level fault is absorbed fail-open too.
+    try {
+        var verdictGate = mergeVerdictGate.runGateForPr(
+            mergeVerdictGate.githubBridgeIo(),
+            repoInfo.owner, repoInfo.repo, params.jobParams || params, pr.number,
+            mcpParse.parseMcp(detail),
+            function (line) { console.log(line); });
+        if (verdictGate.held) {
+            console.warn('PR #' + pr.number + ' merge deferred — newest verdict on the' +
+                ' current head is ' + verdictGate.verdict + ' (gh-1416); the rework lap /' +
+                ' a human resolution owns the fresh verdict');
+            releaseLock();
+            return false;
+        }
+    } catch (eGate) {
+        console.warn('Verdict gate fault — fail-open (gh-1416):', eGate.message || eGate);
     }
 
     // Merge (squash — merge-trigger parity).

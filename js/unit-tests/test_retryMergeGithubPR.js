@@ -8,13 +8,100 @@ var mcpParseModule = loadModule('js/common/mcpParse.js', makeRequire({}), {});
 var BOT = 'merge-bot';
 var HEAD = '0c2732dfeedface0deadbeefcafe0123456789ab';
 
-// The verdict-marker comment builder (the real one — the body a review leg posts).
+// ── memoized module-closure builders (test_mergeTrigger pattern) ────────────
+
+var _m = {};
+function mMachineAuthor() {
+    if (!_m.ma) _m.ma = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    return _m.ma;
+}
+function mReviewVerdicts() {
+    if (!_m.rv) {
+        _m.rv = loadModule('js/common/reviewVerdicts.js', makeRequire({
+            './machineAuthor.js': mMachineAuthor()
+        }), {});
+    }
+    return _m.rv;
+}
+function mFindingRegistry() {
+    if (!_m.fr) {
+        _m.fr = loadModule('js/common/findingRegistry.js', makeRequire({
+            './reviewVerdicts.js': mReviewVerdicts()
+        }), {});
+    }
+    return _m.fr;
+}
+function mLedgerCore() {
+    if (!_m.lc) _m.lc = loadModule('js/common/ledgerCore.js', makeRequire({}), {});
+    return _m.lc;
+}
+function mReviewDebtLedger() {
+    if (!_m.rdl) {
+        _m.rdl = loadModule('js/common/reviewDebtLedger.js', makeRequire({
+            './reviewVerdicts.js': mReviewVerdicts(),
+            './findingRegistry.js': mFindingRegistry(),
+            './ledgerCore.js': mLedgerCore()
+        }), {});
+    }
+    return _m.rdl;
+}
+function mReviewPolicy() {
+    if (!_m.rp) {
+        _m.rp = loadModule('js/common/reviewPolicy.js', makeRequire({
+            './reviewVerdicts.js': mReviewVerdicts()
+        }), {});
+    }
+    return _m.rp;
+}
+function mReviewDispositions() {
+    if (!_m.rd) {
+        _m.rd = loadModule('js/common/reviewDispositions.js', makeRequire({
+            './reviewVerdicts.js': mReviewVerdicts(),
+            './reviewPolicy.js': mReviewPolicy()
+        }), {});
+    }
+    return _m.rd;
+}
+function mThreadInventory() {
+    if (!_m.ti) {
+        _m.ti = loadModule('js/common/reviewThreadInventory.js', makeRequire({
+            './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {})
+        }), {});
+    }
+    return _m.ti;
+}
+function mMergeBackstop() {
+    if (!_m.mb) {
+        _m.mb = loadModule('js/common/mergeBackstop.js', makeRequire({
+            './reviewVerdicts.js': mReviewVerdicts(),
+            './findingRegistry.js': mFindingRegistry(),
+            './reviewDebtLedger.js': mReviewDebtLedger(),
+            './reviewDispositions.js': mReviewDispositions(),
+            './machineAuthor.js': mMachineAuthor(),
+            './reviewThreadInventory.js': mThreadInventory(),
+            './mcpParse.js': mcpParseModule,
+            '../configLoader.js': { loadProjectConfig: function () { return null; } }
+        }), {});
+    }
+    return _m.mb;
+}
+function mGate(globals) {
+    // Per-call load: the gate must SEE the lane's own bridge mocks (one
+    // engine-global set per fixture — memoizing would bind the first
+    // fixture's comment read forever).
+    return loadModule('js/common/mergeVerdictGate.js', makeRequire({
+        './mcpParse.js': mcpParseModule,
+        './reviewVerdicts.js': mReviewVerdicts(),
+        './mergeBackstop.js': mMergeBackstop()
+    }), globals || {});
+}
+
+// ── fixtures ─────────────────────────────────────────────────────────────────
+
+// The verdict-marker comment (the real builder — the body a review leg posts).
 function verdictComment(verdict, head, login) {
-    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({
-        './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-    }), {});
     return {
-        body: rv.buildVerdictComment({
+        body: mReviewVerdicts().buildVerdictComment({
             head: head, verdict: verdict, blocking: 0, important: 1,
             suggestions: 0, at: '2026-11-09T15:42:44Z', source: 'pr_review.json'
         }),
@@ -22,13 +109,33 @@ function verdictComment(verdict, head, login) {
     };
 }
 
+// detail payload shared by every scenario: mergeable CLEAN with a head sha.
+function prDetail(over) {
+    var d = { number: 12, state: 'open', mergeable: true, mergeable_state: 'clean',
+        head: { sha: HEAD } };
+    for (var k in (over || {})) d[k] = over[k];
+    return d;
+}
+
 // The retry lane resolves the repo through the scm provider (or the
-// explicit config.repository); both are stubbed here. detail = the get_pr
-// payload (REST shape).
-function loadLane(mods, opts) {
+// explicit config.repository); both are stubbed here. The gate module
+// shares the lane's bridge mocks (one engine-global set in production).
+function loadLane(opts) {
     opts = opts || {};
     var calls = { merges: [], removed: [], added: [], comments: [], closed: [],
         commentReads: [], branchUpdates: [] };
+    var globals = {
+        github_remove_label: function (a) { calls.removed.push(a); return '{}'; },
+        github_add_labels: function (a) { calls.added.push(a); return '{}'; },
+        github_create_comment: function (a) { calls.comments.push(a); return '{}'; },
+        github_get_issue: function () { return JSON.stringify({ number: 33, state: 'closed' }); },
+        github_close_issue: function (a) { calls.closed.push(a); return '{}'; },
+        github_get_pr_comments: opts.noCommentsPrimitive ? undefined : function (a) {
+            calls.commentReads.push(a);
+            if (opts.getCommentsThrows) throw new Error(opts.getCommentsThrows);
+            return JSON.stringify(opts.comments || []);
+        }
+    };
     var scmStub = {
         createScm: function () {
             return {
@@ -46,95 +153,28 @@ function loadLane(mods, opts) {
             };
         }
     };
-    var globals = {
-        github_remove_label: function (a) { calls.removed.push(a); return '{}'; },
-        github_add_labels: function (a) { calls.added.push(a); return '{}'; },
-        github_create_comment: function (a) { calls.comments.push(a); return '{}'; },
-        github_get_issue: function () { return JSON.stringify({ number: 33, state: 'closed' }); },
-        github_close_issue: function (a) { calls.closed.push(a); return '{}'; },
-        github_get_pr_comments: opts.noCommentsPrimitive ? undefined : function (a) {
-            calls.commentReads.push(a);
-            if (opts.getCommentsThrows) throw new Error(opts.getCommentsThrows);
-            return JSON.stringify(opts.comments || []);
-        }
-    };
-    // The gate module shares the lane's bridge mocks (one engine-global set
-    // in production) and the stubbed configLoader closure of the backstop.
-    var backstop = loadModule('js/common/mergeBackstop.js', makeRequire({
-        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
-            './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-        }), {}),
-        './findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
-            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
-                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-            }), {})
-        }), {}),
-        './reviewDebtLedger.js': loadModule('js/common/reviewDebtLedger.js', makeRequire({
-            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
-                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-            }), {}),
-            './findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
-                './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
-                    './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-                }), {})
-            }), {}),
-            './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({}), {})
-        }), {}),
-        './reviewDispositions.js': loadModule('js/common/reviewDispositions.js', makeRequire({
-            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
-                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-            }), {}),
-            './reviewPolicy.js': loadModule('js/common/reviewPolicy.js', makeRequire({
-                './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
-                    './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-                }), {})
-            }), {})
-        }), {}),
-        './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
-        './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({
-            './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {})
-        }), {}),
-        './mcpParse.js': mcpParseModule,
-        '../configLoader.js': { loadProjectConfig: function () { return null; } }
-    }), {});
-    var gate = loadModule('js/common/mergeVerdictGate.js', makeRequire({
-        './mcpParse.js': mcpParseModule,
-        './reviewVerdicts.js': backstop && loadModule('js/common/reviewVerdicts.js', makeRequire({
-            './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
-        }), {}),
-        './mergeBackstop.js': backstop
-    }), {
-        github_get_pr_comments: globals.github_get_pr_comments,
-        github_create_comment: globals.github_create_comment
-    });
     var lane = loadModule('js/retryMergeGithubPR.js', makeRequire({
         './common/scm.js': scmStub,
         './configLoader.js': { loadProjectConfig: function () { return null; } },
         './common/mcpParse.js': mcpParseModule,
-        './common/mergeVerdictGate.js': gate
+        './common/mergeVerdictGate.js': mGate({
+            github_get_pr_comments: globals.github_get_pr_comments,
+            github_create_comment: globals.github_create_comment
+        })
     }), globals);
-    return { lane: lane, calls: calls, globals: globals };
+    return { lane: lane, calls: calls };
 }
 
-function runLane(opts, extraParams) {
-    var loaded = loadLane(modsFor(opts), opts);
-    var params = Object.assign({
+function runLane(opts, jobParams) {
+    var loaded = loadLane(opts);
+    var result = loaded.lane.action({
         ticket: { key: 'gh-33', prNumber: 12 },
-        jobParams: Object.assign({ machineAuthor: BOT }, (opts && opts.jobParams) || {})
-    }, extraParams || {});
-    var result = loaded.lane.action(params);
+        // Undefined jobParams keeps the default (machineAuthor set);
+        // an explicit object REPLACES it (the unconfigured shape).
+        jobParams: jobParams === undefined ? { machineAuthor: BOT } : jobParams
+    });
     return { result: result, calls: loaded.calls };
 }
-
-// detail payload shared by every scenario: mergeable CLEAN with a head sha.
-function prDetail(over) {
-    var d = { number: 12, state: 'open', mergeable: true, mergeable_state: 'clean',
-        head: { sha: HEAD } };
-    for (var k in (over || {})) d[k] = over[k];
-    return d;
-}
-
-function modsFor(opts) { return opts; }
 
 function holdsPosted(calls) {
     return calls.comments.filter(function (c) {
@@ -145,8 +185,7 @@ function holdsPosted(calls) {
 suite('retryMergeGithubPR: verdict gate at the merge instant (gh-1416)', function () {
 
     test('REQUEST_CHANGES record on the current head -> merge deferred, lock released, hold marker posted', function () {
-        var r = runLane({ comments: [verdictComment('REQUEST_CHANGES', HEAD)],
-            prDetail: prDetail() });
+        var r = runLane({ comments: [verdictComment('REQUEST_CHANGES', HEAD)], prDetail: prDetail() });
         assert.equal(r.result, false, 'held — the SM retries next cycle');
         assert.equal(r.calls.merges.length, 0, 'no squash-merge on a blocking verdict');
         var holds = holdsPosted(r.calls);
@@ -164,8 +203,9 @@ suite('retryMergeGithubPR: verdict gate at the merge instant (gh-1416)', functio
         opts.comments.push({ body: holdsPosted(first.calls)[0].body,
             user: { login: BOT + '[bot]' } });
         var second = runLane(opts);
-        assert.equal(second.result, false, 'still held');
-        assert.equal(holdsPosted(second.calls).length, 1, 'never a new comment per tick');
+        assert.equal(second.result, false, 'still held — the verdict stands');
+        assert.equal(holdsPosted(second.calls).length, 0,
+            'never a new comment per tick (refreshed in place)');
     });
 
     test('APPROVE record on the current head -> merges', function () {
@@ -209,14 +249,10 @@ suite('retryMergeGithubPR: verdict gate at the merge instant (gh-1416)', functio
     });
 
     test('unconfigured machineAuthor -> no trusted records, merges as today', function () {
-        var loaded = loadLane({ comments: [verdictComment('REQUEST_CHANGES', HEAD)],
-            prDetail: prDetail() });
-        var result = loaded.lane.action({
-            ticket: { key: 'gh-33', prNumber: 12 },
-            jobParams: {} // no machineAuthor
-        });
-        assert.equal(result, true, 'empty allowlist = nothing trusted = fail-open');
-        assert.equal(loaded.calls.merges.length, 1);
+        var r = runLane({ comments: [verdictComment('REQUEST_CHANGES', HEAD)], prDetail: prDetail() },
+            {}); // no machineAuthor in jobParams
+        assert.equal(r.result, true, 'empty allowlist = nothing trusted = fail-open');
+        assert.equal(r.calls.merges.length, 1);
     });
 
     test('unlinked-PR path (no prNumber): the merge stays gated too', function () {
@@ -251,7 +287,9 @@ suite('retryMergeGithubPR: lane characterization (gate-neutral shapes)', functio
         assert.equal(r.result, false);
         assert.equal(r.calls.merges.length, 0);
         assert.ok(r.calls.removed.some(function (x) { return x.label === 'pr_approved'; }));
-        assert.ok(r.calls.added.some(function (x) { return x.label === 'agent:rework'; }));
+        assert.ok(r.calls.added.some(function (x) {
+            return (x.labels || []).indexOf('agent:rework') !== -1;
+        }));
         assert.equal(r.calls.commentReads.length, 0);
     });
 
