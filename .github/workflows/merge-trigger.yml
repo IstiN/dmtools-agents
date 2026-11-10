@@ -1,7 +1,34 @@
-# Merge Trigger — thin stub over the canonical pr_approved merge bot
-# (dmtools-agentic-workflows). Event triggers stay repo-side: this repo's
-# validation CI is `Quality` and it fires on PR heads automatically
-# (pull_request trigger), so the bot only merges CLEAN, green PRs.
+# Merge Trigger — the pr_approved merge bot, VENDORED for this repo.
+#
+# WHY VENDORED (2026-11-10, PR #1410 RCA): the canonical reusable workflow
+# (IstiN/dmtools-agentic-workflows/.github/workflows/factory-merge-trigger.yml)
+# runs the merge pack CHECKOUT-LESS and exposes no machine-author/config
+# channel, so the engine's configLoader found no `.dmtools/config.js` and
+# `machineLoginsOf()` resolved to the EMPTY allowlist — "unconfigured =
+# NOTHING counts as machine-owned" (js/common/mergeBackstop.js header). The
+# gh-1353/gh-1370 merge backstop therefore classified the bot's own review
+# thread as human ("1 open human thread(s) stay per gh-744") and PR #1410
+# merged with an open machine review thread on 2026-11-09T15:44:04Z.
+#
+# The vendored copy adds exactly ONE step before the pack run: fetch the
+# default-branch `.dmtools/config.js` into the job CWD (configLoader
+# candidate `.dmtools/config.js`, js/configLoader.js buildConfigCandidates)
+# so every per-repo knob — machineAuthor, reviewPolicy, jira.fields, ... —
+# reaches the funnel. Fail-open: absent/failed fetch = legacy
+# jobParams-only behavior (byte-identical to the delegated stub).
+#
+# DELETE this vendored copy and restore the thin `uses:` delegation once
+# factory-merge-trigger.yml grows a config-fetch step or a machine-author
+# input. Until then, keep this file in sync manually with upstream
+# (dmtools-agentic-workflows/.github/workflows/factory-merge-trigger.yml,
+# @main): every step below except "Fetch the target repo's
+# .dmtools/config.js into CWD" is a verbatim copy of the factory job with
+# the stub's inputs inlined (runner: ubuntu-24.04, remove_pr_label: true,
+# map_pr_labels: true, gh_branch_pattern: true).
+#
+# Event triggers stay repo-side: this repo's validation CI is `Quality` and
+# it fires on PR heads automatically (pull_request trigger), so the bot only
+# merges CLEAN, green PRs.
 name: Merge Trigger
 
 run-name: 'Merge Trigger : Quality passed → merge pr_approved issues'
@@ -19,12 +46,151 @@ permissions:
   issues: write
   actions: read
 
+env:
+  # Version knobs resolve from repository variables ('latest' default) —
+  # same freeze contract as factory-merge-trigger.yml / factory-sm.yml.
+  AGENTS_VERSION: ${{ vars.AGENTS_VERSION || 'latest' }}
+  DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'latest' }}
+
 jobs:
   merge-trigger:
-    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-merge-trigger.yml@main
-    with:
-      runner: ubuntu-24.04
-      remove_pr_label: true
-      map_pr_labels: true
-      gh_branch_pattern: true
-    secrets: inherit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Same-repo guard: PRs from forks must not trigger merges. The
+    # issues:labeled entry path (dmd) re-enters without a workflow_run.
+    if: >-
+      (github.event_name == 'issues' && github.event.label.name == 'pr_approved') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    concurrency:
+      group: merge-trigger-${{ github.event_name }}-${{ github.event.workflow_run.head_sha || github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Gate on MERGE_TRIGGER_ENABLED
+        id: gate
+        env:
+          ENABLED: ${{ vars.MERGE_TRIGGER_ENABLED }}
+        run: |
+          if [ "$ENABLED" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::merge-trigger scaffold is wired but disabled — set the MERGE_TRIGGER_ENABLED repo variable to true (after branch protection + required checks are in place)."
+          fi
+
+      # GitHub App auth (awf#52): with APP_ID + APP_PRIVATE_KEY secrets the
+      # sweep rides a per-job App installation token; absent them the
+      # PAT_TOKEN -> github.token chain below is byte-identical to today.
+      # Minted in-job: GitHub strips secret-bearing job outputs.
+      - name: Resolve GitHub auth (App -> PAT -> github.token)
+        id: app
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+        run: |
+          if [ -n "$APP_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "auth: app"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "auth: pat"
+          fi
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        if: steps.gate.outputs.enabled == 'true' && steps.app.outputs.enabled == 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Resolve versions (agents release + dmtools CLI)
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.PAT_TOKEN || github.token }}
+        run: |
+          resolve_tag() {
+            local repo="$1" knob="$2"
+            if [ "$knob" = "latest" ]; then
+              gh api "repos/${repo}/releases/latest" --jq .tag_name
+            else
+              gh api "repos/${repo}/releases/tags/${knob}" --jq .tag_name
+            fi
+          }
+          AGENTS_TAG="$(resolve_tag IstiN/dmtools-agents "$AGENTS_VERSION")"
+          DMTOOLS_TAG="$(resolve_tag epam/dmtools-dart "$DMTOOLS_VERSION")"
+          echo "AGENTS_TAG=${AGENTS_TAG}" >> "$GITHUB_ENV"
+          echo "DMTOOLS_TAG=${DMTOOLS_TAG}" >> "$GITHUB_ENV"
+          echo "agents pack release: ${AGENTS_TAG} (knob: ${AGENTS_VERSION})"
+          echo "dmtools CLI release: ${DMTOOLS_TAG} (knob: ${DMTOOLS_VERSION})"
+
+      - name: Install dmtools CLI (release bundle)
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.SOURCE_GITHUB_TOKEN }}
+          DMTOOLS_GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.SOURCE_GITHUB_TOKEN }}
+        run: |
+          if ! curl -fsSL --connect-timeout 15 --max-time 45 --retry 2 --retry-delay 2 \
+              "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_TAG}/install.sh" \
+              -o /tmp/dmtools-install.sh; then
+            echo "browser_download failed; falling back to GitHub Releases API for epam/dmtools-dart@${DMTOOLS_TAG}/install.sh" >&2
+            ASSET_URL="$(gh api "repos/epam/dmtools-dart/releases/tags/${DMTOOLS_TAG}" --jq '.assets[] | select(.name == "install.sh") | .url')"
+            curl -fsSL --connect-timeout 15 --max-time 45 --retry 2 --retry-delay 2 \
+              -H "Accept: application/octet-stream" \
+              ${GH_TOKEN:+-H "Authorization: Bearer ${GH_TOKEN}"} \
+              "${ASSET_URL}" -o /tmp/dmtools-install.sh
+          fi
+          bash /tmp/dmtools-install.sh "${DMTOOLS_TAG}"
+          echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
+
+      # THE VENDORED DELTA — make the per-repo config reachable (see the
+      # file header): fetch the default-branch `.dmtools/config.js` into the
+      # job CWD so `configLoader.loadProjectConfig()` (candidate
+      # `.dmtools/config.js`) reads the repo's real knobs. No checkout: the
+      # sweep stays pure GitHub API; this is one raw fetch. Fail-open —
+      # anything other than a 200 with non-empty, non-HTML content leaves
+      # the CWD without a config and the funnel runs exactly as the
+      # delegated stub did (jobParams-only, empty allowlist).
+      - name: Fetch the target repo's .dmtools/config.js into CWD
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.PAT_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p .dmtools
+          http="$(curl -sS --connect-timeout 10 --max-time 30 \
+            -o /tmp/repo-config.js -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://raw.githubusercontent.com/${REPO}/HEAD/.dmtools/config.js")" || http="000"
+          if [ "${http}" != "200" ] || [ ! -s /tmp/repo-config.js ]; then
+            echo "::warning::no .dmtools/config.js on the default branch (http ${http}) — the funnel runs with jobParams-only (legacy behavior)"
+            exit 0
+          fi
+          if grep -qi '<html\|<!DOCTYPE' /tmp/repo-config.js; then
+            echo "::warning::fetched config looks like an HTML error page — ignoring (legacy behavior)"
+            exit 0
+          fi
+          mv /tmp/repo-config.js .dmtools/config.js
+          echo "config fetched: .dmtools/config.js ($(wc -c < .dmtools/config.js) bytes)"
+
+      - name: Merge issues labeled pr_approved
+        if: steps.gate.outputs.enabled == 'true'
+        # Runs as a VERSIONED AGENT PACK (merge_trigger@latest): the pack
+        # carries mergeTrigger.js + merge_trigger.json, sha256-verified
+        # against the release catalog. NO checkout — the sweep is pure
+        # GitHub API via the github_* tool bridge; the workflow inputs map
+        # into the jobParams override.
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.PAT_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.PAT_TOKEN || github.token }}
+          SOURCE_GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.PAT_TOKEN || github.token }}
+          CI_RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          export DMTOOLS_PACK_REGISTRY="https://github.com/IstiN/dmtools-agents/releases/download/${AGENTS_TAG}"
+          repo='${{ github.repository }}'
+          override=$(cat <<EOF
+          {"params":{"jobParams":{"repo":"${repo}","label":"pr_approved","mapPrLabels":true,"ghBranchPattern":true,"removePrLabel":true,"ciRunUrl":"${CI_RUN_URL}"}}}
+          EOF
+          )
+          dmtools run merge_trigger@latest "$override"
