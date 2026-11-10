@@ -47,6 +47,36 @@ function addIssueLabel(number, label, what) {
 
 var REPO = { owner: null, repo: null };
 
+/**
+ * gh-1416: refuse the merge while the current head's newest verdict is
+ * REQUEST_CHANGES/BLOCK — the newest dmtools:review-verdict record for the
+ * CURRENT head holds the merge instant (a stale pr_approved can no longer
+ * race the funnel). Returns true when the caller must defer (the same
+ * shape as mergeTrigger's verdictGateBeforeMerge — the extracted wiring is
+ * directly unit-testable without driving the whole lane). The gate never
+ * throws (it fails open internally — no records, stale-head-only records,
+ * unreadable markers, and broken reads all proceed as today); a
+ * wiring-level fault is absorbed fail-open here too.
+ */
+function verdictGateHoldsMerge(jobParams, owner, repo, prNumber, prDetail) {
+    try {
+        var verdictGate = mergeVerdictGate.runGateForPr(
+            mergeVerdictGate.githubBridgeIo(),
+            owner, repo, jobParams, prNumber,
+            mcpParse.parseMcp(prDetail),
+            function (line) { console.log(line); });
+        if (verdictGate.held) {
+            console.warn('PR #' + prNumber + ' merge deferred — newest verdict on the' +
+                ' current head is ' + verdictGate.verdict + ' (gh-1416); the rework lap /' +
+                ' a human resolution owns the fresh verdict');
+            return true;
+        }
+    } catch (eGate) {
+        console.warn('Verdict gate fault — fail-open (gh-1416):', eGate.message || eGate);
+    }
+    return false;
+}
+
 function action(params) {
     var ticketKey = params.ticket && params.ticket.key;
     var issueNumber = issueNumberFromKey(ticketKey);
@@ -172,30 +202,13 @@ function action(params) {
         return false;
     }
 
-    // gh-1416: refuse the merge while the current head's newest verdict is
-    // REQUEST_CHANGES/BLOCK — the newest dmtools:review-verdict record for
-    // the CURRENT head holds the merge instant (a stale pr_approved can no
-    // longer race the funnel). Held → release the lock and return false:
-    // the SM retries next cycle, the rework lap / a human resolution lands
-    // the fresh verdict; pr_approved stays (the deferral is not a rework
-    // flip). The gate never throws (it fails open internally — no records,
-    // stale-head-only records, unreadable markers, and broken reads all
-    // proceed as today); a wiring-level fault is absorbed fail-open too.
-    try {
-        var verdictGate = mergeVerdictGate.runGateForPr(
-            mergeVerdictGate.githubBridgeIo(),
-            repoInfo.owner, repoInfo.repo, params.jobParams || params, pr.number,
-            mcpParse.parseMcp(detail),
-            function (line) { console.log(line); });
-        if (verdictGate.held) {
-            console.warn('PR #' + pr.number + ' merge deferred — newest verdict on the' +
-                ' current head is ' + verdictGate.verdict + ' (gh-1416); the rework lap /' +
-                ' a human resolution owns the fresh verdict');
-            releaseLock();
-            return false;
-        }
-    } catch (eGate) {
-        console.warn('Verdict gate fault — fail-open (gh-1416):', eGate.message || eGate);
+    // gh-1416: the held path releases the lock and returns false — the SM
+    // retries next cycle, the rework lap / a human resolution lands the
+    // fresh verdict; pr_approved stays (the deferral is not a rework flip).
+    if (verdictGateHoldsMerge(params.jobParams || params,
+            repoInfo.owner, repoInfo.repo, pr.number, detail)) {
+        releaseLock();
+        return false;
     }
 
     // Merge (squash — merge-trigger parity).
@@ -226,5 +239,6 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action, issueNumberFromKey: issueNumberFromKey };
+    module.exports = { action: action, issueNumberFromKey: issueNumberFromKey,
+        verdictGateHoldsMerge: verdictGateHoldsMerge };
 }

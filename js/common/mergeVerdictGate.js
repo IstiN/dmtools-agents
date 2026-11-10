@@ -25,15 +25,16 @@
  *
  *   <!-- dmtools:merge-hold {"reason":"verdict","verdict":"REQUEST_CHANGES","head":"<sha>"} -->
  *
- * The hold is deduped per head: an existing same-head hold is refreshed in
- * place (reused — never a new comment per tick; the gh-808/gh-1392
- * comment-reduction doctrine, ≤ 1 comment per head). The bridge carries no
- * comment-update primitive, so a MOVED head gets its own fresh hold — one
- * per head, exactly like the gh-848 ghost-guard markers. Resolution of the
- * hold is the normal flow: a rework lap lands a new head with a fresh
- * verdict (the stale head's records stop matching), or a human resolves
- * the discussion / merges manually. The gate never removes the hold —
- * stale holds are inert by construction (head-scoped).
+ * The hold is deduped per head: an existing same-head hold is REUSED in
+ * place — the bridge carries no comment-update primitive, so the existing
+ * marker's payload/at stay exactly as first posted (never a new comment per
+ * tick; the gh-808/gh-1392 comment-reduction doctrine, ≤ 1 comment per
+ * head). A MOVED head gets its own fresh hold — one per head, exactly like
+ * the gh-848 ghost-guard markers. Resolution of the hold is the normal
+ * flow: a rework lap lands a new head with a fresh verdict (the stale
+ * head's records stop matching), or a human resolves the discussion /
+ * merges manually. The gate never removes the hold — stale holds are inert
+ * by construction (head-scoped).
  *
  * Fail-open, exactly:
  *   - no verdict record for the current head at all (validation-only
@@ -170,9 +171,11 @@ function verdictHolds(verdict) {
 }
 
 /**
- * The deduped hold stamp (soft): a same-head hold refreshes in place (no
- * new comment), a fresh head gets its own marker, and a failed post never
- * throws — the defer already stands, the marker is observability.
+ * The deduped hold stamp (soft): a same-head hold reuses the existing
+ * marker in place (there is no comment-update primitive on the bridge, so
+ * the payload/at stay as first posted — never a new comment per tick), a
+ * fresh head gets its own marker, and a failed post never throws — the
+ * defer already stands, the marker is observability.
  */
 function stampHold(io, owner, name, comments, input, out, record) {
     try {
@@ -192,12 +195,52 @@ function stampHold(io, owner, name, comments, input, out, record) {
 }
 
 /**
+ * The read→parse→resolve walk of one PR's verdict records (the CRAP-ratchet
+ * rework extraction: runGate keeps only the short-circuit branches). Returns
+ * `{ record, comments }` for the current head's newest machine-verdict
+ * record — or null on every fail-open shape, with the reason recorded on
+ * `out`:
+ *   - the comment read throws        → out.commentsUnreadable, null;
+ *   - no get-comments primitive      → out.commentsSkipped, null
+ *     (capability miss — the probe skips degraded, never blind-holds);
+ *   - the parser throws (paranoia —  it never does) → out.commentsUnreadable,
+ *     null;
+ *   - no records / older heads only  → null (nothing recorded — the healthy
+ *     absence shape).
+ * The parsed comment list rides along so the hold stamp dedups against the
+ * SAME read — no second API call on the held path.
+ */
+function effectiveVerdictOf(io, owner, name, inp, out) {
+    var comments;
+    try {
+        comments = prCommentList(io && io.getComments, owner, name, inp.prNumber);
+    } catch (eRead) {
+        out.commentsUnreadable = true; // fail-open, logged by the outcome line
+        return null;
+    }
+    if (!comments) {
+        out.commentsSkipped = true; // capability miss — named as such, not mislabeled
+        return null;
+    }
+    try {
+        var effective = reviewVerdicts.latestVerdictForHead(
+            reviewVerdicts.parseVerdictRecords(comments,
+                { authorLogins: inp.logins }),
+            out.head);
+        return effective ? { record: effective.record, comments: comments } : null;
+    } catch (eParse) {
+        out.commentsUnreadable = true; // paranoia — the parser never throws
+        return null;
+    }
+}
+
+/**
  * The verdict-freshness gate for one PR about to merge (gh-1416). Returns
  * { prNumber, held, verdict, head, holdPosted, holdDeduped, holdPostFailed,
- *   commentsUnreadable } — `held` is the caller's defer signal. NEVER
- * throws: every fault inside the probe fails open (a broken read or a
- * garbage marker is "no records"; the merge proceeds as today and the
- * outcome lines say which fail-open shape fired).
+ *   commentsUnreadable, commentsSkipped } — `held` is the caller's defer
+ * signal. NEVER throws: every fault inside the probe fails open (a broken
+ * read or a garbage marker is "no records"; the merge proceeds as today and
+ * the outcome lines say which fail-open shape fired).
  *
  * io:    { getComments, createComment } (raw bridge primitives or mocks).
  * input: { prNumber, headSha, logins, nowIso } — logins is the machine
@@ -213,7 +256,8 @@ function runGate(io, owner, name, input) {
         holdPosted: false,
         holdDeduped: false,
         holdPostFailed: false,
-        commentsUnreadable: false
+        commentsUnreadable: false,
+        commentsSkipped: false
     };
     if (!out.head) return out; // no head on the payload — nothing to consult
     if (!inp.logins || !inp.logins.length) {
@@ -223,29 +267,12 @@ function runGate(io, owner, name, input) {
         // as today, gh-807 review round 3 doctrine).
         return out;
     }
-    var comments;
-    try {
-        comments = prCommentList(io && io.getComments, owner, name, inp.prNumber);
-    } catch (eRead) {
-        out.commentsUnreadable = true; // fail-open, logged by the outcome line
-        return out;
-    }
-    if (!comments) return out; // capability miss (no primitive) — fail-open
-    var effective;
-    try {
-        effective = reviewVerdicts.latestVerdictForHead(
-            reviewVerdicts.parseVerdictRecords(comments,
-                { authorLogins: inp.logins || [] }),
-            out.head);
-    } catch (eParse) {
-        out.commentsUnreadable = true; // paranoia — the parser never throws
-        return out;
-    }
-    if (!effective) return out; // fail-open: no records / older heads only
-    out.verdict = effective.record.verdict;
+    var found = effectiveVerdictOf(io, owner, name, inp, out);
+    if (!found) return out; // fail-open: no records / older heads / read faults
+    out.verdict = found.record.verdict;
     if (!verdictHolds(out.verdict)) return out; // APPROVE — merge as today
     out.held = true;
-    stampHold(io, owner, name, comments, inp, out, effective.record);
+    stampHold(io, owner, name, found.comments, inp, out, found.record);
     return out;
 }
 
@@ -255,6 +282,9 @@ function runGate(io, owner, name, input) {
 function proceedReason(out) {
     if (out.commentsUnreadable) {
         return 'verdict comments unreadable — fail-open (treated as absent)';
+    }
+    if (out.commentsSkipped) {
+        return 'no get-comments primitive — capability miss, probe skipped (merge proceeds)';
     }
     if (!out.head) return 'no head sha on the PR payload — nothing to consult';
     if (out.verdict) {
@@ -266,7 +296,7 @@ function proceedReason(out) {
 // The hold-state fragment of the held line.
 function holdStampLine(out) {
     if (out.holdPosted) return 'hold marker posted (one per head)';
-    if (out.holdDeduped) return 'hold marker deduped per head (refreshed in place)';
+    if (out.holdDeduped) return 'hold marker deduped per head (existing marker reused in place)';
     if (out.holdPostFailed) return 'hold marker post failed — fail-open';
     return 'hold marker skipped (no create-comment primitive)';
 }
@@ -336,6 +366,7 @@ if (typeof module !== 'undefined' && module.exports) {
         existingHolds: existingHolds,
         hasHoldForHead: hasHoldForHead,
         headShaOf: headShaOf,
+        effectiveVerdictOf: effectiveVerdictOf,
         runGate: runGate,
         outcomeLines: outcomeLines,
         githubBridgeIo: githubBridgeIo,
