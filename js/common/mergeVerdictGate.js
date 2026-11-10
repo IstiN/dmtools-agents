@@ -216,6 +216,13 @@ function runGate(io, owner, name, input) {
         commentsUnreadable: false
     };
     if (!out.head) return out; // no head on the payload — nothing to consult
+    if (!inp.logins || !inp.logins.length) {
+        // No configured machine identity = nothing can ever be trusted —
+        // skip the comment read entirely (no new API pressure on
+        // deployments without the machineAuthor knob; the merge proceeds
+        // as today, gh-807 review round 3 doctrine).
+        return out;
+    }
     var comments;
     try {
         comments = prCommentList(io && io.getComments, owner, name, inp.prNumber);

@@ -241,6 +241,8 @@ suite('mergeVerdictGate: runGate hold decision', function () {
             { prNumber: 12, headSha: HEAD, logins: [], nowIso: '2026-11-09T15:44:00Z' });
         assert.equal(r.out.held, false, 'empty allowlist = no trusted records = merge as today');
         assert.equal(r.calls.commentsPosted.length, 0);
+        assert.equal(r.calls.commentReads.length, 0,
+            'no configured identity = the comment read is skipped entirely (no API pressure)');
     });
 });
 
