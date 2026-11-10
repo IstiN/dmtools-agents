@@ -136,6 +136,19 @@ function mergeGateModuleFor(mods, backstop) {
     });
 }
 
+// gh-1420: the merge-decision observability layer shares the backstop +
+// verdict-gate instances (the residue payload, headShaOf and the ONE
+// comment reader live there); the io bag arrives as a parameter, so no
+// engine globals bind here.
+function mergeNoteModuleFor(mods, backstop) {
+    return loadModule('js/common/mergeNote.js', makeRequire({
+        './mcpParse.js': mcpParseModule,
+        './reviewVerdicts.js': bsReviewVerdicts(),
+        './mergeBackstop.js': backstop,
+        './mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop)
+    }), {});
+}
+
 function loadMergeBot(mods) {
     var backstop = mergeBackstopModuleFor(mods);
     return loadModule('js/sm/mergeBot.js',
@@ -143,7 +156,8 @@ function loadMergeBot(mods) {
             '../common/mcpParse.js': mcpParseModule,
             '../common/mergeBackstop.js': backstop,
             '../common/mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop),
-            '../common/mergeGate.js': mergeGateModuleFor(mods, backstop)
+            '../common/mergeGate.js': mergeGateModuleFor(mods, backstop),
+            '../common/mergeNote.js': mergeNoteModuleFor(mods, backstop)
         }), mods);
 }
 
@@ -1940,5 +1954,105 @@ suite('mergeBot — verdict gate wiring (gh-1416)', function () {
         var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
         assert.equal(result.acted, 1, 'empty allowlist = nothing trusted = fail-open');
         assert.equal(fx.calls.merges.length, 1);
+    });
+});
+
+// ── gh-1420 merge-decision observability (the structured line + the note) ────
+
+suite('mergeBot — merge-decision observability (gh-1420)', function () {
+    var BOT = 'merge-bot';
+
+    function ghThread(id, body, over) {
+        var t = {
+            id: id,
+            isResolved: false,
+            path: 'js/sm/mergeState.js',
+            line: 42,
+            comments: { nodes: [{ databaseId: 9000 + id.length,
+                author: { login: BOT + '[bot]' }, body: body }] }
+        };
+        for (var k in (over || {})) t[k] = over[k];
+        return t;
+    }
+    function importantBody(claim) {
+        return '⚠️ severity: IMPORTANT — ' + claim;
+    }
+
+    test('AC2: the merged exit says the structured MERGE-DECISION line', function () {
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating']
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 1);
+        var lines = result.log.filter(function (l) {
+            return l.indexOf('MERGE-DECISION pr=42') === 0;
+        });
+        assert.equal(lines.length, 1, 'exactly ONE decision line');
+        assert.contains(lines[0], 'action=merged');
+        assert.contains(lines[0], 'machineThreads=0');
+        assert.contains(lines[0], 'allowlist=1');
+    });
+
+    test('AC1: a residue merge posts the dmtools:merge-note marker with the counts', function () {
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating'],
+            threadsByNumber: { 42: [
+                ghThread('PRT_1', importantBody('nothing validates the merge state token')),
+                ghThread('PRT_H', 'a human question', { author: undefined,
+                    comments: { nodes: [{ databaseId: 9111,
+                        author: { login: 'human-reviewer' }, body: 'a human question' }] } })
+            ] }
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 0, 'the leftover human thread holds the merge (gh-1417)');
+        // Held path: structured held line + the ::warning:: annotation.
+        var held = result.log.filter(function (l) {
+            return l.indexOf('MERGE-DECISION pr=42') === 0;
+        });
+        assert.equal(held.length, 1);
+        assert.contains(held[0], 'action=held');
+        var warnings = result.log.filter(function (l) { return l.indexOf('::warning::') === 0; });
+        assert.equal(warnings.length, 1);
+        assert.equal(fx.calls.merges.length, 0, 'no merge — no merge-note either');
+    });
+
+    test('AC1: the merged-with-machine-residue replay posts ONE note (deduped per head)', function () {
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating'],
+            threadsByNumber: { 42: [
+                ghThread('PRT_1', importantBody('nothing validates the merge state token'))
+            ] }
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        assert.equal(result.acted, 1, 'the backstop deferred the thread, the merge proceeds');
+        var notes = fx.calls.comments.filter(function (c) {
+            return String(c.body || '').indexOf('dmtools:merge-note') !== -1;
+        });
+        assert.equal(notes.length, 1, 'ONE residue marker');
+        assert.contains(notes[0].body, '"openThreadsAtMerge":1');
+        assert.contains(notes[0].body, '"autoResolved":1');
+        var lines = result.log.filter(function (l) {
+            return l.indexOf('MERGE-DECISION pr=42') === 0;
+        });
+        assert.contains(lines[0], 'machineThreads=1');
+        // Replay: the posted marker rides the comment stream — the
+        // same-head note dedupes, never a second comment.
+        fx.opts.prCommentsByNumber = { 42: fx.calls.comments.map(function (c) {
+            return { body: c.body, user: { login: BOT + '[bot]' } };
+        }) };
+        fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        var notesAfter = fx.calls.comments.filter(function (c) {
+            return String(c.body || '').indexOf('dmtools:merge-note') !== -1;
+        });
+        assert.equal(notesAfter.length, 1, 'one merge-note per head');
+    });
+
+    test('a clean merge posts nothing (pure-clean merges stay silent)', function () {
+        var fx = fixture({ labels: ['pr_approved', 'ai_validating'] });
+        fx.bot.action({ jobParams: { repo: 'a/b', machineAuthor: BOT } });
+        var notes = fx.calls.comments.filter(function (c) {
+            return String(c.body || '').indexOf('dmtools:merge-note') !== -1;
+        });
+        assert.equal(notes.length, 0);
     });
 });

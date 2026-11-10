@@ -62,6 +62,13 @@ var mergeGate = require('../common/mergeGate.js');
 // repairs the labels), this gate protects the merge instant.
 var mergeVerdictGate = require('../common/mergeVerdictGate.js');
 
+// gh-1420: the merge-decision observability layer — the greppable
+// MERGE-DECISION structured line at every exit of mergeApprovedHead
+// (shared say seam), the ::warning:: annotation on holds, and the
+// dmtools:merge-note residue marker posted after a squash-merge the
+// backstop counted anything on (pure-clean merges stay silent).
+var mergeNote = require('../common/mergeNote.js');
+
 // Thin wrapper keeps every call site unchanged.
 function parseMcp(raw) { return mcpParse.parseMcp(raw); }
 
@@ -620,6 +627,80 @@ function latchValidated(owner, name, pr, say) {
  * the factory-merge-trigger.yml funnel, fired per tick), whose aggregate
  * throw fails its own job. Returns the acted credit (1 or 0).
  */
+// ── gh-1420: the decision-exit renders (the structured line per exit) ────────
+
+// The verdict-hold exit: the structured deferred line + the hold ::warning::.
+function verdictHeldExit(run, pr, verdictGate) {
+    mergeNote.emitDecision(run.say, {
+        prNumber: pr.number, pr: pr, job: run.job, action: 'defered',
+        verdict: verdictGate.verdict, warn: true,
+        reason: 'newest verdict on head ' + (verdictGate.head || '?') +
+            ' is ' + verdictGate.verdict + ' — a stale approval cannot race the merge (gh-1416)'
+    });
+    return 0;
+}
+
+// The gh-1417 hold exit: the structured held line + the legacy ⏳ line.
+function gateHeldExit(run, pr, gate, verdictGate) {
+    mergeNote.emitDecision(run.say, {
+        prNumber: pr.number, pr: pr, job: run.job, action: 'held',
+        machineThreads: gate.machine, humanThreads: gate.human,
+        verdict: verdictGate && verdictGate.verdict,
+        reason: gate.total + ' unresolved review thread(s) (human ' +
+            gate.human + ', machine ' + gate.machine + ') hold the merge (gh-1417)'
+    });
+    run.say('⏳ pr-' + pr.number + ' ' + gate.total + ' unresolved review thread(s)' +
+        ' (human ' + gate.human + ', machine ' + gate.machine + ') — merge held' +
+        ' (gh-1417), next tick retries');
+    return 0;
+}
+
+// The merged exit: the residue marker (silent on a pure-clean merge,
+// deduped per head), the structured merged line, the credit 1.
+function mergedExit(run, pr, gate, verdictGate, mergedLine) {
+    // gh-1420 AC1: the residue marker (silent on a pure-clean
+    // merge, deduped per head), then the structured merged line.
+    mergeNote.runMergeNoteForPr(mergeVerdictGate.githubBridgeIo(),
+        run.owner, run.name, run.job, pr.number, pr, gate.backstop, run.say);
+    mergeNote.emitDecision(run.say, {
+        prNumber: pr.number, pr: pr, job: run.job, action: 'merged',
+        backstop: gate.backstop,
+        verdict: verdictGate && verdictGate.verdict
+    });
+    run.say(mergedLine);
+    return 1;
+}
+
+// The refused-merge exit: the structured deferred line + the legacy ❌ line.
+function mergeRefusedExit(run, pr, gate, verdictGate, m) {
+    mergeNote.emitDecision(run.say, {
+        prNumber: pr.number, pr: pr, job: run.job, action: 'defered',
+        backstop: gate.backstop, verdict: verdictGate && verdictGate.verdict,
+        reason: 'merge refused: ' + m.error
+    });
+    run.say('❌ pr-' + pr.number + ' merge refused: ' + m.error);
+    return 0;
+}
+
+// The gate-fault exit (fail-closed defer — gh-952 self-heal, caught here).
+function gateFaultExit(run, pr, eGate2) {
+    mergeNote.emitDecision(run.say, {
+        prNumber: pr.number, pr: pr, job: run.job, action: 'held',
+        reason: 'merge gate failed (gh-1370/gh-1417): ' + (eGate2.message || eGate2)
+    });
+    run.say('❌ pr-' + pr.number + ' merge gate failed — merge deferred' +
+        ' (gh-1370/gh-1417: every open review thread must resolve first): ' +
+        (eGate2.message || eGate2));
+    return 0;
+}
+
+// The squash-merge attempt exit: merged credit 1 or the refused exit.
+function squashMergeExit(run, pr, gate, verdictGate, mergedLine) {
+    var m = squashMerge(run.owner, run.name, pr.number);
+    if (m.merged) return mergedExit(run, pr, gate, verdictGate, mergedLine);
+    return mergeRefusedExit(run, pr, gate, verdictGate, m);
+}
+
 function mergeApprovedHead(run, pr, mergedLine) {
     // gh-1416 verdict-freshness gate BEFORE the backstop: the newest
     // verdict record for the CURRENT head being REQUEST_CHANGES/BLOCK
@@ -628,10 +709,11 @@ function mergeApprovedHead(run, pr, mergedLine) {
     // gate never throws (it fails open internally); a wiring-level fault
     // is absorbed fail-open too — the probe adds no new merge-blocking
     // surface (gh-1416 contract).
+    var verdictGate = null;
     try {
-        var verdictGate = mergeVerdictGate.runGateForPr(mergeVerdictGate.githubBridgeIo(),
+        verdictGate = mergeVerdictGate.runGateForPr(mergeVerdictGate.githubBridgeIo(),
             run.owner, run.name, run.job, pr.number, pr, run.say);
-        if (verdictGate.held) return 0;
+        if (verdictGate.held) return verdictHeldExit(run, pr, verdictGate);
     } catch (eGate) {
         run.say('⚠️ pr-' + pr.number + ' verdict gate fault — fail-open (gh-1416): ' +
             (eGate.message || eGate));
@@ -644,25 +726,11 @@ function mergeApprovedHead(run, pr, mergedLine) {
     try {
         var gate = mergeGate.runForPr(mergeGate.githubBridgeIo(),
             run.owner, run.name, run.job, pr.number, pr, run.say);
-        if (gate.held) {
-            run.say('⏳ pr-' + pr.number + ' ' + gate.total + ' unresolved review thread(s)' +
-                ' (human ' + gate.human + ', machine ' + gate.machine + ') — merge held' +
-                ' (gh-1417), next tick retries');
-            return 0;
-        }
+        if (gate.held) return gateHeldExit(run, pr, gate, verdictGate);
+        return squashMergeExit(run, pr, gate, verdictGate, mergedLine);
     } catch (eGate2) {
-        run.say('❌ pr-' + pr.number + ' merge gate failed — merge deferred' +
-            ' (gh-1370/gh-1417: every open review thread must resolve first): ' +
-            (eGate2.message || eGate2));
-        return 0;
+        return gateFaultExit(run, pr, eGate2);
     }
-    var m = squashMerge(run.owner, run.name, pr.number);
-    if (m.merged) {
-        run.say(mergedLine);
-        return 1;
-    }
-    run.say('❌ pr-' + pr.number + ' merge refused: ' + m.error);
-    return 0;
 }
 
 function squashMerge(owner, repo, number) {

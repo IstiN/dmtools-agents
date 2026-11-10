@@ -153,7 +153,8 @@ function prDetail(over) {
 function loadLane(opts) {
     opts = opts || {};
     var calls = { merges: [], removed: [], added: [], comments: [], closed: [],
-        commentReads: [], branchUpdates: [], threads: [] };
+        commentReads: [], branchUpdates: [], threads: [], threadResolves: [],
+        threadReplies: [], debtIssues: [] };
     var globals = laneGlobals(opts, calls);
     var scmStub = {
         createScm: function () {
@@ -168,42 +169,126 @@ function loadLane(opts) {
             github_get_pr_comments: globals.github_get_pr_comments,
             github_create_comment: globals.github_create_comment
         }),
-        './common/mergeGate.js': mTwoStageGate(globals)
+        './common/mergeGate.js': opts.mergeGateModule || mTwoStageGate(globals),
+        // gh-1420: the observability layer shares the lane's gate instances
+        // (the io bag arrives as a parameter — no globals bind here).
+        './common/mergeNote.js': loadModule('js/common/mergeNote.js', makeRequire({
+            './mcpParse.js': mcpParseModule,
+            './reviewVerdicts.js': mReviewVerdicts(),
+            './mergeBackstop.js': mMergeBackstop(globals || null),
+            './mergeVerdictGate.js': mGate(globals || null)
+        }), {})
     }), globals);
     return { lane: lane, calls: calls };
 }
 
-// The bridge-primitive globals (the payload shaping of the lane's comment
-// read): which comments are served, whether the read primitive is absent,
-// and whether it throws. Every call lands in `calls`.
+// The bridge-primitive factories (gh-1420 crap split): each primitive is
+// its own tiny recorder — laneGlobals stays a shallow assembly. Which
+// comments are served, whether the read primitive is absent, and whether
+// it throws are all opts; every call lands in `calls`.
+function recordingRemoveLabel(calls) {
+    return function (a) { calls.removed.push(a); return '{}'; };
+}
+
+function recordingAddLabels(calls) {
+    return function (a) { calls.added.push(a); return '{}'; };
+}
+
+function recordingComment(calls) {
+    return function (a) { calls.comments.push(a); return '{}'; };
+}
+
+function issueReadOf(opts) {
+    return opts.getIssueThrows ? function () {
+        throw new Error(opts.getIssueThrows);
+    } : function () {
+        return JSON.stringify({ number: 33, state: opts.getIssueState || 'closed' });
+    };
+}
+
+function recordingCloseIssue(calls) {
+    return function (a) { calls.closed.push(a); return '{}'; };
+}
+
+function commentReadOf(opts, calls) {
+    return opts.noCommentsPrimitive ? undefined : function (a) {
+        calls.commentReads.push(a);
+        if (opts.getCommentsThrows) throw new Error(opts.getCommentsThrows);
+        return JSON.stringify(opts.comments || []);
+    };
+}
+
+// gh-1417: the two-stage merge gate reads the threads census on
+// every merge attempt — the gate-neutral scenarios serve the EMPTY
+// production payload (census 0 → merge proceeds). The undeclared
+// global here is the test-runner network guard (it throws), not a
+// missing capability, so the gate's skip path never sees these
+// fixtures. opts.threadsByNumber injects open threads for the
+// lane's own hold wiring test — and a successful resolve MUTATES
+// the served nodes (gh-1420: the backstop's stage-1 resolution must
+// be visible to the stage-2 census re-read, backstopBridgeMocks
+// parity), so a residue replay merges after the deferral.
+function threadsReadOf(opts, calls) {
+    return function (a) {
+        calls.threads.push(a);
+        return JSON.stringify({ data: { repository: { pullRequest:
+            { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
+    };
+}
+
+// gh-1420: the successful resolve MUTATES the served nodes so the stage-2
+// census re-read sees the stage-1 deferral (backstopBridgeMocks parity).
+function markThreadsResolved(opts, threadId) {
+    Object.keys(opts.threadsByNumber || {}).forEach(function (pr) {
+        (opts.threadsByNumber[pr] || []).forEach(function (n) {
+            if (n && String(n.id) === String(threadId)) n.isResolved = true;
+        });
+    });
+}
+
+// gh-1420: the full backstop surface for the residue-replay scenarios —
+// resolve (mutating), the ack reply, the digest search and create.
+// resolveFailIds names ids whose resolve throws.
+function threadResolveOf(opts, calls) {
+    return function (a) {
+        if ((opts.resolveFailIds || []).indexOf(String(a.threadId)) !== -1) {
+            throw new Error('422 ' + a.threadId);
+        }
+        calls.threadResolves.push(a);
+        markThreadsResolved(opts, a.threadId);
+        return '{}';
+    };
+}
+
+function recordingThreadReply(calls) {
+    return function (a) { calls.threadReplies.push(a); return '{}'; };
+}
+
+function recordingSearchIssues() {
+    return function () { return JSON.stringify({ items: [] }); };
+}
+
+function recordingCreateIssue(calls) {
+    return function (a) {
+        calls.debtIssues.push(a);
+        return JSON.stringify({ number: 500 + calls.debtIssues.length });
+    };
+}
+
+// The bridge-primitive globals of the lane (the assembled recorders).
 function laneGlobals(opts, calls) {
     return {
-        github_remove_label: function (a) { calls.removed.push(a); return '{}'; },
-        github_add_labels: function (a) { calls.added.push(a); return '{}'; },
-        github_create_comment: function (a) { calls.comments.push(a); return '{}'; },
-        github_get_issue: opts.getIssueThrows ? function () {
-            throw new Error(opts.getIssueThrows);
-        } : function () {
-            return JSON.stringify({ number: 33, state: opts.getIssueState || 'closed' });
-        },
-        github_close_issue: function (a) { calls.closed.push(a); return '{}'; },
-        github_get_pr_comments: opts.noCommentsPrimitive ? undefined : function (a) {
-            calls.commentReads.push(a);
-            if (opts.getCommentsThrows) throw new Error(opts.getCommentsThrows);
-            return JSON.stringify(opts.comments || []);
-        },
-        // gh-1417: the two-stage merge gate reads the threads census on
-        // every merge attempt — the gate-neutral scenarios serve the EMPTY
-        // production payload (census 0 → merge proceeds). The undeclared
-        // global here is the test-runner network guard (it throws), not a
-        // missing capability, so the gate's skip path never sees these
-        // fixtures. opts.threadsByNumber injects open threads for the
-        // lane's own hold wiring test.
-        github_get_pr_review_threads: function (a) {
-            calls.threads.push(a);
-            return JSON.stringify({ data: { repository: { pullRequest:
-                { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
-        }
+        github_remove_label: recordingRemoveLabel(calls),
+        github_add_labels: recordingAddLabels(calls),
+        github_create_comment: recordingComment(calls),
+        github_get_issue: issueReadOf(opts),
+        github_close_issue: recordingCloseIssue(calls),
+        github_get_pr_comments: commentReadOf(opts, calls),
+        github_get_pr_review_threads: threadsReadOf(opts, calls),
+        github_resolve_pr_thread: threadResolveOf(opts, calls),
+        github_reply_to_pr_thread: recordingThreadReply(calls),
+        github_search_issues: recordingSearchIssues(),
+        github_create_issue: recordingCreateIssue(calls)
     };
 }
 
@@ -501,5 +586,149 @@ suite('retryMergeGithubPR: lane characterization (gate-neutral shapes)', functio
             getIssueThrows: 'get issue boom' });
         assert.equal(r.result, true, 'the safety-net fault never fails the merged outcome');
         assert.equal(r.calls.merges.length, 1);
+    });
+});
+
+// ── gh-1420 merge-decision observability (the structured line + the note) ────
+
+suite('retryMergeGithubPR: merge-decision observability (gh-1420)', function () {
+
+    // The lane logs through console (its say seam) — spy it for the suite.
+    function withLogSpy(fn) {
+        var logs = [];
+        var originalLog = console.log;
+        try {
+            console.log = function (msg) { logs.push(String(msg)); };
+            var out = fn();
+        } finally {
+            console.log = originalLog;
+        }
+        return { logs: logs, out: out };
+    }
+
+    function decisionLines(logs) {
+        return logs.filter(function (l) { return l.indexOf('MERGE-DECISION pr=12') === 0; });
+    }
+
+    test('AC2: the merged exit says the structured MERGE-DECISION line (allowlist rides)', function () {
+        var r = withLogSpy(function () {
+            return runLane({ comments: [], prDetail: prDetail() });
+        });
+        assert.equal(r.out.result, true, 'the merge proceeds');
+        var lines = decisionLines(r.logs);
+        assert.equal(lines.length, 1, 'exactly ONE decision line: ' + JSON.stringify(r.logs));
+        assert.contains(lines[0], 'action=merged');
+        assert.contains(lines[0], 'head=0c2732d');
+        assert.contains(lines[0], 'allowlist=1');
+    });
+
+    test('AC1: a residue merge posts the dmtools:merge-note marker with the counts', function () {
+        var machineThread = { id: 'PRT_M1', isResolved: false, path: 'js/x.js', line: 3,
+            comments: { nodes: [{ databaseId: 9200, author: { login: BOT + '[bot]' },
+                body: '⚠️ severity: IMPORTANT — the gate misses this state' }] } };
+        var calls;
+        var r = withLogSpy(function () {
+            var lane = runLane({
+                comments: [],
+                prDetail: prDetail(),
+                threadsByNumber: { 12: [machineThread] }
+            });
+            calls = lane.calls;
+            return lane.result;
+        });
+        assert.equal(r.out, true, 'the backstop deferred the thread, the merge proceeds');
+        var notes = calls.comments.filter(function (c) {
+            return String(c.body || '').indexOf('dmtools:merge-note') !== -1;
+        });
+        assert.equal(notes.length, 1, 'ONE residue marker on the merged PR');
+        assert.contains(notes[0].body, '"openThreadsAtMerge":1');
+        assert.contains(notes[0].body, '"autoResolved":1');
+        var lines = decisionLines(r.logs);
+        assert.contains(lines[0], 'machineThreads=1',
+            'the residue machine count rides the merged line');
+    });
+
+    test('AC2: the held exit (open thread) says the held line + the ::warning:: annotation', function () {
+        var r = withLogSpy(function () {
+            return runLane({
+                comments: [],
+                prDetail: prDetail(),
+                threadsByNumber: { 12: [{ id: 'PRT_H1', isResolved: false,
+                    comments: { nodes: [{ databaseId: 9100,
+                        author: { login: 'human-reviewer' }, body: 'a human finding' }] } }] }
+            });
+        });
+        assert.equal(r.out.result, false, 'held — the SM retries next cycle');
+        var lines = decisionLines(r.logs);
+        assert.equal(lines.length, 1);
+        assert.contains(lines[0], 'action=held');
+        assert.contains(lines[0], 'humanThreads=1');
+        var warnings = r.logs.filter(function (l) { return l.indexOf('::warning::') === 0; });
+        assert.equal(warnings.length, 1, 'the hold surfaces in the Actions UI');
+    });
+
+    test('AC2: the verdict-held exit defers with the verdict on the line', function () {
+        var r = withLogSpy(function () {
+            return runLane({ comments: [verdictComment('REQUEST_CHANGES', HEAD)], prDetail: prDetail() });
+        });
+        assert.equal(r.out.result, false);
+        var lines = decisionLines(r.logs);
+        assert.equal(lines.length, 1);
+        assert.contains(lines[0], 'action=defered');
+        assert.contains(lines[0], 'verdict=REQUEST_CHANGES');
+    });
+
+    test('the outcome-returning wrappers keep the boolean contract', function () {
+        var lane = loadLane({ comments: [], prDetail: prDetail() });
+        assert.equal(lane.lane.mergeGateHoldsMerge({ machineAuthor: BOT }, 'o', 'n', 12,
+            JSON.stringify(prDetail())), false, 'clean census → not held');
+        var thrown = lane.lane.mergeGateOutcomeForPr({ machineAuthor: BOT }, 'o', 'n', 12,
+            JSON.stringify(prDetail()));
+        assert.equal(thrown.backstop !== undefined, true,
+            'the backstop outcome rides the gate outcome for the merge-note');
+    });
+
+    test('a thrown merge-gate fault renders ? counts (unknown ≠ 0 — the grep audit)', function () {
+        var r = withLogSpy(function () {
+            return runLane({
+                comments: [],
+                prDetail: prDetail(),
+                mergeGateModule: {
+                    githubBridgeIo: function () { return {}; },
+                    runForPr: function () { throw new Error('gate census boom'); }
+                }
+            });
+        });
+        assert.equal(r.out.result, false, 'fail-closed defer — the SM retries');
+        assert.equal(r.out.calls.merges.length, 0, 'no merge on a faulted gate');
+        var lines = decisionLines(r.logs);
+        assert.equal(lines.length, 1);
+        assert.contains(lines[0], 'action=held');
+        assert.contains(lines[0], 'machineThreads=?',
+            'the census is UNKNOWN on a fault — never a misleading 0');
+        assert.contains(lines[0], 'humanThreads=?');
+        var warnings = r.logs.filter(function (l) { return l.indexOf('::warning::') === 0; });
+        assert.equal(warnings.length, 1);
+        assert.contains(warnings[0], 'merge gate faulted (gh-1370/gh-1417)');
+    });
+
+    test('a THROWN merge (scm fault) defers with its own line — lock released, labels stay', function () {
+        var r = withLogSpy(function () {
+            return runLane({
+                comments: [verdictComment('APPROVE', HEAD)],
+                prDetail: prDetail(),
+                mergeThrows: 'scm 504'
+            });
+        });
+        assert.equal(r.out.result, false, 'the failed merge is a handled deferral');
+        assert.equal(r.out.calls.merges.length, 1, 'the merge was attempted');
+        assert.equal(r.out.calls.removed.length, 0,
+            'pr_approved stays — a thrown merge consumes no approval');
+        var lines = decisionLines(r.logs);
+        assert.equal(lines.length, 1);
+        assert.contains(lines[0], 'action=defered');
+        assert.contains(lines[0], 'verdict=APPROVE');
+        var warnings = r.logs.filter(function (l) { return l.indexOf('::warning::') === 0; });
+        assert.equal(warnings.length, 0, 'a refused merge defers without the hold annotation');
     });
 });

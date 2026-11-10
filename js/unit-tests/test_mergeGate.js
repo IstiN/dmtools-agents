@@ -854,6 +854,17 @@ suite('mergeGate: runForPr (stage 1 + stage 2, the shared helper)', function () 
         assert.equal(holdMarkersPosted(bridge.calls), 1);
     });
 
+    test('gh-1420: the backstop outcome rides the returned outcome (gate.backstop)', function () {
+        var bridge = bridgeIo({ threads: threadsPayload([machineThread()]) });
+        var out = runForPr(bridge);
+        assert.ok(out.backstop, 'the stage-1 outcome is attached');
+        assert.equal(out.backstop.counted.length, 1,
+            'the residue payload the merge-note renders from');
+        assert.equal(out.backstop.human.length, 0);
+        var clean = runForPr(bridgeIo({ threads: threadsPayload([]) }));
+        assert.equal(clean.backstop.counted.length, 0, 'a clean stage-1 attaches too');
+    });
+
     test('runGateForPr honors the mergeGate knobs from jobParams (knob wiring)', function () {
         var bridge = bridgeIo({ threads: threadsPayload([humanThread()]) });
         var gate = mMergeGate();

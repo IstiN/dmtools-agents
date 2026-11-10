@@ -119,6 +119,14 @@ var failureAnalyzerModule = require('./common/failureAnalyzer.js');
 var commentMarkupModule = require('./common/commentMarkup.js');
 // gh-1366: the failureAnalysis block override merge (shallow, knob-level).
 var mergeObjectsModule = require('./common/mergeObjects.js');
+// gh-1420: the post-merge sweep — every MERGED PR the SM closes gets its
+// unresolved machine-authored review threads digested into the review debt
+// ledger (the gh-1353 identity — one entry per finding, convergent with
+// the pre-merge digests) and its unresolved human threads listed in the
+// same digest as `open (human)`. The closed-PR decision plans the sweep
+// BEFORE the closeIssue safety net (the sweep rides the close tick — the
+// only tick a merged PR's issue is still open).
+var postMergeSweepModule = require('./common/postMergeSweep.js');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure decision core — decideActions(state, cfg) → actions[]
@@ -190,12 +198,23 @@ function decideNoPrActions(has) {
     return [{ type: 'skip', reason: 'no PR and no machine leg to (re)fire' }];
 }
 
-// Merged PR closes the issue (Fixes #N safety net); any other non-open
+// Merged PR closes the issue (Fixes #N safety net) — but NOT before the
+// gh-1420 post-merge sweep: the PR's unresolved machine-authored review
+// threads digest into the review debt ledger and its unresolved human
+// threads list `open (human)` in the same digest. The sweep rides the
+// close tick (the only tick a merged PR's issue is still open — the
+// trigger-scope gap that left PR #1410's thread unswept for days). The
+// sweep itself is fail-soft; the close always follows. Any other non-open
 // state is a plain skip.
 function decideClosedPrActions(pr) {
     if (pr.state === 'MERGED') {
-        return [{ type: 'closeIssue',
-            reason: 'linked PR #' + pr.number + ' merged (Fixes #N safety net)' }];
+        return [
+            { type: 'mergedThreadSweep', prNumber: pr.number,
+                reason: 'post-merge thread sweep (gh-1420): unresolved machine review threads' +
+                    ' digest into the review debt ledger; human threads list open (human)' },
+            { type: 'closeIssue',
+                reason: 'linked PR #' + pr.number + ' merged (Fixes #N safety net)' }
+        ];
     }
     return [{ type: 'skip', reason: 'linked PR #' + pr.number + ' is ' + pr.state }];
 }
@@ -531,6 +550,29 @@ var ACTION_EXECUTORS = {
     },
     dispositionLoop: function (provider, action, issue, cfg) {
         return dispositionLoop(provider, issue, action, cfg);
+    },
+    // gh-1420: the post-merge thread sweep (the merged-PR close tick).
+    // The one-line outcome is the tick's audit trail — the digest comment
+    // on the PR is the durable record.
+    mergedThreadSweep: function (provider, action, issue, cfg) {
+        var out = postMergeSweepModule.runSweep(provider, action.prNumber, cfg);
+        if (out.skipped) {
+            console.log('  ⏭️ gh-' + issue.number + ' post-merge sweep skipped on PR #' +
+                action.prNumber + ' (' + out.skipped + ')');
+        } else if (out.clean) {
+            console.log('  🧹 gh-' + issue.number + ' post-merge sweep on PR #' +
+                action.prNumber + ': no unresolved review threads — clean');
+        } else if (out.commentsUnreadable) {
+            console.warn('  ⚠️ gh-' + issue.number + ' post-merge sweep on PR #' +
+                action.prNumber + ': comments unreadable — nothing swept (fail-soft, retried next tick)');
+        } else {
+            console.log('  🧹 gh-' + issue.number + ' post-merge sweep on PR #' +
+                action.prNumber + ': machine ' + out.machine + ' (digested ' + out.digested +
+                ', resolved ' + out.resolved + ', failures ' + out.resolveFailures + '), human ' +
+                out.human + ' — digest ' + (out.digestPosted ? 'posted' :
+                    (out.digestDeduped ? 'deduped per PR' : 'post failed (fail-soft)')));
+        }
+        return out;
     },
     // gh-1366: apply a deterministic-infra verdict — the park label (the
     // latch that actually stops re-dispatch) + the ONE diagnostic comment.
@@ -1169,6 +1211,12 @@ function action(params) {
     }
     var provider = providerResult.provider;
 
+    // gh-1420: the sweep's thread permalinks (the ledger finding's
+    // threadUrl) resolve through the repo coordinates; absent → the
+    // finding rides threadId/originPr alone.
+    cfg.owner = repoCfg.owner;
+    cfg.name = repoCfg.repo;
+
     console.log('Machine SM — ' + repoCfg.owner + '/' + repoCfg.repo + ' [' + provider.provider + ']' +
         (cfg.dryRun ? ' [DRY RUN]' : '') + ' (cap ' + cfg.maxConcurrentRuns + ', rounds ' + cfg.maxReworkRounds + ')');
 
@@ -1216,6 +1264,7 @@ if (typeof module !== 'undefined' && module.exports) {
         dispositionLoop: dispositionLoop,
         polishGateDecision: polishGateDecision,
         executeAction: executeAction,
+        applyIssueAction: applyIssueAction,
         resolveMachineSmConfig: resolveMachineSmConfig,
         resolveRepoCfg: resolveRepoCfg,
         probeOrphanRun: probeOrphanRun,

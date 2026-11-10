@@ -60,6 +60,43 @@ function plShared() {
     return plShared.mod;
 }
 
+// gh-1420: the mergeBackstop instance the postMergeSweep module delegates
+// to (appendThreadsToLedger — the gh-1353 ledger identity append — and
+// humanTableRows). One memoized load; the module is pure (no globals).
+function mbsShared() {
+    if (!mbsShared.mod) {
+        mbsShared.mod = loadModule('js/common/mergeBackstop.js', makeRequire({
+            './reviewVerdicts.js': rvShared(),
+            './findingRegistry.js': loadModule('js/common/findingRegistry.js',
+                makeRequire({ './reviewVerdicts.js': rvShared() }), {}),
+            './reviewDebtLedger.js': loadModule('js/common/reviewDebtLedger.js',
+                makeRequire({
+                    './reviewVerdicts.js': rvShared(),
+                    './findingRegistry.js': loadModule('js/common/findingRegistry.js',
+                        makeRequire({ './reviewVerdicts.js': rvShared() }), {}),
+                    './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({}))
+                }), {}),
+            './reviewDispositions.js': loadModule('js/common/reviewDispositions.js',
+                makeRequire({
+                    './reviewVerdicts.js': rvShared(),
+                    './reviewPolicy.js': loadModule('js/common/reviewPolicy.js',
+                        makeRequire({ './reviewVerdicts.js': rvShared() }), {})
+                }), {}),
+            './reviewPolicy.js': loadModule('js/common/reviewPolicy.js',
+                makeRequire({ './reviewVerdicts.js': rvShared() }), {}),
+            './machineAuthor.js': maShared(),
+            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
+                makeRequire({
+                    './machineNotice.js': loadModule('js/common/machineNotice.js',
+                        makeRequire({}), {})
+                }), {}),
+            './mcpParse.js': loadModule('js/common/mcpParse.js', makeRequire({}), {}),
+            '../configLoader.js': { loadProjectConfig: function () { return null; } }
+        }), {});
+    }
+    return mbsShared.mod;
+}
+
 function agentModuleMap(projectConfig, holder) {
     var policy = loadModule('js/common/reviewPolicy.js',
         makeRequire({ './reviewVerdicts.js': rvShared() }), {});
@@ -89,7 +126,26 @@ function agentModuleMap(projectConfig, holder) {
             }), {}),
         './common/failureAnalyzer.js': faShared(),
         './common/commentMarkup.js': cmShared(),
-        './common/mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}), {})
+        './common/mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}), {}),
+        // gh-1420: the post-merge sweep rides the closed-PR decision — the
+        // agent's executor delegates to it on the mergedThreadSweep action.
+        './common/postMergeSweep.js': loadModule('js/common/postMergeSweep.js', makeRequire({
+            './reviewVerdicts.js': rvShared(),
+            './machineAuthor.js': maShared(),
+            './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {}),
+            './findingRegistry.js': loadModule('js/common/findingRegistry.js',
+                makeRequire({ './reviewVerdicts.js': rvShared() }), {}),
+            './reviewDebtLedger.js': loadModule('js/common/reviewDebtLedger.js',
+                makeRequire({
+                    './reviewVerdicts.js': rvShared(),
+                    './findingRegistry.js': loadModule('js/common/findingRegistry.js',
+                        makeRequire({ './reviewVerdicts.js': rvShared() }), {}),
+                    './ledgerCore.js': loadModule('js/common/ledgerCore.js', makeRequire({}))
+                }), {}),
+            './reviewDispositions.js': loadModule('js/common/reviewDispositions.js',
+                makeRequire({ './reviewVerdicts.js': rvShared(), './reviewPolicy.js': policy }), {}),
+            './mergeBackstop.js': mbsShared()
+        }), {})
     };
 }
 
@@ -165,9 +221,38 @@ suite('machineSm decision core', function () {
 
     // ── merged / closed ──────────────────────────────────────────────────────
 
-    test('merged PR triggers the close-issue safety net', function () {
+    test('merged PR: the gh-1420 sweep plans BEFORE the close-issue safety net', function () {
         var acts = agent.decideActions(st(['ai_developed'], { number: 9, state: 'MERGED' }), {});
-        assert.equal(acts[0].type, 'closeIssue');
+        assert.equal(acts.length, 2, 'sweep + close');
+        assert.equal(acts[0].type, 'mergedThreadSweep',
+            'the post-merge sweep rides the close tick (the only tick the issue is open)');
+        assert.equal(acts[0].prNumber, 9);
+        assert.equal(acts[1].type, 'closeIssue', 'the Fixes-#N safety net still fires');
+    });
+
+    test('the mergedThreadSweep executor delegates to the sweep module', function () {
+        var calls = { threadReads: [], commentReads: [], commentsPosted: [], resolves: [], replies: [] };
+        var provider = {
+            reviewThreadList: function () { calls.threadReads.push(1); return []; },
+            prCommentList: function () { calls.commentReads.push(1); return []; },
+            postPrComment: function (n, body) { calls.commentsPosted.push(body); return {}; }
+        };
+        agent.executeAction(provider, { type: 'mergedThreadSweep', prNumber: 555 },
+            { number: 42 }, { machineLogins: [] });
+        assert.equal(calls.threadReads.length, 1, 'the sweep ran on the provider');
+    });
+
+    test('dry-run plans the sweep, never executes it (applyIssueAction)', function () {
+        var calls = { threadReads: [], commentReads: [], commentsPosted: [], resolves: [], replies: [] };
+        var provider = {
+            reviewThreadList: function () { calls.threadReads.push(1); return []; },
+            prCommentList: function () { calls.commentReads.push(1); return []; },
+            postPrComment: function (n, body) { calls.commentsPosted.push(body); return {}; }
+        };
+        var outcome = agent.applyIssueAction(provider, { number: 42 },
+            { dryRun: true }, { type: 'mergedThreadSweep', prNumber: 555 });
+        assert.equal(outcome, 'planned');
+        assert.equal(calls.threadReads.length, 0, 'dry runs touch nothing');
     });
 
     test('closed-unmerged PR is a plain skip', function () {

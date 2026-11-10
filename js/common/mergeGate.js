@@ -567,8 +567,14 @@ function runGateForPr(bridges, owner, name, job, prNumber, pr, say) {
  *   Throws (fail-closed) on a broken census/dedup read.
  */
 function runForPr(bridges, owner, name, job, prNumber, pr, say) {
-    mergeBackstop.runBackstopForPr(bridges, owner, name, job, prNumber, pr, say);
-    return runGateForPr(bridges, owner, name, job, prNumber, pr, say);
+    var backstop = mergeBackstop.runBackstopForPr(bridges, owner, name, job, prNumber, pr, say);
+    var gate = runGateForPr(bridges, owner, name, job, prNumber, pr, say);
+    // gh-1420: the backstop outcome rides the returned outcome — the funnel
+    // that squash-merges posts the residue merge-note from it (and renders
+    // the merged MERGE-DECISION line's machine/human counts). Purely
+    // additive: every existing consumer reads held/total/human/machine.
+    gate.backstop = backstop;
+    return gate;
 }
 
 if (typeof module !== 'undefined' && module.exports) {

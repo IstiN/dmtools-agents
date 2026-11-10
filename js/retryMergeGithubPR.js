@@ -32,6 +32,12 @@ var mergeVerdictGate = require('./common/mergeVerdictGate.js');
 // ONE shared helper the other two merge funnels call, so all three gate
 // identically.
 var mergeGate = require('./common/mergeGate.js');
+// gh-1420: the merge-decision observability layer — the greppable
+// MERGE-DECISION structured line at every exit of squashAndFinalize (the
+// shared say/logger seam), the ::warning:: annotation on holds, and the
+// dmtools:merge-note residue marker posted after the squash-merge
+// (pure-clean merges stay silent).
+var mergeNote = require('./common/mergeNote.js');
 
 function issueNumberFromKey(ticketKey) {
     var m = /(\d+)$/.exec(String(ticketKey || ''));
@@ -237,14 +243,14 @@ var WAIT_HANDLERS = {
  * gh-1416: refuse the merge while the current head's newest verdict is
  * REQUEST_CHANGES/BLOCK — the newest dmtools:review-verdict record for the
  * CURRENT head holds the merge instant (a stale pr_approved can no longer
- * race the funnel). Returns true when the caller must defer (the same
- * shape as mergeTrigger's verdictGateBeforeMerge — the extracted wiring is
- * directly unit-testable without driving the whole lane). The gate never
- * throws (it fails open internally — no records, stale-head-only records,
- * unreadable markers, and broken reads all proceed as today); a
- * wiring-level fault is absorbed fail-open here too.
+ * race the funnel). Returns the gate OUTCOME (gh-1420: the verdict rides
+ * the MERGE-DECISION line) — `held` is the caller's defer signal. The gate
+ * never throws (it fails open internally — no records, stale-head-only
+ * records, unreadable markers, and broken reads all proceed as today); a
+ * wiring-level fault is absorbed fail-open here too. Never emits the
+ * decision itself — squashAndFinalize renders ONE line per exit.
  */
-function verdictGateHoldsMerge(jobParams, owner, repo, prNumber, prDetail) {
+function verdictGateOutcomeForPr(jobParams, owner, repo, prNumber, prDetail) {
     try {
         var verdictGate = mergeVerdictGate.runGateForPr(
             mergeVerdictGate.githubBridgeIo(),
@@ -255,12 +261,17 @@ function verdictGateHoldsMerge(jobParams, owner, repo, prNumber, prDetail) {
             console.warn('PR #' + prNumber + ' merge deferred — newest verdict on the' +
                 ' current head is ' + verdictGate.verdict + ' (gh-1416); the rework lap /' +
                 ' a human resolution owns the fresh verdict');
-            return true;
         }
+        return verdictGate;
     } catch (eGate) {
         console.warn('Verdict gate fault — fail-open (gh-1416):', eGate.message || eGate);
+        return { held: false, verdict: null, head: null, prNumber: prNumber, fault: true };
     }
-    return false;
+}
+
+// The boolean defer signal (the pre-gh-1420 shape, kept for callers/tests).
+function verdictGateHoldsMerge(jobParams, owner, repo, prNumber, prDetail) {
+    return verdictGateOutcomeForPr(jobParams, owner, repo, prNumber, prDetail).held === true;
 }
 
 /**
@@ -271,14 +282,16 @@ function verdictGateHoldsMerge(jobParams, owner, repo, prNumber, prDetail) {
  * holds the merge behind a deduped per-head dmtools:merge-hold marker,
  * needs-human escalation past mergeGate.humanHoldHours). The same ONE
  * shared helper mergeTrigger's runStateMachine and the mergeBot probe
- * call — the three funnels gate identically (gh-1417 AC3). Returns true
- * when the caller must defer (a held stage-2 outcome, or a THROWN
- * stage-1/2 fault — the merge gate is fail-CLOSED: a broken census or a
- * failed resolution defers the merge, never merges blind, gh-1370
- * semantics; unlike the verdict gate above it, faults are NOT absorbed
- * fail-open).
+ * call — the three funnels gate identically (gh-1417 AC3). Returns the
+ * gate OUTCOME (gh-1420: the backstop residue rides `backstop` for the
+ * merge-note + the MERGE-DECISION line) — `held` is the caller's defer
+ * signal: a held stage-2 outcome, or a THROWN stage-1/2 fault (shape
+ * `{ held: true, thrown: true }` — the merge gate is fail-CLOSED: a broken
+ * census or a failed resolution defers the merge, never merges blind,
+ * gh-1370 semantics; unlike the verdict gate above it, faults are NOT
+ * absorbed fail-open).
  */
-function mergeGateHoldsMerge(jobParams, owner, repo, prNumber, prDetail) {
+function mergeGateOutcomeForPr(jobParams, owner, repo, prNumber, prDetail) {
     try {
         var gate = mergeGate.runForPr(
             mergeGate.githubBridgeIo(),
@@ -290,14 +303,21 @@ function mergeGateHoldsMerge(jobParams, owner, repo, prNumber, prDetail) {
                 ' unresolved review thread(s) (human ' + gate.human + ', machine ' +
                 gate.machine + ') remain open (gh-1417); the threads resolving' +
                 ' (or a human taking it past mergeGate.humanHoldHours) owns the merge');
-            return true;
         }
+        return gate;
     } catch (eGate) {
         console.warn('Merge gate failed — merge deferred (gh-1370/gh-1417):',
             eGate.message || eGate);
-        return true; // fail-closed: the fault holds THAT merge, the SM retries
+        return { held: true, thrown: true, prNumber: prNumber }; // fail-closed
     }
-    return false;
+}
+
+/**
+ * gh-1417: the boolean defer signal (the pre-gh-1420 shape, kept for
+ * callers/tests).
+ */
+function mergeGateHoldsMerge(jobParams, owner, repo, prNumber, prDetail) {
+    return mergeGateOutcomeForPr(jobParams, owner, repo, prNumber, prDetail).held === true;
 }
 
 // Fixes-#N usually closes the issue on merge; this is the safety net.
@@ -314,34 +334,92 @@ function closeIssueSafetyNet(issueNumber) {
     }
 }
 
+// The gh-1420 logger seam of this lane (console parity with the gates).
+function laneSay(line) { console.log(line); }
+
+// The verdict-hold exit (gh-1416): the structured deferred line + the hold
+// ::warning::, the lock released, pr_approved stays (the deferral is not a
+// rework flip — the rework lap / a human resolution lands the fresh verdict).
+function verdictHoldExit(ctx, pr, prPayload, verdictGate) {
+    mergeNote.emitDecision(laneSay, {
+        prNumber: pr.number, pr: prPayload, job: ctx.jobParams, action: 'defered',
+        verdict: verdictGate.verdict, warn: true,
+        reason: 'newest verdict on head ' + (verdictGate.head || '?') +
+            ' is ' + verdictGate.verdict + ' — a stale approval cannot race the merge (gh-1416)'
+    });
+    releaseLock(ctx);
+    return false;
+}
+
+// The gate-hold exit (gh-1417): held or faulted, the merge defers the same
+// way. A THROWN gate fault reads the census UNKNOWN — the held line renders
+// ? counts (never a misleading machineThreads=0 humanThreads=0, the
+// allowlist=0 grep audit could misread).
+function gateHoldExit(ctx, pr, prPayload, gate, verdictGate) {
+    mergeNote.emitDecision(laneSay, {
+        prNumber: pr.number, pr: prPayload, job: ctx.jobParams, action: 'held',
+        machineThreads: gate.thrown ? '?' : gate.machine,
+        humanThreads: gate.thrown ? '?' : gate.human,
+        verdict: verdictGate.verdict,
+        reason: gate.thrown
+            ? 'merge gate faulted (gh-1370/gh-1417) — fail-closed defer'
+            : gate.total + ' unresolved review thread(s) (human ' +
+                gate.human + ', machine ' + gate.machine + ') hold the merge (gh-1417)'
+    });
+    releaseLock(ctx);
+    return false;
+}
+
+// The failed-merge exit: the structured deferred line + the legacy warning.
+function mergeFailedExit(ctx, pr, prPayload, gate, verdictGate, e) {
+    mergeNote.emitDecision(laneSay, {
+        prNumber: pr.number, pr: prPayload, job: ctx.jobParams, action: 'defered',
+        backstop: gate.backstop, verdict: verdictGate.verdict,
+        reason: 'merge failed: ' + (e.message || e)
+    });
+    console.warn('Merge failed:', e.message || e);
+    releaseLock(ctx);
+    return false;
+}
+
+// The merged exit: the residue marker (silent on a pure-clean merge,
+// deduped per head), the structured merged line, the post-merge bookkeeping.
+function mergedExit(ctx, pr, prPayload, gate, verdictGate) {
+    // gh-1420 AC1: the residue marker — silent on a pure-clean merge,
+    // deduped per head; then the structured merged line.
+    mergeNote.runMergeNoteForPr(mergeVerdictGate.githubBridgeIo(),
+        ctx.owner, ctx.repo, ctx.jobParams, pr.number, prPayload, gate.backstop, laneSay);
+    mergeNote.emitDecision(laneSay, {
+        prNumber: pr.number, pr: prPayload, job: ctx.jobParams, action: 'merged',
+        backstop: gate.backstop, verdict: verdictGate.verdict
+    });
+    removeIssueLabel(ctx.issueNumber, ctx.approvedLabel);
+    releaseLock(ctx);
+    closeIssueSafetyNet(ctx.issueNumber);
+    return true;
+}
+
 function squashAndFinalize(ctx, pr) {
     // gh-1416: the held path releases the lock and returns false — the SM
     // retries next cycle, the rework lap / a human resolution lands the
     // fresh verdict; pr_approved stays (the deferral is not a rework flip).
-    if (verdictGateHoldsMerge(ctx.jobParams, ctx.owner, ctx.repo, pr.number, pr.detail)) {
-        releaseLock(ctx);
-        return false;
-    }
+    var prPayload = mcpParse.parseMcp(pr.detail);
+    var verdictGate = verdictGateOutcomeForPr(ctx.jobParams, ctx.owner, ctx.repo,
+        pr.number, pr.detail);
+    if (verdictGate.held) return verdictHoldExit(ctx, pr, prPayload, verdictGate);
     // gh-1417: the two-stage merge gate — held or faulted, the merge
     // defers the same way (the lock releases, pr_approved stays, the SM
     // retries next cycle).
-    if (mergeGateHoldsMerge(ctx.jobParams, ctx.owner, ctx.repo, pr.number, pr.detail)) {
-        releaseLock(ctx);
-        return false;
-    }
+    var gate = mergeGateOutcomeForPr(ctx.jobParams, ctx.owner, ctx.repo, pr.number, pr.detail);
+    if (gate.held) return gateHoldExit(ctx, pr, prPayload, gate, verdictGate);
     // Merge (squash — merge-trigger parity).
     try {
         ctx.scm.mergePr(pr.number, ctx.owner, ctx.repo, 'squash');
         console.log('✅ Merged PR #' + pr.number + ' (squash)');
     } catch (e) {
-        console.warn('Merge failed:', e.message || e);
-        releaseLock(ctx);
-        return false;
+        return mergeFailedExit(ctx, pr, prPayload, gate, verdictGate, e);
     }
-    removeIssueLabel(ctx.issueNumber, ctx.approvedLabel);
-    releaseLock(ctx);
-    closeIssueSafetyNet(ctx.issueNumber);
-    return true;
+    return mergedExit(ctx, pr, prPayload, gate, verdictGate);
 }
 
 // ── the orchestrator ─────────────────────────────────────────────────────────
@@ -386,5 +464,7 @@ function action(params) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { action: action, issueNumberFromKey: issueNumberFromKey,
         verdictGateHoldsMerge: verdictGateHoldsMerge,
-        mergeGateHoldsMerge: mergeGateHoldsMerge };
+        verdictGateOutcomeForPr: verdictGateOutcomeForPr,
+        mergeGateHoldsMerge: mergeGateHoldsMerge,
+        mergeGateOutcomeForPr: mergeGateOutcomeForPr };
 }
