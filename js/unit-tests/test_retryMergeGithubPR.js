@@ -70,9 +70,16 @@ function mThreadInventory() {
     }
     return _m.ti;
 }
-function mMergeBackstop() {
-    if (!_m.mb) {
-        _m.mb = loadModule('js/common/mergeBackstop.js', makeRequire({
+function mMergeBackstop(globals) {
+    // One mergeBackstop instance per injected-global set (gh-1416): the
+    // gate's githubBridgeIo is the SUBSET VIEW of the backstop's, and the
+    // typeof guards read the eval context — so the instance the gate
+    // delegates to must see the SAME bridge mocks the lane injected, or
+    // its guards map null and every gate scenario silently skips.
+    var key = globals || null;
+    if (!_m.mb) _m.mb = {};
+    if (!_m.mb[key]) {
+        _m.mb[key] = loadModule('js/common/mergeBackstop.js', makeRequire({
             './reviewVerdicts.js': mReviewVerdicts(),
             './findingRegistry.js': mFindingRegistry(),
             './reviewDebtLedger.js': mReviewDebtLedger(),
@@ -81,9 +88,9 @@ function mMergeBackstop() {
             './reviewThreadInventory.js': mThreadInventory(),
             './mcpParse.js': mcpParseModule,
             '../configLoader.js': { loadProjectConfig: function () { return null; } }
-        }), {});
+        }), globals || {});
     }
-    return _m.mb;
+    return _m.mb[key];
 }
 function mGate(globals) {
     // Per-call load: the gate must SEE the lane's own bridge mocks (one
@@ -92,7 +99,7 @@ function mGate(globals) {
     return loadModule('js/common/mergeVerdictGate.js', makeRequire({
         './mcpParse.js': mcpParseModule,
         './reviewVerdicts.js': mReviewVerdicts(),
-        './mergeBackstop.js': mMergeBackstop()
+        './mergeBackstop.js': mMergeBackstop(globals || null)
     }), globals || {});
 }
 

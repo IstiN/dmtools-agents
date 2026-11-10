@@ -81,13 +81,14 @@ var MARKER_SUFFIX = ' -->';
 // proceeds as today.
 var HOLDING_VERDICTS = ['REQUEST_CHANGES', 'BLOCK'];
 
-// Delegates: the ONE shared derivation of the head sha across payload
-// shapes (gh-1371) and the gh-728 machine-logins resolution chain live on
-// the sibling merge-path module (mergeBackstop) — the gate never grows a
-// second copy (gh-1248 lesson: byte-identical copies grow and diverge).
-var headShaOf = mergeBackstop.headShaOf;
+// Delegates: the ONE shared derivations live on the sibling merge-path
+// module (mergeBackstop) — the gate never grows a second copy (gh-1248
+// lesson: byte-identical copies grow and diverge). shortSha renders the
+// hold markers and outcome lines; the wiring ceremony (runProbeForPr —
+// the input build + say loop, gh-1416 duplication-ratchet extraction)
+// lives there too and runGateForPr delegates to it.
 var shortSha = mergeBackstop.shortSha;
-var machineLoginsOf = mergeBackstop.machineLoginsOf;
+var runProbeForPr = mergeBackstop.runProbeForPr;
 
 // ── the comment read (fetchPrCommentList parity) ────────────────────────────
 
@@ -321,38 +322,34 @@ function outcomeLines(out) {
 // ── the merge-path wiring (shared by mergeTrigger + sm/mergeBot + retry) ────
 
 /**
- * The dmtools github-bridge globals → the io bag runGate consumes. Each
- * identifier is typeof-guarded, so a runtime without a primitive maps null
- * (capability miss — the gate skips degraded) instead of throwing a
- * ReferenceError in a harness that did not declare it. Absent = null,
- * never a stub.
+ * The dmtools github-bridge globals → the io bag runGate consumes. The
+ * gate reads the SAME comment primitives the backstop names, so this is
+ * the SUBSET VIEW of the ONE typeof-guarded naming place
+ * (mergeBackstop.githubBridgeIo) — the guards stay single-copy (gh-1416
+ * duplication ratchet). A runtime without a primitive maps null
+ * (capability miss — the gate skips degraded), never a stub.
  */
 function githubBridgeIo() {
+    var backstop = mergeBackstop.githubBridgeIo();
     return {
-        getComments: (typeof github_get_pr_comments === 'function') ? github_get_pr_comments : null,
-        createComment: (typeof github_create_comment === 'function') ? github_create_comment : null
+        getComments: backstop.getComments,
+        createComment: backstop.createComment
     };
 }
 
 /**
  * The one-call wiring for a merge path about to squash-merge (gh-1416):
- * builds the input from the PR payload + jobParams, runs the gate and says
- * the outcome lines verbatim. Never throws (runGate fails open); returns
- * the outcome — `held` is the caller's defer signal.
+ * the shared ceremony (mergeBackstop.runProbeForPr) builds the input from
+ * the PR payload + jobParams, runs the gate and says the outcome lines
+ * verbatim. Never throws (runGate fails open); returns the outcome —
+ * `held` is the caller's defer signal.
  *
  *   bridges — the io bag (githubBridgeIo() in production; test mocks).
  *   job     — the caller's jobParams (machineAuthor allowlist lives there).
  *   pr      — the parsed get_pr payload (either shape).
  */
 function runGateForPr(bridges, owner, name, job, prNumber, pr, say) {
-    var out = runGate(bridges, owner, name, {
-        prNumber: prNumber,
-        headSha: headShaOf(pr),
-        logins: machineLoginsOf(job),
-        nowIso: (new Date()).toISOString()
-    });
-    outcomeLines(out).forEach(function (line) { if (say) say(line); });
-    return out;
+    return runProbeForPr(runGate, outcomeLines, bridges, owner, name, job, prNumber, pr, say);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -365,7 +362,7 @@ if (typeof module !== 'undefined' && module.exports) {
         buildHoldMarker: buildHoldMarker,
         existingHolds: existingHolds,
         hasHoldForHead: hasHoldForHead,
-        headShaOf: headShaOf,
+        effectiveVerdictOf: effectiveVerdictOf,
         effectiveVerdictOf: effectiveVerdictOf,
         runGate: runGate,
         outcomeLines: outcomeLines,
