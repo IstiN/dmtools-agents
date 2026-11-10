@@ -351,6 +351,112 @@ function verdictGateBeforeMerge(ctx, prNumber, pr) {
         ctx.owner, ctx.name, ctx.job, prNumber, pr, ctx.say);
 }
 
+// ── gh-1420: the decision-exit renders (the structured line per exit) ────────
+
+// The funnel's decision render: the shared emitDecision seam with this
+// funnel's identity (pr + job) filled in; `parts` carries the exit-specific
+// fields (verdict/counts/backstop/warn/reason).
+function emitFunnelDecision(ctx, prNumber, pr, action, parts) {
+    mergeNote.emitDecision(ctx.say, Object.assign(
+        { prNumber: prNumber, pr: pr, job: ctx.job, action: action }, parts || {}));
+}
+
+// The gh-1416 verdict-hold reason (the stale-approval race guard).
+function verdictHoldReason(verdictGate) {
+    return 'newest verdict on head ' + (verdictGate.head || '?') +
+        ' is ' + verdictGate.verdict + ' — a stale approval cannot race the merge (gh-1416)';
+}
+
+// The gh-1417 open-threads hold reason.
+function gateHoldReason(gate) {
+    return gate.total + ' unresolved review thread(s) (human ' +
+        gate.human + ', machine ' + gate.machine + ') hold the merge (gh-1417)';
+}
+
+// The gh-1370/gh-1417 gate-fault reason (fail-closed defer).
+function gateFaultReason(eGate) {
+    return 'merge gate failed (gh-1370/gh-1417): ' + (eGate.message || eGate);
+}
+
+// A defer exit (behind / blocked / not-mergeable): the structured line +
+// the legacy human-readable log line, skipped (next tick retries).
+function deferExit(ctx, prNumber, pr, reason, logLine) {
+    emitFunnelDecision(ctx, prNumber, pr, 'defered', { reason: reason });
+    ctx.log.push(logLine);
+    return 'skipped';
+}
+
+// The merged exit: the residue marker (silent on a pure-clean merge,
+// deduped per head), the structured merged line, the caller bookkeeping.
+function mergedExit(ctx, prNumber, pr, gate, verdictGate, onMerged) {
+    // gh-1420 AC1: the funnel-side residue marker — "merged with residue"
+    // visible in the PR timeline.
+    mergeNote.runMergeNoteForPr(mergeVerdictGate.githubBridgeIo(),
+        ctx.owner, ctx.name, ctx.job, prNumber, pr, gate.backstop, ctx.say);
+    emitFunnelDecision(ctx, prNumber, pr, 'merged',
+        { backstop: gate.backstop, verdict: verdictGate.verdict });
+    onMerged(prNumber);
+    return 'merged';
+}
+
+// The refused-merge exit (bash parity: a refused merge is skipped, exit 0).
+function mergeRefusedExit(ctx, prNumber, pr, gate, verdictGate, res) {
+    emitFunnelDecision(ctx, prNumber, pr, 'defered',
+        { backstop: gate.backstop, verdict: verdictGate.verdict,
+            reason: 'merge refused: ' + res.error });
+    ctx.log.push('❌ merge of #' + prNumber + ' failed: ' + res.error);
+    return 'skipped';
+}
+
+/**
+ * The `decision === 'merge'` branch of the state machine (extracted gh-1420:
+ * every exit renders the structured MERGE-DECISION line). Returns
+ * 'merged' | 'skipped'; a thrown merge gate rethrows AFTER its held line
+ * (the per-item isolation upstream counts it failed).
+ */
+function runMergeDecision(ctx, prNumber, pr, onMerged) {
+    // gh-1416: the newest verdict for the CURRENT head being
+    // REQUEST_CHANGES/BLOCK refuses the merge instant — skip, the next
+    // tick retries, the SM's rework lap lands the fresh verdict. Runs
+    // BEFORE the backstop: a held merge skips the thread work entirely.
+    var verdictGate = verdictGateBeforeMerge(ctx, prNumber, pr);
+    if (verdictGate.held) {
+        emitFunnelDecision(ctx, prNumber, pr, 'defered',
+            { verdict: verdictGate.verdict, warn: true, reason: verdictHoldReason(verdictGate) });
+        ctx.log.push('⏳ #' + prNumber + ' newest verdict on head ' + verdictGate.head +
+            ' is ' + verdictGate.verdict + ' — merge deferred (gh-1416), next tick retries');
+        return 'skipped';
+    }
+    // gh-1353 + gh-1370 (stage 1) + gh-1417 (stage 2): every open
+    // machine-owned review thread must reach terminal resolution
+    // BEFORE the merge, and ANY remaining unresolved thread (any
+    // author, machine notices excluded) holds the merge behind the
+    // per-head marker. A stage-1 failure throws — the structured
+    // held-decision line (gh-1420) is said BEFORE the rethrow, then
+    // the per-item isolation below counts it failed and the merge
+    // defers to the next tick (never merges with an open review
+    // thread); a stage-2 hold returns held — skip, the next tick
+    // retries.
+    var gate;
+    try {
+        gate = mergeGateBeforeMerge(ctx, prNumber, pr);
+    } catch (eGate) {
+        emitFunnelDecision(ctx, prNumber, pr, 'held', { reason: gateFaultReason(eGate) });
+        throw eGate;
+    }
+    if (gate.held) {
+        emitFunnelDecision(ctx, prNumber, pr, 'held',
+            { machineThreads: gate.machine, humanThreads: gate.human,
+                verdict: verdictGate.verdict, reason: gateHoldReason(gate) });
+        ctx.log.push('⏳ #' + prNumber + ' ' + gate.total + ' unresolved review thread(s) (human ' +
+            gate.human + ', machine ' + gate.machine + ') — merge held (gh-1417), next tick retries');
+        return 'skipped';
+    }
+    var res = squashMerge(ctx.owner, ctx.name, prNumber);
+    if (res.merged) return mergedExit(ctx, prNumber, pr, gate, verdictGate, onMerged);
+    return mergeRefusedExit(ctx, prNumber, pr, gate, verdictGate, res);
+}
+
 /**
  * The shared state machine (bash `case "$state"` parity). Returns
  * 'merged' | 'skipped'. `onMerged(mergedPrNumber)` performs the
@@ -365,101 +471,19 @@ function runStateMachine(ctx, prNumber, onMerged) {
     ctx.log.push('linked PR #' + prNumber + ' — ' + stateLabel);
 
     var decision = mergeDecisionOf(ms);
-    if (decision === 'merge') {
-        // gh-1416: the newest verdict for the CURRENT head being
-        // REQUEST_CHANGES/BLOCK refuses the merge instant (a stale
-        // approval arriving seconds before the funnel can no longer race
-        // it) — skip, the next tick retries, the SM's rework lap lands the
-        // fresh verdict. Runs BEFORE the backstop: a held merge skips the
-        // thread work entirely.
-        var verdictGate = verdictGateBeforeMerge(ctx, prNumber, pr);
-        if (verdictGate.held) {
-            mergeNote.emitDecision(ctx.say, {
-                prNumber: prNumber, pr: pr, job: ctx.job, action: 'defered',
-                verdict: verdictGate.verdict, warn: true,
-                reason: 'newest verdict on head ' + (verdictGate.head || '?') +
-                    ' is ' + verdictGate.verdict + ' — a stale approval cannot race the merge (gh-1416)'
-            });
-            ctx.log.push('⏳ #' + prNumber + ' newest verdict on head ' + verdictGate.head +
-                ' is ' + verdictGate.verdict + ' — merge deferred (gh-1416), next tick retries');
-            return 'skipped';
-        }
-        // gh-1353 + gh-1370 (stage 1) + gh-1417 (stage 2): every open
-        // machine-owned review thread must reach terminal resolution
-        // BEFORE the merge, and ANY remaining unresolved thread (any
-        // author, machine notices excluded) holds the merge behind the
-        // per-head marker. A stage-1 failure throws — the structured
-        // held-decision line (gh-1420) is said BEFORE the rethrow, then
-        // the per-item isolation below counts it failed and the merge
-        // defers to the next tick (never merges with an open review
-        // thread); a stage-2 hold returns held — skip, the next tick
-        // retries.
-        var gate;
-        try {
-            gate = mergeGateBeforeMerge(ctx, prNumber, pr);
-        } catch (eGate) {
-            mergeNote.emitDecision(ctx.say, {
-                prNumber: prNumber, pr: pr, job: ctx.job, action: 'held',
-                reason: 'merge gate failed (gh-1370/gh-1417): ' + (eGate.message || eGate)
-            });
-            throw eGate;
-        }
-        if (gate.held) {
-            mergeNote.emitDecision(ctx.say, {
-                prNumber: prNumber, pr: pr, job: ctx.job, action: 'held',
-                machineThreads: gate.machine, humanThreads: gate.human,
-                verdict: verdictGate.verdict,
-                reason: gate.total + ' unresolved review thread(s) (human ' +
-                    gate.human + ', machine ' + gate.machine + ') hold the merge (gh-1417)'
-            });
-            ctx.log.push('⏳ #' + prNumber + ' ' + gate.total + ' unresolved review thread(s) (human ' +
-                gate.human + ', machine ' + gate.machine + ') — merge held (gh-1417), next tick retries');
-            return 'skipped';
-        }
-        var res = squashMerge(ctx.owner, ctx.name, prNumber);
-        if (res.merged) {
-            // gh-1420 AC1: the funnel-side residue marker — "merged with
-            // residue" visible in the PR timeline. Pure-clean merges post
-            // nothing (silent); a same-head note dedupes in place.
-            mergeNote.runMergeNoteForPr(mergeVerdictGate.githubBridgeIo(),
-                ctx.owner, ctx.name, ctx.job, prNumber, pr, gate.backstop, ctx.say);
-            mergeNote.emitDecision(ctx.say, {
-                prNumber: prNumber, pr: pr, job: ctx.job, action: 'merged',
-                backstop: gate.backstop, verdict: verdictGate.verdict
-            });
-            onMerged(prNumber);
-            return 'merged';
-        }
-        mergeNote.emitDecision(ctx.say, {
-            prNumber: prNumber, pr: pr, job: ctx.job, action: 'defered',
-            backstop: gate.backstop, verdict: verdictGate.verdict,
-            reason: 'merge refused: ' + res.error
-        });
-        ctx.log.push('❌ merge of #' + prNumber + ' failed: ' + res.error);
-        return 'skipped'; // bash parity: a refused merge is skipped, exit 0
-    }
+    if (decision === 'merge') return runMergeDecision(ctx, prNumber, pr, onMerged);
     if (decision === 'behind') {
-        mergeNote.emitDecision(ctx.say, {
-            prNumber: prNumber, pr: pr, job: ctx.job, action: 'defered',
-            reason: 'behind main — the SM refreshes it, then re-dispatches CI'
-        });
-        ctx.log.push('⏳ #' + prNumber + ' behind main — the SM (silent-update-behind) refreshes it, then re-dispatches CI');
-        return 'skipped';
+        return deferExit(ctx, prNumber, pr,
+            'behind main — the SM refreshes it, then re-dispatches CI',
+            '⏳ #' + prNumber + ' behind main — the SM (silent-update-behind) refreshes it, then re-dispatches CI');
     }
     if (decision === 'blocked') {
-        mergeNote.emitDecision(ctx.say, {
-            prNumber: prNumber, pr: pr, job: ctx.job, action: 'defered',
-            reason: 'required checks not green yet'
-        });
-        ctx.log.push('⏳ #' + prNumber + ' required checks not green yet');
-        return 'skipped';
+        return deferExit(ctx, prNumber, pr, 'required checks not green yet',
+            '⏳ #' + prNumber + ' required checks not green yet');
     }
-    mergeNote.emitDecision(ctx.say, {
-        prNumber: prNumber, pr: pr, job: ctx.job, action: 'defered',
-        reason: 'not mergeable (' + stateLabel + ') — needs manual attention'
-    });
-    ctx.log.push('⛔ #' + prNumber + ' not mergeable (' + stateLabel + ') — needs manual attention');
-    return 'skipped';
+    return deferExit(ctx, prNumber, pr,
+        'not mergeable (' + stateLabel + ') — needs manual attention',
+        '⛔ #' + prNumber + ' not mergeable (' + stateLabel + ') — needs manual attention');
 }
 
 /**

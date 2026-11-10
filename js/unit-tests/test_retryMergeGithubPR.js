@@ -169,7 +169,7 @@ function loadLane(opts) {
             github_get_pr_comments: globals.github_get_pr_comments,
             github_create_comment: globals.github_create_comment
         }),
-        './common/mergeGate.js': mTwoStageGate(globals),
+        './common/mergeGate.js': opts.mergeGateModule || mTwoStageGate(globals),
         // gh-1420: the observability layer shares the lane's gate instances
         // (the io bag arrives as a parameter — no globals bind here).
         './common/mergeNote.js': loadModule('js/common/mergeNote.js', makeRequire({
@@ -182,61 +182,113 @@ function loadLane(opts) {
     return { lane: lane, calls: calls };
 }
 
-// The bridge-primitive globals (the payload shaping of the lane's comment
-// read): which comments are served, whether the read primitive is absent,
-// and whether it throws. Every call lands in `calls`.
+// The bridge-primitive factories (gh-1420 crap split): each primitive is
+// its own tiny recorder — laneGlobals stays a shallow assembly. Which
+// comments are served, whether the read primitive is absent, and whether
+// it throws are all opts; every call lands in `calls`.
+function recordingRemoveLabel(calls) {
+    return function (a) { calls.removed.push(a); return '{}'; };
+}
+
+function recordingAddLabels(calls) {
+    return function (a) { calls.added.push(a); return '{}'; };
+}
+
+function recordingComment(calls) {
+    return function (a) { calls.comments.push(a); return '{}'; };
+}
+
+function issueReadOf(opts) {
+    return opts.getIssueThrows ? function () {
+        throw new Error(opts.getIssueThrows);
+    } : function () {
+        return JSON.stringify({ number: 33, state: opts.getIssueState || 'closed' });
+    };
+}
+
+function recordingCloseIssue(calls) {
+    return function (a) { calls.closed.push(a); return '{}'; };
+}
+
+function commentReadOf(opts, calls) {
+    return opts.noCommentsPrimitive ? undefined : function (a) {
+        calls.commentReads.push(a);
+        if (opts.getCommentsThrows) throw new Error(opts.getCommentsThrows);
+        return JSON.stringify(opts.comments || []);
+    };
+}
+
+// gh-1417: the two-stage merge gate reads the threads census on
+// every merge attempt — the gate-neutral scenarios serve the EMPTY
+// production payload (census 0 → merge proceeds). The undeclared
+// global here is the test-runner network guard (it throws), not a
+// missing capability, so the gate's skip path never sees these
+// fixtures. opts.threadsByNumber injects open threads for the
+// lane's own hold wiring test — and a successful resolve MUTATES
+// the served nodes (gh-1420: the backstop's stage-1 resolution must
+// be visible to the stage-2 census re-read, backstopBridgeMocks
+// parity), so a residue replay merges after the deferral.
+function threadsReadOf(opts, calls) {
+    return function (a) {
+        calls.threads.push(a);
+        return JSON.stringify({ data: { repository: { pullRequest:
+            { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
+    };
+}
+
+// gh-1420: the successful resolve MUTATES the served nodes so the stage-2
+// census re-read sees the stage-1 deferral (backstopBridgeMocks parity).
+function markThreadsResolved(opts, threadId) {
+    Object.keys(opts.threadsByNumber || {}).forEach(function (pr) {
+        (opts.threadsByNumber[pr] || []).forEach(function (n) {
+            if (n && String(n.id) === String(threadId)) n.isResolved = true;
+        });
+    });
+}
+
+// gh-1420: the full backstop surface for the residue-replay scenarios —
+// resolve (mutating), the ack reply, the digest search and create.
+// resolveFailIds names ids whose resolve throws.
+function threadResolveOf(opts, calls) {
+    return function (a) {
+        if ((opts.resolveFailIds || []).indexOf(String(a.threadId)) !== -1) {
+            throw new Error('422 ' + a.threadId);
+        }
+        calls.threadResolves.push(a);
+        markThreadsResolved(opts, a.threadId);
+        return '{}';
+    };
+}
+
+function recordingThreadReply(calls) {
+    return function (a) { calls.threadReplies.push(a); return '{}'; };
+}
+
+function recordingSearchIssues() {
+    return function () { return JSON.stringify({ items: [] }); };
+}
+
+function recordingCreateIssue(calls) {
+    return function (a) {
+        calls.debtIssues.push(a);
+        return JSON.stringify({ number: 500 + calls.debtIssues.length });
+    };
+}
+
+// The bridge-primitive globals of the lane (the assembled recorders).
 function laneGlobals(opts, calls) {
     return {
-        github_remove_label: function (a) { calls.removed.push(a); return '{}'; },
-        github_add_labels: function (a) { calls.added.push(a); return '{}'; },
-        github_create_comment: function (a) { calls.comments.push(a); return '{}'; },
-        github_get_issue: opts.getIssueThrows ? function () {
-            throw new Error(opts.getIssueThrows);
-        } : function () {
-            return JSON.stringify({ number: 33, state: opts.getIssueState || 'closed' });
-        },
-        github_close_issue: function (a) { calls.closed.push(a); return '{}'; },
-        github_get_pr_comments: opts.noCommentsPrimitive ? undefined : function (a) {
-            calls.commentReads.push(a);
-            if (opts.getCommentsThrows) throw new Error(opts.getCommentsThrows);
-            return JSON.stringify(opts.comments || []);
-        },
-        // gh-1417: the two-stage merge gate reads the threads census on
-        // every merge attempt — the gate-neutral scenarios serve the EMPTY
-        // production payload (census 0 → merge proceeds). The undeclared
-        // global here is the test-runner network guard (it throws), not a
-        // missing capability, so the gate's skip path never sees these
-        // fixtures. opts.threadsByNumber injects open threads for the
-        // lane's own hold wiring test — and a successful resolve MUTATES
-        // the served nodes (gh-1420: the backstop's stage-1 resolution must
-        // be visible to the stage-2 census re-read, backstopBridgeMocks
-        // parity), so a residue replay merges after the deferral.
-        github_get_pr_review_threads: function (a) {
-            calls.threads.push(a);
-            return JSON.stringify({ data: { repository: { pullRequest:
-                { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
-        },
-        // gh-1420: the full backstop surface for the residue-replay
-        // scenarios — resolve (mutating), the ack reply, the digest search
-        // and create. resolveFailIds names ids whose resolve throws.
-        github_resolve_pr_thread: function (a) {
-            if ((opts.resolveFailIds || []).indexOf(String(a.threadId)) !== -1) {
-                throw new Error('422 ' + a.threadId);
-            }
-            calls.threadResolves.push(a);
-            Object.keys(opts.threadsByNumber || {}).forEach(function (pr) {
-                (opts.threadsByNumber[pr] || []).forEach(function (n) {
-                    if (n && String(n.id) === String(a.threadId)) n.isResolved = true;
-                });
-            });
-            return '{}';
-        },
-        github_reply_to_pr_thread: function (a) { calls.threadReplies.push(a); return '{}'; },
-        github_search_issues: function () { return JSON.stringify({ items: [] }); },
-        github_create_issue: function (a) {
-            calls.debtIssues.push(a);
-            return JSON.stringify({ number: 500 + calls.debtIssues.length });
-        }
+        github_remove_label: recordingRemoveLabel(calls),
+        github_add_labels: recordingAddLabels(calls),
+        github_create_comment: recordingComment(calls),
+        github_get_issue: issueReadOf(opts),
+        github_close_issue: recordingCloseIssue(calls),
+        github_get_pr_comments: commentReadOf(opts, calls),
+        github_get_pr_review_threads: threadsReadOf(opts, calls),
+        github_resolve_pr_thread: threadResolveOf(opts, calls),
+        github_reply_to_pr_thread: recordingThreadReply(calls),
+        github_search_issues: recordingSearchIssues(),
+        github_create_issue: recordingCreateIssue(calls)
     };
 }
 
@@ -634,5 +686,29 @@ suite('retryMergeGithubPR: merge-decision observability (gh-1420)', function () 
             JSON.stringify(prDetail()));
         assert.equal(thrown.backstop !== undefined, true,
             'the backstop outcome rides the gate outcome for the merge-note');
+    });
+
+    test('a thrown merge-gate fault renders ? counts (unknown ≠ 0 — the grep audit)', function () {
+        var r = withLogSpy(function () {
+            return runLane({
+                comments: [],
+                prDetail: prDetail(),
+                mergeGateModule: {
+                    githubBridgeIo: function () { return {}; },
+                    runForPr: function () { throw new Error('gate census boom'); }
+                }
+            });
+        });
+        assert.equal(r.out.result, false, 'fail-closed defer — the SM retries');
+        assert.equal(r.out.calls.merges.length, 0, 'no merge on a faulted gate');
+        var lines = decisionLines(r.logs);
+        assert.equal(lines.length, 1);
+        assert.contains(lines[0], 'action=held');
+        assert.contains(lines[0], 'machineThreads=?',
+            'the census is UNKNOWN on a fault — never a misleading 0');
+        assert.contains(lines[0], 'humanThreads=?');
+        var warnings = r.logs.filter(function (l) { return l.indexOf('::warning::') === 0; });
+        assert.equal(warnings.length, 1);
+        assert.contains(warnings[0], 'merge gate faulted (gh-1370/gh-1417)');
     });
 });

@@ -121,39 +121,62 @@ function threadRow(id, opts) {
     return r;
 }
 
+// The provider-recorder pieces (gh-1420 crap split): each method is its
+// own tiny factory — the aggregate provider stays a shallow object
+// literal, every factory pins one primitive's recording shape.
+function recordingThreadList(calls, o) {
+    return function (prNumber) {
+        calls.threadReads.push(prNumber);
+        if (o.threadsThrow) throw new Error('503');
+        return o.threads || [threadRow('PRT_1')];
+    };
+}
+
+function recordingCommentList(calls, o) {
+    return function (prNumber) {
+        calls.commentReads.push(prNumber);
+        if (o.commentsThrow) throw new Error('503');
+        return o.comments || [];
+    };
+}
+
+function recordingPostComment(calls) {
+    return function (prNumber, body) {
+        calls.commentsPosted.push({ prNumber: prNumber, body: body });
+        return {};
+    };
+}
+
+function recordingResolveThread(calls, o) {
+    return function (prNumber, thread) {
+        if ((o.resolveFailIds || []).indexOf(String(thread.threadId)) !== -1) {
+            throw new Error('422 ' + thread.threadId);
+        }
+        calls.resolves.push({ prNumber: prNumber, threadId: thread.threadId });
+        (o.threads || [threadRow('PRT_1')]).forEach(function (t) {
+            if (String(t.threadId) === String(thread.threadId)) t.resolved = true;
+        });
+        return {};
+    };
+}
+
+function recordingThreadReply(calls) {
+    return function (prNumber, thread, text) {
+        calls.replies.push({ prNumber: prNumber, threadId: thread.threadId, text: text });
+        return {};
+    };
+}
+
 // The PR #1410-shaped payload: ONE unresolved machine-authored IMPORTANT
 // thread on a MERGED PR (the gh-1420 test case).
 function pr1410Provider(calls, over) {
     var o = over || {};
     return {
-        reviewThreadList: function (prNumber) {
-            calls.threadReads.push(prNumber);
-            if (o.threadsThrow) throw new Error('503');
-            return o.threads || [threadRow('PRT_1')];
-        },
-        prCommentList: function (prNumber) {
-            calls.commentReads.push(prNumber);
-            if (o.commentsThrow) throw new Error('503');
-            return o.comments || [];
-        },
-        postPrComment: function (prNumber, body) {
-            calls.commentsPosted.push({ prNumber: prNumber, body: body });
-            return {};
-        },
-        resolveThread: function (prNumber, thread) {
-            if ((o.resolveFailIds || []).indexOf(String(thread.threadId)) !== -1) {
-                throw new Error('422 ' + thread.threadId);
-            }
-            calls.resolves.push({ prNumber: prNumber, threadId: thread.threadId });
-            (o.threads || [threadRow('PRT_1')]).forEach(function (t) {
-                if (String(t.threadId) === String(thread.threadId)) t.resolved = true;
-            });
-            return {};
-        },
-        replyToThread: function (prNumber, thread, text) {
-            calls.replies.push({ prNumber: prNumber, threadId: thread.threadId, text: text });
-            return {};
-        }
+        reviewThreadList: recordingThreadList(calls, o),
+        prCommentList: recordingCommentList(calls, o),
+        postPrComment: recordingPostComment(calls),
+        resolveThread: recordingResolveThread(calls, o),
+        replyToThread: recordingThreadReply(calls)
     };
 }
 

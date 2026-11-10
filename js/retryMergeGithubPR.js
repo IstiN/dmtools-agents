@@ -337,55 +337,54 @@ function closeIssueSafetyNet(issueNumber) {
 // The gh-1420 logger seam of this lane (console parity with the gates).
 function laneSay(line) { console.log(line); }
 
-function squashAndFinalize(ctx, pr) {
-    // gh-1416: the held path releases the lock and returns false — the SM
-    // retries next cycle, the rework lap / a human resolution lands the
-    // fresh verdict; pr_approved stays (the deferral is not a rework flip).
-    var prPayload = mcpParse.parseMcp(pr.detail);
-    var verdictGate = verdictGateOutcomeForPr(ctx.jobParams, ctx.owner, ctx.repo,
-        pr.number, pr.detail);
-    if (verdictGate.held) {
-        mergeNote.emitDecision(laneSay, {
-            prNumber: pr.number, pr: prPayload, job: ctx.jobParams, action: 'defered',
-            verdict: verdictGate.verdict, warn: true,
-            reason: 'newest verdict on head ' + (verdictGate.head || '?') +
-                ' is ' + verdictGate.verdict + ' — a stale approval cannot race the merge (gh-1416)'
-        });
-        releaseLock(ctx);
-        return false;
-    }
-    // gh-1417: the two-stage merge gate — held or faulted, the merge
-    // defers the same way (the lock releases, pr_approved stays, the SM
-    // retries next cycle).
-    var gate = mergeGateOutcomeForPr(ctx.jobParams, ctx.owner, ctx.repo, pr.number, pr.detail);
-    if (gate.held) {
-        mergeNote.emitDecision(laneSay, {
-            prNumber: pr.number, pr: prPayload, job: ctx.jobParams, action: 'held',
-            machineThreads: gate.thrown ? 0 : gate.machine,
-            humanThreads: gate.thrown ? 0 : gate.human,
-            verdict: verdictGate.verdict,
-            reason: gate.thrown
-                ? 'merge gate faulted (gh-1370/gh-1417) — fail-closed defer'
-                : gate.total + ' unresolved review thread(s) (human ' +
-                    gate.human + ', machine ' + gate.machine + ') hold the merge (gh-1417)'
-        });
-        releaseLock(ctx);
-        return false;
-    }
-    // Merge (squash — merge-trigger parity).
-    try {
-        ctx.scm.mergePr(pr.number, ctx.owner, ctx.repo, 'squash');
-        console.log('✅ Merged PR #' + pr.number + ' (squash)');
-    } catch (e) {
-        mergeNote.emitDecision(laneSay, {
-            prNumber: pr.number, pr: prPayload, job: ctx.jobParams, action: 'defered',
-            backstop: gate.backstop, verdict: verdictGate.verdict,
-            reason: 'merge failed: ' + (e.message || e)
-        });
-        console.warn('Merge failed:', e.message || e);
-        releaseLock(ctx);
-        return false;
-    }
+// The verdict-hold exit (gh-1416): the structured deferred line + the hold
+// ::warning::, the lock released, pr_approved stays (the deferral is not a
+// rework flip — the rework lap / a human resolution lands the fresh verdict).
+function verdictHoldExit(ctx, pr, prPayload, verdictGate) {
+    mergeNote.emitDecision(laneSay, {
+        prNumber: pr.number, pr: prPayload, job: ctx.jobParams, action: 'defered',
+        verdict: verdictGate.verdict, warn: true,
+        reason: 'newest verdict on head ' + (verdictGate.head || '?') +
+            ' is ' + verdictGate.verdict + ' — a stale approval cannot race the merge (gh-1416)'
+    });
+    releaseLock(ctx);
+    return false;
+}
+
+// The gate-hold exit (gh-1417): held or faulted, the merge defers the same
+// way. A THROWN gate fault reads the census UNKNOWN — the held line renders
+// ? counts (never a misleading machineThreads=0 humanThreads=0, the
+// allowlist=0 grep audit could misread).
+function gateHoldExit(ctx, pr, prPayload, gate, verdictGate) {
+    mergeNote.emitDecision(laneSay, {
+        prNumber: pr.number, pr: prPayload, job: ctx.jobParams, action: 'held',
+        machineThreads: gate.thrown ? '?' : gate.machine,
+        humanThreads: gate.thrown ? '?' : gate.human,
+        verdict: verdictGate.verdict,
+        reason: gate.thrown
+            ? 'merge gate faulted (gh-1370/gh-1417) — fail-closed defer'
+            : gate.total + ' unresolved review thread(s) (human ' +
+                gate.human + ', machine ' + gate.machine + ') hold the merge (gh-1417)'
+    });
+    releaseLock(ctx);
+    return false;
+}
+
+// The failed-merge exit: the structured deferred line + the legacy warning.
+function mergeFailedExit(ctx, pr, prPayload, gate, verdictGate, e) {
+    mergeNote.emitDecision(laneSay, {
+        prNumber: pr.number, pr: prPayload, job: ctx.jobParams, action: 'defered',
+        backstop: gate.backstop, verdict: verdictGate.verdict,
+        reason: 'merge failed: ' + (e.message || e)
+    });
+    console.warn('Merge failed:', e.message || e);
+    releaseLock(ctx);
+    return false;
+}
+
+// The merged exit: the residue marker (silent on a pure-clean merge,
+// deduped per head), the structured merged line, the post-merge bookkeeping.
+function mergedExit(ctx, pr, prPayload, gate, verdictGate) {
     // gh-1420 AC1: the residue marker — silent on a pure-clean merge,
     // deduped per head; then the structured merged line.
     mergeNote.runMergeNoteForPr(mergeVerdictGate.githubBridgeIo(),
@@ -398,6 +397,29 @@ function squashAndFinalize(ctx, pr) {
     releaseLock(ctx);
     closeIssueSafetyNet(ctx.issueNumber);
     return true;
+}
+
+function squashAndFinalize(ctx, pr) {
+    // gh-1416: the held path releases the lock and returns false — the SM
+    // retries next cycle, the rework lap / a human resolution lands the
+    // fresh verdict; pr_approved stays (the deferral is not a rework flip).
+    var prPayload = mcpParse.parseMcp(pr.detail);
+    var verdictGate = verdictGateOutcomeForPr(ctx.jobParams, ctx.owner, ctx.repo,
+        pr.number, pr.detail);
+    if (verdictGate.held) return verdictHoldExit(ctx, pr, prPayload, verdictGate);
+    // gh-1417: the two-stage merge gate — held or faulted, the merge
+    // defers the same way (the lock releases, pr_approved stays, the SM
+    // retries next cycle).
+    var gate = mergeGateOutcomeForPr(ctx.jobParams, ctx.owner, ctx.repo, pr.number, pr.detail);
+    if (gate.held) return gateHoldExit(ctx, pr, prPayload, gate, verdictGate);
+    // Merge (squash — merge-trigger parity).
+    try {
+        ctx.scm.mergePr(pr.number, ctx.owner, ctx.repo, 'squash');
+        console.log('✅ Merged PR #' + pr.number + ' (squash)');
+    } catch (e) {
+        return mergeFailedExit(ctx, pr, prPayload, gate, verdictGate, e);
+    }
+    return mergedExit(ctx, pr, prPayload, gate, verdictGate);
 }
 
 // ── the orchestrator ─────────────────────────────────────────────────────────
