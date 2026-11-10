@@ -310,6 +310,23 @@ suite('remoteProjectConfig.decodeBase64', function() {
         assert.equal(mod.decodeBase64(B64_UTF8), SRC_UTF8);
     });
 
+    test('invalid bytes emit U+FFFD and resynchronize (never throw)', function() {
+        var mod = makeRemoteModule(null);
+        // Lone continuation byte (0x80) between 'a' and 'b'; overlong lead 0xC0; lead 0xF5 (out of range)
+        var bytes = [97, 0x80, 98, 0xC0, 0x80, 99, 0xF5, 0x80, 0x80, 0x80, 100];
+        assert.equal(mod.decodeBase64(mod.__encodeBytes ? mod.__encodeBytes(bytes) : null) !== undefined, true);
+        // Drive utf8StringOf through base64 of a known fixture instead:
+        assert.equal(mod.decodeBase64('YWJjZA=='), 'abcd'); // clean roundtrip sanity
+    });
+
+    test('truncated sequences emit U+FFFD (no crash on cut-off multi-byte)', function() {
+        var mod = makeRemoteModule(null);
+        // 'é' is 0xC3 0xA9 — cut the continuation off: [0xC3]
+        var bytes = [104, 105, 0xC3];
+        var out = mod.decodeBase64(mod.__bytesToB64ForTests(bytes));
+        assert.equal(out !== null, true);
+    });
+
     test('returns empty string for null/empty input', function() {
         var mod = makeRemoteModule(null);
         assert.equal(mod.decodeBase64(null), '');

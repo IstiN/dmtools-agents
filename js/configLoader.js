@@ -679,17 +679,13 @@ function loadRemoteProjectConfig(params, customParams) {
 }
 
 /**
- * Probe the candidate config sources in order and return the first one that
- * loads, mirroring the historical precedence:
+ * Probe the LOCAL candidate config sources in order and return the first one
+ * that loads (the historical precedence):
  *   configPath → customParams.configPath → agentConfigsDir → .dmtools → ../.dmtools
- * and — gh-1421 — when ALL of them miss, the remote scm fetch of
- * `<defaultBranch>/.dmtools/config.js` as the LAST candidate (fail-open;
- * one fetch per job run via the module's short-TL cache).
  *
  * @returns {Object} { loaded: Object|null, resolvedPath: string|null }
  */
-function discoverProjectConfig(params, customParams) {
-    var candidates = buildConfigCandidates(params, customParams);
+function discoverLocalProjectConfig(candidates) {
     var loaded = null;
     var resolvedPath = null;
     for (var i = 0; i < candidates.length; i++) {
@@ -702,17 +698,29 @@ function discoverProjectConfig(params, customParams) {
             console.log('configLoader: Loaded config from ' + candidate.path + candidate.logSuffix);
         }
     }
-    if (!loaded) {
+    return { loaded: loaded, resolvedPath: resolvedPath };
+}
+
+/**
+ * Probe the candidate config sources in order and return the first one that
+ * loads, mirroring the historical precedence:
+ *   configPath → customParams.configPath → agentConfigsDir → .dmtools → ../.dmtools
+ * and — gh-1421 — when ALL of them miss, the remote scm fetch of
+ * `<defaultBranch>/.dmtools/config.js` as the LAST candidate (fail-open;
+ * one fetch per job run via the module's short-TL cache).
+ *
+ * @returns {Object} { loaded: Object|null, resolvedPath: string|null }
+ */
+function discoverProjectConfig(params, customParams) {
+    var discovered = discoverLocalProjectConfig(buildConfigCandidates(params, customParams));
+    if (!discovered.loaded) {
         var remote = loadRemoteProjectConfig(params, customParams);
-        if (remote) {
-            loaded = remote.loaded;
-            resolvedPath = remote.resolvedPath;
-        }
+        if (remote) discovered = remote;
     }
-    if (!loaded) {
+    if (!discovered.loaded) {
         console.log('configLoader: No project config found, using defaults');
     }
-    return { loaded: loaded, resolvedPath: resolvedPath };
+    return discovered;
 }
 
 /**

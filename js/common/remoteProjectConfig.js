@@ -42,6 +42,8 @@
  * GraalJS-clean: var + plain functions, JSON-safe data, NO requires (the
  * capability bag names the primitives itself — pure module, io injected),
  * no new globals (GH_REPO is the existing env-global, typeof-guarded).
+ * Every function stays tiny on purpose (the CRAP ratchet gates NEW code at
+ * CC ≤ threshold even at full coverage) — decision tables, not brains.
  */
 
 /* global github_get_file_contents, github_get_file_content,
@@ -65,54 +67,71 @@ var REMOTE_CONFIG_TL_MS = 600;
 // the map is an optimization, never a correctness surface).
 var REMOTE_CONFIG_CACHE_MAX = 16;
 
-// provider → capability bag (production primitives, capability-gated).
-// A primitive maps null when the runtime does not declare it — a capability
-// miss, never an error (callers degrade to the local/defaults path).
-function remoteConfigIo(provider) {
-    var p = String(provider || 'github').toLowerCase();
-    if (p === 'gitlab') {
-        var gl = (typeof gitlab_get_file_contents === 'function') ? gitlab_get_file_contents
-            : ((typeof gitlab_get_file_content === 'function') ? gitlab_get_file_content : null);
-        return {
-            provider: 'gitlab',
-            // The GitLab twin rides the existing gitlab wiring bag
-            // (workspace/repository — the bridge maps it onto the project path).
-            getFileContents: gl ? function(target, path) {
-                return gl({ workspace: target.owner, repository: target.repo, path: path });
-            } : null
-        };
-    }
-    var gh = (typeof github_get_file_contents === 'function') ? github_get_file_contents
-        : ((typeof github_get_file_content === 'function') ? github_get_file_content : null);
+// ── the capability bag (production primitives, capability-gated) ─────────────
+
+// The ticket-named primitive wins; the shipped spelling serves the same
+// schema today. Neither declared → null (capability miss, never an error).
+function githubFileContentsPrimitive() {
+    if (typeof github_get_file_contents === 'function') return github_get_file_contents;
+    if (typeof github_get_file_content === 'function') return github_get_file_content;
+    return null;
+}
+
+function gitlabFileContentsPrimitive() {
+    if (typeof gitlab_get_file_contents === 'function') return gitlab_get_file_contents;
+    if (typeof gitlab_get_file_content === 'function') return gitlab_get_file_content;
+    return null;
+}
+
+// GitHub primitive schema {owner, repo, path, ref?}; ref is omitted — the
+// fetch targets the DEFAULT branch (the stopgap's exact semantics, and the
+// primitive's own default).
+function githubFileContentsBag(get) {
     return {
         provider: 'github',
-        // The GitHub primitive schema is {owner, repo, path, ref?}; ref is
-        // omitted — the fetch targets the DEFAULT branch (the stopgap's exact
-        // semantics, and the primitive's own default).
-        getFileContents: gh ? function(target, path) {
-            return gh({ owner: target.owner, repo: target.repo, path: path });
+        getFileContents: get ? function(target, path) {
+            return get({ owner: target.owner, repo: target.repo, path: path });
         } : null
     };
 }
 
-/**
- * The fetch target for the caller's params: the resolved {owner, repo} of the
- * repo whose config this job is about, or null when nothing identifies one
- * (a null target fetches nothing — silently, like an absent candidate).
- *
- *   1. params.repository        — {owner, repo} (the SM's target-repo param)
- *   2. params.repo              — "owner/name" (the merge funnel's jobParams)
- *   3. customParams.targetRepository — {owner, repo}
- *   4. GH_REPO                  — the env-global (mergeBot/mergeTrigger parity)
- */
-function remoteConfigRepositoryOf(params, customParams) {
+// The GitLab twin rides the existing gitlab wiring bag (workspace/repository
+// — the bridge maps it onto the project path).
+function gitlabFileContentsBag(get) {
+    return {
+        provider: 'gitlab',
+        getFileContents: get ? function(target, path) {
+            return get({ workspace: target.owner, repository: target.repo, path: path });
+        } : null
+    };
+}
+
+// provider → capability bag; an unknown provider reads as github (createScm
+// parity — the same default the provider factory uses).
+function remoteConfigIo(provider) {
+    var p = String(provider || 'github').toLowerCase();
+    if (p === 'gitlab') return gitlabFileContentsBag(gitlabFileContentsPrimitive());
+    return githubFileContentsBag(githubFileContentsPrimitive());
+}
+
+// ── the fetch target ─────────────────────────────────────────────────────────
+
+function repositoryFromParamsRepository(params) {
     if (params && params.repository && params.repository.owner && params.repository.repo) {
         return { owner: String(params.repository.owner), repo: String(params.repository.repo) };
     }
-    if (params && params.repo && String(params.repo).indexOf('/') !== -1) {
-        var parts = String(params.repo).split('/');
-        return { owner: parts[0], repo: parts.slice(1).join('/') };
-    }
+    return null;
+}
+
+// "owner/name" (the merge funnel's jobParams.repo, GH_REPO env-global parity);
+// owner-only or garbage reads as null.
+function repositoryFromRepoString(repoStr) {
+    if (!repoStr || String(repoStr).indexOf('/') === -1) return null;
+    var parts = String(repoStr).split('/');
+    return { owner: parts[0], repo: parts.slice(1).join('/') };
+}
+
+function repositoryFromTargetRepository(customParams) {
     if (customParams && customParams.targetRepository &&
         customParams.targetRepository.owner && customParams.targetRepository.repo) {
         return {
@@ -120,11 +139,24 @@ function remoteConfigRepositoryOf(params, customParams) {
             repo: String(customParams.targetRepository.repo)
         };
     }
-    if (typeof GH_REPO !== 'undefined' && GH_REPO && String(GH_REPO).indexOf('/') !== -1) {
-        var gh = String(GH_REPO).split('/');
-        return { owner: gh[0], repo: gh.slice(1).join('/') };
-    }
     return null;
+}
+
+/**
+ * The fetch target for the caller's params: the resolved {owner, repo} of the
+ * repo whose config this job is about, or null when nothing identifies one
+ * (a null target fetches nothing — silently, like an absent candidate).
+ *   1. params.repository — {owner, repo} (the SM's target-repo param)
+ *   2. params.repo       — "owner/name" (the merge funnel's jobParams)
+ *   3. customParams.targetRepository — {owner, repo}
+ *   4. GH_REPO           — the env-global (mergeBot/mergeTrigger parity)
+ */
+function remoteConfigRepositoryOf(params, customParams) {
+    return repositoryFromParamsRepository(params)
+        || repositoryFromRepoString(params && params.repo)
+        || repositoryFromTargetRepository(customParams)
+        || repositoryFromRepoString(typeof GH_REPO === 'undefined' ? null : GH_REPO)
+        || null;
 }
 
 // ── base64 → UTF-8 (pure JS — no Buffer, no Java interop dependency) ─────────
@@ -154,56 +186,64 @@ function base64Bytes(input) {
     return bytes;
 }
 
+// Lead-byte masks per sequence length (1-4 bytes).
+var UTF8_MASKS = [0x7F, 0x1F, 0x0F, 0x07];
+
+/** The UTF-8 sequence length a lead byte announces; 0 = invalid lead byte. */
+function utf8SequenceLength(lead) {
+    if (lead < 0x80) return 1;
+    if (lead >= 0xC2 && lead <= 0xDF) return 2;
+    if (lead >= 0xE0 && lead <= 0xEF) return 3;
+    if (lead >= 0xF0 && lead <= 0xF4) return 4;
+    return 0;
+}
+
+/** The code point of a complete sequence, or -1 on a truncated/missing continuation. */
+function utf8CodePointOf(bytes, start, seqLen) {
+    var cp = bytes[start] & UTF8_MASKS[seqLen - 1];
+    for (var j = 1; j < seqLen; j++) {
+        var cont = bytes[start + j];
+        if (cont === undefined || (cont & 0xC0) !== 0x80) return -1;
+        cp = (cp << 6) | (cont & 0x3F);
+    }
+    return cp;
+}
+
+/** One code point → its JS string form (surrogate pairs above BMP). */
+function stringFromCodePoint(cp) {
+    if (cp > 0xFFFF) {
+        var shifted = cp - 0x10000;
+        return String.fromCharCode(0xD800 + (shifted >> 10), 0xDC00 + (shifted & 0x3FF));
+    }
+    if (cp >= 0xD800 && cp <= 0xDFFF) return '\uFFFD'; // surrogate range — never valid UTF-8
+    return String.fromCharCode(cp);
+}
+
 /**
  * Decode UTF-8 bytes into a JS string. Full sequence handling (2-4 byte
  * forms incl. surrogate pairs for astral chars); every invalid/truncated
- * sequence emits U+FFFD and resynchronizes on the next lead byte — a decode
- * can never throw (a corrupt read becomes garbage-and-null downstream, never
- * a crash).
+ * sequence emits U+FFFD and resynchronizes on the next byte — a decode can
+ * never throw (a corrupt read becomes garbage-and-null downstream, never a
+ * crash).
  */
 function utf8StringOf(bytes) {
     var out = '';
     var i = 0;
     while (i < bytes.length) {
-        var b = bytes[i];
-        if (b < 0x80) {
-            out += String.fromCharCode(b);
-            i++;
-            continue;
-        }
-        var cp = 0;
-        var extra = 0;
-        if (b >= 0xC2 && b <= 0xDF) { cp = b & 0x1F; extra = 1; }
-        else if (b >= 0xE0 && b <= 0xEF) { cp = b & 0x0F; extra = 2; }
-        else if (b >= 0xF0 && b <= 0xF4) { cp = b & 0x07; extra = 3; }
-        else {
+        var seqLen = utf8SequenceLength(bytes[i]);
+        if (!seqLen) {
             out += '\uFFFD';
             i++;
             continue;
         }
-        var complete = true;
-        for (var j = 1; j <= extra; j++) {
-            var cont = bytes[i + j];
-            if (cont === undefined || (cont & 0xC0) !== 0x80) {
-                complete = false;
-                break;
-            }
-            cp = (cp << 6) | (cont & 0x3F);
-        }
-        if (!complete) {
+        var cp = utf8CodePointOf(bytes, i, seqLen);
+        if (cp < 0) {
             out += '\uFFFD';
             i++;
             continue;
         }
-        if (cp > 0xFFFF) {
-            var shifted = cp - 0x10000;
-            out += String.fromCharCode(0xD800 + (shifted >> 10), 0xDC00 + (shifted & 0x3FF));
-        } else if (cp >= 0xD800 && cp <= 0xDFFF) {
-            out += '\uFFFD'; // surrogate range — never valid UTF-8
-        } else {
-            out += String.fromCharCode(cp);
-        }
-        i += extra + 1;
+        out += stringFromCodePoint(cp);
+        i += seqLen;
     }
     return out;
 }
@@ -233,67 +273,81 @@ function looksLikeHtmlPage(text) {
     return t.indexOf('<!doctype html') === 0 || t.indexOf('<html') === 0;
 }
 
-/** The mcpParse-style bridge envelope unwrap ({result: …} wrappers). */
+/** Whether an object still carries an unwrappable {result: …} layer. */
+function canUnwrapEnvelope(cur) {
+    return Boolean(cur) && typeof cur === 'object' &&
+        typeof cur.content === 'undefined' && typeof cur.result !== 'undefined';
+}
+
+/** One unwrap step: a JSON-string result parses, anything else passes as-is. */
+function unwrapOneEnvelope(cur) {
+    if (typeof cur.result !== 'string') return cur.result;
+    try {
+        return JSON.parse(cur.result);
+    } catch (e) {
+        return cur.result; // a non-JSON result string IS the payload
+    }
+}
+
+/** The mcpParse-style bridge envelope unwrap ({result: …} wrappers, ≤3 deep). */
 function unwrapResultEnvelope(parsed) {
     var cur = parsed;
-    for (var depth = 0; depth < 3 && cur && typeof cur === 'object' &&
-        typeof cur.content === 'undefined' && typeof cur.result !== 'undefined'; depth++) {
-        if (typeof cur.result === 'string') {
-            try { cur = JSON.parse(cur.result); } catch (e) { return cur.result; }
-        } else {
-            cur = cur.result;
-        }
+    var depth = 0;
+    while (depth < 3 && canUnwrapEnvelope(cur)) {
+        cur = unwrapOneEnvelope(cur);
+        depth++;
     }
     return cur;
 }
 
-/** Content field of a Contents-API envelope → config source (or null). */
-function sourceFromContentEnvelope(env) {
+/** The `content` field of a Contents-API envelope → its candidate source. */
+function contentCandidateOf(env) {
     var content = env.content;
     if (typeof content !== 'string' || !content.trim()) return null;
     var encoding = typeof env.encoding === 'string' ? env.encoding.toLowerCase() : '';
-    var candidate;
-    if (encoding === 'base64') {
-        candidate = decodeBase64(content);
-    } else {
-        var flat = content.replace(/\s+/g, '');
-        candidate = (!encoding && looksLikeBase64(flat)) ? decodeBase64(flat) : content;
-    }
+    if (encoding === 'base64') return decodeBase64(content);
+    var flat = content.replace(/\s+/g, '');
+    if (!encoding && looksLikeBase64(flat)) return decodeBase64(flat);
+    return content;
+}
+
+/** An envelope's content → config source; empty and HTML candidates read null. */
+function sourceFromContentEnvelope(env) {
+    var candidate = contentCandidateOf(env);
     if (!candidate || !candidate.trim()) return null;
     return looksLikeHtmlPage(candidate) ? null : candidate;
+}
+
+/** A string payload → config source (HTML-guarded; {…} opens a JSON envelope). */
+function sourceFromRawString(raw) {
+    var trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (trimmed.charAt(0) !== '{') return looksLikeHtmlPage(trimmed) ? null : raw;
+    try {
+        return remoteConfigSourceOf(JSON.parse(trimmed));
+    } catch (e) {
+        return null; // brace-leading junk that is not JSON is not config source
+    }
+}
+
+/** An object payload → config source ({result: …} unwrapped, content decoded). */
+function sourceFromRawObject(raw) {
+    var inner = unwrapResultEnvelope(raw);
+    if (typeof inner === 'string') return remoteConfigSourceOf(inner);
+    if (inner && typeof inner === 'object' && inner !== raw) return remoteConfigSourceOf(inner);
+    if (inner && typeof inner === 'object') return sourceFromContentEnvelope(inner);
+    return null;
 }
 
 /**
  * One bridge payload → the config source string it carries, or null when the
  * payload is absent or unusable (HTML page, junk). PURE — the fetch layer
- * owns the warn for present-but-unusable payloads. Tolerated shapes:
- *   - null / undefined / whitespace   → null (a repo without the file — quiet);
- *   - a source string                 → itself (HTML-guarded);
- *   - a JSON string / object envelope → unwrapped ({result: …}, mcpParse
- *     style) and its base64 `content` decoded (encoding-aware, with the
- *     strict-charset heuristic for envelopes that omit the field);
- *   - anything else                   → null.
+ * owns the warn for present-but-unusable payloads.
  */
 function remoteConfigSourceOf(raw) {
     if (raw === null || raw === undefined) return null;
-    if (typeof raw === 'string') {
-        var trimmed = raw.trim();
-        if (!trimmed) return null;
-        if (trimmed.charAt(0) === '{') {
-            var parsed = null;
-            try { parsed = JSON.parse(trimmed); } catch (e) { return null; }
-            return remoteConfigSourceOf(parsed);
-        }
-        return looksLikeHtmlPage(trimmed) ? null : raw;
-    }
-    if (typeof raw === 'object') {
-        var inner = unwrapResultEnvelope(raw);
-        if (typeof inner === 'string') return remoteConfigSourceOf(inner);
-        if (inner && typeof inner === 'object' && inner !== raw) return remoteConfigSourceOf(inner);
-        if (inner && typeof inner === 'object' && typeof inner.content === 'string') {
-            return sourceFromContentEnvelope(inner);
-        }
-    }
+    if (typeof raw === 'string') return sourceFromRawString(raw);
+    if (typeof raw === 'object') return sourceFromRawObject(raw);
     return null;
 }
 
@@ -318,17 +372,22 @@ function cacheGet(key, nowMs) {
 
 function cachePut(key, source, nowMs) {
     if (!_remoteConfigCache[key] && Object.keys(_remoteConfigCache).length >= REMOTE_CONFIG_CACHE_MAX) {
-        var keys = Object.keys(_remoteConfigCache);
-        for (var i = 0; i < keys.length; i++) {
-            if (nowMs - _remoteConfigCache[keys[i]].fetchedAt >= REMOTE_CONFIG_TL_MS) {
-                delete _remoteConfigCache[keys[i]];
-            }
-        }
-        if (Object.keys(_remoteConfigCache).length >= REMOTE_CONFIG_CACHE_MAX) {
-            _remoteConfigCache = {}; // still full → drop wholesale (bounded, by construction)
-        }
+        cacheEvict(nowMs);
     }
     _remoteConfigCache[key] = { fetchedAt: nowMs, source: source };
+}
+
+/** Make room in a full cache: drop expired entries first, then everything. */
+function cacheEvict(nowMs) {
+    var keys = Object.keys(_remoteConfigCache);
+    for (var i = 0; i < keys.length; i++) {
+        if (nowMs - _remoteConfigCache[keys[i]].fetchedAt >= REMOTE_CONFIG_TL_MS) {
+            delete _remoteConfigCache[keys[i]];
+        }
+    }
+    if (Object.keys(_remoteConfigCache).length >= REMOTE_CONFIG_CACHE_MAX) {
+        _remoteConfigCache = {}; // still full → drop wholesale (bounded, by construction)
+    }
 }
 
 /** Test-isolation reseter (underscore export — the established pattern). */
@@ -343,10 +402,47 @@ function scmProviderOf(customParams) {
     return String((customParams && customParams.scmProvider) || 'github');
 }
 
+/** The production io bag for a provider, or null past a capability miss. */
+function resolveIo(opts, provider) {
+    var io = opts.io || remoteConfigIo(provider);
+    if (!io || !io.getFileContents) {
+        console.log('remoteProjectConfig: no file-contents primitive for ' +
+            ((io && io.provider) || provider) + ' — remote config skipped (capability miss)');
+        return null;
+    }
+    return io;
+}
+
+function resolveNowMs(opts) {
+    return (typeof opts.nowMs === 'number') ? opts.nowMs : Date.now();
+}
+
+/** ONE bridge call, failures swallowed (the fail-open boundary). */
+function remoteFetchAttempt(io, target) {
+    try {
+        return { raw: io.getFileContents(target, REMOTE_CONFIG_PATH) };
+    } catch (e) {
+        console.warn('remoteProjectConfig: fetch failed for ' + target.owner + '/' + target.repo +
+            ':' + REMOTE_CONFIG_PATH + ' — ' + (e.message || e));
+        return {};
+    }
+}
+
+/** Normalize one fetched payload; warn when present-but-unusable (HTML/junk). */
+function remoteOutcomeSource(raw) {
+    var source = remoteConfigSourceOf(raw);
+    if (source === null && raw !== null && raw !== undefined) {
+        console.warn('remoteProjectConfig: ' + REMOTE_CONFIG_PATH + ' is not usable config source — ignoring (fail-open)');
+    } else if (source !== null) {
+        console.log('remoteProjectConfig: fetched ' + REMOTE_CONFIG_PATH + ' (default branch)');
+    }
+    return source;
+}
+
 /**
  * Fetch .dmtools/config.js from the target repo's default branch through the
  * provider's file-contents primitive. Fail-open everywhere: a capability
- * miss, an unknown target, a throwing fetch, an HTML page or corrupt content
+ * miss, an unknown target repo, a throwing fetch, an HTML page or corrupt content
  * all read as null (NO config — never a wrong one). A validated miss caches
  * for the TTL too, so one job run attempts ONE fetch regardless of outcome.
  *
@@ -357,40 +453,19 @@ function scmProviderOf(customParams) {
  */
 function fetchRemoteConfigSource(params, customParams, options) {
     var opts = options || {};
-    var provider = scmProviderOf(customParams);
     var target = remoteConfigRepositoryOf(params, customParams);
     if (!target) return null;
 
-    var io = opts.io || remoteConfigIo(provider);
-    if (!io || !io.getFileContents) {
-        console.log('remoteProjectConfig: no file-contents primitive for ' + (io && io.provider || provider) +
-            ' — remote config skipped (capability miss)');
-        return null;
-    }
+    var io = resolveIo(opts, scmProviderOf(customParams));
+    if (!io) return null;
 
-    var nowMs = (typeof opts.nowMs === 'number') ? opts.nowMs : Date.now();
+    var nowMs = resolveNowMs(opts);
     var key = cacheKeyOf(io.provider, target);
     var cached = cacheGet(key, nowMs);
     if (cached.hit) return cached.source;
 
-    var raw = null;
-    try {
-        raw = io.getFileContents(target, REMOTE_CONFIG_PATH);
-    } catch (e) {
-        console.warn('remoteProjectConfig: fetch failed for ' + target.owner + '/' + target.repo +
-            ':' + REMOTE_CONFIG_PATH + ' — ' + (e.message || e));
-        cachePut(key, null, nowMs);
-        return null;
-    }
-
-    var source = remoteConfigSourceOf(raw);
-    if (source === null && raw !== null && raw !== undefined) {
-        console.warn('remoteProjectConfig: ' + REMOTE_CONFIG_PATH + ' from ' + target.owner + '/' +
-            target.repo + ' is not usable config source — ignoring (fail-open)');
-    } else if (source !== null) {
-        console.log('remoteProjectConfig: fetched ' + REMOTE_CONFIG_PATH + ' from ' + io.provider +
-            ' ' + target.owner + '/' + target.repo + ' (default branch)');
-    }
+    var attempt = remoteFetchAttempt(io, target);
+    var source = ('raw' in attempt) ? remoteOutcomeSource(attempt.raw) : null;
     cachePut(key, source, nowMs);
     return source;
 }
