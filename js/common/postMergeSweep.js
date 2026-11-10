@@ -122,13 +122,6 @@ function digestRowOf(t) {
     };
 }
 
-// The thread permalink: the root comment's REST discussion anchor, or the PR.
-function threadUrlOf(row, ctx) {
-    if (!ctx || !ctx.owner || !ctx.name || !ctx.prNumber) return null;
-    var base = 'https://github.com/' + ctx.owner + '/' + ctx.name + '/pull/' + ctx.prNumber;
-    return (row && row.rootCommentId) ? base + '#discussion_r' + row.rootCommentId : base;
-}
-
 // ── the digest comment ───────────────────────────────────────────────────────
 
 // The sweep marker record (dedup key: the PR number — a merged PR's head
