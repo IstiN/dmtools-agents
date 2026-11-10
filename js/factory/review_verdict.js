@@ -30,6 +30,37 @@
  *      failure (gh-305): ::error:: annotation, needs-human, per-source
  *      diagnosis comment, THROW (the sh exits 1 — the step must redden).
  *
+ * gh-1419 — machine verdict record primacy (the decision ladder): the
+ * finisher's PRIMARY input is the machine verdict record — the
+ * dmtools:review-verdict marker on the PR (head sha + effective verdict +
+ * census), read through the same js/common/reviewVerdicts.js reader the SM
+ * and the merge funnel use. The legacy token parser (run-output/comment
+ * grep) is the FALLBACK only and may never override the marker:
+ *   1. marker present for the PR's current head → its verdict governs; no
+ *      downgrade in any case (the #1410 pathology — the finisher's gh-71
+ *      `blocking === 0` heuristic downgraded a REQUEST_CHANGES the policy
+ *      layer had already recomputed, and stamped pr_approved beside an
+ *      armed agent:rework — is dead);
+ *   2. marker absent (pre-gh-807 shapes, another head, untrusted author, no
+ *      configured machine identity) → the legacy parser decides as before —
+ *      but a REQUEST_CHANGES-class token result NEVER arms pr_approved: an
+ *      approve contract carrying override=true (the gh-71 downgrade key
+ *      un-upgraded packs still emit) classifies REWORK, and
+ *      setup/review-verdict.sh — updated in the same commit, one source of
+ *      truth (the JS is canonical; the sh is the fallback parser) — no
+ *      longer downgrades at all;
+ *   3. marker and legacy parser disagree → LOUD escalation (needs-human +
+ *      diagnosis comment + THROW, the gh-305 "no verdict at all" treatment
+ *      extended to contradictory verdict sources) — never a silent approve
+ *      and never a silent rework.
+ * Approve-with-suggestions stays available through reviewPolicy (preset
+ * `relaxed` / the recompute layer's rework-tier-clean census rule) — the
+ * finisher stops re-implementing policy. Round bookeeping (rounds_done /
+ * next_round / escalate) comes from the parser's label census; when the
+ * effective rework decision rides a contract computed under an approve
+ * decision, the sh's cap rule is recomputed here so the round cap still
+ * fires.
+ *
  * Error contract mirrors the sh under `bash -e`: gh failures on the
  * load-bearing calls (pr list) propagate; tolerant calls keep the sh's
  * `|| true` / `|| echo ''` semantics (labels, comment sources, rollup,
@@ -57,6 +88,13 @@
  */
 
 var shellQuote = require('./token_usage.js').shellQuote;
+// gh-1419: the machine verdict record is read through the same reader the
+// SM and the merge funnel use (parseVerdictRecords / latestVerdictForHead),
+// and the marker trust allowlist splits the gh-728 comma-list knob through
+// machineAuthor.machineAuthorLogins. Both are pure js/common modules; the
+// requires are hoisted (gh-823: load-time requires resolve file-relative).
+var reviewVerdicts = require('../common/reviewVerdicts.js');
+var machineAuthor = require('../common/machineAuthor.js');
 
 var DEFAULT_RUN_OUTPUT = '.dmtools/run-output.txt';
 var CI_POLL_MS = 30000;
