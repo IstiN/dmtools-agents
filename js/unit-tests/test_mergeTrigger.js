@@ -137,6 +137,19 @@ function mergeGateModuleFor(mods, backstop) {
     });
 }
 
+// gh-1420: the merge-decision observability layer shares the backstop +
+// verdict-gate instances (the residue payload, headShaOf and the ONE
+// comment reader live there); the io bag arrives as a parameter, so no
+// engine globals bind here.
+function mergeNoteModuleFor(mods, backstop) {
+    return loadModule('js/common/mergeNote.js', makeRequire({
+        './mcpParse.js': mcpParseModule,
+        './reviewVerdicts.js': bsReviewVerdicts(),
+        './mergeBackstop.js': backstop,
+        './mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop)
+    }), {});
+}
+
 function loadMergeTrigger(mods) {
     var backstop = mergeBackstopModuleFor(mods);
     return loadModule('js/mergeTrigger.js',
@@ -144,7 +157,8 @@ function loadMergeTrigger(mods) {
             './common/mcpParse.js': mcpParseModule,
             './common/mergeBackstop.js': backstop,
             './common/mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop),
-            './common/mergeGate.js': mergeGateModuleFor(mods, backstop)
+            './common/mergeGate.js': mergeGateModuleFor(mods, backstop),
+            './common/mergeNote.js': mergeNoteModuleFor(mods, backstop)
         }), mods);
 }
 

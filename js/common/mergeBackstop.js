@@ -1246,6 +1246,8 @@ if (typeof module !== 'undefined' && module.exports) {
         appendThreadsToLedger: appendThreadsToLedger,
         censusNoteOf: censusNoteOf,
         buildDigestIssue: buildDigestIssue,
+        countedTableRows: countedTableRows,
+        humanTableRows: humanTableRows,
         deferredAck: deferredAck,
         belowThresholdAck: belowThresholdAck,
         buildDebtSearchQuery: buildDebtSearchQuery,

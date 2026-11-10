@@ -168,7 +168,15 @@ function loadLane(opts) {
             github_get_pr_comments: globals.github_get_pr_comments,
             github_create_comment: globals.github_create_comment
         }),
-        './common/mergeGate.js': mTwoStageGate(globals)
+        './common/mergeGate.js': mTwoStageGate(globals),
+        // gh-1420: the observability layer shares the lane's gate instances
+        // (the io bag arrives as a parameter — no globals bind here).
+        './common/mergeNote.js': loadModule('js/common/mergeNote.js', makeRequire({
+            './mcpParse.js': mcpParseModule,
+            './reviewVerdicts.js': mReviewVerdicts(),
+            './mergeBackstop.js': mMergeBackstop(globals || null),
+            './mergeVerdictGate.js': mGate(globals || null)
+        }), {})
     }), globals);
     return { lane: lane, calls: calls };
 }
