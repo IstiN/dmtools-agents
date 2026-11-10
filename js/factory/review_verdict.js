@@ -30,6 +30,42 @@
  *      failure (gh-305): ::error:: annotation, needs-human, per-source
  *      diagnosis comment, THROW (the sh exits 1 — the step must redden).
  *
+ * gh-1419 — machine verdict record primacy (the decision ladder): the
+ * finisher's PRIMARY input is the machine verdict record — the
+ * dmtools:review-verdict marker on the PR (head sha + effective verdict +
+ * census), read through the same js/common/reviewVerdicts.js reader the SM
+ * and the merge funnel use. The legacy token parser (run-output/comment
+ * grep) is the FALLBACK only and may never override the marker:
+ *   1. marker present for the PR's current head → its verdict governs; no
+ *      downgrade in any case (the #1410 pathology — the finisher's gh-71
+ *      `blocking === 0` heuristic downgraded a REQUEST_CHANGES the policy
+ *      layer had already recomputed, and stamped pr_approved beside an
+ *      armed agent:rework — is dead);
+ *   2. marker absent (pre-gh-807 shapes, another head, untrusted author, no
+ *      configured machine identity) → the legacy parser decides as before —
+ *      but a REQUEST_CHANGES-class token result NEVER arms pr_approved: an
+ *      approve contract carrying override=true (the gh-71 downgrade key
+ *      un-upgraded packs still emit) classifies REWORK, and
+ *      setup/review-verdict.sh — updated in the same commit, one source of
+ *      truth (the JS is canonical; the sh is the fallback parser) — no
+ *      longer downgrades at all;
+ *      a FAILED head probe (trusted records exist, the headRefOid
+ *      transport fails) is none of the invisible causes above: the marker
+ *      may be for THIS head, so the parser still decides but its approve
+ *      side is suppressed — rework is the safe side, the genuine approve
+ *      re-arrives on a re-run once gh recovers (never fail-open);
+ *   3. marker and legacy parser disagree → LOUD escalation (needs-human +
+ *      diagnosis comment + THROW, the gh-305 "no verdict at all" treatment
+ *      extended to contradictory verdict sources) — never a silent approve
+ *      and never a silent rework.
+ * Approve-with-suggestions stays available through reviewPolicy (preset
+ * `relaxed` / the recompute layer's rework-tier-clean census rule) — the
+ * finisher stops re-implementing policy. Round bookeeping (rounds_done /
+ * next_round / escalate) comes from the parser's label census; when the
+ * effective rework decision rides a contract computed under an approve
+ * decision, the sh's cap rule is recomputed here so the round cap still
+ * fires.
+ *
  * Error contract mirrors the sh under `bash -e`: gh failures on the
  * load-bearing calls (pr list) propagate; tolerant calls keep the sh's
  * `|| true` / `|| echo ''` semantics (labels, comment sources, rollup,
@@ -57,6 +93,13 @@
  */
 
 var shellQuote = require('./token_usage.js').shellQuote;
+// gh-1419: the machine verdict record is read through the same reader the
+// SM and the merge funnel use (parseVerdictRecords / latestVerdictForHead),
+// and the marker trust allowlist splits the gh-728 comma-list knob through
+// machineAuthor.machineAuthorLogins. Both are pure js/common modules; the
+// requires are hoisted (gh-823: load-time requires resolve file-relative).
+var reviewVerdicts = require('../common/reviewVerdicts.js');
+var machineAuthor = require('../common/machineAuthor.js');
 
 var DEFAULT_RUN_OUTPUT = '.dmtools/run-output.txt';
 var CI_POLL_MS = 30000;
@@ -158,6 +201,176 @@ function basenameNoJson(p) {
     return b.replace(/\.json$/, '');
 }
 
+// ── gh-1419: machine verdict record primacy (pure helpers) ──────────────────
+
+/**
+ * Parses the machine verdict records out of the finisher's PR-comments
+ * payload — the `gh pr view --json comments,reviews` jq shape flattens the
+ * author to the login STRING, while the marker readers key authorship on
+ * user|author objects (machineAuthor.commentAuthorLogin), so each item is
+ * re-shaped before the shared parse. Probe/fetch failure (payload null,
+ * unparseable, non-array) → [] — no marker, the legacy fallback decides.
+ * The gh-728 allowlist gates trust: no configured machine identity → no
+ * records (the machineAuthor doctrine — unconfigured trusts nothing).
+ */
+function normalizedMarkerComment(item) {
+    var it = item || {};
+    var author = it.author;
+    return {
+        author: (author && typeof author === 'object') ? author : { login: String(author || '') },
+        body: it.body
+    };
+}
+
+function normalizedMarkerComments(list) {
+    var normalized = [];
+    for (var i = 0; i < list.length; i++) {
+        normalized.push(normalizedMarkerComment(list[i]));
+    }
+    return normalized;
+}
+
+function markerRecordsFromPayload(payload, authorLogins) {
+    if (!payload) return [];
+    var list;
+    try { list = JSON.parse(payload); } catch (e) { return []; }
+    if (!Array.isArray(list)) return [];
+    try {
+        return reviewVerdicts.parseVerdictRecords(normalizedMarkerComments(list),
+            { authorLogins: authorLogins || [] });
+    } catch (e) { return []; }
+}
+
+/**
+ * The newest marker record for the PR's current head, or null when the
+ * head has none (another head, empty head probe) — the shared prefix-aware
+ * head matching (sameHead) rides reviewVerdicts.latestVerdictForHead, the
+ * exact read the SM's arming gate and the merge funnel make.
+ */
+function markerForHead(records, headSha) {
+    var effective = reviewVerdicts.latestVerdictForHead(records || [], headSha);
+    return effective ? effective.record : null;
+}
+
+/** APPROVE rides the approve path; REQUEST_CHANGES/BLOCK ride rework. */
+function verdictClassOfVerdict(verdict) {
+    return String(verdict || '').toUpperCase() === 'APPROVE' ? 'approve' : 'rework';
+}
+
+/** The gh-71 downgrade key: a truthy override (true | 'true') marks a
+ * REQUEST_CHANGES the old parser downgraded by zero blocking — it can
+ * never classify approve (gh-1419 AC2). */
+function isDowngradeOverride(override) {
+    return override === true || override === 'true';
+}
+
+/**
+ * The legacy parser's verdict class from its contract, or null when it
+ * found no verdict. The `override` key IS the gh-71 downgrade (REQUEST_
+ * CHANGES downgraded by zero blocking) — it classifies REWORK, so the
+ * heuristic can never reach applyApproveVerdict as approve (gh-1419 AC2).
+ */
+function parserVerdictClassOf(contract) {
+    var decision = String((contract && contract.decision) || '');
+    if (decision === 'approve') {
+        return isDowngradeOverride(contract && contract.override) ? 'rework' : 'approve';
+    }
+    return decision === 'rework' ? 'rework' : null;
+}
+
+function parserContractField(contract, field, fallback) {
+    return String((contract && contract[field]) || fallback);
+}
+
+function verdictSourcesDisagree(markerClass, parserClass) {
+    return !!(markerClass && parserClass && markerClass !== parserClass);
+}
+
+/** The raw no-class fallback: the parser's contract token rides through
+ * ('unknown' default) so the log line and the loud no-verdict path keep
+ * the legacy shape byte-for-byte (gh-1419 parity note). */
+function rawParserDecisionOf(contract) {
+    return String((contract && contract.decision) || 'unknown');
+}
+
+/**
+ * The effective decision per the gh-1419 ladder (pure): the marker for the
+ * current head governs; the parser is the fallback and the cross-check.
+ * Returns { decision, source, marker } — or { conflict: { marker,
+ * parserClass, parserSource, parserOverride } } when the two trusted
+ * sources disagree (contradictory verdict sources → loud escalation).
+ * The third arg is the probe-failure state (trusted records exist but the
+ * head sha is unresolvable): the legacy parser still decides, but its
+ * approve side is suppressed — the marker may be for THIS head and a
+ * genuine REQUEST_CHANGES would then be bypassed by a parser approve
+ * (fail-safe: rework is the safe side; the approve re-arrives on a re-run
+ * once gh recovers and the marker resolves).
+ */
+function resolveEffectiveDecision(marker, contract, headUnresolvable) {
+    var markerClass = marker ? verdictClassOfVerdict(marker.verdict) : null;
+    var parserClass = parserVerdictClassOf(contract);
+    if (verdictSourcesDisagree(markerClass, parserClass)) {
+        return { conflict: {
+            marker: marker,
+            parserClass: parserClass,
+            parserSource: parserContractField(contract, 'source', 'none'),
+            parserOverride: parserContractField(contract, 'override', 'false')
+        } };
+    }
+    if (markerClass) {
+        return { decision: markerClass, source: 'machine-verdict-marker', marker: marker };
+    }
+    if (headUnresolvable && parserClass === 'approve') parserClass = 'rework';
+    return {
+        decision: parserClass || rawParserDecisionOf(contract),
+        source: 'legacy-parser',
+        marker: null
+    };
+}
+
+/**
+ * The sh's round-cap rule recomputed over a contract that was computed
+ * under a non-rework decision (the gh-71 downgrade path, or no verdict at
+ * all): the sh advances next_round / sets escalate only under its own
+ * `decision=rework`, so a marker-governed (or override-neutralized) rework
+ * recomputes it here — the cap still fires instead of re-arming the same
+ * round forever. Garbage maxRounds rides the sh default 2.
+ */
+function reworkRoundBookeeping(contract, maxRounds) {
+    var roundsDone = parseInt(contract.rounds_done, 10) || 0;
+    var cap = parseInt(maxRounds, 10);
+    if (isNaN(cap)) cap = 2;
+    if (roundsDone >= cap) {
+        contract.escalate = true;
+        contract.next_round = roundsDone;
+    } else {
+        contract.escalate = false;
+        contract.next_round = roundsDone + 1;
+    }
+}
+
+/** The pure conflicting-verdicts diagnosis comment body (gh-1419). */
+function buildConflictingVerdictsComment(conflict) {
+    var m = conflict.marker;
+    var census = 'blocking=' + reviewVerdicts.censusCount(m.blocking) +
+        ', important=' + reviewVerdicts.censusCount(m.important) +
+        ', suggestions=' + reviewVerdicts.censusCount(m.suggestions) +
+        ', nits=' + reviewVerdicts.censusCount(m.nits) +
+        ', digest=' + reviewVerdicts.censusCount(m.digest);
+    return [
+        '🛑 **Contradictory review verdicts** — the machine verdict record and the legacy verdict parser disagree, so the review cycle cannot be labeled (gh-1419).',
+        '',
+        '- Machine verdict record (primary): **' + m.verdict + '** on head `' + String(m.head).substring(0, 12) +
+            '` — census ' + census + ' (at ' + (m.at || 'unknown time') + ', source: ' + m.source + ')',
+        '- Legacy parser (fallback): **' + (conflict.parserClass === 'approve' ? 'APPROVE' : 'REQUEST_CHANGES-class') +
+            '** (source: ' + conflict.parserSource + ', override: ' + conflict.parserOverride + ')',
+        '',
+        'The machine marker governs by default (gh-1419) — a disagreement means one of the two sources is stale or forged, and neither a silent approve nor a silent rework is acceptable.',
+        '',
+        '_Next step (human):_ reconcile the two sources above, then label `pr_approved` (approve) or `agent:rework` (changes requested) — or re-label `agent:review` for a fresh review leg.'
+    ].join('\n') + '\n';
+}
+
 // ── orchestration (capturer-injected) ────────────────────────────────────────
 
 /** The entry's exec unwrap (no trim: body/file paths ride verbatim).
@@ -235,10 +448,16 @@ function buildReviewContext(opts, io) {
 
     var prCommentsPath = io.tempFile('pr_comments.json');
     var issueCommentsPath = io.tempFile('issue_comments.json');
+    // gh-1419: the raw payload also feeds the machine-marker read (in
+    // memory — the file staging is the legacy parser's contract).
+    var prCommentsPayload = '';
     if (pr) {
         var pc = tryExec(io, 'gh pr view ' + q(pr) + ' --repo ' + q(repo) +
             " --json comments,reviews --jq '" + PR_COMMENTS_JQ + "'", null);
-        if (pc !== null) io.writeFile(prCommentsPath, pc);
+        if (pc !== null) {
+            prCommentsPayload = pc;
+            io.writeFile(prCommentsPath, pc);
+        }
     }
     var ic = tryExec(io, 'gh issue view ' + q(number) + ' --repo ' + q(repo) +
         " --json comments --jq '" + ISSUE_COMMENTS_JQ + "'", null);
@@ -254,6 +473,7 @@ function buildReviewContext(opts, io) {
         labels: labels,
         pr: pr,
         prCommentsPath: prCommentsPath,
+        prCommentsPayload: prCommentsPayload,
         issueCommentsPath: issueCommentsPath,
         machineAuthor: machineAuthor,
         verdictSh: verdictSh
@@ -293,8 +513,48 @@ function probeVerdictContract(opts, io, ctx) {
 
 function logDecisionLine(log, probed) {
     var contract = probed.contract;
-    log('→ review decision: ' + probed.decision + ' (source=' + (contract.source || 'none') +
+    // gh-1419 rework pickup (digest): when the machine marker governed,
+    // the line names the GOVERNING source — the legacy contract's parser
+    // source would misattribute the decision. Pre-marker flows keep the
+    // sh byte-exact decision line (contract.source || 'none').
+    var source = probed.verdictSource === 'machine-verdict-marker'
+        ? probed.verdictSource
+        : (contract.source || 'none');
+    log('→ review decision: ' + probed.decision + ' (source=' + source +
         ', override=' + (contract.override || 'false') + ', rounds_done=' + contract.rounds_done + ')');
+}
+
+// gh-1419: the machine verdict record probe — parse the trusted markers out
+// of the PR-comments payload, and only when one exists probe the PR's head
+// sha (lazy: no records → no probe, the transport stays in the parity
+// shape for pre-marker PRs) and take the newest record for THIS head. No
+// configured machine identity → no trusted records at all.
+function probeMachineVerdictMarker(opts, io, ctx) {
+    var logins = machineAuthor.machineAuthorLogins(ctx.machineAuthor);
+    ctx.headSha = '';
+    ctx.marker = null;
+    ctx.headUnresolvable = false;
+    if (!logins.length) return null;
+    var records = markerRecordsFromPayload(ctx.prCommentsPayload, logins);
+    if (!records.length) return null;
+    var headSha = ctx.pr ? headShaOf(io, opts.repo, ctx.pr) : '';
+    if (ctx.pr && !headSha) {
+        // gh-1419 rework: trusted records exist but WHICH head they sit on
+        // is unknown — never fail open to a parser approve here (the
+        // resolveEffectiveDecision guard keeps the parser on its safe
+        // side; the genuine approve re-arrives once gh recovers).
+        ctx.headUnresolvable = true;
+        ctx.log('::warning::machine verdict record(s) exist but the PR head sha is unresolvable (probe failure) — the legacy parser may decide on its safe side only (no approve)');
+    }
+    ctx.headSha = headSha;
+    ctx.marker = markerForHead(records, headSha);
+    if (ctx.marker) {
+        ctx.log('→ machine verdict record: ' + ctx.marker.verdict + ' on head ' +
+            String(headSha).substring(0, 8) + ' (blocking=' +
+            reviewVerdicts.censusCount(ctx.marker.blocking) + ', important=' +
+            reviewVerdicts.censusCount(ctx.marker.important) + ', source=' + ctx.marker.source + ')');
+    }
+    return ctx.marker;
 }
 
 // ── label/comment primitives (were applyReviewVerdict closures) ─────────────
@@ -426,6 +686,20 @@ function applyMissingVerdict(io, ctx) {
     throw new Error('review verdict missing — needs-human left behind, the cycle is stranded (gh-305; the sh exits 1)');
 }
 
+// gh-1419: the gh-305 loud treatment extended to CONTRADICTORY verdict
+// sources — the machine marker and the legacy parser disagree, so neither
+// a silent approve nor a silent rework is allowed (exit nonzero).
+function applyConflictingVerdicts(opts, io, ctx) {
+    var conflict = ctx.conflict;
+    ctx.log('::error::contradictory verdict sources — machine marker ' + conflict.marker.verdict +
+        ' vs legacy parser ' + conflict.parserClass + ' — the review cycle cannot be labeled (gh-1419)');
+    ensureLabel(io, ctx, 'needs-human', 'B60205');
+    addLabel(io, ctx, 'needs-human');
+    postIssueComment(io, ctx, buildConflictingVerdictsComment(conflict));
+    ctx.log('→ labeled needs-human — contradictory verdict sources need a human (gh-1419)');
+    throw new Error('contradictory review verdicts (machine marker vs legacy parser) — needs-human left behind, the cycle is stranded (gh-1419)');
+}
+
 // One rollup snapshot → 'green' | 'red' | 'pending' (empty lines skipped;
 // any red conclusion refuses the whole verdict).
 function assessRollup(states, pr, log) {
@@ -492,7 +766,8 @@ function applyApproveVerdict(opts, io, ctx) {
 /**
  * Apply the review verdict. See the header for opts/io and the statuses:
  * no-token | rework | escalated | approved | approve-no-pr | ci-red |
- * ci-timeout; throws on the loud no-verdict path (exit-1 parity).
+ * ci-timeout; throws on the loud no-verdict and contradictory-verdict
+ * paths (exit-1 parity).
  */
 function applyReviewVerdict(opts, io) {
     opts = opts || {};
@@ -502,11 +777,52 @@ function applyReviewVerdict(opts, io) {
     var ctx = buildReviewContext(opts, io);
     var probed = probeVerdictContract(opts, io, ctx);
     ctx.contract = probed.contract;
-    ctx.decision = probed.decision;
-    logDecisionLine(ctx.log, probed);
+    wireEffectiveDecision(opts, io, ctx);
+    logDecisionLine(ctx.log, {
+        contract: ctx.contract,
+        decision: ctx.decision,
+        verdictSource: ctx.verdictSource
+    });
     if (ctx.decision === 'rework') return applyReworkVerdict(opts, io, ctx);
     if (ctx.decision !== 'approve') return applyMissingVerdict(io, ctx);
     return applyApproveVerdict(opts, io, ctx);
+}
+
+// ── gh-1419: the post-probe decision wiring (marker primacy) ────────────────
+
+/** The rework round-cap recompute guard: the sh computes its cap only under
+ * its own rework decision — a marker-governed (or override-neutralized)
+ * rework over an approve/unknown contract recomputes it. */
+function decisionNeedsRoundRecompute(resolved, contract) {
+    return resolved.decision === 'rework' && String((contract && contract.decision) || '') !== 'rework';
+}
+
+/** Wires the resolved decision onto ctx (decision + verdict source +
+ * round bookeeping). */
+function applyDecisionToContext(ctx, resolved, opts) {
+    if (decisionNeedsRoundRecompute(resolved, ctx.contract)) {
+        reworkRoundBookeeping(ctx.contract, opts.maxRounds);
+    }
+    ctx.decision = resolved.decision;
+    ctx.verdictSource = resolved.source;
+}
+
+/**
+ * gh-1419: probe the machine marker, resolve the ladder, and wire the
+ * effective decision onto ctx. Contradictory verdict sources escalate
+ * LOUDLY here (needs-human + diagnosis comment) and THROW — applyReview
+ * Verdict never returns on that path (the gh-305 exit-1 contract extended
+ * to contradictory sources).
+ */
+function wireEffectiveDecision(opts, io, ctx) {
+    probeMachineVerdictMarker(opts, io, ctx);
+    var resolved = resolveEffectiveDecision(ctx.marker, ctx.contract, ctx.headUnresolvable);
+    if (resolved.conflict) {
+        ctx.conflict = resolved.conflict;
+        applyConflictingVerdicts(opts, io, ctx);
+        return;
+    }
+    applyDecisionToContext(ctx, resolved, opts);
 }
 
 // ── gh-1101: kick one SM tick on approval when the head is already green ──
@@ -591,6 +907,17 @@ module.exports = {
     verdictParserCommand: verdictParserCommand,
     probeVerdictContract: probeVerdictContract,
     logDecisionLine: logDecisionLine,
+    markerRecordsFromPayload: markerRecordsFromPayload,
+    markerForHead: markerForHead,
+    verdictClassOfVerdict: verdictClassOfVerdict,
+    parserVerdictClassOf: parserVerdictClassOf,
+    resolveEffectiveDecision: resolveEffectiveDecision,
+    reworkRoundBookeeping: reworkRoundBookeeping,
+    buildConflictingVerdictsComment: buildConflictingVerdictsComment,
+    applyConflictingVerdicts: applyConflictingVerdicts,
+    probeMachineVerdictMarker: probeMachineVerdictMarker,
+    wireEffectiveDecision: wireEffectiveDecision,
+    decisionNeedsRoundRecompute: decisionNeedsRoundRecompute,
     stripRoundLabels: stripRoundLabels,
     ensureLabel: ensureLabel,
     addLabel: addLabel,

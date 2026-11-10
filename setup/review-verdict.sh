@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # review-verdict.sh — pure decision logic for the ai-teammate review loop
-# (gh-71: cap auto-rework rounds + make approve-with-suggestions real).
+# (gh-71: cap auto-rework rounds. gh-1419: the gh-71 approve-with-suggestions
+# DOWNGRADE is removed — REQUEST_CHANGES is rework, always).
+#
+# ONE SOURCE OF TRUTH (gh-1419): the JS finisher js/factory/review_verdict.js
+# is the canonical verdict resolver — it reads the machine verdict record
+# (the dmtools:review-verdict marker, js/common/reviewVerdicts.js) as its
+# primary input and consumes this script's key=value contract as the FALLBACK
+# parser only. This script is updated in the same commit so the two cannot
+# drift; an un-upgraded pack that still emits the old override=true downgrade
+# key is neutralized by the JS (it classifies rework, never approve).
 #
 # The workflow step (factory-teammate.yml → "Apply the review verdict")
 # is a thin wrapper around this script: gh/network calls stay there, every
@@ -27,9 +36,14 @@
 #       Emits one `key=value` assignment per line (eval-safe):
 #         decision=approve|rework|unknown
 #         source=pr_review_json|run_output|pr_comments|issue_comments|none
-#         override=true|false   REQUEST_CHANGES downgraded by zero blocking
-#         blocking_markers=<int> inline comments that are blocking regardless
-#                               of the issueCounts counter (override gate)
+#         override=false         always false — gh-1419 removed the gh-71
+#                                downgrade of REQUEST_CHANGES with zero
+#                                blocking (approve-with-suggestions is
+#                                expressed through reviewPolicy, not a
+#                                heuristic); the key stays for parser
+#                                compatibility
+#         blocking_markers=<int> inline comments carrying a BLOCKING marker
+#                                (diagnosis only — gates nothing since gh-1419)
 #         rounds_done=<int>     completed auto-rework rounds (from labels)
 #         next_round=<int>      round this rework verdict would start
 #         escalate=true|false   cap reached → needs-human instead of rework
@@ -45,10 +59,11 @@
 #
 # Verdict resolution order (gh-305 hardened — a silent skip strands the
 # cycle post-review: no REQUEST_CHANGES → rework, no approval → merge):
-#   1. pr_review.json `recommendation` (or `verdict`) — authoritative; a
-#      REQUEST_CHANGES with zero BLOCKING findings is downgraded to approve
-#      per the review protocol (only correctness/bug findings block;
-#      allowApproveWithSuggestions=true on this machine).
+#   1. pr_review.json `recommendation` (or `verdict`) — authoritative;
+#      REQUEST_CHANGES/BLOCK → rework, always. gh-1419 removed the gh-71
+#      zero-blocking downgrade: the effective verdict is recomputed from the
+#      severity census + the resolved reviewPolicy upstream (gh-1351), and a
+#      hardcoded blocking===0 heuristic here must never override it.
 #   2. Token-grep of the run output — legacy fallback when no JSON was
 #      written; changes/BLOCK tokens win over approve tokens.
 #   3. Token-grep of the PR's comments + review bodies — recovers the
@@ -85,14 +100,12 @@ read_review_json() {
     printf '%s|%s\n' "$rec" "$blocking"
 }
 
-# Self-consistency guard for the blocking-0 override (gh-71 review): the
-# issueCounts counter is written by the same reviewer that produced the
-# verdict, so a misclassified finding must not convert an explicit
-# REQUEST_CHANGES into an approval. Counts inline comments that are
-# blocking regardless of the counter:
+# Counts inline comments that are blocking regardless of the issueCounts
+# counter (gh-1419: DIAGNOSIS ONLY — the decision no longer depends on it;
+# the old gh-71 self-consistency override gate is gone with the downgrade):
 #   1. a `severity` field of "BLOCKING" (the protocol's structured marker), or
 #   2. a referenced comment file carrying the 🚨 marker (the protocol's
-#      every-BLOCKING-comment prefix) — catches a mislabeled severity.
+#      every-BLOCKING-comment prefix).
 # Comment paths resolve repo-root-relative first (the schema's
 # "outputs/pr_review_comments/…" form), then relative to the JSON's dir.
 inline_blocking_markers() {
@@ -166,7 +179,7 @@ read_comments_verdict() {
 
 decide() {
     local decision="unknown" source="none" override="false"
-    local rec="" blocking="" review_json_file=""
+    local rec="" blocking="" review_json_file="" markers=0
 
     # Per-source outcome for the diagnosable marker (gh-305): absent (input
     # not provided) / missing (file not readable) / malformed (unreadable
@@ -197,8 +210,7 @@ decide() {
         if [ "$i" -eq 1 ]; then d_json1="malformed"; else d_json2="malformed"; fi
     done
 
-    # 2) Legacy fallback: grep the run output for verdict tokens. No issue
-    # counts exist here, so the blocking-0 override never applies.
+    # 2) Legacy fallback: grep the run output for verdict tokens.
     if [ -z "$rec" ]; then
         if [ -z "${RUN_OUTPUT:-}" ]; then
             d_run="absent"
@@ -219,9 +231,8 @@ decide() {
     # 3+4) Comments the leg itself wrote (gh-305): the PR's comments +
     # review bodies, then the issue's comments. A run output truncated by
     # a crash (or a lost pr_review.json) must not strand the cycle when
-    # the agent did record its verdict in a comment — and a verdict found
-    # here carries no issue counts, so the blocking-0 override never
-    # applies (same as the run-output path).
+    # the agent did record its verdict in a comment (gh-1419: a verdict
+    # found here is a plain token read — rework never downgrades).
     if [ -z "$rec" ]; then
         if [ -z "${PR_COMMENTS_JSON:-}" ]; then
             d_prc="absent"
@@ -260,24 +271,13 @@ decide() {
             decision="approve"
             ;;
         REQUEST_CHANGES)
-            # Protocol (gh-71): CHANGES_REQUESTED only for correctness/bug
-            # findings. blocking==0 → nothing correctness-level was reported,
-            # so the verdict converges to approve (approve-with-suggestions).
-            # A non-numeric blocking count is treated as blocking (safe side).
-            # Cross-check (gh-71 review): the override additionally requires
-            # the review's own inline comments to agree on zero blocking —
-            # a miscounted severity must not auto-merge the PR.
-            local markers
+            # gh-1419: REQUEST_CHANGES is rework, ALWAYS. The legacy gh-71
+            # zero-blocking downgrade is gone — approve-with-suggestions is
+            # expressed through reviewPolicy (the recompute layer, gh-1351),
+            # never a blocking===0 heuristic in the finisher. The inline
+            # blocking markers stay in the emitted contract as diagnosis.
             markers="$(inline_blocking_markers "$review_json_file")"
-            if [ "$source" = "pr_review_json" ] \
-                && [ "${blocking:-0}" -eq 0 ] 2>/dev/null \
-                && [ "${markers:-0}" -eq 0 ]; then
-                decision="approve"
-                override="true"
-                echo "WARNING: REQUEST_CHANGES with 0 blocking findings → approve (approve-with-suggestions, gh-71)" >&2
-            else
-                decision="rework"
-            fi
+            decision="rework"
             ;;
         BLOCK)
             decision="rework"

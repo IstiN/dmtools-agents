@@ -125,10 +125,13 @@ suite('setup/review-verdict.sh: verdict fallback chain (gh-305)', function () {
         assert.equal(r.source, 'pr_review_json');
     });
 
-    test('pr_review.json REQUEST_CHANGES with 0 blocking → approve (override)', function () {
-        var r = rvDecide({ reviewJson: '{"recommendation":"REQUEST_CHANGES","issueCounts":{"blocking":0}}' });
-        assert.equal(r.decision, 'approve');
-        assert.equal(r.override, 'true');
+    test('pr_review.json REQUEST_CHANGES with 0 blocking → rework (gh-1419 removed the downgrade)', function () {
+        // gh-1419: the gh-71 zero-blocking downgrade is gone — the effective
+        // verdict is recomputed upstream from the census + reviewPolicy, and
+        // the finisher's marker governs; this parser never re-implements it.
+        var r = rvDecide({ reviewJson: '{"recommendation":"REQUEST_CHANGES","issueCounts":{"blocking":0,"important":1}}' });
+        assert.equal(r.decision, 'rework');
+        assert.equal(r.override, 'false', 'the downgrade key is gone — always false for parser compatibility');
     });
 
     test('pr_review.json verdict=BLOCK → rework', function () {

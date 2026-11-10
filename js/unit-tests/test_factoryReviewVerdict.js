@@ -28,8 +28,16 @@
 var assert = globalThis.assert;
 
 var tokenUsageModule = loadModule('js/factory/token_usage.js', makeRequire({}, {}), {});
+// gh-1419: the finisher reads the machine verdict record through the SAME
+// reader the SM and the merge funnel use (js/common/reviewVerdicts.js).
+var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}, {}), {});
+var reviewVerdictsModule = loadModule('js/common/reviewVerdicts.js', makeRequire({
+    './machineAuthor.js': machineAuthorModule
+}), {});
 var rvModule = loadModule('js/factory/review_verdict.js', makeRequire({
-    './token_usage.js': tokenUsageModule
+    './token_usage.js': tokenUsageModule,
+    '../common/reviewVerdicts.js': reviewVerdictsModule,
+    '../common/machineAuthor.js': machineAuthorModule
 }), {});
 
 var RUN_URL_NA = null; // (verdict step has no run url — keep the linter calm)
@@ -120,18 +128,27 @@ function baseRules(over) {
     ];
 }
 
+// gh-1419 rework: a tiny defaults helper — the CRAP ratchet reds on chains
+// of ternary/`||` default branches (contractLines grandfathered at 9,
+// markerBody new over the threshold-8 bar); optVal collapses each default
+// to a plain call (the review thread's suggested fix). EXACT `!== undefined`
+// semantics — never the truthy `||` (a `source: ''` override must survive).
+function optVal(over, key, fallback) {
+    return over[key] !== undefined ? over[key] : fallback;
+}
+
 // the contract the stubbed parser emits (eval-safe key=value, like the
 // awf A/B scenario's setup/review-verdict.sh stub)
 function contractLines(over) {
     over = over || {};
     return [
         'decision=' + (over.decision || 'unknown'),
-        'source=' + (over.source !== undefined ? over.source : 'stub-source'),
-        'override=false',
-        'rounds_done=' + (over.roundsDone !== undefined ? over.roundsDone : '2'),
-        'next_round=' + (over.nextRound !== undefined ? over.nextRound : '3'),
+        'source=' + optVal(over, 'source', 'stub-source'),
+        'override=' + optVal(over, 'override', 'false'),
+        'rounds_done=' + optVal(over, 'roundsDone', '2'),
+        'next_round=' + optVal(over, 'nextRound', '3'),
         'escalate=' + (over.escalate || 'false'),
-        'round_labels=' + (over.roundLabels !== undefined ? over.roundLabels : 'rework-round-2'),
+        'round_labels=' + optVal(over, 'roundLabels', 'rework-round-2'),
         'diagnosis="' + (over.diagnosis || 'pr_review.json=present run-output=missing') + '"'
     ].join('\n');
 }
@@ -1204,4 +1221,427 @@ suite('factoryReviewVerdict — entry action seams (gh-1196)', function () {
     var r = entry.action(gh1196Params(), {});
     assert.equal(r.status, 'rework', 'the typeof-global seam fallbacks are the production path');
   });
+});
+
+// ── gh-1419: machine verdict record primacy ─────────────────────────────────
+// The finisher consumes the dmtools:review-verdict marker (the same reader
+// the SM and the merge funnel use — js/common/reviewVerdicts.js) as its
+// primary input; the legacy token parser is the fallback only and can never
+// override the marker. The gh-71 rule (REQUEST_CHANGES with zero BLOCKING
+// findings downgraded to approve) is gone: an approve contract carrying
+// override=true (the downgrade key un-upgraded packs still emit) classifies
+// REWORK and can never reach applyApproveVerdict as approve.
+
+var MARKER_SHA = 'aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44';
+var MARKER_SHA_OTHER = 'ff11bb22cc33dd44ee55ff66aa11bb22cc33ddaa';
+
+function markerBody(verdict, head, over) {
+    over = over || {};
+    var payload = {
+        head: head || MARKER_SHA,
+        verdict: verdict,
+        blocking: optVal(over, 'blocking', 0),
+        important: optVal(over, 'important', 0),
+        suggestions: optVal(over, 'suggestions', 0),
+        nits: over.nits || 0,
+        digest: over.digest || 0,
+        at: over.at || '2026-11-09T15:42:57Z',
+        source: over.source || 'pr_review.json'
+    };
+    return '<!-- dmtools:review-verdict ' + JSON.stringify(payload) +
+        ' -->\n🤖 Automated review record. Please do not edit or reply.';
+}
+
+function markerCommentJson(verdict, head, over) {
+    return JSON.stringify([{
+        author: (over && over.author) || 'machine-reviewer[bot]',
+        body: markerBody(verdict, head, over)
+    }]);
+}
+
+// baseRules with the PR comments payload replaced (the marker rides the
+// comments+reviews fetch) and the PR head sha probed (lazy: only when a
+// trusted marker record exists). headSha=null simulates a FAILED probe —
+// the headRefOid transport throws (rate limit / network blip) — the
+// gh-1419 rework gap: trusted records exist but WHICH head is unknown.
+function markerRules(prComments, headSha, over) {
+    var rules = baseRules(over).map(function (r) {
+        return r[0] === 'pr view.*--json comments,reviews' ? [r[0], r[1], prComments] : r;
+    });
+    if (headSha === null) rules.push(['headRefOid', 'throw', 'rate limit exceeded']);
+    else if (headSha !== undefined) rules.push(['headRefOid', 'out', headSha + '\n']);
+    return rules;
+}
+
+function markerScenario(prComments, contractOver, headSha, rulesOver, threadsOut) {
+    var st = withParser(execStub(markerRules(prComments, headSha, rulesOver)),
+        contractLines(contractOver), threadsOut);
+    var io = ioStub(st);
+    return { st: st, io: io };
+}
+
+suite('factoryReviewVerdict — machine verdict record primacy (gh-1419)', function () {
+
+  test('AC1a: marker REQUEST_CHANGES (blocking:0, important:1) governs — rework path, no pr_approved, no downgrade', function () {
+    // The legacy parser contract still carries the OLD gh-71 downgrade
+    // shape (approve + override=true, an un-upgraded pack) — the marker
+    // overrides it; the override key is neutralized to rework either way.
+    var x = markerScenario(
+        markerCommentJson('REQUEST_CHANGES', MARKER_SHA, { important: 1 }),
+        { decision: 'approve', override: 'true', roundsDone: 0, nextRound: 0 },
+        MARKER_SHA);
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'rework');
+    var all = x.st.commands.join('\n');
+    assert.equal(all.indexOf('pr_approved') !== -1, false, 'pr_approved must never arm off a REQUEST_CHANGES marker');
+    assert.ok(all.indexOf("--add-label 'agent:rework'") !== -1, 'the rework path armed');
+    assert.ok(all.indexOf("--add-label 'rework-round-1'") !== -1,
+      'the round bookeeping was recomputed for the marker-governed rework (contract said approve)');
+    var logs = x.io.logs.join('\n');
+    assert.ok(logs.indexOf('→ machine verdict record: REQUEST_CHANGES') !== -1,
+      'the governing marker is named in the log');
+    assert.ok(logs.indexOf('→ review decision: rework') !== -1, 'the effective decision is rework');
+    assert.ok(logs.indexOf('override=true') !== -1, 'the neutralized override key stays visible in the decision line');
+    assert.ok(logs.indexOf('(source=machine-verdict-marker,') !== -1,
+      'the decision line names the GOVERNING source, not the parser contract source (digest: verdictSource was set but never read)');
+  });
+
+  test('AC1b: marker APPROVE governs — approve path with the green-checks gate unchanged', function () {
+    var x = markerScenario(
+        markerCommentJson('APPROVE', MARKER_SHA),
+        { decision: 'approve' },
+        MARKER_SHA,
+        { rollup: 'SUCCESS\nSKIPPED\n' });
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'approved');
+    var all = x.st.commands.join('\n');
+    assert.ok(all.indexOf("--add-label 'pr_approved'") !== -1);
+    assert.ok(x.io.logs.join('\n').indexOf('→ PR #' + PR + ' checks green') !== -1,
+      'the green-checks gate still ran');
+    var headProbe = x.st.commands.filter(function (c) { return c.indexOf('headRefOid') !== -1; });
+    assert.ok(headProbe.length >= 1, 'the head sha was probed (marker records exist; the gh-1101 SM kick probes it again on approval)');
+  });
+
+  test('AC1c: marker absent + legacy parser says rework — rework path, never approve, no head probe', function () {
+    // Pre-gh-807 shape: the comments payload carries NO marker (a plain
+    // trusted-bot REQUEST_CHANGES token comment does not exist for the
+    // marker reader).
+    var x = markerScenario(
+        '[{"author":"machine-reviewer[bot]","body":"REQUEST_CHANGES — see inline findings"}]',
+        { decision: 'rework' });
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'rework');
+    var all = x.st.commands.join('\n');
+    assert.equal(all.indexOf('pr_approved') !== -1, false);
+    assert.equal(all.indexOf('headRefOid') !== -1, false,
+      'no marker records → the head probe never runs (lazy; keeps the transport parity-shape)');
+    assert.equal(x.io.logs.join('\n').indexOf('→ machine verdict record:') !== -1, false);
+  });
+
+  test('AC1d: marker absent + legacy parser says approve — the legacy fail-open is preserved', function () {
+    var x = markerScenario(
+        '[{"author":"machine-reviewer[bot]","body":"LGTM — approving this one"}]',
+        { decision: 'approve' });
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'approved');
+    assert.ok(x.st.commands.join('\n').indexOf("--add-label 'pr_approved'") !== -1);
+  });
+
+  test('AC1e: marker APPROVE vs parser rework — needs-human escalation + diagnosis comment + THROWS', function () {
+    var x = markerScenario(
+        markerCommentJson('APPROVE', MARKER_SHA),
+        { decision: 'rework' },
+        MARKER_SHA);
+    var threw = null;
+    try { rvModule.applyReviewVerdict(baseOpts(), x.io); } catch (e) { threw = e; }
+    assert.ok(threw, 'the disagreement must exit nonzero (the gh-305 exit-1 contract)');
+    assert.ok(String(threw && threw.message || threw).indexOf('contradictory review verdicts') !== -1);
+    var logs = x.io.logs.join('\n');
+    assert.ok(logs.indexOf('::error::contradictory verdict sources') !== -1);
+    var creates = x.st.commands.filter(function (c) { return c.indexOf('label create') !== -1; });
+    assert.ok(creates.join('\n').indexOf("'needs-human'") !== -1);
+    assert.ok(creates.join('\n').indexOf("'B60205'") !== -1);
+    var adds = x.st.commands.filter(function (c) { return c.indexOf('--add-label') !== -1; });
+    assert.ok(adds.join('\n').indexOf("--add-label 'needs-human'") !== -1);
+    var commentCmds = x.st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
+    var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
+    var body = x.io.written[bodyPath];
+    assert.ok(body.indexOf('**APPROVE**') !== -1, 'the comment names the marker verdict');
+    assert.ok(body.indexOf('REQUEST_CHANGES-class') !== -1, 'the comment names the parser class');
+    assert.ok(body.indexOf('machine-reviewer[bot]') === -1,
+      'the comment names the verdict sources, not the author login');
+    assert.ok(body.indexOf('(gh-1419)') !== -1);
+    assert.ok(body.indexOf('nits=') !== -1 && body.indexOf('digest=') !== -1,
+      'the census names the FULL severity census — nits and digest included (digest item)');
+    assert.equal(x.st.commands.join('\n').indexOf('pr_approved') !== -1, false);
+    assert.equal(x.st.commands.join('\n').indexOf('agent:rework') !== -1, false,
+      'no silent rework either — a disagreement is escalated, not dispatched');
+  });
+
+  test('AC1f: marker REQUEST_CHANGES vs parser approve — escalated, NEVER approved', function () {
+    var x = markerScenario(
+        markerCommentJson('REQUEST_CHANGES', MARKER_SHA, { important: 1 }),
+        { decision: 'approve', override: 'false' },
+        MARKER_SHA);
+    var threw = null;
+    try { rvModule.applyReviewVerdict(baseOpts(), x.io); } catch (e) { threw = e; }
+    assert.ok(threw, 'the disagreeing approve must not survive');
+    assert.equal(x.st.commands.join('\n').indexOf('pr_approved') !== -1, false,
+      'the #1410 pathology is dead: a REQUEST_CHANGES marker can never end in pr_approved');
+    assert.equal(x.st.commands.join('\n').indexOf('agent:rework') !== -1, false,
+      'a disagreement escalates instead of dispatching on the marker');
+  });
+
+  test('AC1g: marker for a different head sha does not govern — the legacy fallback rules apply (rule 1 bullet 2)', function () {
+    // The marker is for an older head; the current head has no marker, so
+    // the legacy parser decides — including the override neutralization.
+    var x = markerScenario(
+        markerCommentJson('REQUEST_CHANGES', MARKER_SHA_OTHER, { important: 1 }),
+        { decision: 'approve' },
+        MARKER_SHA);
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'approved',
+      'the stale-head marker does not govern; the parser approve (override=false) is a genuine approve');
+    var headProbe = x.st.commands.filter(function (c) { return c.indexOf('headRefOid') !== -1; });
+    assert.ok(headProbe.length >= 1, 'the head was probed to filter the marker records');
+    assert.equal(x.io.logs.join('\n').indexOf('→ machine verdict record:') !== -1, false,
+      'no marker for THIS head → no marker-governs log');
+  });
+
+  test('AC1h: trusted marker records exist but the head probe FAILS — the parser can never classify approve (no fail-open)', function () {
+    // The review thread's gap: a trusted REQUEST_CHANGES marker sits on
+    // SOME head — quite possibly this one — and a transient gh failure
+    // (rate limit, network blip) hides WHICH. The header's invisible-list
+    // (pre-gh-807 shape / another head / untrusted author / no identity)
+    // does not cover a FAILED probe: failing open to a legacy approve
+    // contract would re-enter the #1410 pathology through the one branch
+    // the ladder doesn't guard. The safe side: the parser's approve is
+    // suppressed (rework dispatches); the genuine approve re-arrives on a
+    // re-run once gh recovers and the marker resolves for this head.
+    var x = markerScenario(
+        markerCommentJson('REQUEST_CHANGES', MARKER_SHA, { important: 1 }),
+        { decision: 'approve', override: 'false', roundsDone: 0, nextRound: 0 },
+        null); // the headRefOid transport throws
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'rework',
+      'unresolvable head + trusted records → the parser approve is suppressed (fail-safe)');
+    var all = x.st.commands.join('\n');
+    assert.equal(all.indexOf("--add-label 'pr_approved'") !== -1, false,
+      'the #1410 approve path must not arm through a failed head probe');
+    assert.ok(all.indexOf("--add-label 'agent:rework'") !== -1, 'the rework path armed');
+    assert.ok(all.indexOf("--add-label 'rework-round-1'") !== -1,
+      'the round bookeeping was recomputed for the safe-side rework over an approve contract');
+    var logs = x.io.logs.join('\n');
+    assert.ok(logs.indexOf('head sha is unresolvable') !== -1,
+      'the failed probe is named loudly (not a silent reclassification)');
+    assert.equal(logs.indexOf('→ machine verdict record:') !== -1, false,
+      'no marker matched an unresolvable head → no marker-governs log');
+  });
+
+  test('rule 1 bullet 2 holds for a stale-head marker too — override=true still never approves', function () {
+    var x = markerScenario(
+        markerCommentJson('REQUEST_CHANGES', MARKER_SHA_OTHER),
+        { decision: 'approve', override: 'true', roundsDone: 0, nextRound: 0 },
+        MARKER_SHA);
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'rework',
+      'marker absent for this head → legacy fallback, and the downgrade key classifies rework');
+    assert.equal(x.st.commands.join('\n').indexOf('pr_approved') !== -1, false);
+  });
+
+  test('AC2: approve + override=true with the marker absent — rework, never pr_approved (asserted)', function () {
+    var x = markerScenario(
+        '[{"author":"machine-reviewer[bot]","body":"unrelated machine comment"}]',
+        { decision: 'approve', override: 'true', roundsDone: 0, nextRound: 0 });
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'rework');
+    assert.equal(x.st.commands.join('\n').indexOf('pr_approved') !== -1, false);
+  });
+
+  test('untrusted marker author — the marker is invisible, the legacy parser decides', function () {
+    var x = markerScenario(
+        markerCommentJson('REQUEST_CHANGES', MARKER_SHA, { important: 1, author: 'some-human' }),
+        { decision: 'approve' },
+        MARKER_SHA);
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'approved',
+      'a marker outside the machine-identity allowlist does not exist for the reader');
+  });
+
+  test('comma-list machineAuthor (gh-728) — every listed identity is trusted', function () {
+    var x = markerScenario(
+        markerCommentJson('REQUEST_CHANGES', MARKER_SHA, { important: 1, author: 'second-bot' }),
+        { decision: 'approve', override: 'true', roundsDone: 0, nextRound: 0 },
+        MARKER_SHA);
+    var r = rvModule.applyReviewVerdict(Object.assign(baseOpts(),
+        { machineAuthor: 'machine-reviewer[bot],second-bot' }), x.io);
+    assert.equal(r.status, 'rework', 'the second listed identity authored a governing marker');
+  });
+
+  test('marker REQUEST_CHANGES at the round cap — the recomputed bookeeping escalates (cap parity)', function () {
+    var x = markerScenario(
+        markerCommentJson('REQUEST_CHANGES', MARKER_SHA, { important: 1 }),
+        { decision: 'approve', override: 'true', roundsDone: 2, nextRound: 2 },
+        MARKER_SHA);
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'escalated',
+      'rounds_done=2 at cap 2 under a marker-governed rework → needs-human, not a 3rd round');
+    var commentCmds = x.st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
+    var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
+    assert.ok(x.io.written[bodyPath].indexOf('Auto-rework loop capped') !== -1);
+  });
+
+});
+
+// ── gh-1419: pure helpers ───────────────────────────────────────────────────
+
+suite('factoryReviewVerdict — gh-1419 pure helpers', function () {
+
+  function rec(verdict, head, over) {
+    over = over || {};
+    return {
+      head: head || MARKER_SHA,
+      verdict: verdict,
+      blocking: optVal(over, 'blocking', 0),
+      important: optVal(over, 'important', 0),
+      suggestions: optVal(over, 'suggestions', 0),
+      nits: 0, digest: 0,
+      at: over.at || '2026-11-09T15:42:57Z',
+      source: over.source || 'pr_review.json'
+    };
+  }
+  function contract(over) {
+    return rvModule.parseVerdictContract(contractLines(over || {}));
+  }
+
+  test('parserVerdictClassOf: the override key classifies rework, never approve', function () {
+    assert.equal(rvModule.parserVerdictClassOf(contract({ decision: 'approve', override: 'true' })), 'rework');
+    assert.equal(rvModule.parserVerdictClassOf(contract({ decision: 'approve' })), 'approve');
+    assert.equal(rvModule.parserVerdictClassOf(contract({ decision: 'rework' })), 'rework');
+    assert.equal(rvModule.parserVerdictClassOf(contract({ decision: 'unknown' })), null);
+    assert.equal(rvModule.parserVerdictClassOf({ decision: 'approve', override: true }), 'rework',
+      'the raw boolean true (a non-sh contract) neutralizes the same way');
+    assert.equal(rvModule.parserVerdictClassOf({}), null);
+  });
+
+  test('verdictClassOfVerdict: APPROVE rides approve; REQUEST_CHANGES and BLOCK ride rework', function () {
+    assert.equal(rvModule.verdictClassOfVerdict('APPROVE'), 'approve');
+    assert.equal(rvModule.verdictClassOfVerdict('REQUEST_CHANGES'), 'rework');
+    assert.equal(rvModule.verdictClassOfVerdict('BLOCK'), 'rework');
+  });
+
+  test('resolveEffectiveDecision: the marker governs; agreement passes; disagreement conflicts', function () {
+    var marker = rec('REQUEST_CHANGES', MARKER_SHA, { important: 1 });
+    var r1 = rvModule.resolveEffectiveDecision(marker, contract({ decision: 'approve', override: 'true' }));
+    assert.equal(r1.decision, 'rework');
+    assert.equal(r1.source, 'machine-verdict-marker');
+
+    var r2 = rvModule.resolveEffectiveDecision(rec('APPROVE'), contract({ decision: 'approve' }));
+    assert.equal(r2.decision, 'approve');
+    assert.equal(r2.source, 'machine-verdict-marker');
+
+    var r3 = rvModule.resolveEffectiveDecision(null, contract({ decision: 'approve' }));
+    assert.equal(r3.decision, 'approve');
+    assert.equal(r3.source, 'legacy-parser');
+    assert.equal(r3.marker, null);
+
+    var r4 = rvModule.resolveEffectiveDecision(null, contract({ decision: 'unknown' }));
+    assert.equal(r4.decision, 'unknown');
+
+    var c1 = rvModule.resolveEffectiveDecision(rec('APPROVE'), contract({ decision: 'rework' }));
+    assert.ok(c1.conflict, 'marker approve vs parser rework → conflict');
+    assert.equal(c1.conflict.marker.verdict, 'APPROVE');
+    assert.equal(c1.conflict.parserClass, 'rework');
+    assert.equal(c1.conflict.parserSource, 'stub-source');
+
+    var c2 = rvModule.resolveEffectiveDecision(rec('REQUEST_CHANGES'), contract({ decision: 'approve' }));
+    assert.ok(c2.conflict, 'marker rework vs parser approve → conflict');
+    assert.equal(c2.conflict.parserClass, 'approve');
+
+    var agree = rvModule.resolveEffectiveDecision(rec('REQUEST_CHANGES'),
+        contract({ decision: 'approve', override: 'true' }));
+    assert.equal(agree.decision, 'rework', 'approve+override=true IS rework-class — agreement, not conflict');
+
+    var markerOnly = rvModule.resolveEffectiveDecision(rec('APPROVE'), contract({ decision: 'unknown' }));
+    assert.equal(markerOnly.decision, 'approve', 'the parser found nothing → the marker governs alone');
+  });
+
+  test('resolveEffectiveDecision: an unresolvable head with trusted records never classifies approve (fail-safe, review-thread gap)', function () {
+    // Third arg = the probe-failure state from probeMachineVerdictMarker:
+    // trusted marker records exist but the PR head sha could not be read.
+    var r1 = rvModule.resolveEffectiveDecision(null, contract({ decision: 'approve' }), true);
+    assert.equal(r1.decision, 'rework', 'the parser approve is suppressed — rework is the safe side');
+    assert.equal(r1.source, 'legacy-parser', 'the legacy parser still decides, on its safe side only');
+
+    var r2 = rvModule.resolveEffectiveDecision(null, contract({ decision: 'rework' }), true);
+    assert.equal(r2.decision, 'rework', 'a parser rework stays a rework (already the safe side)');
+
+    var r3 = rvModule.resolveEffectiveDecision(null, contract({ decision: 'approve' }), false);
+    assert.equal(r3.decision, 'approve', 'a RESOLVED head keeps the legacy fail-open (AC1d unchanged)');
+
+    var r4 = rvModule.resolveEffectiveDecision(null, contract({ decision: 'unknown' }), true);
+    assert.equal(r4.decision, 'unknown', 'no parser verdict still rides the loud missing-verdict path');
+
+    var overrideKey = rvModule.resolveEffectiveDecision(
+        null, contract({ decision: 'approve', override: 'true' }), true);
+    assert.equal(overrideKey.decision, 'rework', 'override=true + suppressed approve → rework either way');
+  });
+
+  test('reworkRoundBookeeping: the sh rule recomputed over an approve/unknown contract', function () {
+    var c = contract({ decision: 'approve', roundsDone: 0, nextRound: 0 });
+    rvModule.reworkRoundBookeeping(c, '2');
+    assert.equal(c.next_round, 1);
+    assert.equal(c.escalate, false);
+
+    var capped = contract({ decision: 'approve', roundsDone: 2, nextRound: 2 });
+    rvModule.reworkRoundBookeeping(capped, '2');
+    assert.equal(capped.escalate, true);
+    assert.equal(capped.next_round, 2);
+
+    var garbageCap = contract({ decision: 'approve', roundsDone: 2, nextRound: 2 });
+    rvModule.reworkRoundBookeeping(garbageCap, 'not-a-number');
+    assert.equal(garbageCap.escalate, true, 'a garbage cap rides the sh default 2 → capped');
+
+    var underCap = contract({ decision: 'approve', roundsDone: 1, nextRound: 1 });
+    rvModule.reworkRoundBookeeping(underCap, undefined);
+    assert.equal(underCap.next_round, 2, 'undefined cap rides the sh default 2');
+  });
+
+  test('markerRecordsFromPayload: JSON/array/author-shape/allowlist contracts', function () {
+    var logins = ['machine-reviewer[bot]'];
+    var records = rvModule.markerRecordsFromPayload(
+        markerCommentJson('APPROVE', MARKER_SHA), logins);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].verdict, 'APPROVE');
+    assert.equal(records[0].head, MARKER_SHA);
+
+    assert.deepEqual(rvModule.markerRecordsFromPayload(null, logins), [], 'no payload → no records');
+    assert.deepEqual(rvModule.markerRecordsFromPayload('not json', logins), [], 'unparseable → no records');
+    assert.deepEqual(rvModule.markerRecordsFromPayload('{"body":"x"}', logins), [], 'non-array payload → no records');
+    assert.deepEqual(rvModule.markerRecordsFromPayload(
+        markerCommentJson('APPROVE', MARKER_SHA, { author: 'random-human' }), logins), [],
+      'a foreign author is invisible (the machineAuthor doctrine)');
+    assert.deepEqual(rvModule.markerRecordsFromPayload(markerCommentJson('APPROVE', MARKER_SHA), []),
+      [], 'an empty allowlist trusts nothing');
+    var objectAuthor = rvModule.markerRecordsFromPayload(
+        JSON.stringify([{ author: { login: 'machine-reviewer[bot]' }, body: markerBody('APPROVE', MARKER_SHA) }]),
+        logins);
+    assert.equal(objectAuthor.length, 1, 'REST-shaped author objects ride through too');
+  });
+
+  test('markerForHead: newest record for THIS head wins; another head (or no sha) → null', function () {
+    var records = rvModule.markerRecordsFromPayload(
+        JSON.stringify([
+          { author: 'machine-reviewer[bot]', body: markerBody('REQUEST_CHANGES', MARKER_SHA_OTHER, { at: '2026-11-09T15:00:00Z' }) },
+          { author: 'machine-reviewer[bot]', body: markerBody('APPROVE', MARKER_SHA, { at: '2026-11-09T15:42:57Z' }) }
+        ]),
+        ['machine-reviewer[bot]']);
+    assert.equal(records.length, 2);
+    assert.equal(rvModule.markerForHead(records, MARKER_SHA).verdict, 'APPROVE',
+      'the newest record for the probed head wins');
+    assert.equal(rvModule.markerForHead(records, MARKER_SHA_OTHER).verdict, 'REQUEST_CHANGES');
+    assert.equal(rvModule.markerForHead(records, ''), null, 'no head sha → no marker (probe failed / no PR)');
+    assert.equal(rvModule.markerForHead([], MARKER_SHA), null);
+  });
+
 });
