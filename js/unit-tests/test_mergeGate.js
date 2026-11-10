@@ -797,13 +797,22 @@ suite('mergeGate: runForPr (stage 1 + stage 2, the shared helper)', function () 
 
 suite('mergeGate: githubBridgeIo superset view', function () {
 
-    test('carries the escalation label primitive plus the backstop keys', function () {
+    test('carries the escalation label primitive plus the FULL backstop keys', function () {
+        // The undeclared bridge identifiers resolve from the ENGINE globals,
+        // so this test pins the test-runner network-guard parity contract
+        // (testRunner.js guards every github_* global; node_testRunner.js
+        // must guard the same review-threads family) — under a harness whose
+        // guard list misses any of them the typeof guards map null and this
+        // fails exactly like the CI crap red on gh-1417's head.
         var io = mMergeGate({ github_add_labels: function () { return '{}'; } }).githubBridgeIo();
         assert.equal(typeof io.addLabels, 'function');
         assert.equal(typeof io.getThreads, 'function');
         assert.equal(typeof io.getComments, 'function');
         assert.equal(typeof io.createComment, 'function');
+        assert.equal(typeof io.searchIssues, 'function');
+        assert.equal(typeof io.createIssue, 'function');
         assert.equal(typeof io.resolveThread, 'function');
+        assert.equal(typeof io.replyToThread, 'function');
     });
 
     test('a missing label primitive maps null (capability miss, never a stub)', function () {
