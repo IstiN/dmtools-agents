@@ -153,7 +153,8 @@ function prDetail(over) {
 function loadLane(opts) {
     opts = opts || {};
     var calls = { merges: [], removed: [], added: [], comments: [], closed: [],
-        commentReads: [], branchUpdates: [], threads: [] };
+        commentReads: [], branchUpdates: [], threads: [], threadResolves: [],
+        threadReplies: [], debtIssues: [] };
     var globals = laneGlobals(opts, calls);
     var scmStub = {
         createScm: function () {
@@ -206,11 +207,35 @@ function laneGlobals(opts, calls) {
         // global here is the test-runner network guard (it throws), not a
         // missing capability, so the gate's skip path never sees these
         // fixtures. opts.threadsByNumber injects open threads for the
-        // lane's own hold wiring test.
+        // lane's own hold wiring test — and a successful resolve MUTATES
+        // the served nodes (gh-1420: the backstop's stage-1 resolution must
+        // be visible to the stage-2 census re-read, backstopBridgeMocks
+        // parity), so a residue replay merges after the deferral.
         github_get_pr_review_threads: function (a) {
             calls.threads.push(a);
             return JSON.stringify({ data: { repository: { pullRequest:
                 { reviewThreads: { nodes: (opts.threadsByNumber || {})[a.pullRequestId] || [] } } } } });
+        },
+        // gh-1420: the full backstop surface for the residue-replay
+        // scenarios — resolve (mutating), the ack reply, the digest search
+        // and create. resolveFailIds names ids whose resolve throws.
+        github_resolve_pr_thread: function (a) {
+            if ((opts.resolveFailIds || []).indexOf(String(a.threadId)) !== -1) {
+                throw new Error('422 ' + a.threadId);
+            }
+            calls.threadResolves.push(a);
+            Object.keys(opts.threadsByNumber || {}).forEach(function (pr) {
+                (opts.threadsByNumber[pr] || []).forEach(function (n) {
+                    if (n && String(n.id) === String(a.threadId)) n.isResolved = true;
+                });
+            });
+            return '{}';
+        },
+        github_reply_to_pr_thread: function (a) { calls.threadReplies.push(a); return '{}'; },
+        github_search_issues: function () { return JSON.stringify({ items: [] }); },
+        github_create_issue: function (a) {
+            calls.debtIssues.push(a);
+            return JSON.stringify({ number: 500 + calls.debtIssues.length });
         }
     };
 }
@@ -509,5 +534,105 @@ suite('retryMergeGithubPR: lane characterization (gate-neutral shapes)', functio
             getIssueThrows: 'get issue boom' });
         assert.equal(r.result, true, 'the safety-net fault never fails the merged outcome');
         assert.equal(r.calls.merges.length, 1);
+    });
+});
+
+// ── gh-1420 merge-decision observability (the structured line + the note) ────
+
+suite('retryMergeGithubPR: merge-decision observability (gh-1420)', function () {
+
+    // The lane logs through console (its say seam) — spy it for the suite.
+    function withLogSpy(fn) {
+        var logs = [];
+        var originalLog = console.log;
+        try {
+            console.log = function (msg) { logs.push(String(msg)); };
+            var out = fn();
+        } finally {
+            console.log = originalLog;
+        }
+        return { logs: logs, out: out };
+    }
+
+    function decisionLines(logs) {
+        return logs.filter(function (l) { return l.indexOf('MERGE-DECISION pr=12') === 0; });
+    }
+
+    test('AC2: the merged exit says the structured MERGE-DECISION line (allowlist rides)', function () {
+        var r = withLogSpy(function () {
+            return runLane({ comments: [], prDetail: prDetail() });
+        });
+        assert.equal(r.out.result, true, 'the merge proceeds');
+        var lines = decisionLines(r.logs);
+        assert.equal(lines.length, 1, 'exactly ONE decision line: ' + JSON.stringify(r.logs));
+        assert.contains(lines[0], 'action=merged');
+        assert.contains(lines[0], 'head=0c2732d');
+        assert.contains(lines[0], 'allowlist=1');
+    });
+
+    test('AC1: a residue merge posts the dmtools:merge-note marker with the counts', function () {
+        var machineThread = { id: 'PRT_M1', isResolved: false, path: 'js/x.js', line: 3,
+            comments: { nodes: [{ databaseId: 9200, author: { login: BOT + '[bot]' },
+                body: '⚠️ severity: IMPORTANT — the gate misses this state' }] } };
+        var calls;
+        var r = withLogSpy(function () {
+            var lane = runLane({
+                comments: [],
+                prDetail: prDetail(),
+                threadsByNumber: { 12: [machineThread] }
+            });
+            calls = lane.calls;
+            return lane.result;
+        });
+        assert.equal(r.out, true, 'the backstop deferred the thread, the merge proceeds');
+        var notes = calls.comments.filter(function (c) {
+            return String(c.body || '').indexOf('dmtools:merge-note') !== -1;
+        });
+        assert.equal(notes.length, 1, 'ONE residue marker on the merged PR');
+        assert.contains(notes[0].body, '"openThreadsAtMerge":1');
+        assert.contains(notes[0].body, '"autoResolved":1');
+        var lines = decisionLines(r.logs);
+        assert.contains(lines[0], 'machineThreads=1',
+            'the residue machine count rides the merged line');
+    });
+
+    test('AC2: the held exit (open thread) says the held line + the ::warning:: annotation', function () {
+        var r = withLogSpy(function () {
+            return runLane({
+                comments: [],
+                prDetail: prDetail(),
+                threadsByNumber: { 12: [{ id: 'PRT_H1', isResolved: false,
+                    comments: { nodes: [{ databaseId: 9100,
+                        author: { login: 'human-reviewer' }, body: 'a human finding' }] } }] }
+            });
+        });
+        assert.equal(r.out.result, false, 'held — the SM retries next cycle');
+        var lines = decisionLines(r.logs);
+        assert.equal(lines.length, 1);
+        assert.contains(lines[0], 'action=held');
+        assert.contains(lines[0], 'humanThreads=1');
+        var warnings = r.logs.filter(function (l) { return l.indexOf('::warning::') === 0; });
+        assert.equal(warnings.length, 1, 'the hold surfaces in the Actions UI');
+    });
+
+    test('AC2: the verdict-held exit defers with the verdict on the line', function () {
+        var r = withLogSpy(function () {
+            return runLane({ comments: [verdictComment('REQUEST_CHANGES', HEAD)], prDetail: prDetail() });
+        });
+        assert.equal(r.out.result, false);
+        var lines = decisionLines(r.logs);
+        assert.equal(lines.length, 1);
+        assert.contains(lines[0], 'action=defered');
+        assert.contains(lines[0], 'verdict=REQUEST_CHANGES');
+    });
+
+    test('the outcome-returning wrappers keep the boolean contract', function () {
+        var lane = loadLane({ comments: [], prDetail: prDetail() });
+        assert.equal(lane.lane.mergeGateHoldsMerge({ machineAuthor: BOT }, 'o', 'n', 12,
+            JSON.stringify(prDetail())), false, 'clean census → not held');
+        var thrown = lane.lane.mergeGateOutcomeForPr({ machineAuthor: BOT }, 'o', 'n', 12,
+            JSON.stringify(prDetail()));
+        assert.equal(thrown.backstop !== undefined, true,
+            'the backstop outcome rides the gate outcome for the merge-note');
     });
 });

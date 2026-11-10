@@ -1513,3 +1513,135 @@ suite('mergeTrigger — verdict gate wiring (gh-1416)', function () {
         assert.equal(result.merged, 1, 'empty allowlist = nothing trusted = fail-open');
     });
 });
+
+// ── gh-1420 merge-decision observability (the structured line + the note) ────
+
+suite('mergeTrigger — merge-decision observability (gh-1420)', function () {
+    var BOT = 'merge-bot';
+    var HEAD = '0c2732dfeedface0deadbeefcafe0123456789ab';
+    var CLEAN_PR = { number: 12, labels: [], body: 'What it does\n\nCloses #5\n', headRefName: 'feature/x' };
+
+    function machineThreadNode(id, body) {
+        return { id: id, isResolved: false, path: 'js/mergeTrigger.js', line: 42,
+            comments: { nodes: [{ databaseId: 9200, author: { login: BOT + '[bot]' },
+                body: body || '⚠️ severity: IMPORTANT — the gate misses this state' }] } };
+    }
+
+    test('AC2: every decision says the structured MERGE-DECISION line — merged', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD } }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.merged, 1);
+        var lines = result.log.filter(function (l) {
+            return l.indexOf('MERGE-DECISION pr=12') === 0;
+        });
+        assert.equal(lines.length, 1, 'exactly ONE decision line: ' + JSON.stringify(result.log));
+        assert.contains(lines[0], 'action=merged');
+        assert.contains(lines[0], 'head=0c2732d');
+        assert.contains(lines[0], 'machineThreads=0');
+        assert.contains(lines[0], 'allowlist=1');
+        assert.contains(lines[0], 'verdict=none');
+    });
+
+    test('AC1: a residue merge posts the dmtools:merge-note marker; the line carries the counts', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD } },
+            threadsByNumber: { 12: [machineThreadNode('M1')] }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.merged, 1, 'the backstop deferred the thread, the merge proceeds');
+        var notes = fx.calls.comments.filter(function (c) {
+            return String(c.body || '').indexOf('dmtools:merge-note') !== -1;
+        });
+        assert.equal(notes.length, 1, 'ONE residue marker on the PR');
+        assert.contains(notes[0].body, '"openThreadsAtMerge":1');
+        assert.contains(notes[0].body, '"autoResolved":1');
+        assert.contains(notes[0].body, '"head":"' + HEAD + '"');
+        assert.equal(notes[0].number, 12, 'the marker lands on the PR');
+        var lines = result.log.filter(function (l) {
+            return l.indexOf('MERGE-DECISION pr=12') === 0;
+        });
+        assert.contains(lines[0], 'action=merged');
+        assert.contains(lines[0], 'machineThreads=1', 'the residue machine count rides the line');
+    });
+
+    test('AC1 replay: the same-head merge note dedupes — never a second comment', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD } },
+            threadsByNumber: { 12: [machineThreadNode('M1')] }
+        });
+        run(fx, { repo: 'a/b', machineAuthor: BOT });
+        var notesPosted = fx.calls.comments.filter(function (c) {
+            return String(c.body || '').indexOf('dmtools:merge-note') !== -1;
+        }).length;
+        // The posted note + ledger stamp are now on the PR — the replay reads them.
+        fx.opts.prCommentsByNumber = { 12: fx.calls.comments.map(function (c) {
+            return { body: c.body, user: { login: BOT + '[bot]' } };
+        }) };
+        var before = fx.calls.comments.length;
+        var second = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(second.merged, 1, 'the replay merges again (same head)');
+        var notesAfter = fx.calls.comments.filter(function (c) {
+            return String(c.body || '').indexOf('dmtools:merge-note') !== -1;
+        }).length;
+        assert.equal(notesAfter, notesPosted, 'one merge-note per head');
+    });
+
+    test('AC1: a pure-clean merge stays silent — no note, no read', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD } }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.merged, 1);
+        var notes = fx.calls.comments.filter(function (c) {
+            return String(c.body || '').indexOf('dmtools:merge-note') !== -1;
+        });
+        assert.equal(notes.length, 0, 'nothing counted → nothing posted');
+    });
+
+    test('AC2: the gh-1417 hold says the structured held line + the ::warning:: annotation', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'CLEAN', headRefOid: HEAD } },
+            threadsByNumber: { 12: [{ id: 'H1', isResolved: false, path: 'src/x.js', line: 7,
+                comments: { nodes: [{ databaseId: 9100, author: { login: 'human-reviewer' },
+                    body: 'Please reconsider this API' }] } }] }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.merged, 0);
+        var lines = result.log.filter(function (l) {
+            return l.indexOf('MERGE-DECISION pr=12') === 0;
+        });
+        assert.equal(lines.length, 1);
+        assert.contains(lines[0], 'action=held');
+        assert.contains(lines[0], 'humanThreads=1');
+        var warnings = result.log.filter(function (l) { return l.indexOf('::warning::') === 0; });
+        assert.equal(warnings.length, 1, 'the hold surfaces in the Actions UI');
+    });
+
+    test('AC2: the BEHIND decision defers with its own line (no gates ran — zero counts)', function () {
+        var fx = fixture({
+            labeledIssues: [5],
+            prs: [CLEAN_PR],
+            prStates: { 12: { mergeable: true, state: 'BEHIND', headRefOid: HEAD } }
+        });
+        var result = run(fx, { repo: 'a/b', machineAuthor: BOT });
+        assert.equal(result.merged, 0);
+        var lines = result.log.filter(function (l) {
+            return l.indexOf('MERGE-DECISION pr=12') === 0;
+        });
+        assert.equal(lines.length, 1);
+        assert.contains(lines[0], 'action=defered');
+        assert.contains(lines[0], 'verdict=none');
+    });
+});
