@@ -229,6 +229,11 @@ function severityAtLeastImportant(severityClass) {
  * mandatory-fix or lap-gated thread at merge time would fake convergence —
  * the disposition loop (polish lap / triage) owns it instead. An
  * unclassified tier rides the gh-828 parity (the triage path closes it).
+ * Direct-call contract: a NULL entry acks (fail-open) — unreachable via
+ * runBackstop, which always resolves/validates the policy first
+ * (reviewPolicyOf → ReviewPolicyValidationError) and every resolved
+ * preset table defines all four tiers; only a hand-built table passed
+ * straight to classifyThreads can hit it (the gh-1418 review digest).
  */
 function isDeferrableTier(entry) {
     if (!entry) return true;
@@ -988,20 +993,17 @@ function requireZeroOpenMachineThreads(out) {
 // ONE comments read per run with open machine threads (gh-1371): the
 // payload is shared by the ledger append (its base), the digest (its
 // review-run reference) and the gh-1418 census sanity check. Fail-closed
-// when the LEDGER needs it (counted/ack buckets append findings — a broken
-// read defers the merge, the #1319 pathology never reads as clean); a
-// hold-only run degrades — the note is observability, the hold is the
-// decision.
+// when the LEDGER needs it (counted/ack buckets append findings — a missing
+// primitive or an empty read defers the merge, the #1319 pathology never
+// reads as clean); a hold-only run degrades to null — the note is
+// observability, the hold is the decision. ONE throw site, one message:
+// the gh-1418 rework collapsed the duplicated fail-closed guard (the CI
+// crap ratchet — commentsForRun rides the measured gate with the negative
+// tests in test_mergeBackstop.js covering both arms).
 function commentsForRun(t, cls, inp) {
     var needsLedger = cls.counted.length > 0 || cls.ackThreads.length > 0;
-    if (!t.prComments) {
-        if (needsLedger) {
-            throw new Error('mergeBackstop: no pr-comments primitive — the ledger append cannot read its base');
-        }
-        return null;
-    }
-    var comments = t.prComments(inp.prNumber);
-    if (!comments && needsLedger) {
+    var comments = t.prComments ? t.prComments(inp.prNumber) : null;
+    if (needsLedger && !comments) {
         throw new Error('mergeBackstop: no pr-comments primitive — the ledger append cannot read its base');
     }
     return comments;
@@ -1056,10 +1058,14 @@ function runBackstop(io, owner, name, input) {
     var cls = classifyThreads(rows, inp.logins, policy, densityAllowanceOf(inp, policy));
     bookClassification(out, cls);
     if (!openMachineCount(cls)) {
-        // gh-1370 + gh-1418: deferrable-tier machine threads resolve (the
-        // wontfix ack path, each with its ledger item), and the merge may
-        // proceed ONLY on zero open machine threads.
-        resolveAckThreads(t, inp.prNumber, cls.ackThreads, out);
+        // gh-1370 + gh-1418: the PURE-CLEAN replay — zero open machine
+        // threads (counted/ack/hold are all empty by the openMachineCount
+        // identity), so the merge proceeds with nothing left to ack here.
+        // The deferrable-tier ack path lives in the shared tail BELOW
+        // (ledgerPhase first — gh-1352: a deferral needs its ledger item);
+        // this branch never touches threads (the gh-1418 rework review:
+        // the pre-gh-1418 resolveAckThreads call was a provable no-op —
+        // an empty array under the very identity the condition checks).
         return requireZeroOpenMachineThreads(out);
     }
     var comments = commentsForRun(t, cls, inp);

@@ -143,6 +143,27 @@ function nitBody(claim) {
 }
 
 /**
+ * The comments primitive of ioFixture (the ledger-base read, gh-1371).
+ * ABSENT when `noComments` — normalizedIo maps the non-function slot to
+ * null exactly like a missing bridge tool (the gh-1418 no-primitive
+ * probes). Extracted from ioFixture for the CI crap ratchet (the
+ * capability-miss ternary + the throw arm are decisions ioFixture cannot
+ * afford — it rides the measured gate).
+ */
+function commentsMockFor(f, rec) {
+    if (f.noComments) return undefined;
+    return function () {
+        rec.order.push('comments');
+        if (f.commentsThrow) throw new Error(f.commentsThrow);
+        // reality: the posts ARE the PR comment stream (write-then-read
+        // parity — the same read the next run's ledger base uses)
+        return JSON.stringify(f.comments.concat(rec.posts.map(function (p) {
+            return { body: p.body, user: { login: MACHINE } };
+        })));
+    };
+}
+
+/**
  * A scripted github bridge: every primitive recorded (rec.order keeps the
  * GLOBAL call order across primitives so the ticket's file-then-resolve
  * order is assertable), payloads served, failures injectable per primitive.
@@ -178,15 +199,7 @@ function ioFixture(opts) {
             return JSON.stringify({ data: { repository: { pullRequest:
                 { reviewThreads: { nodes: f.threads } } } } });
         },
-        getComments: f.noComments ? undefined : function () {
-            mark('comments');
-            if (f.commentsThrow) throw new Error(f.commentsThrow);
-            // reality: the posts ARE the PR comment stream (write-then-read
-            // parity — the same read the next run's ledger base uses)
-            return JSON.stringify(f.comments.concat(rec.posts.map(function (p) {
-                return { body: p.body, user: { login: MACHINE } };
-            })));
-        },
+        getComments: commentsMockFor(f, rec),
         createComment: function (a) { mark('post'); rec.posts.push(a); return '{}'; },
         createIssue: function (a) {
             mark('issue');
@@ -1605,5 +1618,58 @@ suite('mergeBackstop — gh-1418 policy-aware dispositions', function () {
             { number: 42, title: 'T', headRefOid: 'deadbeefcafe0123456789abcdef' },
             function () {});
         assert.equal(out2.ackResolved, 1, 'jobParams.reviewPolicy rides the standard chain (relaxed acks the SUGGESTION)');
+    });
+
+    test('fail-closed reads: an ack run without the comments primitive throws — the ledger base is mandatory', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_N1', nitBody('a nit'), 5)], noComments: true });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'the ledger append cannot read its base — defer the merge (the #1319 pathology never reads as clean)');
+        assert.contains(threw.message, 'no pr-comments primitive');
+        assert.equal(f.rec.resolves.length, 0, 'the read gate runs before any resolution attempt');
+        assert.equal(f.rec.replies.length, 0, 'no ack on a broken base');
+        assert.equal(f.rec.posts.length, 0, 'no ledger stamp on a broken base');
+    });
+
+    test('fail-closed reads: a counted (>=IMPORTANT) run without the comments primitive throws the same way', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [ghThread({ id: 'PRT_1', line: 42 })], noComments: true });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'the digest shares the read — one fail-closed guard for both ledger-bearing buckets');
+        assert.contains(threw.message, 'no pr-comments primitive');
+        assert.equal(f.rec.issues.length, 0, 'no digest off a clobber-prone base');
+        assert.equal(f.rec.posts.length, 0);
+    });
+
+    test('fail-closed reads: a hold-only run without the comments primitive degrades to null (the hold is the decision)', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [belowThread('PRT_S1', suggestionBody('extract'), 9)], noComments: true });
+        var threw = null;
+        try { run(m, f); } catch (e) { threw = e; }
+        assert.ok(threw, 'the policy hold still fires — the degraded read never mutes it');
+        assert.contains(threw.message, 'policy holds 1');
+        assert.notContains(threw.message, 'no pr-comments primitive',
+            'no ledger base needed — the run degrades, not throws');
+        assert.equal(f.rec.posts.length, 0, 'a hold defers nothing, stamps nothing');
+    });
+
+    test('gh-1418 rework: the pure-clean replay (every machine thread already resolved) posts and resolves NOTHING', function () {
+        var m = mergeBackstopMod();
+        var f = ioFixture({ threads: [
+            ghThread({ id: 'PRT_1', line: 42, isResolved: true }),
+            ghThread({ id: 'PRT_2', line: 77, isResolved: true, comments: { nodes: [{
+                databaseId: 9002, author: { login: MACHINE + '[bot]' },
+                body: importantBody('sessions never expire') }] } })
+        ] });
+        var out = run(m, f);
+        assert.equal(f.rec.resolves.length, 0,
+            'zero open machine threads — the clean-replay branch has nothing to resolve');
+        assert.equal(f.rec.replies.length, 0,
+            'no ack replies — the ack path lives in the shared tail (ledgerPhase first, gh-1352)');
+        assert.equal(f.rec.posts.length, 0, 'no ledger stamp — nothing deferred');
+        assert.contains(m.outcomeLines(out)[0], 'no unresolved machine-owned',
+            'the branch is the pure-clean replay, not a hidden ack path');
     });
 });

@@ -258,8 +258,13 @@ function fixture(opts) {
         github_add_labels: function (a) { calls.adds.push(a); return '{}'; },
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
         github_create_comment: function (c) { calls.comments.push(c); return '{}'; },
-        // gh-1418: the ack path reads its ledger base (one comments read per run)
-        github_get_pr_comments: function () { return JSON.stringify(opts.prComments || []); },
+        // gh-1418: the ack path reads its ledger base (one comments read per run).
+        // NO github_get_pr_comments entry here on purpose: backstopBridgeMocks
+        // (Object.assign below) owns the slot — opts.prCommentsByNumber — and
+        // an inline duplicate would be silently overwritten AND still cost
+        // fixture a +1 CC decision (the CI crap ratchet regression this
+        // rework fixes: the gh-1418 dev leg added a dead `opts.prComments
+        // || []` mock that never ran).
         // Self-tick (owner rule 2026-10-04): capture every cli dispatch;
         // opts.cliThrows simulates a dead gh CLI for the failure path.
         cli_execute_command: function (c) {
