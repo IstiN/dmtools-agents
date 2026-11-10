@@ -436,7 +436,11 @@ function runGate(io, owner, name, input) {
         out.holdDeduped = true;
         out.escalated = true;
         stampHold(io, owner, name, inp, out, census, holds, true, existing.at);
-        stampEscalationLabel(io, owner, name, inp, out);
+        if (out.escalationPosted) {
+            // The label rides the state TRANSITION only — a deduped
+            // marker means the escalation already stood (no label spam).
+            stampEscalationLabel(io, owner, name, inp, out);
+        }
         return out;
     }
     stampHold(io, owner, name, inp, out, census, holds, false, null);

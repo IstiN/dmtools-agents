@@ -596,7 +596,8 @@ suite('mergeGate: humanHoldHours escalation (clock-injected)', function () {
         assert.equal(r.out.held, true);
         assert.equal(r.out.escalated, false);
         assert.equal(r.calls.labelsAdded.length, 0);
-        assert.equal(r.calls.commentsPosted.length, 1, 'the open-threads marker still stamps');
+        assert.equal(r.out.holdDeduped, true, 'the standing marker is reused in place');
+        assert.equal(r.calls.commentsPosted.length, 0);
     });
 
     test('escalation never fires while human threads are delegated', function () {
@@ -607,6 +608,8 @@ suite('mergeGate: humanHoldHours escalation (clock-injected)', function () {
         assert.equal(r.out.held, true);
         assert.equal(r.out.escalated, false);
         assert.equal(r.calls.labelsAdded.length, 0);
+        assert.equal(r.out.holdDeduped, true);
+        assert.equal(r.calls.commentsPosted.length, 0);
     });
 
     test('an age-less hold (unparseable at) reads as DUE — the FIFO cannot stall forever', function () {
@@ -676,10 +679,11 @@ suite('mergeGate: runForPr (stage 1 + stage 2, the shared helper)', function () 
     function bridgeIo(opts, calls) {
         calls = calls || { threadsReads: [], commentReads: [], commentsPosted: [],
             labelsAdded: [], threadResolves: [], threadReplies: [], debtIssues: [], debtSearches: [] };
-        var nodes = (opts.threads === undefined) ? [] :
-            JSON.parse(JSON.stringify(opts.threads.data.repository.pullRequest.reviewThreads.nodes));
-        var g = gateIo({}, calls);
-        g.io.getThreads = function (a) {
+        var threadsPayloadObj = (typeof opts.threads === 'string') ? JSON.parse(opts.threads) : opts.threads;
+        var nodes = (!threadsPayloadObj) ? [] :
+            JSON.parse(JSON.stringify(threadsPayloadObj.data.repository.pullRequest.reviewThreads.nodes));
+        var g = gateIo(opts, calls);
+        if (!opts.noThreads) g.io.getThreads = function (a) {
             calls.threadsReads.push(a);
             if (opts.threadsThrows) throw new Error(opts.threadsThrows);
             return JSON.stringify({ data: { repository: { pullRequest:
@@ -796,7 +800,10 @@ suite('mergeGate: githubBridgeIo superset view', function () {
     });
 
     test('a missing label primitive maps null (capability miss, never a stub)', function () {
-        var io = mMergeGate({}).githubBridgeIo();
+        // Explicit undefined mock: the preamble shadows the runner's
+        // network-guard throwers so the module truly sees no primitive
+        // (the dmtools host injects the real bridge globals).
+        var io = mMergeGate({ github_add_labels: undefined }).githubBridgeIo();
         assert.equal(io.addLabels, null);
     });
 });

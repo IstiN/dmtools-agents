@@ -44,13 +44,13 @@
 // (mergeTrigger's copies were byte-identical to sm/mergeBot.js's).
 var mcpParse = require('./common/mcpParse.js');
 
-// gh-1353: the merge backstop rides every squash-merge — and since gh-1370
-// it is a GATE on machine-owned threads: ONE digest issue + `deferred`
-// resolutions for open machine-owned >=IMPORTANT threads, `wontfix`
-// ack-resolutions for the below-threshold ones, and a failed resolution
-// HOLDS the merge (merging with an open machine thread is a policy
-// violation; the next tick retries).
-var mergeBackstop = require('./common/mergeBackstop.js');
+// gh-1353/gh-1370 + gh-1417: the two-stage merge gate (stage 1: the
+// backstop — machine-owned threads to terminal disposition; stage 2: the
+// classification-independent hold) lives in js/common/mergeGate.js, which
+// delegates stage 1 to the backstop module. mergeTrigger no longer wires
+// the backstop directly — the shared helper is the one call site for all
+// three funnels (gh-1417 AC3).
+var mergeGate = require('./common/mergeGate.js');
 
 // gh-1416: the verdict-freshness probe rides every squash-merge — the
 // newest dmtools:review-verdict record for the CURRENT head being
@@ -308,19 +308,26 @@ function mergeDecisionOf(ms) {
 }
 
 /**
- * gh-1370 merge backstop before a squash-merge: every open machine-owned
- * review thread must reach terminal resolution — >=IMPORTANT threads ride
- * the digest (ONE digest issue, `deferred: #digest` resolves), SUGGESTION/
- * NIT threads resolve WITHOUT a fix (`wontfix` ack tags), and human
- * threads stay untouched (branch protection owns them). A record-keeping
- * OR resolution failure throws — the per-item isolation below counts it
+ * gh-1417 merge gate before a squash-merge — the TWO-STAGE rule (the ONE
+ * shared helper, js/common/mergeGate.js runForPr): stage 1 is the
+ * gh-1353/gh-1370 backstop (every open machine-owned review thread reaches
+ * terminal resolution — >=IMPORTANT threads ride the digest (ONE digest
+ * issue, `deferred: #digest` resolves), SUGGESTION/NIT threads resolve
+ * WITHOUT a fix (`wontfix` ack tags)); stage 2 is the
+ * classification-independent hold (after stage 1, ANY unresolved review
+ * thread — any author, machine notices excluded — holds the merge behind a
+ * deduped per-head dmtools:merge-hold marker, with the needs-human
+ * escalation past mergeGate.humanHoldHours). A stage-1 record-keeping OR
+ * resolution failure throws — the per-item isolation below counts it
  * failed (the merge of THAT PR defers to the next tick — the retry) and
  * the sweep's aggregate throw fails the job: the escalation surface when
  * resolution keeps failing (gh-1370: merging with open machine threads is
- * a policy violation).
+ * a policy violation). A stage-2 hold returns `held` — the merge skips
+ * (the next tick retries; human threads are never machine-resolved,
+ * gh-744 — the gate only waits for them).
  */
-function backstopBeforeMerge(ctx, prNumber, pr) {
-    mergeBackstop.runBackstopForPr(mergeBackstop.githubBridgeIo(),
+function mergeGateBeforeMerge(ctx, prNumber, pr) {
+    return mergeGate.runForPr(mergeGate.githubBridgeIo(),
         ctx.owner, ctx.name, ctx.job, prNumber, pr, ctx.say);
 }
 
@@ -363,13 +370,20 @@ function runStateMachine(ctx, prNumber, onMerged) {
                 ' is ' + verdictGate.verdict + ' — merge deferred (gh-1416), next tick retries');
             return 'skipped';
         }
-        // gh-1353 + gh-1370: every open machine-owned review thread must
-        // reach terminal resolution BEFORE the merge (digest + deferred
-        // resolutions for >=IMPORTANT, wontfix acks below the threshold).
-        // A record-keeping or resolution failure throws — the per-item
+        // gh-1353 + gh-1370 (stage 1) + gh-1417 (stage 2): every open
+        // machine-owned review thread must reach terminal resolution
+        // BEFORE the merge, and ANY remaining unresolved thread (any
+        // author, machine notices excluded) holds the merge behind the
+        // per-head marker. A stage-1 failure throws — the per-item
         // isolation below counts it failed and the merge defers to the
-        // next tick (never merges with an open machine thread).
-        backstopBeforeMerge(ctx, prNumber, pr);
+        // next tick (never merges with an open review thread); a stage-2
+        // hold returns held — skip, the next tick retries.
+        var gate = mergeGateBeforeMerge(ctx, prNumber, pr);
+        if (gate.held) {
+            ctx.log.push('⏳ #' + prNumber + ' ' + gate.total + ' unresolved review thread(s) (human ' +
+                gate.human + ', machine ' + gate.machine + ') — merge held (gh-1417), next tick retries');
+            return 'skipped';
+        }
         var res = squashMerge(ctx.owner, ctx.name, prNumber);
         if (res.merged) {
             onMerged(prNumber);
@@ -548,7 +562,7 @@ if (typeof module !== 'undefined' && module.exports) {
         mergeDecisionOf: mergeDecisionOf,
         isIssueOpen: isIssueOpen,
         squashMerge: squashMerge,
-        backstopBeforeMerge: backstopBeforeMerge,
+        mergeGateBeforeMerge: mergeGateBeforeMerge,
         verdictGateBeforeMerge: verdictGateBeforeMerge,
         tryRemoveLabel: tryRemoveLabel,
         tryComment: tryComment
