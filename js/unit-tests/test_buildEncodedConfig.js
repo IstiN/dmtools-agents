@@ -676,6 +676,44 @@ suite('resolveParentMerge — parent inheritance', function() {
         assert.equal(builder.resolveParentFilePath('@0.1.255', 'agents/child.json'), 'agents/@0.1.255');
     });
 
+    test('pack parent ref (@latest / @version) resolves to base agent pack instead of self or sibling override in dirOf(agentPath)', function() {
+        var mapcPrReview = JSON.stringify({
+            parent: { path: 'pr_review@latest', merge: ['params.cliPrompts'] },
+            params: { cliPrompts: ['mapc-mobile-prompt.md'] }
+        });
+        var mapcSfReview = JSON.stringify({
+            parent: { path: 'pr_review@latest', merge: ['params.cliPrompts'] },
+            params: { cliPrompts: ['mapc-sf-prompt.md'] }
+        });
+        var basePackReview = JSON.stringify({
+            params: { postJSAction: 'agents/js/postPRReviewComments.js', cliPrompts: ['base-review.md'] }
+        });
+        var builder = loadBuilder({
+            'ai_teammate/mapc/pr_review.json': mapcPrReview,
+            'ai_teammate/mapc/sf_pr_review_auto.json': mapcSfReview,
+            'agents/pr_review.json': basePackReview
+        });
+        assert.equal(
+            builder.resolveParentFilePath('pr_review@latest', 'ai_teammate/mapc/pr_review.json'),
+            'agents/pr_review.json',
+            'same-named override must not resolve parent to itself'
+        );
+        assert.equal(
+            builder.resolveParentFilePath('pr_review@latest', 'ai_teammate/mapc/sf_pr_review_auto.json'),
+            'agents/pr_review.json',
+            'sibling override must resolve @latest parent ref to agents/<base>.json, not dirOf(agentPath)+<base>.json'
+        );
+        var mergedSameName = builder.resolveParentMerge(JSON.parse(mapcPrReview), 'ai_teammate/mapc/pr_review.json');
+        assert.deepEqual(mergedSameName.cliPrompts, ['base-review.md', 'mapc-mobile-prompt.md']);
+        var mergedSibling = builder.resolveParentMerge(JSON.parse(mapcSfReview), 'ai_teammate/mapc/sf_pr_review_auto.json');
+        assert.deepEqual(mergedSibling.cliPrompts, ['base-review.md', 'mapc-sf-prompt.md']);
+        assert.equal(
+            builder.resolveParentFilePath('pr_review.json', 'ai_teammate/mapc/pr_review.json'),
+            'agents/pr_review.json',
+            'even a bare filename equal to agentPath skips self and falls through to agents/<base>.json'
+        );
+    });
+
     test('merge directive tolerates non-array parent and child values', function() {
         var builder = loadBuilder({
             'agents/parent.json': JSON.stringify({ params: { cliPrompts: 'not-an-array' } })

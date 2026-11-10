@@ -110,18 +110,25 @@ function applyMergeDirectives(merged, agentJson, parentParams, childParams) {
  * @param {number} [depth=0]   - Recursion guard (max 10 levels).
  * @returns {Object} Fully-resolved `params` object with parent inheritance applied.
  */
+function parentCandidatePaths(parentRefPath, agentPath, base) {
+    if (String(parentRefPath || '').indexOf('@') !== -1) {
+        return ['agents/' + base + '.json', base + '.json'];
+    }
+    return [dirOf(agentPath) + base + '.json', 'agents/' + base + '.json', base + '.json'];
+}
+
 function resolveParentFilePath(parentRefPath, agentPath) {
     var direct = dirOf(agentPath) + parentRefPath;
-    if (tryReadJson(direct)) {
+    if (direct !== agentPath && tryReadJson(direct)) {
         return direct;
     }
     var base = String(parentRefPath || '').replace(/@[^/]+$/, '').replace(/\.json$/i, '');
     if (!base) {
         return direct;
     }
-    var candidates = [dirOf(agentPath) + base + '.json', 'agents/' + base + '.json', base + '.json'];
+    var candidates = parentCandidatePaths(parentRefPath, agentPath, base);
     for (var i = 0; i < candidates.length; i++) {
-        if (tryReadJson(candidates[i])) {
+        if (candidates[i] !== agentPath && tryReadJson(candidates[i])) {
             return candidates[i];
         }
     }
