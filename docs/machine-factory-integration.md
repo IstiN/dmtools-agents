@@ -59,6 +59,18 @@ resolve from the target repo, and the engine is self-pinned via
 dmtools CLI installs from its release asset (version-locked), so the
 target repo needs no copies of anything.
 
+Per-repo config acquisition is **SCM-neutral** (gh-1421): when a job runs
+checkout-less, the engine fetches `.dmtools/config.js` from the repo's
+default branch through its own scm layer (`js/common/remoteProjectConfig.js`
+— the `github_get_file_contents` / `gitlab_get_file_contents` bridge
+primitives, one fetch per run, fail-open to defaults; local candidates keep
+absolute precedence). **Deletion note** — this retires the workflow-side
+`gh api repos/{repo}/contents/...` config-fetch step (the
+dmtools-agentic-workflows#91 stopgap in `factory-merge-trigger.yml`):
+workflows no longer fetch per-repo config themselves, so delete the
+stopgap step when upgrading the engine past gh-1421 — a GitLab (or any
+future provider) funnel needs no per-SCM fetch.
+
 ---
 
 ## 3. Prerequisites
