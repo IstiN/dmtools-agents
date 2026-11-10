@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-10T15:05:36.021Z",
+  "ticketKey": "gh-1420",
+  "headSha": "65879cee2be74e4ea431ef898df9a16e21d630f6",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:2d1d6f5688e73fad",
+      "size": 52153
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:436c8d260298936f",
+      "size": 4697433
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:317d58d201f37ddd",
+      "size": 2277
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:3aefca7b26295d57",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:4d597734e9ad7eb7",
+      "size": 15335
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:80cc298660ffdcb1",
+      "size": 7221
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:1980d735dd5ee1a8",
+      "size": 4498
+    },
+    "request.md": {
+      "hash": "fnv1a64:5dca41625c778dfb",
+      "size": 3878
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:53fc0cd38273372d",
+      "size": 1917
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:1069de90278da8f9",
+      "size": 962
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:afa09cccc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:2fa40d8d7a94dc76",
+      "size": 3977
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:5dca41625c778dfb",
+      "size": 3878
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs61wCf2",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/postMergeSweep.js:278",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — the `crap` gate fails at 65879cee (CRAP ratchet: \"CRAP may only decrease\")**\n\nThe PR's only failed check is the CRAP ratchet: **0 regressions, 11 new functions over threshold 8** (run 42836162956, full log in `ci_failures_full.log`):\n\n```\nNEW > 8  js/common/mergeNote.js::residueCountsOf: 9\nNEW > 8  js/common/mergeNote.js::runMergeNote: 12.7\nNEW > 8  js/common/mergeNote.js::mergeDecisionLine: 10\nNEW > 8  js/common/mergeNote.js::emitDecision: 12\nNEW > 8  js/common/postMergeSweep.js::buildSweepComment: 10\nNEW > 8  js/common/postMergeSweep.js::runSweep: 16.1\nNEW > 8  js/mergeTrigger.js::runStateMachine: 11\nNEW > 8  js/retryMergeGithubPR.js::squashAndFinalize: 10.5\nNEW > 8  js/sm/mergeBot.js::mergeApprovedHead: 13\nNEW > 8  js/unit-tests/test_postMergeSweep.js::pr1410Provider: 10\nNEW > 8  js/unit-tests/test_retryMergeGithubPR.js::laneGlobals: 14\n```\n\n`runSweep` (CRAP 16.1, the worst) is the merge-sweep core; `mergeApprovedHead` (13) grew because every exit now renders an `emitDecision` call. Suggested decomposition direction (keep behavior byte-identical — the emission suites pin it):\n\n- `postMergeSweep.runSweep`: extract the provider-primitive gate, the comments-read/ledger phase, and the digest dedup/post tail into helpers (the module already has `resolveMachineThreads` as the model).\n- `mergeBot.mergeApprovedHead` / `mergeTrigger.runStateMachine` / `retryMergeGithubPR.squashAndFinalize`: extract the shared `held-decision` render (`emitDecision` + reason string) per exit into a small local helper; the three funnels repeat the same 6–8-line block at each exit.\n- Test helpers `pr1410Provider` and `laneGlobals`: split the fixture factories (thread rows vs lane globals vs provider recorder).\n\nNote the ratchet is monotone: once this lands with CRAP ≤ 8 for the new functions, the baseline absorbs them. Unit tests are green (9497 passed in CI; I reproduced locally), so this is purely complexity/coverage debt on the new code."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61wCkW",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/machineSmAgent.js:212",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the sweep can never reach PR #1410 itself — the ticket's live test case has no trigger**\n\n`mergedThreadSweep` rides the merged-PR close tick (`decideClosedPrActions`), which only ever runs for issues listed by `listMachineIssues` — and that search filters `is:issue is:open` (`js/common/smProvider.js:647-655`). A closed issue is terminal: no later SM tick ever revisits the PR.\n\nThat is exactly gh-1410's state per this PR's own root-cause note (\"PR merged, issue closed, thread open, nobody scheduled anything\"). So after this ships:\n\n- **Future** merged-with-residue PRs → swept on their close tick ✓\n- **PR #1410 itself** → its issue is already closed, `is:open` excludes it, the sweep never fires, and its open IMPORTANT thread stays unresolved forever — the precise debt this issue was opened to recover.\n\nticket.md (Design c) states the live acceptance: *\"Test case: PR #1410's thread must be picked up by the sweep on its next run after this ships.\"* AC3's scripted-payload variant is satisfied (the test passes), but the live variant cannot pass without an explicit recovery step. Please add one of:\n\n1. reopen gh-1410's linked issue before/at merge so the next tick plans `[mergedThreadSweep, closeIssue]` for it, or\n2. a one-shot backfill (a dry run of `postMergeSweep.runSweep` against PR #1410 via a scratch job), or\n3. record on the issue that the live case is superseded by the scripted-payload AC3 test and why.\n\nIf gh-1410's issue is in fact still open, this finding dissolves — but then please say so on the thread, because the root-cause narrative in the PR description asserts the close path already closed it."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61wCp-",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/machineSmAgent.js:215",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: AC4 — the root-cause investigation note must land on the issue itself before this merges**\n\nticket.md AC4 (verbatim): *\"The root cause of the gh-1379 miss on #1410 is written into this issue (investigation note) before the sweep fix merges.\"*\n\nThe root cause analysis is excellent — but as of the ticket snapshot taken at PR-creation time (`input/gh-1420/ticket.md`), the issue body carries no investigation note; the three-gap analysis (author-allowlist blindness, verdict-gate blindness, trigger-scope gap) lives **only in the PR description**. This PR closes #1420 (`Closes #1420`), so once merged, the issue goes terminal with AC4 unmet on its face.\n\nTwo-line fix: paste the PR description's \"Root cause (AC4)\" section into the issue (as a comment or a description edit) before the merge lands — or point me to the already-posted note if it was added after the snapshot, and I'll withdraw this."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs61wCv0",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/mergeNote.js:123",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the marker sentence overstates \"auto-resolved\" for the machine bucket**\n\nAt `mergeNote.js:123-127` the human-readable half of the marker renders:\n\n```\n🧵 Merged with residue (gh-1420): 3 review thread(s) were open at merge time —\n2 machine-owned (auto-resolved by the merge backstop, findings ride the\nreview debt ledger / digest issue), 1 human (left open per gh-744).\n```\n\nBut `residueCountsOf` computes `machine = counted + ackThreads + holdThreads`, where `counted` threads are **defered to the digest** (not auto-resolved) and `holdThreads` are expired human-hour holds. Only `autoResolved = resolved + ackResolved` were actually auto-resolved. So a merge with 2 counted + 0 resolved says \"2 machine-owned (auto-resolved...)\" — wrong for the counted bucket.\n\nThe JSON payload is the protocol and it is correct; only the sentence misleads a human reader auditing \"what actually happened to my threads\". Cheap fix while the crap rework touches this file anyway:\n\n```js\nvar note = '\\uD83E\\uDD9A Merged with residue (gh-1420): ' +\n    residue.openThreadsAtMerge + ' review thread(s) were open at merge time — ' +\n    residue.machine + ' machine-owned (' + residue.autoResolved + ' auto-resolved; the rest' +\n    ' deferred to the review debt ledger / digest issue), ' + residue.human +\n    ' human (left open per gh-744).';\n```\n\n(or simply drop the \"(auto-resolved …)\" parenthetical — the payload and the ledger marker already say it precisely)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:94509626",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — the `crap` gate fails at 65879cee (CRAP ratchet: \"CRAP may only decrease\")**\n\nThe PR's only failed check is the CRAP ratchet: **0 regressions, 11 new functions over threshold 8** (run 42836162956, full log in `ci_failures_full.log`):\n\n```\nNEW > 8  js/common/mergeNote.js::residueCountsOf: 9\nNEW > 8  js/common/mergeNote.js::runMergeNote: 12.7\nNEW > 8  js/common/mergeNote.js::mergeDecisionLine: 10\nNEW > 8  js/common/mergeNote.js::emitDecision: 12\nNEW > 8  js/common/postMergeSweep.js::buildSweepComment: 10\nNEW > 8  js/common/postMergeSweep.js::runSweep: 16.1\nNEW > 8  js/mergeTrigger.js::runStateMachine: 11\nNEW > 8  js/retryMergeGithubPR.js::squashAndFinalize: 10.5\nNEW > 8  js/sm/mergeBot.js::mergeApprovedHead: 13\nNEW > 8  js/unit-tests/test_postMergeSweep.js::pr1410Provider: 10\nNEW > 8  js/unit-tests/test_retryMergeGithubPR.js::laneGlobals: 14\n```\n\n`runSweep` (CRAP 16.1, the worst) is the merge-sweep core; `mergeApprovedHead` (13) grew because every exit now renders an `emitDecision` call. Suggested decomposition direction (keep behavior byte-identical — the emission suites pin it):\n\n- `postMergeSweep.runSweep`: extract the provider-primitive gate, the comments-read/ledger phase, and the digest dedup/post tail into helpers (the module already has `resolveMachineThreads` as the model).\n- `mergeBot.mergeApprovedHead` / `mergeTrigger.runStateMachine` / `retryMergeGithubPR.squashAndFinalize`: extract the shared `held-decision` render (`emitDecision` + reason string) per exit into a small local helper; the three funnels repeat the same 6–8-line block at each exit.\n- Test helpers `pr1410Provider` and `laneGlobals`: split the fixture factories (thread rows vs lane globals vs provider recorder).\n\nNote the ratchet is monotone: once this lands with CRAP ≤ 8 for the new functions, the baseline absorbs them. Unit tests are green (9497 passed in CI; I reproduced locally), so this is purely complexity/coverage debt on the new code."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:4f7ec6c7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the sweep can never reach PR #1410 itself — the ticket's live test case has no trigger**\n\n`mergedThreadSweep` rides the merged-PR close tick (`decideClosedPrActions`), which only ever runs for issues listed by `listMachineIssues` — and that search filters `is:issue is:open` (`js/common/smProvider.js:647-655`). A closed issue is terminal: no later SM tick ever revisits the PR.\n\nThat is exactly gh-1410's state per this PR's own root-cause note (\"PR merged, issue closed, thread open, nobody scheduled anything\"). So after this ships:\n\n- **Future** merged-with-residue PRs → swept on their close tick ✓\n- **PR #1410 itself** → its issue is already closed, `is:open` excludes it, the sweep never fires, and its open IMPORTANT thread stays unresolved forever — the precise debt this issue was opened to recover.\n\nticket.md (Design c) states the live acceptance: *\"Test case: PR #1410's thread must be picked up by the sweep on its next run after this ships.\"* AC3's scripted-payload variant is satisfied (the test passes), but the live variant cannot pass without an explicit recovery step. Please add one of:\n\n1. reopen gh-1410's linked issue before/at merge so the next tick plans `[mergedThreadSweep, closeIssue]` for it, or\n2. a one-shot backfill (a dry run of `postMergeSweep.runSweep` against PR #1410 via a scratch job), or\n3. record on the issue that the live case is superseded by the scripted-payload AC3 test and why.\n\nIf gh-1410's issue is in fact still open, this finding dissolves — but then please say so on the thread, because the root-cause narrative in the PR description asserts the close path already closed it."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:629d7b36",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: AC4 — the root-cause investigation note must land on the issue itself before this merges**\n\nticket.md AC4 (verbatim): *\"The root cause of the gh-1379 miss on #1410 is written into this issue (investigation note) before the sweep fix merges.\"*\n\nThe root cause analysis is excellent — but as of the ticket snapshot taken at PR-creation time (`input/gh-1420/ticket.md`), the issue body carries no investigation note; the three-gap analysis (author-allowlist blindness, verdict-gate blindness, trigger-scope gap) lives **only in the PR description**. This PR closes #1420 (`Closes #1420`), so once merged, the issue goes terminal with AC4 unmet on its face.\n\nTwo-line fix: paste the PR description's \"Root cause (AC4)\" section into the issue (as a comment or a description edit) before the merge lands — or point me to the already-posted note if it was added after the snapshot, and I'll withdraw this."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:818874fc",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the marker sentence overstates \"auto-resolved\" for the machine bucket**\n\nAt `mergeNote.js:123-127` the human-readable half of the marker renders:\n\n```\n🧵 Merged with residue (gh-1420): 3 review thread(s) were open at merge time —\n2 machine-owned (auto-resolved by the merge backstop, findings ride the\nreview debt ledger / digest issue), 1 human (left open per gh-744).\n```\n\nBut `residueCountsOf` computes `machine = counted + ackThreads + holdThreads`, where `counted` threads are **defered to the digest** (not auto-resolved) and `holdThreads` are expired human-hour holds. Only `autoResolved = resolved + ackResolved` were actually auto-resolved. So a merge with 2 counted + 0 resolved says \"2 machine-owned (auto-resolved...)\" — wrong for the counted bucket.\n\nThe JSON payload is the protocol and it is correct; only the sentence misleads a human reader auditing \"what actually happened to my threads\". Cheap fix while the crap rework touches this file anyway:\n\n```js\nvar note = '\\uD83E\\uDD9A Merged with residue (gh-1420): ' +\n    residue.openThreadsAtMerge + ' review thread(s) were open at merge time — ' +\n    residue.machine + ' machine-owned (' + residue.autoResolved + ' auto-resolved; the rest' +\n    ' deferred to the review debt ledger / digest issue), ' + residue.human +\n    ' human (left open per gh-744).';\n```\n\n(or simply drop the \"(auto-resolved …)\" parenthetical — the payload and the ledger marker already say it precisely)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-10:73326ffc",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The design is sound and the root-cause analysis is real — but CI is red: the `crap` ratchet fails at 65879cee with **11 new functions over threshold 8** (`runSweep` 16.1, `mergeApprovedHead` 13, `laneGlobals` 14, …), which is 🚨 BLOCKING per policy. Two IMPORTANT items: the sweep's only trigger (the merged-PR close tick on `is:open` issues) can never reach PR #1410 itself, whose issue is already closed per the PR's own root cause — the ticket's live test case needs an explicit recovery path; and AC4's root-cause note is on the PR description only, not on the issue this PR closes.\n\n**Key Issues**:\n- 🚨 crap gate red — decompose the 11 over-threshold functions (full list in comment 1); unit tests are green (9497 passed in CI, reproduced locally), so this is pure complexity debt\n- ⚠️ sweep reachability — gh-1410's closed issue is invisible to `listMachineIssues` (`is:open`), so the live pickup promised in ticket Design c needs a reopen/backfill (comment 2)\n- ⚠️ AC4 — paste the root-cause note onto issue #1420 before merge (comment 3)\n- 💡 marker sentence says \"auto-resolved\" for defered/hold threads — payload is correct, prose overstates (comment 4)\n\n**Digest** (advisory, no threads):\n- `js/common/postMergeSweep.js:106` — `severityClassOfThread` duplicates `mergeBackstop`'s private helper verbatim; export & delegate when the crap rework touches these files (duplication gate passed)\n- `js/retryMergeGithubPR.js:364` — held line renders `machineThreads=0 humanThreads=0` on a *thrown* gate fault (unknown ≠ 0); the `allowlist=0` grep audit could misread it — consider `?` for the fault case\n- `js/common/mergeNote.js:295` — the `::warning::` reason interpolates raw exception text; a multi-line message would break the one-line annotation shape (low risk)\n- `js/unit-tests/test_mergeNote.js:136` — stray `human2: undefined` fixture key in `residueBackstop()`\n\n**Next Steps**:\n1. Fix the CRAP ratchet (extract helpers in the 11 flagged functions — tests already pin behavior, refactor is safe)\n2. Resolve the PR #1410 recovery path (reopen its issue or add a one-shot backfill) and confirm AC4's note is on the issue\n3. Re-push; the emission/dedup test coverage is otherwise strong and should keep passing unchanged"
+    }
+  ]
+}
