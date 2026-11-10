@@ -312,19 +312,20 @@ suite('remoteProjectConfig.decodeBase64', function() {
 
     test('invalid bytes emit U+FFFD and resynchronize (never throw)', function() {
         var mod = makeRemoteModule(null);
-        // Lone continuation byte (0x80) between 'a' and 'b'; overlong lead 0xC0; lead 0xF5 (out of range)
-        var bytes = [97, 0x80, 98, 0xC0, 0x80, 99, 0xF5, 0x80, 0x80, 0x80, 100];
-        assert.equal(mod.decodeBase64(mod.__encodeBytes ? mod.__encodeBytes(bytes) : null) !== undefined, true);
-        // Drive utf8StringOf through base64 of a known fixture instead:
-        assert.equal(mod.decodeBase64('YWJjZA=='), 'abcd'); // clean roundtrip sanity
+        // 'a', lone continuation byte, 'b' → a\uFFFD b
+        assert.equal(mod.decodeBase64('YYBi'), 'a\uFFFD' + 'b');
+        // 'c', overlong lead 0xC0, lone continuation, 'd', out-of-range lead 0xF5,
+        // 3 lone continuations, 'e' → one U+FFFD per invalid byte (WHATWG parity)
+        assert.equal(mod.decodeBase64('Y8CAZPWAgIBl'),
+            'c\uFFFD\uFFFD' + 'd\uFFFD\uFFFD\uFFFD\uFFFD' + 'e');
+        // surrogate-range sequence (U+D83D can never appear in valid UTF-8) → U+FFFD
+        assert.equal(mod.decodeBase64('7aC4'), '\uFFFD');
     });
 
     test('truncated sequences emit U+FFFD (no crash on cut-off multi-byte)', function() {
         var mod = makeRemoteModule(null);
-        // 'é' is 0xC3 0xA9 — cut the continuation off: [0xC3]
-        var bytes = [104, 105, 0xC3];
-        var out = mod.decodeBase64(mod.__bytesToB64ForTests(bytes));
-        assert.equal(out !== null, true);
+        // 'h', 'i', lead 0xC3 with the continuation byte cut off → 'hi\uFFFD'
+        assert.equal(mod.decodeBase64('aGnD'), 'hi\uFFFD');
     });
 
     test('returns empty string for null/empty input', function() {
@@ -689,6 +690,22 @@ suite('scm provider twins — getFileContents', function() {
     test('gitlab twin: primitive absent → null', function() {
         var scm = scmMod({});
         assert.equal(scm._createGitLabProvider('grp', 'proj').getFileContents('.dmtools/config.js'), null);
+    });
+
+    test('remoteConfigIo() defaults to github when the provider is absent', function() {
+        var mod = makeRemoteModule(null);
+        assert.equal(mod.remoteConfigIo().provider, 'github');
+    });
+
+    test('fetch without nowMs uses the real clock and still caches', function() {
+        var mod = makeRemoteModule(null);
+        var calls = 0;
+        var io = { provider: 'github', getFileContents: function() { calls++; return null; } };
+        var first = mod.fetchRemoteConfigSource({ repo: 'o/r' }, {}, { io: io });
+        var second = mod.fetchRemoteConfigSource({ repo: 'o/r' }, {}, { io: io });
+        assert.equal(first, null);
+        assert.equal(second, null);
+        assert.equal(calls, 1); // the Date.now()-timestamped miss cached for the TTL
     });
 
 });
