@@ -132,8 +132,7 @@ function residueBackstop() {
             machineByTier: {}, allowedDeferrable: 2 },
         resolved: 1,
         ackResolved: 1,
-        digest: 501,
-        human2: undefined
+        digest: 501
     };
 }
 
@@ -450,5 +449,169 @@ suite('mergeNote: runMergeNoteForPr (the one-call funnel wiring)', function () {
             function () {});
         assert.equal(out.silent, true);
         assert.equal(calls.commentsPosted.length, 0);
+    });
+
+    test('the failure outcome lines are named on the seam (deduped / unreadable / post-failed)', function () {
+        var mn = mMergeNote(null);
+        var PR2 = { number: 12, headRefOid: HEAD };
+        var said = [];
+        // The deduped shape: the same head replays → the dedup line rides.
+        mn.runMergeNoteForPr(ioOf({ commentReads: [], commentsPosted: [] }), 'o', 'n',
+            { machineAuthor: BOT }, 1410, PR2, residueBackstop(), function (l) { said.push(l); });
+        assert.contains(said[said.length - 1], 'merged with residue');
+        // The post-failed shape: a broken createComment names the outcome.
+        said = [];
+        var ioFail = ioOf({ commentReads: [], commentsPosted: [] }, []);
+        ioFail.createComment = function () { throw new Error('422'); };
+        mn.runMergeNoteForPr(ioFail, 'o', 'n', { machineAuthor: BOT }, 12, PR2,
+            residueBackstop(), function (l) { said.push(l); });
+        assert.contains(said[said.length - 1], 'post failed — fail-open');
+        // The comments-unreadable shape: a broken read skips the marker, said aloud.
+        said = [];
+        var ioUnreadable = ioOf({ commentReads: [], commentsPosted: [] });
+        ioUnreadable.getComments = function () { throw new Error('503'); };
+        mn.runMergeNoteForPr(ioUnreadable, 'o', 'n', { machineAuthor: BOT }, 12, PR2,
+            residueBackstop(), function (l) { said.push(l); });
+        assert.contains(said[said.length - 1], 'comments unreadable');
+    });
+});
+
+// ── gh-1420 rework: the review-thread fixes ──────────────────────────────────
+
+// A backstop outcome with counted threads but NO auto-resolution yet
+// (the deferral happens at the digest — the exact shape the reworked
+// marker sentence must not describe as "auto-resolved").
+function deferredOnlyBackstop() {
+    var bs = residueBackstop();
+    bs.resolved = 0;
+    bs.ackResolved = 0;
+    bs.ackThreads = [];
+    return bs;
+}
+
+suite('mergeNote — rework: the marker sentence says what actually happened (thread 💡)', function () {
+    var mn = mMergeNote(null);
+
+    test('a machine bucket with zero auto-resolutions never says "auto-resolved"', function () {
+        var m = mn.buildMergeNoteMarker(mn.residueCountsOf(deferredOnlyBackstop()), HEAD, NOW);
+        assert.contains(m, '"openThreadsAtMerge":2');
+        assert.contains(m, '"machine":1');
+        assert.contains(m, '1 machine-owned (0 auto-resolved; the rest' +
+            ' deferred to the review debt ledger / digest issue)',
+            'the counted bucket is a deferral, not an auto-resolution');
+        assert.equal(m.indexOf('auto-resolved by the merge backstop'), -1,
+            'the overstated parenthetical is gone');
+        assert.contains(m, '1 human (left open per gh-744).');
+    });
+
+    test('a machine bucket with auto-resolutions still names them (and the deferral rest)', function () {
+        var m = mn.buildMergeNoteMarker(mn.residueCountsOf(residueBackstop()), HEAD, NOW);
+        assert.contains(m, '2 machine-owned (2 auto-resolved; the rest' +
+            ' deferred to the review debt ledger / digest issue)');
+    });
+
+    test('a machine-free residue (human only) renders the zero machine bucket', function () {
+        var m = mn.buildMergeNoteMarker(
+            { openThreadsAtMerge: 1, autoResolved: 0, machine: 0, human: 1 }, HEAD, NOW);
+        assert.contains(m, '0 machine-owned (0 auto-resolved; the rest' +
+            ' deferred to the review debt ledger / digest issue), 1 human');
+    });
+});
+
+suite('mergeNote — rework: the ::warning:: annotation stays one line', function () {
+    var mn = mMergeNote(null);
+    var PR = { number: 12, headRefOid: HEAD };
+
+    test('a multi-line fault reason is flattened onto the annotation line', function () {
+        var said = [];
+        mn.emitDecision(function (l) { said.push(l); }, {
+            prNumber: 12, pr: PR, job: { machineAuthor: BOT },
+            action: 'held', reason: 'merge gate failed (gh-1370/gh-1417):\nboom\n  at stack'
+        });
+        var warnings = said.filter(function (l) { return l.indexOf('::warning::') === 0; });
+        assert.equal(warnings.length, 1);
+        assert.equal(warnings[0].indexOf('\n'), -1,
+            'a multi-line reason must not break the one-line annotation shape');
+        assert.contains(warnings[0], 'merge gate failed (gh-1370/gh-1417): boom   at stack');
+    });
+});
+
+suite('mergeNote — rework: runMergeNote capability-miss shapes (coverage of the stamp)', function () {
+    function ioOf(calls, comments) {
+        return {
+            getComments: function (a) {
+                calls.commentReads.push(a);
+                if (calls.commentsThrow) throw new Error('503');
+                return commentsPayload(comments || []);
+            },
+            createComment: function (a) { calls.commentsPosted.push(a); return '{}'; }
+        };
+    }
+
+    test('a comments read capability miss (no getComments primitive) skips the marker, named', function () {
+        var calls = { commentReads: [], commentsPosted: [] };
+        var io = ioOf(calls);
+        delete io.getComments;
+        var out = mMergeNote(null).runMergeNote(io, 'o', 'n', {
+            prNumber: 1410, headSha: HEAD, nowIso: NOW, backstop: residueBackstop()
+        });
+        assert.equal(out.commentsUnreadable, true);
+        assert.equal(out.posted, false);
+        assert.equal(calls.commentsPosted.length, 0);
+    });
+
+    test('an io without createComment (capability miss) names postFailed, never throws', function () {
+        var calls = { commentReads: [], commentsPosted: [] };
+        var io = ioOf(calls, []);
+        delete io.createComment;
+        var out = mMergeNote(null).runMergeNote(io, 'o', 'n', {
+            prNumber: 1410, headSha: HEAD, nowIso: NOW, backstop: residueBackstop()
+        });
+        assert.equal(out.postFailed, true);
+        assert.equal(out.posted, false);
+    });
+
+    test('a runMergeNote with NO input rides its defaults (undefined input shape)', function () {
+        var out = mMergeNote(null).runMergeNote(
+            ioOf({ commentReads: [], commentsPosted: [] }), 'o', 'n', null);
+        assert.equal(out.silent, true, 'a null input → null backstop → zero residue → silent');
+        assert.equal(out.prNumber, undefined);
+        assert.equal(out.head, null);
+    });
+});
+
+suite('mergeNote — rework: payload edge shapes (boundary coverage)', function () {
+    var mn = mMergeNote(null);
+
+    test('residueCountsOf reads a partially-informed backstop outcome (missing buckets)', function () {
+        var r = mn.residueCountsOf({ counted: [{ threadId: 't1' }], resolved: 2 });
+        assert.equal(r.machine, 1);
+        assert.equal(r.human, 0, 'a missing human bucket is an empty one');
+        assert.equal(r.openThreadsAtMerge, 1);
+        assert.equal(r.autoResolved, 2, 'a missing ackResolved counter reads zero');
+    });
+
+    test('mergeDecisionLine renders ? for a missing prNumber (never undefined)', function () {
+        var line = mn.mergeDecisionLine({ headSha: HEAD, action: 'held' });
+        assert.contains(line, 'MERGE-DECISION pr=? head=0c2732d');
+        assert.equal(line.indexOf('undefined'), -1);
+    });
+
+    test('mergeDecisionLine tolerates a null parts bag', function () {
+        var line = mn.mergeDecisionLine(null);
+        assert.contains(line, 'action=defered', 'the canonical default action rides');
+        assert.contains(line, 'verdict=none');
+        assert.equal(line.indexOf('undefined'), -1);
+    });
+
+    test('emitDecision renders counts from the funnel when no backstop outcome rides', function () {
+        var line = mn.emitDecision(null, {
+            prNumber: 9, pr: null, job: null, action: 'held',
+            machineThreads: 4, humanThreads: 2
+        });
+        assert.contains(line, 'pr=9');
+        assert.contains(line, 'machineThreads=4');
+        assert.contains(line, 'humanThreads=2');
+        assert.contains(line, 'allowlist=0', 'a null job reads an empty allowlist');
     });
 });

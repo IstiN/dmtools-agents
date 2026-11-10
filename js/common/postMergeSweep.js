@@ -70,7 +70,6 @@
 var reviewVerdicts = require('./reviewVerdicts.js');
 var machineAuthor = require('./machineAuthor.js');
 var machineNotice = require('./machineNotice.js');
-var findingRegistry = require('./findingRegistry.js');
 var reviewDebtLedger = require('./reviewDebtLedger.js');
 var reviewDispositions = require('./reviewDispositions.js');
 var mergeBackstop = require('./mergeBackstop.js');
@@ -102,11 +101,9 @@ function sweepRowsOf(rows, logins) {
 }
 
 // The severity class of one thread body (the findingRegistry class set —
-// the gh-1332 identity's severity key; mergeBackstop's same derivation).
-function severityClassOfThread(body) {
-    return findingRegistry.severityClassOf(
-        String(reviewVerdicts.threadSeverity(body)).toUpperCase());
-}
+// the gh-1332 identity's severity key). Delegates to the ONE derivation on
+// mergeBackstop (gh-1420 review digest: no second copy).
+var severityClassOfThread = mergeBackstop.severityClassOfThread;
 
 // One ledger-append row from a provider thread row (the digestRowOf shape
 // mergeBackstop.appendThreadsToLedger consumes — the gh-1353 identity).
@@ -150,6 +147,37 @@ function hasSweepForPr(sweeps, prNumber) {
     return false;
 }
 
+// The sweep marker (the dedup family) — machine/human ride their zeros.
+function sweepMarkerOf(p) {
+    return MARKER_PREFIX + JSON.stringify({
+        pr: p.prNumber, machine: p.machine || 0, human: p.human || 0, at: p.at || ''
+    }, reviewVerdicts.markerSafeReplacer) + MARKER_SUFFIX;
+}
+
+// The digest headline (the counts in prose — the marker above is data).
+function sweepHeadline(p) {
+    return '\uD83E\uDDF9 Post-merge sweep (gh-1420) — merged PR #' + p.prNumber + ' carried' +
+        ' unresolved review thread(s): ' + (p.machine || 0) + ' machine-authored' +
+        ' (digested below and resolved `deferred:` — the batched review-debt sweep owns' +
+        ' the fixes), ' + (p.human || 0) + ' human (never machine-resolved, gh-744).';
+}
+
+// The `open (human)` section — never machine-resolved (gh-744); an empty
+// human bucket contributes no lines.
+function sweepHumanSection(humanRows, ctx) {
+    if (!Array.isArray(humanRows) || !humanRows.length) return [];
+    return ['', '## Open human threads — never machine-resolved (gh-744)']
+        .concat(mergeBackstop.humanTableRows(humanRows, ctx));
+}
+
+// The digest footer (the convergence invariant in prose).
+function sweepFooter() {
+    return ['',
+        'Findings ride the gh-1353 ledger identity (file + normalized claim + severity) —',
+        'a pre-merge digest and this sweep converge on ONE entry per finding; re-runs',
+        'refresh, never duplicate. No action is required right now.'];
+}
+
 /**
  * The digest comment body: the sweep marker (dedup family), the headline,
  * the review-debt-ledger machine marker + async digest (the gh-1353
@@ -160,30 +188,11 @@ function buildSweepComment(parts) {
     var p = parts || {};
     var ledger = p.ledger || reviewDebtLedger.emptyLedger();
     var ctx = { owner: p.owner, name: p.name, prNumber: p.prNumber };
-    var marker = MARKER_PREFIX + JSON.stringify({
-        pr: p.prNumber, machine: p.machine || 0, human: p.human || 0, at: p.at || ''
-    }, reviewVerdicts.markerSafeReplacer) + MARKER_SUFFIX;
-    var lines = [
-        marker,
-        '',
-        '\uD83E\uDDF9 Post-merge sweep (gh-1420) — merged PR #' + p.prNumber + ' carried' +
-            ' unresolved review thread(s): ' + (p.machine || 0) + ' machine-authored' +
-            ' (digested below and resolved `deferred:` — the batched review-debt sweep owns' +
-            ' the fixes), ' + (p.human || 0) + ' human (never machine-resolved, gh-744).',
-        reviewDebtLedger.buildDebtMarker(ledger),
-        '',
-        reviewDebtLedger.buildDebtDigest(ledger)
-    ];
-    if (Array.isArray(p.humanRows) && p.humanRows.length) {
-        lines = lines.concat(['',
-            '## Open human threads — never machine-resolved (gh-744)'],
-            mergeBackstop.humanTableRows(p.humanRows, ctx));
-    }
-    lines = lines.concat(['',
-        'Findings ride the gh-1353 ledger identity (file + normalized claim + severity) —',
-        'a pre-merge digest and this sweep converge on ONE entry per finding; re-runs',
-        'refresh, never duplicate. No action is required right now.']);
-    return lines.join('\n');
+    return [sweepMarkerOf(p), '', sweepHeadline(p),
+        reviewDebtLedger.buildDebtMarker(ledger), '',
+        reviewDebtLedger.buildDebtDigest(ledger)]
+        .concat(sweepHumanSection(p.humanRows, ctx), sweepFooter())
+        .join('\n');
 }
 
 // ── the resolution loop (gh-1352 post-merge hygiene parity) ──────────────────
@@ -265,63 +274,49 @@ function emptyOutcome(prNumber) {
     };
 }
 
-/**
- * The post-merge sweep for one MERGED PR. Never throws (fail-soft — the
- * sweep rides the issue-close tick; the next open tick re-sweeps). The
- * outcome names every shape: clean (nothing open), commentsUnreadable
- * (no ledger base — nothing appends, nothing resolves), skipped
- * (capability miss), digestPosted / digestDeduped, the resolution counters.
- *
- * cfg: { machineLogins, owner?, name?, nowIso? } — machineLogins is the
- * gh-728 allowlist (empty → every thread sweeps as human).
- */
-function runSweep(provider, prNumber, cfg) {
-    var c = cfg || {};
-    var out = emptyOutcome(prNumber);
-    if (!provider || typeof provider.reviewThreadList !== 'function' ||
-        typeof provider.prCommentList !== 'function' ||
-        typeof provider.postPrComment !== 'function') {
-        out.skipped = 'no-primitives';
-        return out;
-    }
-    var rows = provider.reviewThreadList(prNumber);
-    var split = sweepRowsOf(rows, c.machineLogins);
-    out.machine = split.machine.length;
-    out.human = split.human.length;
-    if (!out.machine && !out.human) {
-        out.clean = true; // nothing open — no read, no comment (pure-clean parity)
-        return out;
-    }
-    // ONE comments read per sweep: the ledger base, the digest dedup and
-    // (post-post) the marker families share it. Fail-soft: without the
-    // base, appending would clobber the marker family's newest-wins state
-    // (the #1319 pathology rule) — the thread stays open, the next tick
-    // re-sweeps.
-    var comments;
+// The provider-primitive gate (fail-soft skip — a capability miss is a
+// named `skipped` outcome, never a throw through the close path).
+function sweepPrimitivesReady(provider) {
+    return !!provider && typeof provider.reviewThreadList === 'function' &&
+        typeof provider.prCommentList === 'function' &&
+        typeof provider.postPrComment === 'function';
+}
+
+// ONE comments read per sweep: the ledger base, the digest dedup and
+// (post-post) the marker families share it. Fail-soft: without the
+// base, appending would clobber the marker family's newest-wins state
+// (the #1319 pathology rule) — the thread stays open, the next tick
+// re-sweeps.
+function sweepCommentsOf(provider, prNumber, out) {
     try {
-        comments = provider.prCommentList(prNumber);
+        var comments = provider.prCommentList(prNumber);
+        if (!comments) out.commentsUnreadable = true;
+        return comments || null;
     } catch (eRead) {
         out.commentsUnreadable = true;
-        return out;
+        return null;
     }
-    if (!comments) {
-        out.commentsUnreadable = true;
-        return out;
-    }
-    var ledger = mergeBackstop.appendThreadsToLedger(
+}
+
+// The ledger phase: the PR's pre-existing debt ledger (the gh-1353 base)
+// and this sweep's machine rows append into ONE convergent ledger.
+function sweepLedgerOf(comments, c, prNumber, split) {
+    return mergeBackstop.appendThreadsToLedger(
         reviewDebtLedger.latestDebtLedger(comments, { authorLogins: c.machineLogins || [] }) ||
             reviewDebtLedger.emptyLedger(),
         split.machine.map(digestRowOf),
         { owner: c.owner, name: c.name, prNumber: prNumber, nowIso: c.nowIso });
-    out.ledgerFindings = Array.isArray(ledger.findings) ? ledger.findings.length : 0;
-    out.digested = split.machine.length;
-    resolveMachineThreads(provider, prNumber, ledger, split.machine, out);
-    // The digest comment: ONE per PR (a merged head is frozen). The dedup
-    // keys on the sweep-marker family — a PR carrying only a ledger stamp
-    // (the merge-time backstop's) still gets the sweep digest.
+}
+
+// The digest tail: ONE digest comment per PR (a merged head is frozen).
+// The dedup keys on the sweep-marker family — a PR carrying only a ledger
+// stamp (the merge-time backstop's) still gets the sweep digest. A failed
+// post is soft: the debt also lives in the resolution acks; the next tick
+// re-posts (the marker family is the dedup, the ledger the payload).
+function postSweepDigest(provider, prNumber, c, ledger, split, comments, out) {
     if (hasSweepForPr(existingSweeps(comments), prNumber)) {
         out.digestDeduped = true;
-        return out;
+        return;
     }
     try {
         provider.postPrComment(prNumber, buildSweepComment({
@@ -336,9 +331,42 @@ function runSweep(provider, prNumber, cfg) {
         }));
         out.digestPosted = true;
     } catch (ePost) {
-        // soft — the debt also lives in the resolution acks; the next tick
-        // re-posts (the marker family is the dedup, the ledger the payload).
+        // soft — the next tick re-sweeps and re-tries the post.
     }
+}
+
+/**
+ * The post-merge sweep for one MERGED PR. Never throws (fail-soft — the
+ * sweep rides the issue-close tick; the next open tick re-sweeps). The
+ * outcome names every shape: clean (nothing open), commentsUnreadable
+ * (no ledger base — nothing appends, nothing resolves), skipped
+ * (capability miss), digestPosted / digestDeduped, the resolution counters.
+ *
+ * cfg: { machineLogins, owner?, name?, nowIso? } — machineLogins is the
+ * gh-728 allowlist (empty → every thread sweeps as human).
+ */
+function runSweep(provider, prNumber, cfg) {
+    var c = cfg || {};
+    var out = emptyOutcome(prNumber);
+    if (!sweepPrimitivesReady(provider)) {
+        out.skipped = 'no-primitives';
+        return out;
+    }
+    var rows = provider.reviewThreadList(prNumber);
+    var split = sweepRowsOf(rows, c.machineLogins);
+    out.machine = split.machine.length;
+    out.human = split.human.length;
+    if (!out.machine && !out.human) {
+        out.clean = true; // nothing open — no read, no comment (pure-clean parity)
+        return out;
+    }
+    var comments = sweepCommentsOf(provider, prNumber, out);
+    if (!comments) return out;
+    var ledger = sweepLedgerOf(comments, c, prNumber, split);
+    out.ledgerFindings = Array.isArray(ledger.findings) ? ledger.findings.length : 0;
+    out.digested = split.machine.length;
+    resolveMachineThreads(provider, prNumber, ledger, split.machine, out);
+    postSweepDigest(provider, prNumber, c, ledger, split, comments, out);
     return out;
 }
 

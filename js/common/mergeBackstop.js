@@ -1248,6 +1248,7 @@ if (typeof module !== 'undefined' && module.exports) {
         buildDigestIssue: buildDigestIssue,
         countedTableRows: countedTableRows,
         humanTableRows: humanTableRows,
+        severityClassOfThread: severityClassOfThread,
         deferredAck: deferredAck,
         belowThresholdAck: belowThresholdAck,
         buildDebtSearchQuery: buildDebtSearchQuery,

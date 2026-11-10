@@ -81,6 +81,22 @@ var shortSha = mergeBackstop.shortSha;
 
 // ── the residue payload ──────────────────────────────────────────────────────
 
+// The zero-residue payload (a null/skipped outcome — the backstop saw
+// nothing, pure-clean parity, AC1).
+function zeroResidue() {
+    return { openThreadsAtMerge: 0, autoResolved: 0, machine: 0, human: 0 };
+}
+
+// A residue bucket length — a missing/non-array bucket is an empty one.
+function residueBucketLen(bs, field) {
+    return Array.isArray(bs[field]) ? bs[field].length : 0;
+}
+
+// A residue counter — a missing counter is zero.
+function residueCountOf(v) {
+    return v || 0;
+}
+
 /**
  * The residue counts of one gh-1353 backstop outcome — what the merge-note
  * payload and the merged/deferred MERGE-DECISION lines render. Every
@@ -89,21 +105,32 @@ var shortSha = mergeBackstop.shortSha;
  */
 function residueCountsOf(bs) {
     if (!bs || bs.skipped) {
-        return { openThreadsAtMerge: 0, autoResolved: 0, machine: 0, human: 0 };
+        return zeroResidue();
     }
-    var counted = Array.isArray(bs.counted) ? bs.counted.length : 0;
-    var ack = Array.isArray(bs.ackThreads) ? bs.ackThreads.length : 0;
-    var hold = Array.isArray(bs.holdThreads) ? bs.holdThreads.length : 0;
-    var human = Array.isArray(bs.human) ? bs.human.length : 0;
+    var machine = residueBucketLen(bs, 'counted') +
+        residueBucketLen(bs, 'ackThreads') + residueBucketLen(bs, 'holdThreads');
+    var human = residueBucketLen(bs, 'human');
     return {
-        openThreadsAtMerge: counted + ack + hold + human,
-        autoResolved: (bs.resolved || 0) + (bs.ackResolved || 0),
-        machine: counted + ack + hold,
+        openThreadsAtMerge: machine + human,
+        autoResolved: residueCountOf(bs.resolved) + residueCountOf(bs.ackResolved),
+        machine: machine,
         human: human
     };
 }
 
 // ── the marker ───────────────────────────────────────────────────────────────
+
+// The human-readable half of the marker — the sentence says what ACTUALLY
+// happened to each bucket: only `autoResolved` were auto-resolved, the rest
+// of the machine bucket was DEFERED to the digest (gh-1420 rework review:
+// the payload is the protocol, the prose must not overstate it).
+function residueSentence(residue) {
+    return '\uD83E\uDD9A Merged with residue (gh-1420): ' +
+        residue.openThreadsAtMerge + ' review thread(s) were open at merge time — ' +
+        residue.machine + ' machine-owned (' + residue.autoResolved + ' auto-resolved; the' +
+        ' rest deferred to the review debt ledger / digest issue), ' + residue.human +
+        ' human (left open per gh-744).';
+}
 
 /**
  * The machine-parseable merge-note marker for one merged head: the payload
@@ -120,13 +147,8 @@ function buildMergeNoteMarker(residue, headSha, nowIso) {
         head: String(headSha || ''),
         at: nowIso || ''
     };
-    var note = '\uD83E\uDD9A Merged with residue (gh-1420): ' +
-        residue.openThreadsAtMerge + ' review thread(s) were open at merge time — ' +
-        residue.machine + ' machine-owned (auto-resolved by the merge backstop' +
-        (residue.autoResolved ? ', findings ride the review debt ledger / digest issue' : '') +
-        '), ' + residue.human + ' human (left open per gh-744).';
     return MARKER_PREFIX + JSON.stringify(payload, reviewVerdicts.markerSafeReplacer) +
-        MARKER_SUFFIX + '\n' + note;
+        MARKER_SUFFIX + '\n' + residueSentence(residue);
 }
 
 // The note record of one dmtools:merge-note payload (dedup key: head).
@@ -160,6 +182,39 @@ function hasNoteForHead(notes, headSha) {
 
 // ── the stamp ────────────────────────────────────────────────────────────────
 
+// The stamp's dedup read: the ONE comment-list read the marker dedup rides.
+// Fail-soft — without the read, posting would risk comment spam, so the
+// outcome names `commentsUnreadable` and the marker is skipped.
+function stampCommentsOf(io, owner, name, inp, out) {
+    try {
+        var comments = mergeVerdictGate.prCommentList(io && io.getComments, owner, name, inp.prNumber);
+        if (!comments) out.commentsUnreadable = true; // capability miss — the marker is skipped
+        return comments || null;
+    } catch (eRead) {
+        out.commentsUnreadable = true; // soft — posting without the dedup read risks spam
+        return null;
+    }
+}
+
+// The marker post for one residue stamp. Fail-soft — the merge already
+// happened; every fault (a missing createComment primitive, a failed post)
+// is named on the outcome, never thrown.
+function postStampMarker(io, owner, name, inp, residue, out) {
+    try {
+        if (!io || typeof io.createComment !== 'function') {
+            out.postFailed = true; // capability miss — named, never thrown
+            return;
+        }
+        io.createComment({
+            workspace: owner, repository: name, number: inp.prNumber,
+            body: buildMergeNoteMarker(residue, out.head, inp.nowIso)
+        });
+        out.posted = true;
+    } catch (ePost) {
+        out.postFailed = true; // soft — the merge stands, the residue lives in the log line
+    }
+}
+
 /**
  * The merge-note stamp for one squash-merged PR: zero residue → silent
  * (no read spent); residue → the dedup read, then ONE marker per head.
@@ -182,34 +237,13 @@ function runMergeNote(io, owner, name, input) {
         out.silent = true; // pure-clean merges stay silent (AC1) — no read spent
         return out;
     }
-    var comments;
-    try {
-        comments = mergeVerdictGate.prCommentList(io && io.getComments, owner, name, inp.prNumber);
-    } catch (eRead) {
-        out.commentsUnreadable = true; // soft — posting without the dedup read risks spam
-        return out;
-    }
-    if (!comments) {
-        out.commentsUnreadable = true; // capability miss — the marker is skipped
-        return out;
-    }
+    var comments = stampCommentsOf(io, owner, name, inp, out);
+    if (!comments) return out;
     if (hasNoteForHead(existingNotes(comments), out.head)) {
         out.deduped = true; // one comment per head (refresh-in-place by NOT posting)
         return out;
     }
-    try {
-        if (!io || typeof io.createComment !== 'function') {
-            out.postFailed = true; // capability miss — named, never thrown
-            return out;
-        }
-        io.createComment({
-            workspace: owner, repository: name, number: inp.prNumber,
-            body: buildMergeNoteMarker(residue, out.head, inp.nowIso)
-        });
-        out.posted = true;
-    } catch (ePost) {
-        out.postFailed = true; // soft — the merge stands, the residue lives in the log line
-    }
+    postStampMarker(io, owner, name, inp, residue, out);
     return out;
 }
 
@@ -240,6 +274,27 @@ function outcomeLines(out) {
 
 // ── the structured decision line (format v2) ─────────────────────────────────
 
+// A counter field — missing/zero rides its zero (a partial decision still
+// renders a complete greppable line).
+function decisionCountOf(v) {
+    return v || 0;
+}
+
+// A word field — missing rides its default word.
+function decisionWordOf(v, dflt) {
+    return v || dflt;
+}
+
+// The head field — the 7-char short sha, missing reads 'none'.
+function decisionHeadOf(headSha) {
+    return headSha ? shortSha(headSha) : 'none';
+}
+
+// The pr field — missing reads '?' (never an undefined in the line).
+function decisionPrOf(prNumber) {
+    return (prNumber === undefined || prNumber === null) ? '?' : prNumber;
+}
+
 /**
  * The greppable MERGE-DECISION line for one merge decision (gh-1420
  * design b). Pure — the funnel renders + says it via emitDecision.
@@ -250,15 +305,39 @@ function outcomeLines(out) {
  */
 function mergeDecisionLine(parts) {
     var p = parts || {};
-    var head = p.headSha ? shortSha(p.headSha) : 'none';
-    return 'MERGE-DECISION pr=' + (p.prNumber === undefined || p.prNumber === null
-            ? '?' : p.prNumber) +
-        ' head=' + head +
-        ' action=' + (p.action || ACTION_DEFERED) +
-        ' machineThreads=' + (p.machineThreads || 0) +
-        ' humanThreads=' + (p.humanThreads || 0) +
-        ' allowlist=' + (p.allowlist || 0) +
-        ' verdict=' + (p.verdict || 'none');
+    return 'MERGE-DECISION pr=' + decisionPrOf(p.prNumber) +
+        ' head=' + decisionHeadOf(p.headSha) +
+        ' action=' + decisionWordOf(p.action, ACTION_DEFERED) +
+        ' machineThreads=' + decisionCountOf(p.machineThreads) +
+        ' humanThreads=' + decisionCountOf(p.humanThreads) +
+        ' allowlist=' + decisionCountOf(p.allowlist) +
+        ' verdict=' + decisionWordOf(p.verdict, 'none');
+}
+
+// The line's decision parts: the machine/human counts render from the
+// gh-1353 backstop outcome when it rides (the authoritative pre-resolution
+// census), else from the funnel's own numbers.
+function decisionPartsOf(p) {
+    var residue = residueCountsOf(p.backstop);
+    return {
+        prNumber: p.prNumber,
+        headSha: headShaOf(p.pr),
+        action: p.action,
+        machineThreads: p.backstop ? residue.machine : decisionCountOf(p.machineThreads),
+        humanThreads: p.backstop ? residue.human : decisionCountOf(p.humanThreads),
+        allowlist: mergeBackstop.machineLoginsOf(p.job || null).length,
+        verdict: decisionWordOf(p.verdict, 'none')
+    };
+}
+
+// The workflow-level annotation for one hold (design d): ONE line — a
+// multi-line fault reason is flattened so the annotation shape survives
+// (gh-1420 rework digest).
+function holdWarningLine(p) {
+    var reason = p.reason ? String(p.reason).replace(/[\r\n]+/g, ' ') :
+        ' — the merge gates hold it; see the MERGE-DECISION line';
+    return '::warning:: merge ' + p.action + ' on PR #' + p.prNumber + ' (gh-1420)' +
+        (p.reason ? ': ' + reason : reason);
 }
 
 /**
@@ -273,28 +352,15 @@ function mergeDecisionLine(parts) {
  * parts: { prNumber, pr, job, action, machineThreads?, humanThreads?,
  *          verdict?, warn?, reason?, backstop? } — when `backstop` (the
  * gh-1353 outcome mergeGate.runForPr attaches) is present, the machine/
- * human counts render from its residue (the authoritative pre-resolution
- * census); otherwise the funnel's own numbers ride.
+ * human counts render from its residue; otherwise the funnel's own
+ * numbers ride.
  */
 function emitDecision(say, parts) {
     var p = parts || {};
-    var residue = residueCountsOf(p.backstop);
-    var line = mergeDecisionLine({
-        prNumber: p.prNumber,
-        headSha: headShaOf(p.pr),
-        action: p.action,
-        machineThreads: p.backstop ? residue.machine : (p.machineThreads || 0),
-        humanThreads: p.backstop ? residue.human : (p.humanThreads || 0),
-        allowlist: mergeBackstop.machineLoginsOf(p.job || null).length,
-        verdict: p.verdict || 'none'
-    });
+    var line = mergeDecisionLine(decisionPartsOf(p));
     if (typeof say === 'function') {
         say(line);
-        var warn = (p.action === ACTION_HELD) || p.warn === true;
-        if (warn) {
-            say('::warning:: merge ' + p.action + ' on PR #' + p.prNumber + ' (gh-1420)' +
-                (p.reason ? ': ' + p.reason : ' — the merge gates hold it; see the MERGE-DECISION line'));
-        }
+        if ((p.action === ACTION_HELD) || p.warn === true) say(holdWarningLine(p));
     }
     return line;
 }
