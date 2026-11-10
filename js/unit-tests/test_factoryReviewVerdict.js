@@ -1305,7 +1305,7 @@ suite('factoryReviewVerdict — machine verdict record primacy (gh-1419)', funct
     assert.ok(x.io.logs.join('\n').indexOf('→ PR #' + PR + ' checks green') !== -1,
       'the green-checks gate still ran');
     var headProbe = x.st.commands.filter(function (c) { return c.indexOf('headRefOid') !== -1; });
-    assert.equal(headProbe.length, 1, 'the head sha was probed (marker records exist)');
+    assert.ok(headProbe.length >= 1, 'the head sha was probed (marker records exist; the gh-1101 SM kick probes it again on approval)');
   });
 
   test('AC1c: marker absent + legacy parser says rework — rework path, never approve, no head probe', function () {
@@ -1386,7 +1386,7 @@ suite('factoryReviewVerdict — machine verdict record primacy (gh-1419)', funct
     assert.equal(r.status, 'approved',
       'the stale-head marker does not govern; the parser approve (override=false) is a genuine approve');
     var headProbe = x.st.commands.filter(function (c) { return c.indexOf('headRefOid') !== -1; });
-    assert.equal(headProbe.length, 1, 'the head was probed to filter the marker records');
+    assert.ok(headProbe.length >= 1, 'the head was probed to filter the marker records');
     assert.equal(x.io.logs.join('\n').indexOf('→ machine verdict record:') !== -1, false,
       'no marker for THIS head → no marker-governs log');
   });
