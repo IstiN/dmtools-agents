@@ -382,9 +382,10 @@ function stampEscalationLabel(io, owner, name, input, out) {
  *          one reads every open thread as human — the hold survives);
  *          the knobs default strict (true / 24h).
  */
-function runGate(io, owner, name, input) {
-    var inp = input || {};
-    var out = {
+// The fresh outcome record — every observable flag the gate can set, in
+// one place (all false/empty until a phase sets them).
+function gateOutcomeOf(inp) {
+    return {
         prNumber: inp.prNumber,
         held: false,
         escalated: false,
@@ -404,9 +405,15 @@ function runGate(io, owner, name, input) {
         threadsSkipped: false,
         commentsSkipped: false
     };
+}
+
+// Phase 1 — the census. Returns the census when it holds the merge;
+// null when the gate stops here (capability miss, or the census lets
+// the merge proceed — the outcome carries which).
+function censusPhase(io, owner, name, inp, out) {
     if (!io || typeof io.getThreads !== 'function') {
         out.threadsSkipped = true; // capability miss — the backstop's skip shape
-        return out;
+        return null;
     }
     // Fail-closed census: a broken read throws through (hold) — it must
     // never classify as "no threads" (the #1319 pathology rule).
@@ -417,13 +424,14 @@ function runGate(io, owner, name, input) {
     out.human = census.human;
     out.machine = census.machine;
     out.notices = census.notices;
-    if (!censusHolds(census, inp.holdOnHumanThreads)) return out; // merge proceeds
+    if (!censusHolds(census, inp.holdOnHumanThreads)) return null; // merge proceeds
+    return census;
+}
+
+// Phase 2 — the hold. Runs only once the census holds the merge:
+// the dedup-safe stamp, the escalation valve and its label transition.
+function holdPhase(io, owner, name, inp, out, census, escalate) {
     out.held = true;
-    // The escalation valve keys on HUMAN threads actually holding the
-    // merge (a machine-only hold waits on stage 1's retry loop — its
-    // repeated failures escalate through the funnel job surface, never
-    // through needs-human).
-    var escalate = inp.holdOnHumanThreads !== false && census.human > 0;
     if (!out.head) {
         out.markerSkipped = true; // hold stands — no dedup key, no marker
         return out;
@@ -451,6 +459,19 @@ function runGate(io, owner, name, input) {
     }
     stampHold(io, owner, name, inp, out, census, holds, false, null);
     return out;
+}
+
+function runGate(io, owner, name, input) {
+    var inp = input || {};
+    var out = gateOutcomeOf(inp);
+    var census = censusPhase(io, owner, name, inp, out);
+    if (!census) return out; // capability miss, or the merge proceeds
+    // The escalation valve keys on HUMAN threads actually holding the
+    // merge (a machine-only hold waits on stage 1's retry loop — its
+    // repeated failures escalate through the funnel job surface, never
+    // through needs-human).
+    var escalate = inp.holdOnHumanThreads !== false && census.human > 0;
+    return holdPhase(io, owner, name, inp, out, census, escalate);
 }
 
 // ── caller-facing log lines ──────────────────────────────────────────────────

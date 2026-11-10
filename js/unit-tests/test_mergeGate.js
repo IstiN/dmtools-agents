@@ -201,31 +201,46 @@ function escalatedHoldComment(head, at) {
 // payloads; opts.threadsThrows / opts.noThreads / opts.noComments /
 // opts.noCreateComment / opts.noAddLabels / opts.createCommentThrows /
 // opts.addLabelsThrows shape the failure modes. Every call lands in `calls`.
+// One scripted provider: absent (null) when opts[shape.absent], otherwise
+// a recording reader that throws on opts[shape.throwKey] and serves
+// shape.serve(opts). The shape table keeps gateIo's complexity flat when
+// a provider is added (the crap ratchet counts per-function branches).
+function scriptedGateReader(opts, calls, shape) {
+    if (opts[shape.absent]) return null;
+    return function (a) {
+        calls[shape.callsKey].push(a);
+        if (opts[shape.throwKey]) throw new Error(opts[shape.throwKey]);
+        return shape.serve(opts);
+    };
+}
+
+// io bag over scripted providers: opts.threads / opts.comments = the served
+// payloads; opts.threadsThrows / opts.noThreads / opts.noComments /
+// opts.noCreateComment / opts.noAddLabels / opts.createCommentThrows /
+// opts.addLabelsThrows shape the failure modes. Every call lands in `calls`.
 function gateIo(opts, calls) {
     opts = opts || {};
     calls = calls || { threadsReads: [], commentReads: [], commentsPosted: [], labelsAdded: [] };
     return {
         io: {
-            getThreads: opts.noThreads ? null : function (a) {
-                calls.threadsReads.push(a);
-                if (opts.threadsThrows) throw new Error(opts.threadsThrows);
-                return (opts.threads === undefined) ? threadsPayload([]) : opts.threads;
-            },
-            getComments: opts.noComments ? null : function (a) {
-                calls.commentReads.push(a);
-                if (opts.commentsThrows) throw new Error(opts.commentsThrows);
-                return JSON.stringify(opts.comments || []);
-            },
-            createComment: opts.noCreateComment ? null : function (c) {
-                calls.commentsPosted.push(c);
-                if (opts.createCommentThrows) throw new Error(opts.createCommentThrows);
-                return '{}';
-            },
-            addLabels: opts.noAddLabels ? null : function (l) {
-                calls.labelsAdded.push(l);
-                if (opts.addLabelsThrows) throw new Error(opts.addLabelsThrows);
-                return '{}';
-            }
+            getThreads: scriptedGateReader(opts, calls, {
+                absent: 'noThreads', callsKey: 'threadsReads', throwKey: 'threadsThrows',
+                serve: function (o) {
+                    return (o.threads === undefined) ? threadsPayload([]) : o.threads;
+                }
+            }),
+            getComments: scriptedGateReader(opts, calls, {
+                absent: 'noComments', callsKey: 'commentReads', throwKey: 'commentsThrows',
+                serve: function (o) { return JSON.stringify(o.comments || []); }
+            }),
+            createComment: scriptedGateReader(opts, calls, {
+                absent: 'noCreateComment', callsKey: 'commentsPosted', throwKey: 'createCommentThrows',
+                serve: function () { return '{}'; }
+            }),
+            addLabels: scriptedGateReader(opts, calls, {
+                absent: 'noAddLabels', callsKey: 'labelsAdded', throwKey: 'addLabelsThrows',
+                serve: function () { return '{}'; }
+            })
         },
         calls: calls
     };
@@ -673,6 +688,45 @@ suite('mergeGate: outcome lines', function () {
     });
 });
 
+// holdStampLine — every marker state names itself. Table-driven over the
+// exported outcomeLines: one case per holdStampLine branch so the
+// caller-facing marker fragments stay pinned (and the crap ratchet sees
+// full branch coverage on the line builder).
+function markerOutcomeOf(flags) {
+    var out = { prNumber: 12, held: true, total: 1, human: 1, machine: 0 };
+    for (var k in flags) out[k] = flags[k];
+    return out;
+}
+
+suite('mergeGate: holdStampLine — every marker state names itself', function () {
+
+    var MARKER_CASES = [
+        [{ escalationPosted: true }, 'hold ESCALATED (needs-human) — escalated marker posted'],
+        [{ escalationDeduped: true }, 'hold ESCALATED (needs-human) — escalated marker deduped'],
+        [{ holdPosted: true }, 'hold marker posted (one per head)'],
+        [{ holdDeduped: true }, 'hold marker deduped per head (existing marker reused in place)'],
+        [{ holdPostFailed: true }, 'hold marker post failed — fail-open'],
+        [{ markerSkipped: true }, 'hold marker skipped (no dedup-safe primitive)'],
+        [{ commentsSkipped: true }, 'hold marker skipped (no dedup-safe primitive)'],
+        [{}, 'hold marker skipped']
+    ];
+
+    MARKER_CASES.forEach(function (c) {
+        test('held line marker fragment: ' + c[1], function () {
+            var lines = mMergeGate().outcomeLines(markerOutcomeOf(c[0]));
+            assert.equal(lines.length, 1);
+            assert.ok(lines[0].indexOf('merge deferred') !== -1, 'the held line shape');
+            assert.ok(lines[0].indexOf(c[1]) !== -1, 'the marker fragment rides the line');
+        });
+    });
+
+    test('marker-state precedence: escalation beats dedup beats the plain marker states', function () {
+        var lines = mMergeGate().outcomeLines(markerOutcomeOf(
+            { escalationPosted: true, holdDeduped: true, holdPosted: true }));
+        assert.ok(lines[0].indexOf('ESCALATED (needs-human) — escalated marker posted') !== -1);
+    });
+});
+
 // ── runForPr: the two-stage wiring ───────────────────────────────────────────
 
 suite('mergeGate: runForPr (stage 1 + stage 2, the shared helper)', function () {
@@ -683,32 +737,52 @@ suite('mergeGate: runForPr (stage 1 + stage 2, the shared helper)', function () 
     // resolveThread marks the node resolved, so the stage-2 census (the
     // second read) sees the post-resolution reality. Every call lands in
     // `calls`.
-    function bridgeIo(opts, calls) {
-        calls = calls || { threadsReads: [], commentReads: [], commentsPosted: [],
-            labelsAdded: [], threadResolves: [], threadReplies: [], debtIssues: [], debtSearches: [] };
-        var threadsPayloadObj = (typeof opts.threads === 'string') ? JSON.parse(opts.threads) : opts.threads;
-        var nodes = (!threadsPayloadObj) ? [] :
-            JSON.parse(JSON.stringify(threadsPayloadObj.data.repository.pullRequest.reviewThreads.nodes));
-        var g = gateIo(opts, calls);
-        if (!opts.noThreads) g.io.getThreads = function (a) {
+    // The MUTABLE thread nodes behind the fixture: a successful
+    // resolveThread flips the node in place, so the stage-2 census (the
+    // second read) sees the post-resolution reality.
+    function bridgeNodesOf(opts) {
+        var payload = (typeof opts.threads === 'string') ? JSON.parse(opts.threads) : opts.threads;
+        if (!payload) return [];
+        return JSON.parse(JSON.stringify(payload.data.repository.pullRequest.reviewThreads.nodes));
+    }
+
+    // The recording getThreads over the shared mutable nodes.
+    function bridgeGetThreads(opts, calls, nodes) {
+        return function (a) {
             calls.threadsReads.push(a);
             if (opts.threadsThrows) throw new Error(opts.threadsThrows);
             return JSON.stringify({ data: { repository: { pullRequest:
                 { reviewThreads: { nodes: nodes } } } } });
         };
+    }
+
+    // The recording resolveThread: fails the ids in opts.resolveFailIds,
+    // otherwise flips the node resolved in place.
+    function bridgeResolveThread(opts, calls, nodes) {
+        return function (a) {
+            if ((opts.resolveFailIds || []).indexOf(String(a.threadId)) !== -1) {
+                throw new Error('422 ' + a.threadId);
+            }
+            calls.threadResolves.push(a);
+            nodes.forEach(function (n) {
+                if (n && String(n.id) === String(a.threadId)) n.isResolved = true;
+            });
+            return '{}';
+        };
+    }
+
+    function bridgeIo(opts, calls) {
+        calls = calls || { threadsReads: [], commentReads: [], commentsPosted: [],
+            labelsAdded: [], threadResolves: [], threadReplies: [], debtIssues: [], debtSearches: [] };
+        var nodes = bridgeNodesOf(opts);
+        var g = gateIo(opts, calls);
+        if (!opts.noThreads) g.io.getThreads = bridgeGetThreads(opts, calls, nodes);
         g.io.searchIssues = function () { calls.debtSearches.push({}); return JSON.stringify({ items: [] }); };
         g.io.createIssue = function (a) {
             calls.debtIssues.push(a);
             return JSON.stringify({ number: 500 + calls.debtIssues.length });
         };
-        g.io.resolveThread = function (a) {
-            if ((opts.resolveFailIds || []).indexOf(String(a.threadId)) !== -1) {
-                throw new Error('422 ' + a.threadId);
-            }
-            calls.threadResolves.push(a);
-            nodes.forEach(function (n) { if (n && String(n.id) === String(a.threadId)) n.isResolved = true; });
-            return '{}';
-        };
+        g.io.resolveThread = bridgeResolveThread(opts, calls, nodes);
         g.io.replyToThread = function (a) { calls.threadReplies.push(a); return '{}'; };
         return g;
     }
