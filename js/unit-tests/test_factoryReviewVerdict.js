@@ -1252,12 +1252,15 @@ function markerCommentJson(verdict, head, over) {
 
 // baseRules with the PR comments payload replaced (the marker rides the
 // comments+reviews fetch) and the PR head sha probed (lazy: only when a
-// trusted marker record exists).
+// trusted marker record exists). headSha=null simulates a FAILED probe —
+// the headRefOid transport throws (rate limit / network blip) — the
+// gh-1419 rework gap: trusted records exist but WHICH head is unknown.
 function markerRules(prComments, headSha, over) {
     var rules = baseRules(over).map(function (r) {
         return r[0] === 'pr view.*--json comments,reviews' ? [r[0], r[1], prComments] : r;
     });
-    if (headSha !== undefined) rules.push(['headRefOid', 'out', headSha + '\n']);
+    if (headSha === null) rules.push(['headRefOid', 'throw', 'rate limit exceeded']);
+    else if (headSha !== undefined) rules.push(['headRefOid', 'out', headSha + '\n']);
     return rules;
 }
 
@@ -1391,6 +1394,36 @@ suite('factoryReviewVerdict — machine verdict record primacy (gh-1419)', funct
       'no marker for THIS head → no marker-governs log');
   });
 
+  test('AC1h: trusted marker records exist but the head probe FAILS — the parser can never classify approve (no fail-open)', function () {
+    // The review thread's gap: a trusted REQUEST_CHANGES marker sits on
+    // SOME head — quite possibly this one — and a transient gh failure
+    // (rate limit, network blip) hides WHICH. The header's invisible-list
+    // (pre-gh-807 shape / another head / untrusted author / no identity)
+    // does not cover a FAILED probe: failing open to a legacy approve
+    // contract would re-enter the #1410 pathology through the one branch
+    // the ladder doesn't guard. The safe side: the parser's approve is
+    // suppressed (rework dispatches); the genuine approve re-arrives on a
+    // re-run once gh recovers and the marker resolves for this head.
+    var x = markerScenario(
+        markerCommentJson('REQUEST_CHANGES', MARKER_SHA, { important: 1 }),
+        { decision: 'approve', override: 'false', roundsDone: 0, nextRound: 0 },
+        null); // the headRefOid transport throws
+    var r = rvModule.applyReviewVerdict(baseOpts(), x.io);
+    assert.equal(r.status, 'rework',
+      'unresolvable head + trusted records → the parser approve is suppressed (fail-safe)');
+    var all = x.st.commands.join('\n');
+    assert.equal(all.indexOf("--add-label 'pr_approved'") !== -1, false,
+      'the #1410 approve path must not arm through a failed head probe');
+    assert.ok(all.indexOf("--add-label 'agent:rework'") !== -1, 'the rework path armed');
+    assert.ok(all.indexOf("--add-label 'rework-round-1'") !== -1,
+      'the round bookeeping was recomputed for the safe-side rework over an approve contract');
+    var logs = x.io.logs.join('\n');
+    assert.ok(logs.indexOf('head sha is unresolvable') !== -1,
+      'the failed probe is named loudly (not a silent reclassification)');
+    assert.equal(logs.indexOf('→ machine verdict record:') !== -1, false,
+      'no marker matched an unresolvable head → no marker-governs log');
+  });
+
   test('rule 1 bullet 2 holds for a stale-head marker too — override=true still never approves', function () {
     var x = markerScenario(
         markerCommentJson('REQUEST_CHANGES', MARKER_SHA_OTHER),
@@ -1517,6 +1550,27 @@ suite('factoryReviewVerdict — gh-1419 pure helpers', function () {
 
     var markerOnly = rvModule.resolveEffectiveDecision(rec('APPROVE'), contract({ decision: 'unknown' }));
     assert.equal(markerOnly.decision, 'approve', 'the parser found nothing → the marker governs alone');
+  });
+
+  test('resolveEffectiveDecision: an unresolvable head with trusted records never classifies approve (fail-safe, review-thread gap)', function () {
+    // Third arg = the probe-failure state from probeMachineVerdictMarker:
+    // trusted marker records exist but the PR head sha could not be read.
+    var r1 = rvModule.resolveEffectiveDecision(null, contract({ decision: 'approve' }), true);
+    assert.equal(r1.decision, 'rework', 'the parser approve is suppressed — rework is the safe side');
+    assert.equal(r1.source, 'legacy-parser', 'the legacy parser still decides, on its safe side only');
+
+    var r2 = rvModule.resolveEffectiveDecision(null, contract({ decision: 'rework' }), true);
+    assert.equal(r2.decision, 'rework', 'a parser rework stays a rework (already the safe side)');
+
+    var r3 = rvModule.resolveEffectiveDecision(null, contract({ decision: 'approve' }), false);
+    assert.equal(r3.decision, 'approve', 'a RESOLVED head keeps the legacy fail-open (AC1d unchanged)');
+
+    var r4 = rvModule.resolveEffectiveDecision(null, contract({ decision: 'unknown' }), true);
+    assert.equal(r4.decision, 'unknown', 'no parser verdict still rides the loud missing-verdict path');
+
+    var overrideKey = rvModule.resolveEffectiveDecision(
+        null, contract({ decision: 'approve', override: 'true' }), true);
+    assert.equal(overrideKey.decision, 'rework', 'override=true + suppressed approve → rework either way');
   });
 
   test('reworkRoundBookeeping: the sh rule recomputed over an approve/unknown contract', function () {

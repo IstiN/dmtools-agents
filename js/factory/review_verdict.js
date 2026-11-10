@@ -49,6 +49,11 @@
  *      setup/review-verdict.sh — updated in the same commit, one source of
  *      truth (the JS is canonical; the sh is the fallback parser) — no
  *      longer downgrades at all;
+ *      a FAILED head probe (trusted records exist, the headRefOid
+ *      transport fails) is none of the invisible causes above: the marker
+ *      may be for THIS head, so the parser still decides but its approve
+ *      side is suppressed — rework is the safe side, the genuine approve
+ *      re-arrives on a re-run once gh recovers (never fail-open);
  *   3. marker and legacy parser disagree → LOUD escalation (needs-human +
  *      diagnosis comment + THROW, the gh-305 "no verdict at all" treatment
  *      extended to contradictory verdict sources) — never a silent approve
@@ -294,8 +299,14 @@ function rawParserDecisionOf(contract) {
  * Returns { decision, source, marker } — or { conflict: { marker,
  * parserClass, parserSource, parserOverride } } when the two trusted
  * sources disagree (contradictory verdict sources → loud escalation).
+ * The third arg is the probe-failure state (trusted records exist but the
+ * head sha is unresolvable): the legacy parser still decides, but its
+ * approve side is suppressed — the marker may be for THIS head and a
+ * genuine REQUEST_CHANGES would then be bypassed by a parser approve
+ * (fail-safe: rework is the safe side; the approve re-arrives on a re-run
+ * once gh recovers and the marker resolves).
  */
-function resolveEffectiveDecision(marker, contract) {
+function resolveEffectiveDecision(marker, contract, headUnresolvable) {
     var markerClass = marker ? verdictClassOfVerdict(marker.verdict) : null;
     var parserClass = parserVerdictClassOf(contract);
     if (verdictSourcesDisagree(markerClass, parserClass)) {
@@ -309,6 +320,7 @@ function resolveEffectiveDecision(marker, contract) {
     if (markerClass) {
         return { decision: markerClass, source: 'machine-verdict-marker', marker: marker };
     }
+    if (headUnresolvable && parserClass === 'approve') parserClass = 'rework';
     return {
         decision: parserClass || rawParserDecisionOf(contract),
         source: 'legacy-parser',
@@ -512,10 +524,19 @@ function probeMachineVerdictMarker(opts, io, ctx) {
     var logins = machineAuthor.machineAuthorLogins(ctx.machineAuthor);
     ctx.headSha = '';
     ctx.marker = null;
+    ctx.headUnresolvable = false;
     if (!logins.length) return null;
     var records = markerRecordsFromPayload(ctx.prCommentsPayload, logins);
     if (!records.length) return null;
     var headSha = ctx.pr ? headShaOf(io, opts.repo, ctx.pr) : '';
+    if (ctx.pr && !headSha) {
+        // gh-1419 rework: trusted records exist but WHICH head they sit on
+        // is unknown — never fail open to a parser approve here (the
+        // resolveEffectiveDecision guard keeps the parser on its safe
+        // side; the genuine approve re-arrives once gh recovers).
+        ctx.headUnresolvable = true;
+        ctx.log('::warning::machine verdict record(s) exist but the PR head sha is unresolvable (probe failure) — the legacy parser may decide on its safe side only (no approve)');
+    }
     ctx.headSha = headSha;
     ctx.marker = markerForHead(records, headSha);
     if (ctx.marker) {
@@ -782,7 +803,7 @@ function applyDecisionToContext(ctx, resolved, opts) {
  */
 function wireEffectiveDecision(opts, io, ctx) {
     probeMachineVerdictMarker(opts, io, ctx);
-    var resolved = resolveEffectiveDecision(ctx.marker, ctx.contract);
+    var resolved = resolveEffectiveDecision(ctx.marker, ctx.contract, ctx.headUnresolvable);
     if (resolved.conflict) {
         ctx.conflict = resolved.conflict;
         applyConflictingVerdicts(opts, io, ctx);
