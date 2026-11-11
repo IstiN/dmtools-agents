@@ -241,43 +241,64 @@ var legConfigLoader = Object.assign({}, configLoaderModule, {
     }
 });
 
-function loadLegModule(mocks) {
-    return (function (_m) {
-        return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
-            './common/toolchainSummary.js': { withToolchainLine: function (t) { return t; } },
-            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
-            './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
-            './common/submodules.js': {},
-            './common/feedbackLoop.js': {
-                runQualityGates: function () { return { success: true }; },
-                runPolicyGates: function () { return { success: true }; },
-                runPostPublishGates: function () { return { success: true }; },
-                resumeAgent: function () { return { attempted: false }; },
-                resumeOnceForMissingResponse: function () { return { attempted: false }; }
-            },
-            './common/autoStart.js': { triggerSmIfIdle: function () { } },
-            './common/outputFiles.js': { readOutputFile: function () { return null; }, hasOutputFile: function () { return false; } },
-            './common/needsInput.js': loadModule('js/common/needsInput.js'),
-            './cacheToReleases.js': {},
-            './common/gitStaging.js': loadModule('js/common/gitStaging.js'),
-            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
-            // REAL developmentMode module — the IT path must exercise the actual resolver.
-            './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './configLoader.js': legConfigLoader,
-            './config.js': configModule,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
-            './common/commentMarkup.js': loadModule('js/common/commentMarkup.js',
-                makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }))
-        }, {
-            './common/trackers.js': trackersWith(_m),
-            './common/trackerSlot.js': trackerSlotWith(_m)
-        })), _m);
-    })(Object.assign({
+// Default dmtools-global mocks for the leg module. Callers merge their own
+// mocks on top — the overrides win, mirroring makeRequire's shadowing rule.
+function legBaseMocks() {
+    return {
         cli_execute_command: function () { return ''; },
         jira_post_comment: function () { },
         jira_move_to_status: function () { },
         jira_remove_label: function () { }
-    }, mocks || {}));
+    };
+}
+
+// Static require map for the leg module. The REAL developmentMode module is
+// wired here — the IT path must exercise the actual resolver. trackers /
+// trackerSlot stay mockable per-test via legRequireOverrides(_m).
+function legRequireMap() {
+    return {
+        './common/toolchainSummary.js': { withToolchainLine: function (t) { return t; } },
+        './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+        './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
+        './common/submodules.js': {},
+        './common/feedbackLoop.js': {
+            runQualityGates: function () { return { success: true }; },
+            runPolicyGates: function () { return { success: true }; },
+            runPostPublishGates: function () { return { success: true }; },
+            resumeAgent: function () { return { attempted: false }; },
+            resumeOnceForMissingResponse: function () { return { attempted: false }; }
+        },
+        './common/autoStart.js': { triggerSmIfIdle: function () { } },
+        './common/outputFiles.js': { readOutputFile: function () { return null; }, hasOutputFile: function () { return false; } },
+        './common/needsInput.js': loadModule('js/common/needsInput.js'),
+        './cacheToReleases.js': {},
+        './common/gitStaging.js': loadModule('js/common/gitStaging.js'),
+        './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
+        // REAL developmentMode module — the IT path must exercise the actual resolver.
+        './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+        './configLoader.js': legConfigLoader,
+        './config.js': configModule,
+        './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+        './common/commentMarkup.js': loadModule('js/common/commentMarkup.js',
+            makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }))
+    };
+}
+
+// Mock-dependent require overrides — shadow the static map per test.
+function legRequireOverrides(_m) {
+    return {
+        './common/trackers.js': trackersWith(_m),
+        './common/trackerSlot.js': trackerSlotWith(_m)
+    };
+}
+
+// The mock/require tables live in the named helpers above: crap4js counts
+// lambda bodies toward the enclosing function, so keeping them inline left
+// loadLegModule at CC 3 / CRAP 8.5 — over the repo's CRAP ratchet (8).
+function loadLegModule(mocks) {
+    var _m = Object.assign(legBaseMocks(), mocks || {});
+    var legRequires = Object.assign({}, legRequireMap(), legRequireOverrides(_m));
+    return loadModule('js/developTicketAndCreatePR.js', makeRequire(legRequires), _m);
 }
 
 function legParams(customParams, shape) {
