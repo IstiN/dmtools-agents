@@ -558,6 +558,19 @@ suite('tokenUsageComment.postTokenUsageSafely (gh-124)', function() {
         assert.contains(posted[0].comment, 'Initiator: [~accountid:user-1]');
     });
 
+
+    test('initiatorOf falls back to params.jobParams.initiator when top-level params.initiator is absent', function() {
+        var posted = [];
+        var mod = loadTokenUsageComment(usageFileMocks(posted));
+
+        assert.equal(mod.initiatorOf({ jobParams: { initiator: '712020:from-job-params' } }), '712020:from-job-params');
+        assert.equal(mod.initiatorOf({ initiator: '712020:top', jobParams: { initiator: '712020:from-job-params' } }), '712020:top');
+        assert.equal(mod.initiatorOf({}), '');
+
+        mod.postTokenUsageSafely('TS-1B', { jobParams: { initiator: '712020:from-job-params', customParams: { trackerProvider: 'jira' } } });
+        assert.equal(posted.length, 1);
+        assert.contains(posted[0].comment, 'Initiator: [~accountid:712020:from-job-params]');
+    });
     test('overrides win: explicit initiator and tracker are used, params may be null', function() {
         var posted = [];
         var mod = loadTokenUsageComment(usageFileMocks(posted));
