@@ -228,9 +228,6 @@ function materializePlanAppendix(customParams, io) {
     // resolution must not reference the IO globals at all (same lazy-gate
     // discipline as readAppendixText above).
     var write = (io && io.file_write) || file_write;
-    if (resolved.error) {
-        return { ok: false, active: true, path: resolved.path, overridden: resolved.overridden, error: resolved.error, warnings: resolved.warnings };
-    }
     try {
         write({ path: PLAN_APPENDIX_FILE_PATH, content: resolved.text });
     } catch (e) {
