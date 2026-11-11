@@ -385,7 +385,7 @@ suite('gh-1435 IT — dev leg config-reading path (initDevelopmentContext)', fun
 
 suite('gh-1435 REG — all repo workflow configs resolve default + stay silent', function () {
     test('golden: no existing workflow config sets developmentMode → zero drift', function () {
-        var listing = cli_execute_command({ command: 'ls *.json' }) || '';
+        var listing = cli_execute_command({ command: 'git ls-files "*.json"' }) || '';
         var files = listing.split('\n').map(function (l) { return String(l).trim(); }).filter(function (l) {
             return /^[A-Za-z0-9._-]+\.json$/.test(l);
         });
