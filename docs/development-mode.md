@@ -32,6 +32,8 @@ byte the pre-knob behavior (regression-guarded).
 
 ## 2. Profiles
 
+§2.1 describes shipped behavior; §2.2–2.3 describe the target contract — today every value executes the `default` profile.
+
 ### 2.1 `default`
 
 Direct execution — no plan artifacts, no prompt appendix, no thresholds.
