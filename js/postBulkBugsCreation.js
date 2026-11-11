@@ -628,7 +628,7 @@ function postBulkTokenUsage(ctx) {
     // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
     // wrote outputs/*_usage.json during the agent run.
     try {
-        tokenUsageComment.postTokenUsageComments((ctx.actualParams.ticket && ctx.actualParams.ticket.key) || null, { initiator: ctx.actualParams.initiator || ctx.params.initiator || (ctx.params.jobParams && ctx.params.jobParams.initiator), customParams: tokenUsageComment.customParamsOf(ctx.params) });
+        tokenUsageComment.postTokenUsageComments((ctx.actualParams.ticket && ctx.actualParams.ticket.key) || null, { initiator: ctx.actualParams.initiator, customParams: tokenUsageComment.customParamsOf(ctx.params) });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }

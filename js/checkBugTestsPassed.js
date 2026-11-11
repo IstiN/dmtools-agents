@@ -281,7 +281,7 @@ function completeBugDone(tracker, ticketKey, totalTCs, jiraConfig, params, remov
     // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
     // wrote outputs/*_usage.json during the agent run. gh-1250: the shared wrapper never throws —
     // a provider failure here must not fail the done check.
-    tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, { initiator: params.initiator || (params.jobParams && params.jobParams.initiator), customParams: tokenUsageComment.customParamsOf(params) });
+    tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
 
     releaseLock(tracker, ticketKey, removeLabel);
     return { success: true, action: 'moved_to_done', totalTCs: totalTCs, ticketKey: ticketKey };

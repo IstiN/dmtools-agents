@@ -32,7 +32,7 @@ function action(params) {
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator || (params.jobParams && params.jobParams.initiator), tracker: tracker });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

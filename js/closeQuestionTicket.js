@@ -34,7 +34,7 @@ function removeWipLabelSafely(tracker, ticketKey, wipLabel) {
 /** Post token usage summary comments; a failure is logged and skipped. */
 function postTokenUsageCommentsSafely(ticketKey, params, tracker) {
     try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator || (params.jobParams && params.jobParams.initiator), tracker: tracker });
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }

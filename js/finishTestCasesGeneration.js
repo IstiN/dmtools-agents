@@ -54,7 +54,7 @@ function removeGeneratorTriggerLabelQuietly(ticketKey) {
 /** Token-usage comments are a nice-to-have — never fail the action on them. */
 function postTokenUsageQuietly(ticketKey, params) {
     try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator || (params.jobParams && params.jobParams.initiator), customParams: tokenUsageComment.customParamsOf(params) });
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }
