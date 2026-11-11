@@ -75,6 +75,8 @@ _Post-Action Development — Dynamic Repository variant_
   - `contentOutput.target`
   - `customStatuses`
   - `dependenciesDir`
+  - `developmentMode`
+  - `developmentModeConfig`
   - `dryRun`
   - `feedbackLoop`
   - `localTeammate`
@@ -127,6 +129,8 @@ _Post-Action Development — Dynamic Repository variant_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
 - `customStatuses` _(used by JS action)_
+- `developmentMode` _(used by JS action)_
+- `developmentModeConfig` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `managedSubmodules` _(used by JS action)_

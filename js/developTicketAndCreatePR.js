@@ -25,6 +25,10 @@ var toolchainSummary = require('./common/toolchainSummary.js');
 // share the needs-input probe, the ai_questions_asked label lifecycle and
 // the green needsInput outcome body (review round 1, bug-legs thread).
 var needsInputCommon = require('./common/needsInput.js');
+// gh-1435: developmentMode config knob — resolve + validate + log only (I2:
+// inert); resolution lives in this one shared module, next to the layer that
+// reads customParams.feedbackLoop, so other legs adopt it without duplication.
+var developmentMode = require('./common/developmentMode.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 // gh-1250: the lazy-tracker boilerplate lives in the shared trackerSlot module.
@@ -1320,6 +1324,11 @@ function initDevelopmentContext(params) {
     // Resolve statuses — allows per-project overrides via customParams.customStatuses
     ctx.customParams = customParams;
     ctx.statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
+    // gh-1435: developmentMode config knob — read + validate + log only.
+    // Never fails the leg (I1: invalid ⇒ default + warning); inert by design
+    // (I2): nothing branches on the resolved mode in this issue — later
+    // sub-issues wire plan/adaptive/spawn from ctx.developmentMode.
+    ctx.developmentMode = developmentMode.applyDevelopmentMode(customParams);
     ctx.config = config;
     ctx.expectedBranch = configLoader.resolveBranchName(config, params.ticket || actualParams.ticket, 'development');
     console.log('Processing development workflow for ticket:', ctx.ticketKey);
@@ -2179,6 +2188,9 @@ if (typeof module !== 'undefined' && module.exports) {
         // Completion post-check (outputs/concerns.md) — the two surfacing
         // post-processors + the read seam, exported for direct
         // characterization tests.
-        readConcernsMd, appendConcernsToCompletionComment, mirrorConcernsIntoResponseBody
+        readConcernsMd, appendConcernsToCompletionComment, mirrorConcernsIntoResponseBody,
+        // gh-1435: config-context seam — exported so the developmentMode IT
+        // suites drive the leg's real config-reading path directly.
+        initDevelopmentContext
     };
 }
