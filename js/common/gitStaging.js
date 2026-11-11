@@ -38,6 +38,10 @@ var RUNTIME_ARTIFACT_PATHS = [
     '.dmtools/run-output.txt',
     '.dmtools/stall-capture.log',
     '.dmtools/fa-sessions',
+    // gh-1436: plan-mode appendix materialization — engine-written prompt
+    // input, never leg work; the DURABLE plan artifact is the agent-committed
+    // .dmtools/plan-snapshot.md.
+    '.dmtools/development-mode-plan-appendix.md',
     '.dmtools-session-output.log',
     '.claude-session-id'
 ];

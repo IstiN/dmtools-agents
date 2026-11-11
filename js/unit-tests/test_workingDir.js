@@ -141,6 +141,10 @@ function loadPreCli(workingDir) {
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
+            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
+            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
             './common/trackers.js': trackersModuleReal
         }),
         modMocks
@@ -264,6 +268,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
+            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
         }),
             modMocks
         );
@@ -338,6 +344,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
+            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
         }),
             modMocks
         );
@@ -416,6 +424,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
+            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
         }),
             modMocks
         );
