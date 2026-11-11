@@ -107,12 +107,17 @@ suite('gh-1436 UT — plan-mode gating', function () {
         // on an inactive leg neither file_write nor file_read may be referenced
         // at all — both globals deleted, the calls must still complete (P1: the
         // IO surface is not even touched, only skipped).
-        var hadRead = typeof global.file_read !== 'undefined';
-        var hadWrite = typeof global.file_write !== 'undefined';
-        var savedRead = global.file_read;
-        var savedWrite = global.file_write;
-        delete global.file_read;
-        delete global.file_write;
+        // Host-portable global handle: Node (the CI crap-check harness) and the
+        // dmtools GraalJS runner both expose the global object as globalThis.
+        var host = (typeof globalThis !== 'undefined') ? globalThis : null;
+        var hadRead = !!host && typeof host.file_read !== 'undefined';
+        var hadWrite = !!host && typeof host.file_write !== 'undefined';
+        var savedRead = hadRead ? host.file_read : undefined;
+        var savedWrite = hadWrite ? host.file_write : undefined;
+        if (host) {
+            delete host.file_read;
+            delete host.file_write;
+        }
         try {
             var captured = captureConsole(function () {
                 var rText = developmentModePlan.readAppendixText({});
@@ -124,8 +129,8 @@ suite('gh-1436 UT — plan-mode gating', function () {
             assert.equal(captured.logs.length, 0, 'no logs');
             assert.equal(captured.warns.length, 0, 'no warnings');
         } finally {
-            if (hadRead) global.file_read = savedRead;
-            if (hadWrite) global.file_write = savedWrite;
+            if (host && hadRead) host.file_read = savedRead;
+            if (host && hadWrite) host.file_write = savedWrite;
         }
     });
 });
