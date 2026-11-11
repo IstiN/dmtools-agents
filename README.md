@@ -564,6 +564,23 @@ All config files live in the `agents/js/` directory and are consumed by the `ai-
 | `test_cases_generator.json` | TestCasesGenerator | Generate structured Jira test cases from a merged Story and move ticket to In Testing | — | `moveToReadyForTesting.js` | `moveToInTesting.js` |
 | `workflow_failure_reporter.json` | JSRunner | Monitor GitHub Actions workflow runs and create/update Jira bugs for CI failures | — | — | `workflowFailureReporter.js` (jsPath) |
 
+### Development Mode Knob (`developmentMode`)
+
+The story development leg (`story_development.json` → `developTicketAndCreatePR.js`) reads an optional `developmentMode` knob from its `customParams`:
+
+```json
+"customParams": {
+  "developmentMode": "default",
+  "developmentModeConfig": { "plan": { }, "adaptive": { } }
+}
+```
+
+- Values: `default` | `plan` | `adaptive` — **case-sensitive, lowercase only** (`"PLAN"` is invalid and is never silently normalized).
+- Missing key = `default` = today's behavior. Missing/invalid values never fail the leg: anything invalid resolves to `default` with exactly one warning on the run log.
+- The knob is currently **inert**: the resolved mode is logged (`developmentMode=<resolved>`) for observability only; behavior behind `plan`/`adaptive` is wired by later issues.
+- `developmentModeConfig` is parsed permissively: unknown keys are ignored (forward compatibility), wrong-typed slice values are logged-and-ignored.
+- Resolution lives in `js/common/developmentMode.js` (one place, next to the `customParams.feedbackLoop` layer), so other dev legs can adopt the knob without duplicating the logic.
+
 ---
 
 ## Story Template Customization

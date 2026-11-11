@@ -110,6 +110,9 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/autoStart.js': { triggerSmIfIdle: function () { } },
         './common/outputFiles.js': { readOutputFile: function () { return null; } },
         './common/needsInput.js': loadModule('js/common/needsInput.js'),
+        // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+        // same loadModule pattern as needsInput above.
+        './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
         './cacheToReleases.js': {},
         './common/gitStaging.js': gitStagingModule,
         './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -130,6 +133,9 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './configLoader.js': configLoaderModule,
         './common/outputFiles.js': outputFiles,
         './common/needsInput.js': loadModule('js/common/needsInput.js'),
+        // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+        // same loadModule pattern as needsInput above.
+        './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
         './common/trackers.js': loadTrackersDev(allMocks),
         './common/machineAuthor.js': machineAuthorModule,
         './common/tcMaintenanceLedger.js': tcLedgerModule,
@@ -800,6 +806,9 @@ suite('developBugAndCreatePR', function() {
                     }
                 }),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
+                // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+                // same loadModule pattern as needsInput above.
+                './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
                 './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
                 './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
                     './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
@@ -950,6 +959,9 @@ function loadBugForMissingResponseResume(opts) {
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': realOutputFiles,
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+            // same loadModule pattern as needsInput above.
+            './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModuleLocal,
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
@@ -982,6 +994,9 @@ function loadBugForMissingResponseResume(opts) {
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': realOutputFiles,
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+            // same loadModule pattern as needsInput above.
+            './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
             './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
                 './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({
@@ -1446,6 +1461,9 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
                 './configLoader.js': loaderWithScmStub,
                 './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), allMocks),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
+                // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+                // same loadModule pattern as needsInput above.
+                './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
                 './common/trackers.js': loadTrackersDev(allMocks),
                 './common/machineAuthor.js': loadModule('js/common/machineAuthor.js'),
                 './common/tcMaintenanceLedger.js': loadModule('js/common/tcMaintenanceLedger.js', makeRequire({ './ledgerCore.js': LEDGERCORE,
