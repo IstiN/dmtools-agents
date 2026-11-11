@@ -98,6 +98,36 @@ suite('gh-1436 UT — plan-mode gating', function () {
         assert.equal(captured.logs.length, 0, 'no log lines on a default-mode leg');
         assert.equal(captured.warns.length, 0, 'no warnings on a default-mode leg');
     });
+
+    test('inactive leg with NO io never references the dmtools IO globals (CI regression: file_write ReferenceError ×25)', function () {
+        // The reviewed eager pattern `var write = (io && io.file_write) || file_write;`
+        // was evaluated BEFORE the mode gate, so every default-mode preCli leg
+        // threw ReferenceError under hosts without the dmtools globals (the Node
+        // harness defines file_read but NOT file_write → 25 red CI tests). Pin:
+        // on an inactive leg neither file_write nor file_read may be referenced
+        // at all — both globals deleted, the calls must still complete (P1: the
+        // IO surface is not even touched, only skipped).
+        var hadRead = typeof global.file_read !== 'undefined';
+        var hadWrite = typeof global.file_write !== 'undefined';
+        var savedRead = global.file_read;
+        var savedWrite = global.file_write;
+        delete global.file_read;
+        delete global.file_write;
+        try {
+            var captured = captureConsole(function () {
+                var rText = developmentModePlan.readAppendixText({});
+                assert.equal(rText.active, false, 'readAppendixText: absent mode → inactive');
+                var rMat = developmentModePlan.materializePlanAppendix({});
+                assert.equal(rMat.active, false, 'materializePlanAppendix: absent mode → inactive');
+                assert.notOk(rMat.error, 'the no-op carries no error');
+            });
+            assert.equal(captured.logs.length, 0, 'no logs');
+            assert.equal(captured.warns.length, 0, 'no warnings');
+        } finally {
+            if (hadRead) global.file_read = savedRead;
+            if (hadWrite) global.file_write = savedWrite;
+        }
+    });
 });
 
 // ── UT: appendix text resolution (default + override) ────────────────────────

@@ -169,11 +169,15 @@ function appendixOverridePath(customParams) {
  * @returns {{active: boolean, text: string|null, overridden: boolean, path: string|null, error: string|null, warnings: string[]}}
  */
 function readAppendixText(customParams, io) {
-    var read = (io && io.file_read) || file_read;
     var warnings = [];
     if (!isPlanMode(customParams)) {
         return { active: false, text: null, overridden: false, path: null, error: null, warnings: warnings };
     }
+    // Resolved only AFTER the mode gate: an inactive (default-mode) leg must
+    // not touch the IO surface at all — an eager `(io && io.file_read) ||
+    // file_read` here crashed every non-plan leg on hosts without the dmtools
+    // globals (the Node test harness; gh-1436 review, 25 red CI tests).
+    var read = (io && io.file_read) || file_read;
     var override = appendixOverridePath(customParams);
     warnings = warnings.concat(override.warnings);
     if (!override.path) {
@@ -205,14 +209,25 @@ function readAppendixText(customParams, io) {
  * into the leg's fail-fast setup error. Inactive mode performs zero IO and
  * zero output (P1 golden).
  *
+ * The inactive no-op shape is { ok: false, active: false, error: null }:
+ * `ok:false` reads as "nothing materialized", NOT as a leg failure — callers
+ * MUST check `active` first (runPlanModeAppendixStep returns on !active before
+ * ever consulting ok).
+ *
  * @returns {{ok: boolean, active: boolean, path: string|null, overridden: boolean, error: string|null, warnings: string[]}}
  */
 function materializePlanAppendix(customParams, io) {
-    var write = (io && io.file_write) || file_write;
     var resolved = readAppendixText(customParams, io);
     if (!resolved.active) {
         return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolved.warnings };
     }
+    if (resolved.error) {
+        return { ok: false, active: true, path: resolved.path, overridden: resolved.overridden, error: resolved.error, warnings: resolved.warnings };
+    }
+    // Resolved only when a write is actually due — an inactive or failed
+    // resolution must not reference the IO globals at all (same lazy-gate
+    // discipline as readAppendixText above).
+    var write = (io && io.file_write) || file_write;
     if (resolved.error) {
         return { ok: false, active: true, path: resolved.path, overridden: resolved.overridden, error: resolved.error, warnings: resolved.warnings };
     }
