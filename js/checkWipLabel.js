@@ -117,16 +117,21 @@ function resolveMoveOnStartFlag(config) {
     return config && config.jira ? config.jira.moveOnStart : false;
 }
 
+function defaultOnStartStatus(config) {
+    var jiraStatuses = (config && config.jira && config.jira.statuses) || {};
+    return jiraStatuses.ON_START || jiraStatuses.IN_DEVELOPMENT || 'In Progress';
+}
+
 function resolveOnStartStatusName(flag, config) {
     if (!flag || flag === 'false') return null;
     if (typeof flag === 'string' && flag !== 'true') return flag;
-    var jiraStatuses = (config && config.jira && config.jira.statuses) || {};
-    return jiraStatuses.ON_START || jiraStatuses.IN_DEVELOPMENT || 'In Progress';
+    return defaultOnStartStatus(config);
 }
 
 function moveTicketOnStartIfConfigured(ticketKey, config, dryRun) {
     if (dryRun || /^pr-\d+$/i.test(String(ticketKey || ''))) return false;
     var statusName = resolveOnStartStatusName(resolveMoveOnStartFlag(config), config);
+    if (!statusName) return false;
     try {
         getTracker().moveToStatus(ticketKey, statusName);
         console.log('Moved ' + ticketKey + ' to ' + statusName + ' on start');

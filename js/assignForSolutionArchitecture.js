@@ -84,9 +84,14 @@ function removeTriggerLabelsQuietly(tracker, ticketKey) {
     });
 }
 
+function resolveInitiatorId(params) {
+    if (!params) return '';
+    return params.initiator || (params.jobParams && params.jobParams.initiator) || '';
+}
+
 function postTokenUsageQuietly(tracker, ticketKey, params) {
     try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator || (params.jobParams && params.jobParams.initiator), customParams: tokenUsageComment.customParamsOf(params) });
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: resolveInitiatorId(params), customParams: tokenUsageComment.customParamsOf(params) });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }
@@ -117,7 +122,7 @@ function triggerSolutionAutoStartQuietly(customParams, projectConfig, ticketKey)
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
-        var initiatorId = params.initiator || (params.jobParams && params.jobParams.initiator);
+        var initiatorId = resolveInitiatorId(params);
         var wipLabel = resolveWipLabel(params);
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = projectConfig.jira;

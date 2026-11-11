@@ -449,12 +449,17 @@ function triggerAutoStartQuestionAnswer(customParams, projectConfig, createdTick
     }
 }
 
+function resolveInitiatorId(params) {
+    if (!params) return '';
+    return params.initiator || (params.jobParams && params.jobParams.initiator) || '';
+}
+
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
         var projectKey = ticketKey.split('-')[0];
         initTracker(loadConfigSafe(params), bootstrapCustomParams(params));
-        var initiatorId = params.initiator || (params.jobParams && params.jobParams.initiator);
+        var initiatorId = resolveInitiatorId(params);
         var wipLabel = buildWipLabel(params.metadata);
 
         // The CLI/AI-provider call can fail (missing binary, provider outage, HTTP 5xx, ...)

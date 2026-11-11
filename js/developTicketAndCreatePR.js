@@ -1288,8 +1288,13 @@ function actualParamsOf(params) {
 function customParamsOf(params, actualParams) {
     return (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
 }
+function resolveInitiator(params, actualParams) {
+    if (actualParams && actualParams.initiator) return actualParams.initiator;
+    var jobParams = params && params.jobParams;
+    return (params && params.initiator) || (jobParams && jobParams.initiator) || '';
+}
 
-function ticketDescriptorOf(actualParams) {
+function ticketDescriptorOf(actualParams, params) {
     return {
         ticket: actualParams.ticket,
         ticketKey: actualParams.ticket.key,
@@ -1300,7 +1305,7 @@ function ticketDescriptorOf(actualParams) {
         cliHasFatalError: actualParams.currentCliHasFatalError === true,
         cliErrorMessage: actualParams.currentCliErrorMessage || null,
         metadata: actualParams.metadata,
-        initiator: actualParams.initiator
+        initiator: resolveInitiator(params, actualParams)
     };
 }
 
@@ -1314,10 +1319,7 @@ function initDevelopmentContext(params) {
     _scm = configLoader.createScm(config);
     var customParams = customParamsOf(params, actualParams);
     initTracker(config, customParams);
-    var ctx = ticketDescriptorOf(actualParams);
-    if (!ctx.initiator) {
-        ctx.initiator = params.initiator || (params.jobParams && params.jobParams.initiator) || '';
-    }
+    var ctx = ticketDescriptorOf(actualParams, params);
     // gh-1087: park label name + probe cadence are jobParams config.
     ctx.jobParams = params.jobParams || {};
     // Resolve statuses — allows per-project overrides via customParams.customStatuses
@@ -1904,7 +1906,7 @@ function postDevelopmentTelemetry(params, ctx) {
     // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
     // wrote outputs/*_usage.json during the agent run.
     try {
-        tokenUsageComment.postTokenUsageComments(ctx.ticketKey, { initiator: ctx.initiator || params.initiator || (params.jobParams && params.jobParams.initiator), customParams: tokenUsageComment.customParamsOf(params) });
+        tokenUsageComment.postTokenUsageComments(ctx.ticketKey, { initiator: ctx.initiator || resolveInitiator(params, null), customParams: tokenUsageComment.customParamsOf(params) });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }

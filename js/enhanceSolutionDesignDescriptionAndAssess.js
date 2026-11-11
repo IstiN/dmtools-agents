@@ -115,9 +115,14 @@ function countSuccessfulUpdates(updateResults) {
 /** Post token usage summary comments; a failure is logged and skipped
  *  (shared try/catch wrapper lives in tokenUsageComment.js, gh-1250).
  *  Parameter order matches closeQuestionTicket.js's same-named helper. */
+function resolveInitiatorId(params) {
+    if (!params) return '';
+    return params.initiator || (params.jobParams && params.jobParams.initiator) || '';
+}
+
 function postTokenUsageCommentsSafely(ticketKey, params) {
     tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, {
-        initiator: params.initiator || (params.jobParams && params.jobParams.initiator),
+        initiator: resolveInitiatorId(params),
         customParams: tokenUsageComment.customParamsOf(params)
     });
 }
@@ -125,7 +130,7 @@ function postTokenUsageCommentsSafely(ticketKey, params) {
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
-        const initiatorId = params.initiator || (params.jobParams && params.jobParams.initiator);
+        const initiatorId = resolveInitiatorId(params);
         enhancementPost.initEnhancementTracker(params);
         const wipLabel = resolveWipLabel(params);
 
