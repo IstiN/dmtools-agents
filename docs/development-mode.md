@@ -130,13 +130,3 @@ wrong types are warned-and-ignored.
 - **Issue normalization** (pre-leg canonical spec): planned future
   groundwork — a restructuring pass ahead of profile selection. The
   profiles work fully without it.
-
----
-
-## 6. References
-
-- dmtools-agentic-workflows#92 — factory pass-through and version-path
-  record (selection mechanics, kit/scripts sweep, smoke).
-- `scripts/resolve-parent-config.sh` /
-  `scripts/fetch-factory-setup.sh` (dmtools-agentic-workflows) — the
-  selection and pack-unpack steps referenced above.
