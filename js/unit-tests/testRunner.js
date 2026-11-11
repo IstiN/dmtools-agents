@@ -232,6 +232,9 @@ function makeRequire(moduleMap) {
         if (moduleMap[noExt]) return withModuleCompat(moduleMap[noExt]);
         if (moduleMap['./' + base]) return withModuleCompat(moduleMap['./' + base]);
 
+        if (base === 'branchSetup.js' || noExt === 'branchSetup') {
+            return loadModule('js/common/branchSetup.js');
+        }
         throw new Error('makeRequire: module not found: ' + id);
     };
 }

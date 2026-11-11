@@ -157,6 +157,16 @@ function plainInitiator(initiator) {
 }
 
 /**
+ * Resolve initiator from top-level params or nested params.jobParams.initiator.
+ * @param {Object|null} params the action params
+ * @returns {string}
+ */
+function initiatorOf(params) {
+    return (params && params.initiator) ||
+        (params && params.jobParams && params.jobParams.initiator) || '';
+}
+
+/**
  * The customParams of a job action's params (jobParams.customParams or params.customParams), {} when
  * absent. Call sites that have no tracker object pass this so the usage comment goes through the
  * provider the run selected (customParams.trackerProvider) and not through the Jira default (agents#854).
@@ -298,7 +308,7 @@ function postTokenUsageSafely(ticketKey, params, overrides) {
 // the params, customParams via customParamsOf, tracker/config overrides win.
 function tokenUsageSafelyOptions(params, overrides) {
     var options = {
-        initiator: (overrides && overrides.initiator) || (params && params.initiator),
+        initiator: (overrides && overrides.initiator) || initiatorOf(params),
         customParams: customParamsOf(params)
     };
     if (!overrides) return options;
@@ -313,6 +323,7 @@ if (typeof module !== 'undefined' && module.exports) {
         postTokenUsageCommentsSafely: postTokenUsageCommentsSafely,
         postTokenUsageSafely: postTokenUsageSafely,
         resolvePostTracker: resolvePostTracker,
+        initiatorOf: initiatorOf,
         customParamsOf: customParamsOf,
         findUsageFiles: findUsageFiles,
         formatUsageComment: formatUsageComment,

@@ -552,4 +552,64 @@ suite('checkWipLabel — dryRun guard (gh-1413)', function() {
         });
     });
 });
+
+suite('checkWipLabel — moveOnStart transition', function() {
+
+    function loadCheckWipWithConfig(configObj, mocks) {
+        mocks = mocks || {};
+        return (function (_m) { return loadModule('js/checkWipLabel.js', makeRequire(Object.assign({}, {
+            './configLoader.js': {
+                loadProjectConfig: function() { return configObj || {}; },
+                createScm: function() { return {}; }
+            },
+            './common/githubHelpers.js': {
+                findPRForTicket: function() { return { number: 42 }; }
+            },
+            './common/branchSetup.js': loadModule('js/common/branchSetup.js')
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })(mocks);
+    }
+
+    test('transitions ticket when jira.moveOnStart is true or explicit status string', function() {
+        var moved = [];
+        var mod = loadCheckWipWithConfig(
+            { jira: { moveOnStart: true, statuses: { IN_DEVELOPMENT: 'In Progress' } } },
+            { jira_move_to_status: function(args) { moved.push(args); } }
+        );
+        assert.equal(mod.action({ ticket: makeTicket('MAPC-10'), metadata: { contextId: 'story_questions' } }), true);
+        assert.deepEqual(moved, [{ key: 'MAPC-10', statusName: 'In Progress' }]);
+        var movedCustom = [];
+        var mod2 = loadCheckWipWithConfig({ jira: { moveOnStart: 'In Progress' } }, { jira_move_to_status: function(args) { movedCustom.push(args); } });
+        assert.equal(mod2.action({
+            ticket: makeTicket('MAPC-11'),
+            metadata: { contextId: 'story_solution' }
+        }), true);
+        assert.deepEqual(movedCustom, [{ key: 'MAPC-11', statusName: 'In Progress' }]);
+    });
+
+    test('does not transition when WIP label stops run, when dryRun is set, or for pr-N pseudo-tickets', function() {
+        var moved = [];
+        var mod = loadCheckWipWithConfig(
+            { jira: { moveOnStart: 'In Progress' } },
+            {
+                jira_move_to_status: function(args) { moved.push(args); },
+                jira_post_comment: function() {}
+            }
+        );
+        assert.equal(mod.action({ ticket: makeTicket('MAPC-12', ['story_questions_wip']), metadata: { contextId: 'story_questions' } }), false);
+        assert.equal(mod.action({ ticket: makeTicket('MAPC-12'), metadata: { contextId: 'story_questions' }, dryRun: true }), true);
+        assert.equal(mod.action({ ticket: makeTicket('pr-42'), metadata: { contextId: 'pr_rework' } }), true);
+        assert.equal(moved.length, 0);
+    });
+
+    test('transition failure is non-fatal and resolveOnStartStatusName precedence works', function() {
+        var mod = loadCheckWipWithConfig(
+            { jira: { moveOnStart: true, statuses: { ON_START: 'Custom Active', IN_DEVELOPMENT: 'In Dev' } } },
+            { jira_move_to_status: function() { throw new Error('transition denied'); } }
+        );
+        assert.equal(mod.action({ ticket: makeTicket('MAPC-13'), metadata: { contextId: 'story_questions' } }), true);
+        assert.equal(mod.resolveOnStartStatusName(true, { jira: { statuses: { ON_START: 'StartStatus', IN_DEVELOPMENT: 'DevStatus' } } }), 'StartStatus');
+        assert.equal(mod.resolveOnStartStatusName(false, {}), null);
+        assert.equal(mod.resolveOnStartStatusName('false', {}), null);
+    });
+});
 });

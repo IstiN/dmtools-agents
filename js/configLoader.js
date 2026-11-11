@@ -57,6 +57,11 @@ var DEFAULTS = {
         // (bounce back to IN_REWORK, an already-"actively worked" status) is unchanged;
         // enable for projects whose rework bounce-back target is a "queued" status instead.
         markReworkInDevelopment: false,
+        // Opt-in: transition the ticket to an active-work status as soon as
+        // checkWipLabel.js passes at the start of any agent run (preJSAction).
+        // Set to true (uses jira.statuses.ON_START || jira.statuses.IN_DEVELOPMENT || 'In Progress')
+        // or to an explicit transition/status name string (e.g. 'In Progress').
+        moveOnStart: false,
         questions: {
             // JQL to fetch question subtasks. {ticketKey} is replaced at runtime.
             fetchJql: 'parent = {ticketKey} AND issuetype = Subtask ORDER BY created ASC',
