@@ -42,7 +42,11 @@ _Pre-CLI Development Setup — Dynamic Repository variant_
   - `commentMarkup`
   - `contexts`
   - `dependenciesDir`
+  - `developmentMode`
+  - `developmentModeConfig`
+  - `developmentModeConfig.plan`
   - `dryRun`
+  - `feedbackLoop`
   - `feedbackLoop.qualityGates.gates`
   - `fields`
   - `jql`
@@ -110,7 +114,11 @@ _Post-Action Development — Dynamic Repository variant_
 - `commentMarkup` _(used by JS action)_
 - `contexts` _(used by JS action)_
 - `dependenciesDir` _(used by JS action)_
+- `developmentMode` _(used by JS action)_
+- `developmentModeConfig` _(used by JS action)_
+- `developmentModeConfig.plan` _(used by JS action)_
 - `dryRun` _(used by JS action)_
+- `feedbackLoop` _(used by JS action)_
 - `feedbackLoop.qualityGates.gates` _(used by JS action)_
 - `fields` _(used by JS action)_
 - `jql` _(used by JS action)_
@@ -129,9 +137,6 @@ _Post-Action Development — Dynamic Repository variant_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
 - `customStatuses` _(used by JS action)_
-- `developmentMode` _(used by JS action)_
-- `developmentModeConfig` _(used by JS action)_
-- `feedbackLoop` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `managedSubmodules` _(used by JS action)_
 - `projectKey` _(used by JS action)_
