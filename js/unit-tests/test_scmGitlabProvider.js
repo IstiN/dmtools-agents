@@ -351,6 +351,39 @@ suite('scm gitlab provider', function () {
         ]);
     });
 
+    test('teammate rework dispatch translates MR inputs to the GitLab pipeline contract', function () {
+        var call;
+        var scm = makeGitlab({
+            gitlab_trigger_pipeline: function (args) { call = args; return 'triggered'; }
+        });
+        scm.triggerWorkflow(null, null, 'ai-teammate.yml', JSON.stringify({
+            issue: '', pr: '36', leg: 'rework', reason: 'review changes', checkout_ref: 'refs/merge-requests/36/head'
+        }), 'main');
+        var variables = JSON.parse(call.variablesJson);
+        assert.equal(call.ref, 'main');
+        assert.equal(variables.FACTORY_ISSUE, '');
+        assert.equal(variables.FACTORY_MR, '36');
+        assert.equal(variables.FACTORY_LEG, 'rework');
+        assert.equal(variables.FACTORY_REASON, 'review changes');
+        assert.equal(variables.FACTORY_CHECKOUT_REF, 'refs/merge-requests/36/head');
+        assert.equal(variables.workflow_file, 'ai-teammate.yml');
+    });
+
+    test('teammate dispatch maps issue anchors and preserves explicit FACTORY variables', function () {
+        var calls = [];
+        var scm = makeGitlab({
+            gitlab_trigger_pipeline: function (args) { calls.push(JSON.parse(args.variablesJson)); return 'triggered'; }
+        });
+        scm.triggerWorkflow(null, null, 'ai-teammate.yml', '{"issue":"8","leg":"rework"}', 'main');
+        scm.triggerWorkflow(null, null, 'ai-teammate.yml',
+            '{"issue":"8","leg":"review","FACTORY_ISSUE":"","FACTORY_MR":"36","FACTORY_LEG":"rework"}', 'main');
+        assert.equal(calls[0].FACTORY_ISSUE, '8');
+        assert.equal(calls[0].FACTORY_LEG, 'rework');
+        assert.equal(calls[1].FACTORY_ISSUE, '');
+        assert.equal(calls[1].FACTORY_MR, '36');
+        assert.equal(calls[1].FACTORY_LEG, 'rework');
+    });
+
     // ── createPr / updateBranch / getRemoteRepoInfo ───────────────────────
 
     test('createPr normalizes the created MR and returns the pinned result shape', function () {

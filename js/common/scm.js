@@ -1015,6 +1015,21 @@ function _gitlabBuildPipelineVariables(workflowFile, payload) {
             variables[key] = parsed[key];
         });
     }
+    if (workflowFile === 'ai-teammate.yml') {
+        var factoryInputs = {
+            issue: 'FACTORY_ISSUE',
+            pr: 'FACTORY_MR',
+            leg: 'FACTORY_LEG',
+            reason: 'FACTORY_REASON',
+            checkout_ref: 'FACTORY_CHECKOUT_REF'
+        };
+        Object.keys(factoryInputs).forEach(function(key) {
+            var target = factoryInputs[key];
+            if (variables[key] !== undefined && variables[target] === undefined) {
+                variables[target] = variables[key];
+            }
+        });
+    }
     variables.workflow_file = workflowFile;
     return variables;
 }
