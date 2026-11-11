@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-11T09:18:52.904Z",
+  "ticketKey": "gh-1435",
+  "headSha": "c4f246da4702d6c84f384082df65ec2fc1933f62",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:beecf3cb69dee70a",
+      "size": 88787
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:42dbe14b32ce9904",
+      "size": 4796070
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:e2c185a8ae8f96ea",
+      "size": 2787
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:f70bb62cabcca33e",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:adefea8b5aeb2138",
+      "size": 7924
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:08ac4040df13ab67",
+      "size": 3651
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:ccfef4b3ad59839d",
+      "size": 3419
+    },
+    "request.md": {
+      "hash": "fnv1a64:f04487c97286a16d",
+      "size": 4224
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:349512ac1497ce62",
+      "size": 1907
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:41f257d6ef44b1a1",
+      "size": 763
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:66a0e478c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:522d8bb257e7e469",
+      "size": 4345
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:f04487c97286a16d",
+      "size": 4224
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs62GNOM",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "README.md:567",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — `docs-freshness` fails on head `c4f246da` (stale generated docs)**\n\nThe PR adds two new `customParams` keys to the dev leg's config surface (`js/developTicketAndCreatePR.js` → `initDevelopmentContext`), so the agent-doc generator's output changes — but the regenerated docs are not committed. CI failed:\n\n- Run: https://github.com/IstiN/dmtools-agents/actions/runs/42989719055/job/130419330438\n- `##[error]docs/agents/generated or snapshots is stale. Run 'node js/agentDocGenerator.js && node generate_agent_snapshots.js' and commit the result.`\n\nReproduced locally on the PR head — the generator diff is exactly three files, byte-identical to CI's failure diff:\n\n```text\n docs/agents/generated/bug_development.md                | 4 ++++\n docs/agents/generated/story_development.md              | 4 ++++\n docs/agents/generated/story_development_dynamic_repo.md | 4 ++++\n```\n\nThe entries are correct content, not generator noise: the knob is genuinely read by the bug dev leg too (`js/developBugAndCreatePR.js:870` delegates into `developTicket.action(params)` → `initDevelopmentContext` → `applyDevelopmentMode`), and `story_development_dynamic_repo.json` inherits the same action through its `parent: story_development.json`.\n\n**Fix** (no code change needed — regen + commit):\n\n```bash\nnode js/agentDocGenerator.js && node generate_agent_snapshots.js\ngit add docs/agents/generated snapshots\ngit commit -m \"gh-1435: regenerate agent docs for the developmentMode knob\"\n```\n\nVerification note: the unit suite is green on this head — `dmtools run js/unit-tests/run_developmentMode.json` = 36/36 PASS, and the full `run_all.json` under the CI node harness = 9638 passed / 0 failed. `docs-freshness` is the only red check; fixing it unblocks merge."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs62GNQn",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "README.md:569",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: README documents the knob for one leg — it is live on three**\n\nThis section says *\"The story development leg (`story_development.json` → `developTicketAndCreatePR.js`) reads an optional `developmentMode` knob\"* and the last bullet says *\"so other dev legs **can adopt** the knob without duplicating the logic\"* — implying other legs have not adopted it yet. In this PR they already have:\n\n- `bug_development` — `js/developBugAndCreatePR.js:870` calls `developTicket.action(params)`, which runs `initDevelopmentContext` → `applyDevelopmentMode`. The knob is read on that leg today.\n- `story_development_dynamic_repo` — the regenerated generated docs (the ones CI requires you to commit) list `developmentMode`/`developmentModeConfig` for this agent as well.\n\nA deployer configuring `bug_development` from the README would conclude the knob does nothing for their leg, while `docs/agents/generated/bug_development.md` says it does.\n\nSuggested fix (one sentence, rides the same commit as the doc regeneration):\n\n> Any leg whose action runs `developTicketAndCreatePR.js` (story, bug, and dynamic-repo variants) reads the knob — the same surface as `customParams.feedbackLoop`.\n\nNon-blocking; documentation-surface clarity only."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-11:c24bc3ec",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-11",
+      "updatedAt": "2026-11-11",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — `docs-freshness` fails on head `c4f246da` (stale generated docs)**\n\nThe PR adds two new `customParams` keys to the dev leg's config surface (`js/developTicketAndCreatePR.js` → `initDevelopmentContext`), so the agent-doc generator's output changes — but the regenerated docs are not committed. CI failed:\n\n- Run: https://github.com/IstiN/dmtools-agents/actions/runs/42989719055/job/130419330438\n- `##[error]docs/agents/generated or snapshots is stale. Run 'node js/agentDocGenerator.js && node generate_agent_snapshots.js' and commit the result.`\n\nReproduced locally on the PR head — the generator diff is exactly three files, byte-identical to CI's failure diff:\n\n```text\n docs/agents/generated/bug_development.md                | 4 ++++\n docs/agents/generated/story_development.md              | 4 ++++\n docs/agents/generated/story_development_dynamic_repo.md | 4 ++++\n```\n\nThe entries are correct content, not generator noise: the knob is genuinely read by the bug dev leg too (`js/developBugAndCreatePR.js:870` delegates into `developTicket.action(params)` → `initDevelopmentContext` → `applyDevelopmentMode`), and `story_development_dynamic_repo.json` inherits the same action through its `parent: story_development.json`.\n\n**Fix** (no code change needed — regen + commit):\n\n```bash\nnode js/agentDocGenerator.js && node generate_agent_snapshots.js\ngit add docs/agents/generated snapshots\ngit commit -m \"gh-1435: regenerate agent docs for the developmentMode knob\"\n```\n\nVerification note: the unit suite is green on this head — `dmtools run js/unit-tests/run_developmentMode.json` = 36/36 PASS, and the full `run_all.json` under the CI node harness = 9638 passed / 0 failed. `docs-freshness` is the only red check; fixing it unblocks merge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-11:323dee6d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-11",
+      "updatedAt": "2026-11-11",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGESTION: README documents the knob for one leg — it is live on three**\n\nThis section says *\"The story development leg (`story_development.json` → `developTicketAndCreatePR.js`) reads an optional `developmentMode` knob\"* and the last bullet says *\"so other dev legs **can adopt** the knob without duplicating the logic\"* — implying other legs have not adopted it yet. In this PR they already have:\n\n- `bug_development` — `js/developBugAndCreatePR.js:870` calls `developTicket.action(params)`, which runs `initDevelopmentContext` → `applyDevelopmentMode`. The knob is read on that leg today.\n- `story_development_dynamic_repo` — the regenerated generated docs (the ones CI requires you to commit) list `developmentMode`/`developmentModeConfig` for this agent as well.\n\nA deployer configuring `bug_development` from the README would conclude the knob does nothing for their leg, while `docs/agents/generated/bug_development.md` says it does.\n\nSuggested fix (one sentence, rides the same commit as the doc regeneration):\n\n> Any leg whose action runs `developTicketAndCreatePR.js` (story, bug, and dynamic-repo variants) reads the knob — the same surface as `customParams.feedbackLoop`.\n\nNon-blocking; documentation-surface clarity only."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-11:d1272730",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-11",
+      "updatedAt": "2026-11-11",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: One blocking issue: the `docs-freshness` gate is red on head `c4f246da` — the PR adds `developmentMode`/`developmentModeConfig` to the dev leg's config surface but does not commit the regenerated agent docs. Tests are green (36/36 new-suite, full suite 9638/0 under the CI node harness); `docs-freshness` is the only red check.\n\n**Key Issues**:\n- 🚨 BLOCKING — stale generated docs: `bug_development.md`, `story_development.md`, `story_development_dynamic_repo.md` each gain the two new `customParams` entries; regen + commit fixes the gate.\n- 💡 SUGESTION — README scopes the knob to `story_development` only, but the bug leg already reads it (`js/developBugAndCreatePR.js:870`) and the generated docs list it for three agents.\n\n**Ranked digest** (no threads):\n- `js/common/developmentMode.js:44` — `describeRawValue` can `JSON.stringify` an arbitrarily large config object into a single warn line (log-noise only; cannot throw).\n\n**Next Steps**:\n1. Run `node js/agentDocGenerator.js && node generate_agent_snapshots.js` and commit `docs/agents/generated/*.md` (+ `snapshots/` if touched) — turns `docs-freshness` green.\n2. Optionally widen the README sentence to cover the bug/dynamic-repo legs in the same commit."
+    }
+  ]
+}
