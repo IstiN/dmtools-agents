@@ -76,7 +76,6 @@ else  default
 - Thresholds are config, calibrated offline against closed-issue replays;
   the rule is deliberately conservative — inconclusive signals route
   `default`.
-- Adaptive never spawns sub-agents.
 
 ---
 
@@ -93,8 +92,6 @@ else  default
     "planIfBodyTokensAtLeast": 800,
     "shadowMode": false
   },
-  "spawn": { "enabled": false, "maxAgents": 3, "minTasks": 4,
-             "gateCommand": "dart test && dart analyze" }
 }
 ```
 
@@ -119,14 +116,3 @@ wrong types are warned-and-ignored.
   covers session-cache misses. Failure handling (missing response,
   rework loops) stays with the existing feedback machinery.
 
----
-
-## 5. Not implemented (by design)
-
-- **Sub-agent fan-out** (`spawn` slice): a planned extension where a
-  plan's tasks are handed to parallel scoped sub-legs merged behind a
-  test gate. Config defaults to `enabled: false` and the code path does
-  not exist; field presence is forward-declaration only.
-- **Issue normalization** (pre-leg canonical spec): planned future
-  groundwork — a restructuring pass ahead of profile selection. The
-  profiles work fully without it.
