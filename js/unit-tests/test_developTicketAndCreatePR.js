@@ -74,6 +74,9 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': outputFilesStubFor(),
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+            // same loadModule pattern as needsInput above.
+            './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -108,6 +111,9 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks, feedbackLoopOverr
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': outputFilesStubFor(),
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+            // same loadModule pattern as needsInput above.
+            './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -453,6 +459,9 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': outputFilesStubFor(),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
+                // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+                // same loadModule pattern as needsInput above.
+                './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -531,6 +540,9 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': outputFilesStubFor(),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
+                // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+                // same loadModule pattern as needsInput above.
+                './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -609,6 +621,9 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': outputFilesStubFor(),
                 './common/needsInput.js': loadModule('js/common/needsInput.js'),
+                // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+                // same loadModule pattern as needsInput above.
+                './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -758,6 +773,9 @@ function loadForLandingGuard(mocks, opts) {
                 hasOutputFile: function () { return !!opts.needsInputMd; }
             },
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+            // same loadModule pattern as needsInput above.
+            './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -968,6 +986,9 @@ function loadForPrTail(mocks, opts) {
                 hasOutputFile: function () { return !!opts.needsInputMd; }
             },
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+            // same loadModule pattern as needsInput above.
+            './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1332,6 +1353,9 @@ function loadForMissingResponseResume(opts) {
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': realOutputFiles,
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+            // same loadModule pattern as needsInput above.
+            './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1931,6 +1955,9 @@ function loadForOutcomePinning(mocks, opts) {
                 hasOutputFile: function () { return !!opts.needsInputMd; }
             },
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+            // same loadModule pattern as needsInput above.
+            './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './cacheToReleases.js': {
                 action: function () { telemetry.cache++; }
             },
@@ -3391,6 +3418,9 @@ function loadForConcernsSeam(mocks, opts) {
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': concernsSeamOutputFilesStub(opts),
             './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            // gh-1435: the dev leg now requires the developmentMode resolver — real module,
+            // same loadModule pattern as needsInput above.
+            './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
