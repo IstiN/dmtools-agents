@@ -533,8 +533,7 @@
             "reason": "sm: agent:rework (red CI or review CHANGES)"
           },
           "limit": 1,
-          "id": "rework-on-red-ci",
-          "workflowRef": "{branch}"
+          "id": "rework-on-red-ci"
         },
         {
           "description": "GitLab twin of sm_github.json rule 'rework-on-label' — see that rule's description for the operational contract.",
@@ -556,8 +555,7 @@
             "agent:rework"
           ],
           "limit": 1,
-          "id": "rework-on-label",
-          "workflowRef": "{branch}"
+          "id": "rework-on-label"
         },
         {
           "description": "GitLab twin of sm_github.json rule 'rework-arm-restore' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'restore_rework_arm' still uses GitHub-only tools in js/smAgent.js.",
@@ -649,8 +647,7 @@
             "reason": "sm: green PR awaits review"
           },
           "limit": 10,
-          "id": "review-after-dev",
-          "workflowRef": "{branch}"
+          "id": "review-after-dev"
         },
         {
           "description": "GitLab twin of sm_github.json rule 'review-external-once' — see that rule's description for the operational contract.",
@@ -705,8 +702,7 @@
             "pr": "{prNumber}"
           },
           "limit": 1,
-          "id": "review-machine-unlinked",
-          "workflowRef": "{branch}"
+          "id": "review-machine-unlinked"
         },
         {
           "description": "GitLab twin of sm_github.json rule 'review-stale-verdict' — see that rule's description for the operational contract. Disabled on GitLab: localAction 'arm_review' still uses GitHub-only tools in js/smAgent.js.",
@@ -818,8 +814,7 @@
             "pr": "{prNumber}"
           },
           "limit": 1,
-          "id": "review-on-label",
-          "workflowRef": "{branch}"
+          "id": "review-on-label"
         },
         {
           "description": "GitLab twin of sm_github.json rule 'review-on-issue-label' — see that rule's description for the operational contract.",
@@ -846,8 +841,7 @@
             "reason": "sm: agent:review label on issue"
           },
           "limit": 1,
-          "id": "review-on-issue-label",
-          "workflowRef": "{branch}"
+          "id": "review-on-issue-label"
         },
         {
           "description": "GitLab twin of sm_github.json rule 'close-on-merge' — see that rule's description for the operational contract. Disabled on GitLab: the GitLab bridge has no close-issue tool (the rule would re-fire every tick).",

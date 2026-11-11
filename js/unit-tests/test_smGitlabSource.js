@@ -225,6 +225,13 @@ suite('sm_gitlab.json — shipped GitLab rule pack', function () {
         assert.deepEqual(enabled.sort(), DISPATCH_ONLY.slice().sort());
     });
 
+    test('teammate rules dispatch on the configured default ref, not the MR head', function () {
+        jp.rules.forEach(function (r) {
+            if (r.enabled === false || r.workflowFile !== 'ai-teammate.yml') return;
+            assert.notOk(r.workflowRef, r.id + ' must use the default-branch pipeline; the teammate checks out the MR');
+        });
+    });
+
     test('prState guards use the uppercase provider vocabulary (both packs)', function () {
         ['sm_gitlab.json', 'sm_github.json'].forEach(function (f) {
             var rules = JSON.parse(file_read({ path: f })).params.jobParams.rules;
