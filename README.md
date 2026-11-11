@@ -566,7 +566,7 @@ All config files live in the `agents/js/` directory and are consumed by the `ai-
 
 ### Development Mode Knob (`developmentMode`)
 
-The story development leg (`story_development.json` → `developTicketAndCreatePR.js`) reads an optional `developmentMode` knob from its `customParams`:
+Any dev leg whose action runs `developTicketAndCreatePR.js` — the story (`story_development.json`), bug (`bug_development.json`), and dynamic-repo (`story_development_dynamic_repo.json`) variants — reads an optional `developmentMode` knob from its `customParams` (the same surface as `customParams.feedbackLoop`):
 
 ```json
 "customParams": {
@@ -579,7 +579,7 @@ The story development leg (`story_development.json` → `developTicketAndCreateP
 - Missing key = `default` = today's behavior. Missing/invalid values never fail the leg: anything invalid resolves to `default` with exactly one warning on the run log.
 - The knob is currently **inert**: the resolved mode is logged (`developmentMode=<resolved>`) for observability only; behavior behind `plan`/`adaptive` is wired by later issues.
 - `developmentModeConfig` is parsed permissively: unknown keys are ignored (forward compatibility), wrong-typed slice values are logged-and-ignored.
-- Resolution lives in `js/common/developmentMode.js` (one place, next to the `customParams.feedbackLoop` layer), so other dev legs can adopt the knob without duplicating the logic.
+- Resolution lives in `js/common/developmentMode.js` (one place, next to the `customParams.feedbackLoop` layer) — every dev leg adopting the knob shares the logic instead of duplicating it, and future legs can adopt it the same way.
 
 ---
 
