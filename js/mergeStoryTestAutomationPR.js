@@ -312,7 +312,7 @@ function requestBranchUpdate(scm, prNumber, repoInfo) {
  */
 function postTokenUsageCommentsSafe(params, storyKey) {
     try {
-        tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+        tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator || (params.jobParams && params.jobParams.initiator), customParams: tokenUsageComment.customParamsOf(params) });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }

@@ -117,7 +117,7 @@ function countSuccessfulUpdates(updateResults) {
  *  Parameter order matches closeQuestionTicket.js's same-named helper. */
 function postTokenUsageCommentsSafely(ticketKey, params) {
     tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, {
-        initiator: params.initiator,
+        initiator: params.initiator || (params.jobParams && params.jobParams.initiator),
         customParams: tokenUsageComment.customParamsOf(params)
     });
 }
@@ -125,7 +125,7 @@ function postTokenUsageCommentsSafely(ticketKey, params) {
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
-        const initiatorId = params.initiator;
+        const initiatorId = params.initiator || (params.jobParams && params.jobParams.initiator);
         enhancementPost.initEnhancementTracker(params);
         const wipLabel = resolveWipLabel(params);
 

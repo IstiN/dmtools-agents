@@ -113,6 +113,30 @@ function loadConfigBestEffort(params) {
     }
 }
 
+function resolveMoveOnStartFlag(config) {
+    return config && config.jira ? config.jira.moveOnStart : false;
+}
+
+function resolveOnStartStatusName(flag, config) {
+    if (!flag || flag === 'false') return null;
+    if (typeof flag === 'string' && flag !== 'true') return flag;
+    var jiraStatuses = (config && config.jira && config.jira.statuses) || {};
+    return jiraStatuses.ON_START || jiraStatuses.IN_DEVELOPMENT || 'In Progress';
+}
+
+function moveTicketOnStartIfConfigured(ticketKey, config, dryRun) {
+    if (dryRun || /^pr-\d+$/i.test(String(ticketKey || ''))) return false;
+    var statusName = resolveOnStartStatusName(resolveMoveOnStartFlag(config), config);
+    try {
+        getTracker().moveToStatus(ticketKey, statusName);
+        console.log('Moved ' + ticketKey + ' to ' + statusName + ' on start');
+        return true;
+    } catch (e) {
+        console.warn('Failed to move ' + ticketKey + ' to ' + statusName + ' on start (non-fatal):', e && e.message ? e.message : e);
+        return false;
+    }
+}
+
 // Optional: verify an open PR exists for review/rework agents. Returns the
 // gate's decision ({skip: boolean}) when it applied, null when the guard is
 // disabled or failed non-fatally (fail-open).
@@ -156,17 +180,20 @@ function action(params) {
         // Dynamically generate WIP label from contextId
         const wipLabel = wipLabelFor(metadata.contextId);
         var dryRun = branchSetup.isDryRunParams(params);
-        initTracker(loadConfigBestEffort(params), resolveCustomParams(params));
+        var projectConfig = loadConfigBestEffort(params.jobParams || params);
+        var customParams = resolveCustomParams(params);
+        initTracker(projectConfig, customParams);
 
         if (wipLabelGate(ticket, wipLabel, dryRun)) {
             return false; // Stop processing
         }
 
         var guard = openPrGuardResult(params, ticket.key, dryRun);
-        if (guard) {
-            return !guard.skip;
+        if (guard && guard.skip) {
+            return false;
         }
 
+        moveTicketOnStartIfConfigured(ticket.key, projectConfig, dryRun);
         console.log('checkWipLabel result: continue processing');
         return true; // Continue processing
 
@@ -196,6 +223,9 @@ if (typeof module !== 'undefined' && module.exports) {
         wipSkipComment: wipSkipComment,
         noOpenPrSkipComment: noOpenPrSkipComment,
         isTicketNotFoundError: isTicketNotFoundError,
-        resolveCustomParams: resolveCustomParams
+        resolveCustomParams: resolveCustomParams,
+        resolveMoveOnStartFlag: resolveMoveOnStartFlag,
+        resolveOnStartStatusName: resolveOnStartStatusName,
+        moveTicketOnStartIfConfigured: moveTicketOnStartIfConfigured
     };
 }

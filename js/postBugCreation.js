@@ -212,7 +212,7 @@ function postTokenUsage(ctx) {
     // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
     // wrote outputs/*_usage.json during the agent run.
     try {
-        tokenUsageComment.postTokenUsageComments(ctx.ticketKey, { initiator: ctx.params.initiator, customParams: tokenUsageComment.customParamsOf(ctx.params) });
+        tokenUsageComment.postTokenUsageComments(ctx.ticketKey, { initiator: ctx.params.initiator || (ctx.params.jobParams && ctx.params.jobParams.initiator), customParams: tokenUsageComment.customParamsOf(ctx.params) });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }

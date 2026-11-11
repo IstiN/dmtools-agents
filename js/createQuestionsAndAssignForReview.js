@@ -454,7 +454,7 @@ function action(params) {
         var ticketKey = params.ticket.key;
         var projectKey = ticketKey.split('-')[0];
         initTracker(loadConfigSafe(params), bootstrapCustomParams(params));
-        var initiatorId = params.initiator;
+        var initiatorId = params.initiator || (params.jobParams && params.jobParams.initiator);
         var wipLabel = buildWipLabel(params.metadata);
 
         // The CLI/AI-provider call can fail (missing binary, provider outage, HTTP 5xx, ...)

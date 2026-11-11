@@ -2754,7 +2754,7 @@ function postTokenUsageQuietly(ctx, params) {
     try {
         // agents#889: reuse the tracker resolved for this run (customParams patched by the pr_review
         // instructions); customParamsOf(params) alone misses it and fell back to Jira on ADO.
-        tokenUsageComment.postTokenUsageComments(ctx.ticketKey, { initiator: params.initiator, tracker: ctx.tracker });
+        tokenUsageComment.postTokenUsageComments(ctx.ticketKey, { initiator: params.initiator || (params.jobParams && params.jobParams.initiator), tracker: ctx.tracker });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }
@@ -3006,7 +3006,7 @@ function action(params) {
         removeSmLabelIfConfigured(tracker, ctx.ticketKey, ctx.customParams);
 
         // Step 11: Assign back to initiator
-        assignBackToInitiator(tracker, ctx.ticketKey, params.initiator);
+        assignBackToInitiator(tracker, ctx.ticketKey, params.initiator || (params.jobParams && params.jobParams.initiator));
 
         // Step 12: Auto-start pr_rework when changes were requested (opt-in via customParams)
         runReworkLeg(ctx, params, pr, repoInfo, isApproved);

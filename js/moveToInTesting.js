@@ -53,7 +53,7 @@ function action(params) {
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run. gh-1250: the shared
         // try/catch wrapper lives in tokenUsageComment.postTokenUsageCommentsSafely.
-        tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, { initiator: params.initiator, tracker: tracker });
+        tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, { initiator: params.initiator || (params.jobParams && params.jobParams.initiator), tracker: tracker });
 
         return {
             success: true,
