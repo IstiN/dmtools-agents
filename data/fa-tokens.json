@@ -2015,6 +2015,15 @@
       "total": 250927,
       "cacheRead": 5713152,
       "model": "glm-5.3-flash"
+    },
+    {
+      "leg": "review",
+      "at": "2026-11-11T09:49:37Z",
+      "prompt": 118928,
+      "completion": 9720,
+      "total": 128648,
+      "cacheRead": 1777152,
+      "model": "glm-5.3-flash"
     }
   ]
 }
