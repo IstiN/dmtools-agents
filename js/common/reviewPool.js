@@ -72,7 +72,9 @@ var DEFAULT_ROUNDS = ['all'];
 // §8 check 3: the citation-discipline hint a lens must contain when the
 // skill file EXPLICITLY declares BLOCKING in mayRaise (the check warns —
 // the validator script surfaces it; the loader collects it as a warning).
-var CITATION_HINT_FRAGMENT = 'citation';
+// Either spelling counts: the verb lenses teach ("cite the file:line") or
+// the noun ("the citation discipline").
+var CITATION_HINT_FRAGMENTS = ['cite', 'citation'];
 
 var ERROR_NAME = 'ReviewSkillValidationError';
 
@@ -386,7 +388,10 @@ function loadRepoDir(io, dir, factorySkills, warnings, repoDefined) {
 function citationHintWarning(skill, lensText) {
     if (skill.mayRaise.indexOf('BLOCKING') === -1) return null;
     if (!lensText) return null; // unreadable lens → the lens-existence check owns it
-    if (String(lensText).toLowerCase().indexOf(CITATION_HINT_FRAGMENT) !== -1) return null;
+    var lens = String(lensText).toLowerCase();
+    for (var i = 0; i < CITATION_HINT_FRAGMENTS.length; i++) {
+        if (lens.indexOf(CITATION_HINT_FRAGMENTS[i]) !== -1) return null;
+    }
     return skill.name + ': mayRaise explicitly includes BLOCKING but the lens lacks a citation-discipline hint — ' +
         '🚨 claims stay evidence-bound: state what evidence (file:line / doc URL) raises a finding to BLOCKING';
 }
