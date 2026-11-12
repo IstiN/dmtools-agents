@@ -21,18 +21,41 @@ suite('gitlabIssueLink', function () {
 
     // ── env/sleep primitives ──────────────────────────────────────────────
 
-    test('envValue prefers the Java host env and falls back to process.env', function () {
-        var mod = loadMod();
-        // The harness java mock getenv() returns null → falls through to process.env.
-        var key = 'GITLAB_ISSUE_LINK_TEST_VAR';
-        process.env[key] = 'from-node';
+    // Canonical-gate guard (test_sessionDelta.js pattern): the dmtools GraalJS
+    // runner has no bare `process` global, so process.env-backed tests only
+    // register on the Node harness; envValue/nodeEnv coverage comes from there.
+    var _glHasNodeProcess_ = (function () {
         try {
-            assert.equal(mod.envValue(key), 'from-node');
-        } finally {
-            delete process.env[key];
-        }
-        assert.equal(mod.envValue('GITLAB_ISSUE_LINK_MISSING_VAR'), '', 'missing everywhere → empty string');
-    });
+            return typeof process !== 'undefined' && !!(process.versions && process.versions.node);
+        } catch (e) { return false; }
+    })();
+
+    if (_glHasNodeProcess_) {
+        test('envValue prefers the Java host env and falls back to process.env', function () {
+            var mod = loadMod();
+            // The harness java mock getenv() returns null → falls through to process.env.
+            var key = 'GITLAB_ISSUE_LINK_TEST_VAR';
+            process.env[key] = 'from-node';
+            try {
+                assert.equal(mod.envValue(key), 'from-node');
+            } finally {
+                delete process.env[key];
+            }
+            assert.equal(mod.envValue('GITLAB_ISSUE_LINK_MISSING_VAR'), '', 'missing everywhere → empty string');
+        });
+
+        test('nodeEnv reads process.env and defaults to an empty string', function () {
+            var mod = loadMod();
+            var key = 'GITLAB_ISSUE_LINK_NODE_VAR';
+            process.env[key] = 'v';
+            try {
+                assert.equal(mod.nodeEnv(key), 'v');
+            } finally {
+                delete process.env[key];
+            }
+            assert.equal(mod.nodeEnv(key), '');
+        });
+    }
 
     test('javaEnv returns the host value, null when absent, and survives a throwing bridge', function () {
         var mod = loadMod();
@@ -47,18 +70,6 @@ suite('gitlabIssueLink', function () {
         } finally {
             java.lang.System.getenv = original;
         }
-    });
-
-    test('nodeEnv reads process.env and defaults to an empty string', function () {
-        var mod = loadMod();
-        var key = 'GITLAB_ISSUE_LINK_NODE_VAR';
-        process.env[key] = 'v';
-        try {
-            assert.equal(mod.nodeEnv(key), 'v');
-        } finally {
-            delete process.env[key];
-        }
-        assert.equal(mod.nodeEnv(key), '');
     });
 
     test('sleepMs uses the Java host sleep and swallows its absence', function () {
@@ -99,6 +110,8 @@ suite('gitlabIssueLink', function () {
         var cmd = mod.relatedMrsCommand('https://gl/api/v4', '42', '7');
         assert.contains(cmd, '/projects/42/issues/7/related_merge_requests?per_page=100');
         assert.contains(cmd, 'PRIVATE-TOKEN: $GITLAB_TOKEN');
+        assert.contains(cmd, '--connect-timeout 5', 'a hung socket must not stall the dev leg');
+        assert.contains(cmd, '--max-time 15', 'each probe is time-boxed so the overall wait stays bounded');
         assert.ok(cmd.indexOf('bash -c') === 0, 'runs through bash (whitelisted on dev legs)');
     });
 

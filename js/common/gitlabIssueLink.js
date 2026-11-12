@@ -71,11 +71,14 @@ function hasCiEnv(env) {
 }
 
 // $GITLAB_TOKEN expands inside the job shell, so the token never appears in
-// the logged tool arguments.
+// the logged tool arguments. --connect-timeout/--max-time keep a single probe
+// bounded (curl has no default timeout — a blackholed socket would otherwise
+// hang the dev leg past the documented wait budget).
 function relatedMrsCommand(apiUrl, projectId, issueIid) {
     var endpoint = apiUrl + '/projects/' + projectId + '/issues/' + issueIid +
         '/related_merge_requests?per_page=100';
-    return 'bash -c \'curl --fail --silent --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "' + endpoint + '"\'';
+    return 'bash -c \'curl --fail --silent --connect-timeout 5 --max-time 15 ' +
+        '--header "PRIVATE-TOKEN: $GITLAB_TOKEN" "' + endpoint + '"\'';
 }
 
 function parseRelated(raw) {
