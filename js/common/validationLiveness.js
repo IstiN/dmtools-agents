@@ -5,14 +5,14 @@
 var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
 var POOL_STALE_NON_RUNNING_MS = 6 * 60 * 60 * 1000;
 
-// Machine-loop orchestration workflows run on lightweight GitHub-hosted
-// runners and never compete for validation/self-hosted pool capacity.
-// repoPoolFree runs FROM INSIDE machine-sm.yml — counting orchestration
-// runs made repoPoolFree self-block on every live tick (fa #2133).
+// GitHub-hosted orchestration / release workflows never compete for the
+// validation / self-hosted runner pool (macos / ubuntu-arm).
+// repoPoolFree runs FROM INSIDE machine-sm.yml — counting these runs
+// made repoPoolFree self-block on every live tick (fa #2133).
 var POOL_EXCLUDED_WORKFLOW_FILES = [
     'machine-sm.yml', 'factory-sm.yml', 'sm-kicker.yml', 'factory-sm-kicker.yml',
     'agent-pack-release-kicker.yml', 'machine-merge.yml', 'merge-trigger.yml',
-    'sm-merge-guard.yml'
+    'sm-merge-guard.yml', 'release.yml', 'agent-pack-release.yml', 'codeql.yml'
 ];
 
 function workflowFileOf(r) {

@@ -8058,10 +8058,9 @@ function repoPoolFree(repoInfo) {
             perPage: 50
         })) || {};
         var list = runs.workflow_runs || runs.workflowRuns || [];
-        // Stale queued/waiting runs (no job, no runner) age out and
-        // machine-loop orchestration runs (machine-sm.yml, sm-kicker.yml,
-        // machine-merge.yml, merge-trigger.yml) are excluded so the
-        // running SM tick never self-blocks the pool probe (live fa #2133).
+        // Stale queued/waiting runs age out and GitHub-hosted orchestration /
+        // release runs (machine-sm.yml, sm-kicker.yml, machine-merge.yml,
+        // release.yml, etc.) are excluded so they never block the pool (fa #2133).
         return !validationLivenessModule.poolBusy(list, Date.now());
     } catch (ePool) {
         console.warn('  ⚠️  pool-free probe failed: ' + (ePool.message || ePool));

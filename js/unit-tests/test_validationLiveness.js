@@ -577,10 +577,13 @@ suite('validationLiveness poolBusy — stale queued runs age out (fa #2133)', fu
             { status: 'queued', path: '.github/workflows/sm-kicker.yml', created_at: '2026-11-12T17:29:30Z' },
             { status: 'in_progress', path: '.github/workflows/machine-merge.yml', created_at: '2026-11-12T17:29:40Z' },
             { status: 'waiting', path: '.github/workflows/merge-trigger.yml', created_at: '2026-11-12T17:29:50Z' },
-            { status: 'in_progress', path: 'factory-sm.yml', created_at: '2026-11-12T17:29:55Z' }
+            { status: 'in_progress', path: 'factory-sm.yml', created_at: '2026-11-12T17:29:55Z' },
+            { status: 'in_progress', path: '.github/workflows/release.yml', created_at: '2026-11-12T17:29:58Z' },
+            { status: 'in_progress', path: '.github/workflows/agent-pack-release.yml', created_at: '2026-11-12T17:29:59Z' },
+            { status: 'in_progress', path: '.github/workflows/codeql.yml', created_at: '2026-11-12T17:30:00Z' }
         ];
         assert.equal(live.poolBusy(orchestrationRuns, NOW), false,
-            'active SM tick / kicker / merge orchestration runs never pin repoPoolFree');
+            'active SM tick / kicker / merge / release / codeql runs never pin repoPoolFree');
         assert.equal(live.isPoolExcludedWorkflowRun(orchestrationRuns[0]), true);
         assert.equal(live.isPoolExcludedWorkflowRun({ path: '.github/workflows/ci.yml' }), false);
         assert.equal(live.isPoolExcludedWorkflowRun({ path: '.github/workflows/ai-teammate.yml' }), false);
