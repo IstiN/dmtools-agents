@@ -2264,3 +2264,53 @@ suite('trackers.createTrackerHolder (gh-124)', function() {
         assert.equal(tracker.provider(), 'jira', 'falls back to the jira default');
     });
 });
+
+// ── gh-1442: ticketSummaryOf & ticketDescriptionOf ───────────────────────────
+
+suite('trackers.ticketSummaryOf & ticketDescriptionOf (gh-1442)', function() {
+
+    test('resolves summary and description across Jira, ADO, GitHub, and empty shapes', function() {
+        var mod = loadTrackers({});
+
+        assert.equal(mod.ticketSummaryOf(null), '');
+        assert.equal(mod.ticketSummaryOf('not-an-object'), '');
+        assert.equal(mod.ticketDescriptionOf(null), '');
+        assert.equal(mod.ticketDescriptionOf(undefined), '');
+
+        // Jira shape
+        var jiraTicket = { key: 'PROJ-1', fields: { summary: 'Jira summary', description: 'Jira desc' } };
+        assert.equal(mod.ticketSummaryOf(jiraTicket), 'Jira summary');
+        assert.equal(mod.ticketDescriptionOf(jiraTicket), 'Jira desc');
+
+        // JavaScriptExecutor ADO shape ({ key, title, description, fields: { 'System.Title', 'System.Description' } })
+        var adoJsExecTicket = {
+            key: '2071862',
+            title: '[DEV] AI Factory: agents skip local Eclipse (ecj) check',
+            description: 'ADO description from ITicket',
+            fields: {
+                'System.Title': '[DEV] AI Factory: agents skip local Eclipse (ecj) check',
+                'System.Description': 'ADO description from fields'
+            }
+        };
+        assert.equal(mod.ticketSummaryOf(adoJsExecTicket), '[DEV] AI Factory: agents skip local Eclipse (ecj) check');
+        assert.equal(mod.ticketDescriptionOf(adoJsExecTicket), 'ADO description from ITicket');
+
+        // Raw ADO shape (only fields['System.Title'] / fields['System.Description'])
+        var adoRawTicket = {
+            key: '2071862',
+            fields: {
+                'System.Title': 'Raw ADO Title',
+                'System.Description': 'Raw ADO Description'
+            }
+        };
+        assert.equal(mod.ticketSummaryOf(adoRawTicket), 'Raw ADO Title');
+        assert.equal(mod.ticketDescriptionOf(adoRawTicket), 'Raw ADO Description');
+
+        // GitHub / flat fallbacks
+        assert.equal(mod.ticketSummaryOf({ key: '1', summary: 'Flat summary' }), 'Flat summary');
+        assert.equal(mod.ticketSummaryOf({ key: '1', fields: { title: 'Fields title' } }), 'Fields title');
+        assert.equal(mod.ticketDescriptionOf({ key: '1', body: 'GH body' }), 'GH body');
+        assert.equal(mod.ticketSummaryOf({ key: '1', fields: {} }), '');
+        assert.equal(mod.ticketDescriptionOf({ key: '1', fields: {} }), '');
+    });
+});
