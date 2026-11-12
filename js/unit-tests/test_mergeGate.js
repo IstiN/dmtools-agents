@@ -113,6 +113,14 @@ function mConfigLoaderStub(mergeGateConfig) {
         return mergeGateConfig ? { mergeGate: mergeGateConfig } : null;
     } };
 }
+// gh-1406: the reviewer-pool marker module loads for real (pure, no dmtools
+// globals) — the gate's pool clause parses actual markers in the tests.
+function mReviewPoolMarkers() {
+    var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': mMachineAuthor() }), {});
+    return loadModule('js/common/reviewPoolMarkers.js',
+        makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+}
 function mMergeGate(globals, configLoaderStub) {
     // Per-global-set load: the gate must SEE the fixture's own bridge
     // mocks (one engine-global set per fixture — memoizing across
@@ -124,7 +132,8 @@ function mMergeGate(globals, configLoaderStub) {
         './machineNotice.js': mMachineNotice(),
         '../configLoader.js': configLoaderStub || mConfigLoaderStub(null),
         './mergeBackstop.js': mMergeBackstop(globals || null),
-        './mergeVerdictGate.js': mMergeVerdictGate(globals || null)
+        './mergeVerdictGate.js': mMergeVerdictGate(globals || null),
+        './reviewPoolMarkers.js': mReviewPoolMarkers()
     }), globals || {});
 }
 
@@ -333,7 +342,8 @@ suite('mergeGate: per-repo knobs', function () {
             './machineNotice.js': mMachineNotice(),
             '../configLoader.js': { loadProjectConfig: function () { throw new Error('cfg boom'); } },
             './mergeBackstop.js': mMergeBackstop(null),
-            './mergeVerdictGate.js': mMergeVerdictGate(null)
+            './mergeVerdictGate.js': mMergeVerdictGate(null),
+            './reviewPoolMarkers.js': mReviewPoolMarkers()
         }), {});
         var s = gate.mergeGateSettingsOf({});
         assert.equal(s.holdOnHumanThreads, true);
@@ -903,5 +913,124 @@ suite('mergeGate: githubBridgeIo superset view', function () {
         // (the dmtools host injects the real bridge globals).
         var io = mMergeGate({ github_add_labels: undefined }).githubBridgeIo();
         assert.equal(io.addLabels, null);
+    });
+});
+
+// ── gh-1406: the required-reviewer pool clause (phase 0) ─────────────────────
+
+suite('mergeGate: gh-1406 required-reviewer pool clause', function () {
+    var mReviewPoolMarkers = function () {
+        var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+            makeRequire({ './machineAuthor.js': mMachineAuthor() }), {});
+        return loadModule('js/common/reviewPoolMarkers.js',
+            makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+    };
+
+    function poolComments(entries, passNames, extra) {
+        var pm = mReviewPoolMarkers();
+        var list = (extra || []).slice();
+        list.push({ author: { login: BOT }, body: pm.buildPoolOutcomeMarkerComment(HEAD, 'first', entries, NOW) });
+        (passNames || []).forEach(function (n) {
+            list.push({ author: { login: BOT }, body: pm.buildPassMarkerComment(n, HEAD, NOW) });
+        });
+        return list;
+    }
+
+    test('every required reviewer with a same-head PASS marker → merge proceeds', function () {
+        var r = run({
+            comments: poolComments([{ name: 'base', required: true }, { name: 'security', required: true }],
+                ['base', 'security'])
+        });
+        assert.equal(r.out.held, false);
+        assert.deepEqual(r.out.poolMissing, []);
+        assert.equal(r.calls.commentsPosted.length, 0);
+    });
+
+    test('the 429 scenario: base passed, security failed → merge withheld + hold marker', function () {
+        var r = run({
+            comments: poolComments([{ name: 'base', required: true }, { name: 'security', required: true }], ['base'])
+        });
+        assert.equal(r.out.held, true);
+        assert.equal(r.out.holdReason, 'required-reviewer');
+        assert.deepEqual(r.out.poolMissing, ['security']);
+        assert.equal(r.out.holdPosted, true);
+        assert.equal(r.calls.commentsPosted.length, 1, 'one hold marker');
+        var payload = mReviewVerdicts().extractMarkerJson(r.calls.commentsPosted[0].body, '<!-- dmtools:merge-hold ', ' -->');
+        assert.equal(payload.reason, 'required-reviewer');
+        assert.deepEqual(payload.missing, ['security']);
+        assert.equal(payload.head, HEAD);
+        // The held line names the missing required reviewer.
+        var lines = mMergeGate().outcomeLines(r.out);
+        assert.ok(lines[0].indexOf('security') !== -1, 'held line names the missing reviewer: ' + lines[0]);
+        assert.ok(lines[0].indexOf('gh-1406') !== -1);
+    });
+
+    test('a failed hold post never lifts the hold (fail-closed decision, soft marker)', function () {
+        var r = run({
+            comments: poolComments([{ name: 'security', required: true }], []),
+            createCommentThrows: true
+        });
+        assert.equal(r.out.held, true);
+        assert.equal(r.out.holdPostFailed, true);
+    });
+
+    test('no pool outcome on the head (legacy single-leg PR) → proceeds exactly as before', function () {
+        var r = run({ comments: [{ author: { login: BOT }, body: 'a plain review comment' }] });
+        assert.equal(r.out.held, false);
+        assert.deepEqual(r.out.poolMissing, []);
+    });
+
+    test('pool outcome from a non-machine author is invisible (fail-closed trust)', function () {
+        var pm = mReviewPoolMarkers();
+        var body = pm.buildPoolOutcomeMarkerComment(HEAD, 'first', [{ name: 'security', required: true }], NOW);
+        var r = run({ comments: [{ author: { login: 'attacker' }, body: body }] });
+        assert.equal(r.out.held, false);
+        assert.equal(r.calls.commentsPosted.length, 0);
+    });
+
+    test('the pool clause runs BEFORE the thread census: held merges skip the threads read', function () {
+        var r = run({
+            comments: poolComments([{ name: 'security', required: true }], []),
+            threads: threadsPayload([humanThread()])
+        });
+        assert.equal(r.out.held, true);
+        assert.equal(r.out.holdReason, 'required-reviewer');
+        assert.equal(r.calls.threadsReads.length, 0, 'no thread work once the pool clause holds');
+    });
+
+    test('an existing same-head required-reviewer hold is deduped (one per head)', function () {
+        var pm = mReviewPoolMarkers();
+        var comments = poolComments([{ name: 'security', required: true }], []);
+        comments.push({ author: { login: BOT }, body: pm.buildRequiredReviewerHoldMarker(['security'], HEAD, '2026-11-10T11:00:00Z', false, null) });
+        var r = run({ comments: comments });
+        assert.equal(r.out.held, true);
+        assert.equal(r.out.holdDeduped, true);
+        assert.equal(r.calls.commentsPosted.length, 0, 'no new comment per tick');
+    });
+
+    test('a required-reviewer hold past the valve escalates to needs-human (gh-957)', function () {
+        var pm = mReviewPoolMarkers();
+        var comments = poolComments([{ name: 'security', required: true }], []);
+        comments.push({ author: { login: BOT }, body: pm.buildRequiredReviewerHoldMarker(['security'], HEAD, '2026-11-09T00:00:00Z', false, null) });
+        var r = run({ comments: comments }); // NOW is 36h after the hold was stamped
+        assert.equal(r.out.held, true);
+        assert.equal(r.out.escalationPosted, true);
+        var payload = mReviewVerdicts().extractMarkerJson(r.calls.commentsPosted[0].body, '<!-- dmtools:merge-hold ', ' -->');
+        assert.equal(payload.escalated, true);
+        assert.equal(r.calls.labelsAdded.length, 1);
+        assert.deepEqual(r.calls.labelsAdded[0].labels, ['needs-human']);
+    });
+
+    test('no getComments primitive → the clause skips (capability miss), the census still runs', function () {
+        var r = run({ noComments: true });
+        assert.equal(r.out.poolSkipped, true);
+        assert.equal(r.out.held, false);
+    });
+
+    test('optional reviewers without PASS markers never gate (fail-open for non-required)', function () {
+        var r = run({
+            comments: poolComments([{ name: 'base', required: true }, { name: 'legal', required: false }], ['base'])
+        });
+        assert.equal(r.out.held, false);
     });
 });
