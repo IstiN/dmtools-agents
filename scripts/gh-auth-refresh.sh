@@ -239,6 +239,36 @@ STUB_EOF
     assert_not_contains "full expired token never printed" "$(logs_of "$out")" "ghs_expiredapptoken0123456789"
     assert_not_contains "full PAT never printed" "$(logs_of "$out")" "ghp_machinepat0123456789"
 
+    # 10 — sourced-library contract: sourcing the helper must NOT flip
+    #     `set -u` onto the host. The post-agent glue runs GitHub's default
+    #     `bash -e`; a sourced `set -u` turns tolerated-empty vars into hard
+    #     `unbound variable` step deaths on the graceful path gh-1450 fixes.
+    host_flags="$( ( cd "$tmp" && bash -c '
+        set -e
+        . "'"$tmp"'/helper.sh"
+        printf "%s" "$-"
+    ' ) )"; rc=$?
+    assert_equals "sourcing the helper exits 0" "$rc" "0"
+    assert_not_contains "sourcing does not flip set -u onto the host" "$host_flags" "u"
+
+    # 11 — the state dir honors RUNER_TEMP (GitHub's double-N export):
+    #     without GH_TOKEN_KEEPER_DIR the state file rides the job-scoped
+    #     temp dir, never /tmp — plaintext credentials must not persist on
+    #     shared runners past the job's RUNNER_TEMP cleanup.
+    runner_dir="$tmp/jobtemp"
+    mkdir -p "$runner_dir"
+    state_path="$( ( cd "$tmp" && env -u GH_TOKEN -u SOURCE_GITHUB_TOKEN -u GITHUB_RUN_ID \
+        -u RUNER_TEMP -u GH_TOKEN_KEEPER_DIR -u GH_TOKEN_KEEPER_DISABLE \
+        -u GH_TOKEN_KEEPER_MAX_AGE_SEC \
+        PATH="$stubs:$PATH" RUNER_TEMP="$runner_dir" \
+        bash -c '
+            . "'"$tmp"'/helper.sh"
+            gh_auth_keeper_state_file
+        ' ) )"; rc=$?
+    assert_equals "state-file path resolution exits 0" "$rc" "0"
+    assert_equals "state file rides RUNER_TEMP (job-scoped, not /tmp)" \
+        "$state_path" "$runner_dir/gh-token-keeper-local.env"
+
     rm -rf "$tmp"
     if [ "$fails" -eq 0 ]; then
         echo "gh-auth-refresh self-test: PASS"

@@ -531,6 +531,19 @@ STUB_EOF
     mode="$(stat -c %a "$tmp/gh-token-keeper-4242.env" 2>/dev/null || stat -f %Lp "$tmp/gh-token-keeper-4242.env" 2>/dev/null)"
     assert_equals "state file mode is 600" "$mode" "600"
 
+    # 13 — the DEFAULT refresh interval is the documented 45 min (2700 s):
+    #     the header, usage() and the ticket all contract "every ~45 min —
+    #     safely inside the 60-minute TTL". A 270 s default re-mints the App
+    #     installation token 10x more often and breaks the consumer's
+    #     stale-window rationale, so the default is pinned here (scenario 10
+    #     overrides GH_TOKEN_KEEPER_INTERVAL_SEC and cannot catch this).
+    reset_sandbox
+    out="$(run_keeper_out 1 start GITHUB_REPOSITORY=acme/widgets GH_TOKEN_KEEPER_MAX_LIFETIME_SEC=0)"
+    rc=$?
+    assert_equals "default-interval start exits 0" "$rc" "0"
+    assert_contains "default interval is 2700s (45 min)" "$out" "started (interval 2700s"
+
+
     rm -rf "$tmp"
     if [ "$fails" -eq 0 ]; then
         echo "gh-token-keeper self-test: PASS"
