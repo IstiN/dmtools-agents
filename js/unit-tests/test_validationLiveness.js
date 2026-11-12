@@ -571,4 +571,23 @@ suite('validationLiveness poolBusy — stale queued runs age out (fa #2133)', fu
         assert.equal(live.poolBusy(runs, NOW, 60 * 60 * 1000), false);
         assert.equal(live.poolBusy(runs, NOW), true);
     });
+    test('machine-loop orchestration workflows do NOT self-block the pool (fa #2133)', function () {
+        var orchestrationRuns = [
+            { status: 'in_progress', path: '.github/workflows/machine-sm.yml', created_at: '2026-11-12T17:29:00Z' },
+            { status: 'queued', path: '.github/workflows/sm-kicker.yml', created_at: '2026-11-12T17:29:30Z' },
+            { status: 'in_progress', path: '.github/workflows/machine-merge.yml', created_at: '2026-11-12T17:29:40Z' },
+            { status: 'waiting', path: '.github/workflows/merge-trigger.yml', created_at: '2026-11-12T17:29:50Z' },
+            { status: 'in_progress', path: 'factory-sm.yml', created_at: '2026-11-12T17:29:55Z' }
+        ];
+        assert.equal(live.poolBusy(orchestrationRuns, NOW), false,
+            'active SM tick / kicker / merge orchestration runs never pin repoPoolFree');
+        assert.equal(live.isPoolExcludedWorkflowRun(orchestrationRuns[0]), true);
+        assert.equal(live.isPoolExcludedWorkflowRun({ path: '.github/workflows/ci.yml' }), false);
+        assert.equal(live.isPoolExcludedWorkflowRun({ path: '.github/workflows/ai-teammate.yml' }), false);
+        assert.equal(live.isPoolExcludedWorkflowRun(null), false);
+        var withCi = orchestrationRuns.concat([
+            { status: 'in_progress', path: '.github/workflows/ci.yml', created_at: '2026-11-12T17:28:00Z' }
+        ]);
+        assert.equal(live.poolBusy(withCi, NOW), true, 'an active CI run still marks the pool busy');
+    });
 });
