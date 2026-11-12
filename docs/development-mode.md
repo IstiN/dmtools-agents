@@ -69,13 +69,24 @@ plan  if  deliverable-modules ≥ planIfModulesAtLeast (2)
 else  default
 ```
 
-- Signal extraction is a pure function over title+body (golden-tested).
+- Signal extraction is a pure function over title+body (golden-tested, in
+  `js/common/developmentModeAdaptive.js`): *modules* = max(numbered-list
+  items outside AC sections, highest `module N` mention, contiguous bullet
+  groups outside AC sections); *acceptanceBullets* = list items under
+  Acceptance/AC sections; *bodyTokens* = the chars/4 backstop.
+- A routed-to-plan leg carries the SAME plan appendix as `plan` (the
+  materialized runtime file is the decision record); a routed-to-default leg
+  and any shadow leg remove stale appendix state, so their prompts stay
+  byte-identical to `default`. `plan` itself ignores the rule entirely —
+  the rule exists only for `adaptive`.
 - `developmentModeConfig.adaptive.shadowMode: true` ⇒ decide + log only
-  (`would plan: …`), never act — used to accumulate routing evidence
-  before enabling real routing.
+  (`adaptive: would plan (signals: modules=3) but shadow mode`), never act —
+  used to accumulate routing evidence before enabling real routing.
 - Thresholds are config, calibrated offline against closed-issue replays;
   the rule is deliberately conservative — inconclusive signals route
   `default`.
+- Adaptive never spawns sub-agents (`developmentModeConfig.spawn` is a later
+  concern, off by default).
 
 ---
 
@@ -100,7 +111,33 @@ wrong types are warned-and-ignored.
 
 ---
 
-## 4. Operational contract
+## 4. Calibration (offline — `adaptive` thresholds)
+
+Threshold validity is expert review of a decision table, not a numeric bar
+(owner decision, gh-1437): the harness replays the rule over an
+expert-labeled sample and the owner tunes thresholds (config-only) from the
+disagreement cases.
+
+```bash
+node js/adaptiveCalibrationHarness.js <sample.json> \
+  [--out adaptive-decision-table.md] \
+  [--planIfModulesAtLeast 2] [--planIfAcceptanceBulletsAtLeast 5] [--planIfBodyTokensAtLeast 800]
+```
+
+- Sample format: `{ "issues": [ { "key", "title", "body", "label" } ] }` —
+  `label` is the expert verdict, exactly `plan` or `default` (anything else
+  is flagged invalid and excluded from the stats). A documented example
+  sample lives in `examples/adaptive-calibration-sample.example.json`.
+- The artifact (markdown, deterministic — no timestamps) lists, per issue:
+  signals, would-decide, expert label, agree/disagree, plus a disagreements
+  section and agreement/precision/recall numbers (informational only).
+- The replay uses the SAME extractor and decision the legs run, so a table
+  is faithful to production routing; re-running with different thresholds is
+  a config-only diff of the artifact.
+
+---
+
+## 5. Operational contract
 
 - **Factory pass-through** — the workflows layer selects the config
   *file* and hands its path to the engine (`AI_TEAMMATE_CONFIG_FILE`);

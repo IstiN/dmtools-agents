@@ -44,6 +44,7 @@ _Pre-CLI Development Setup — Dynamic Repository variant_
   - `dependenciesDir`
   - `developmentMode`
   - `developmentModeConfig`
+  - `developmentModeConfig.adaptive`
   - `developmentModeConfig.plan`
   - `dryRun`
   - `feedbackLoop`
@@ -116,6 +117,7 @@ _Post-Action Development — Dynamic Repository variant_
 - `dependenciesDir` _(used by JS action)_
 - `developmentMode` _(used by JS action)_
 - `developmentModeConfig` _(used by JS action)_
+- `developmentModeConfig.adaptive` _(used by JS action)_
 - `developmentModeConfig.plan` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_

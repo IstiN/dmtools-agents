@@ -194,20 +194,26 @@ function appendixOverridePath(customParams) {
  *
  * @returns {{active: boolean, text: string|null, overridden: boolean, path: string|null, error: string|null, warnings: string[]}}
  */
-function readAppendixText(customParams, io) {
+/**
+ * Resolve the appendix TEXT source — the engine default, or the workflow's
+ * developmentModeConfig.plan.appendixFile used VERBATIM. No mode gate:
+ * callers gate on their own mode before calling (plan legs through
+ * readAppendixText, adaptive legs routed-to-plan through the gh-1437
+ * adaptive module). An unreadable/blank/missing override yields an error
+ * naming the path — the caller fails the leg fast (a config error, never a
+ * fallback). The IO global is resolved lazily INSIDE here, which keeps the
+ * surface untouched for callers that never reach this function on inactive
+ * legs (gh-1436 review discipline).
+ *
+ * @returns {{text: string|null, overridden: boolean, path: string|null, error: string|null, warnings: string[]}}
+ */
+function resolveAppendixSource(customParams, io) {
     var warnings = [];
-    if (!isPlanMode(customParams)) {
-        return { active: false, text: null, overridden: false, path: null, error: null, warnings: warnings };
-    }
-    // Resolved only AFTER the mode gate: an inactive (default-mode) leg must
-    // not touch the IO surface at all — an eager `(io && io.file_read) ||
-    // file_read` here crashed every non-plan leg on hosts without the dmtools
-    // globals (the Node test harness; gh-1436 review, 25 red CI tests).
     var read = (io && io.file_read) || file_read;
     var override = appendixOverridePath(customParams);
     warnings = warnings.concat(override.warnings);
     if (!override.path) {
-        return { active: true, text: DEFAULT_PLAN_APPENDIX, overridden: false, path: null, error: null, warnings: warnings };
+        return { text: DEFAULT_PLAN_APPENDIX, overridden: false, path: null, error: null, warnings: warnings };
     }
     var content = null;
     try {
@@ -217,7 +223,6 @@ function readAppendixText(customParams, io) {
     }
     if (typeof content !== 'string' || !content.trim()) {
         return {
-            active: true,
             text: null,
             overridden: true,
             path: override.path,
@@ -226,7 +231,16 @@ function readAppendixText(customParams, io) {
             warnings: warnings
         };
     }
-    return { active: true, text: content, overridden: true, path: override.path, error: null, warnings: warnings };
+    return { text: content, overridden: true, path: override.path, error: null, warnings: warnings };
+}
+
+function readAppendixText(customParams, io) {
+    if (!isPlanMode(customParams)) {
+        return { active: false, text: null, overridden: false, path: null, error: null, warnings: [] };
+    }
+    var resolved = resolveAppendixSource(customParams, io);
+    resolved.active = true;
+    return resolved;
 }
 
 /**
@@ -242,32 +256,45 @@ function readAppendixText(customParams, io) {
  *
  * @returns {{ok: boolean, active: boolean, path: string|null, overridden: boolean, error: string|null, warnings: string[]}}
  */
-function materializePlanAppendix(customParams, io) {
-    var resolved = readAppendixText(customParams, io);
-    if (!resolved.active) {
-        return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolved.warnings };
-    }
-    if (resolved.error) {
-        return { ok: false, active: true, path: resolved.path, overridden: resolved.overridden, error: resolved.error, warnings: resolved.warnings };
-    }
+/**
+ * Write a resolved appendix to the runtime path. Never throws — the write
+ * failure becomes ok:false + an honest error naming the path. Shared by the
+ * plan-mode materialization and the adaptive routed-to-plan materialization
+ * (gh-1437).
+ *
+ * @returns {{ok: boolean, path: string, overridden: boolean, error: string|null}}
+ */
+function writeResolvedAppendix(resolved, io) {
     // Resolved only when a write is actually due — an inactive or failed
     // resolution must not reference the IO globals at all (same lazy-gate
-    // discipline as readAppendixText above).
+    // discipline as resolveAppendixSource above).
     var write = (io && io.file_write) || file_write;
     try {
         write({ path: PLAN_APPENDIX_FILE_PATH, content: resolved.text });
     } catch (e) {
         return {
             ok: false,
-            active: true,
             path: PLAN_APPENDIX_FILE_PATH,
             overridden: resolved.overridden,
             error: 'developmentMode=plan: could not write the plan-mode appendix to "' +
-                PLAN_APPENDIX_FILE_PATH + '": ' + e,
-            warnings: resolved.warnings
+                PLAN_APPENDIX_FILE_PATH + '": ' + e
         };
     }
-    return { ok: true, active: true, path: PLAN_APPENDIX_FILE_PATH, overridden: resolved.overridden, error: null, warnings: resolved.warnings };
+    return { ok: true, path: PLAN_APPENDIX_FILE_PATH, overridden: resolved.overridden, error: null };
+}
+
+function materializePlanAppendix(customParams, io) {
+    var resolved = readAppendixText(customParams, io);
+    if (!resolved.active) {
+        return { ok: false, active: false, path: null, overridden: false, error: null, warnings: [] };
+    }
+    if (resolved.error) {
+        return { ok: false, active: true, path: resolved.path, overridden: resolved.overridden, error: resolved.error, warnings: resolved.warnings };
+    }
+    var written = writeResolvedAppendix(resolved, io);
+    written.active = true;
+    written.warnings = resolved.warnings;
+    return written;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -281,6 +308,8 @@ if (typeof module !== 'undefined' && module.exports) {
         isPlanMode: isPlanMode,
         planAppendixCliEntry: planAppendixCliEntry,
         appendixOverridePath: appendixOverridePath,
+        resolveAppendixSource: resolveAppendixSource,
+        writeResolvedAppendix: writeResolvedAppendix,
         readAppendixText: readAppendixText,
         materializePlanAppendix: materializePlanAppendix
     };

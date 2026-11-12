@@ -26,7 +26,12 @@ var legStartSignal = require('./common/legStartSignal.js');
 // gh-1436: plan-mode execution path — the plan-protocol prompt appendix is
 // materialized here (preCli, before the agent launches) at the runtime path
 // the dev leg configs' conditional cliPrompts entry points at.
+// gh-1437: adaptive legs route through the same appendix (the decision
+// carrier is the runtime file's existence) — the dispatcher below sends
+// plan legs down the unchanged plan path and adaptive legs through the
+// signal-driven decision (js/common/developmentModeAdaptive.js).
 var developmentModePlan = require('./common/developmentModePlan.js');
+var developmentModeAdaptive = require('./common/developmentModeAdaptive.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
@@ -1090,6 +1095,77 @@ function runPlanModeAppendixStepOrReport(customParams, config, ticketKey) {
     }
 }
 
+// ── gh-1437: adaptive routing — same appendix, signal-driven decision ───────
+// When the resolved developmentMode is "adaptive", the ENGINE decides
+// plan-vs-default from ticket signals (js/common/developmentModeAdaptive.js):
+// routed-to-plan materializes the appendix exactly like a plan leg,
+// routed-to-default and shadowMode legs remove stale appendix state instead.
+// The decision itself never fails the leg (permissive config philosophy);
+// only a failed appendix RESOLUTION (unreadable override, unwritable path)
+// does — the same config-error class the plan path reports.
+
+/** Ticket title+body for the signal extractor — tracker-agnostic (gh-1442
+ *  resolvers: Jira fields.summary/description, ADO System.Title/System.
+ *  Description, GitHub top-level title/body), so adaptive routing reads the
+ *  real text on every tracker instead of silently routing default on ADO. */
+function ticketTextForAdaptive(ticket) {
+    return trackersModule.ticketSummaryOf(ticket) + '\n' + trackersModule.ticketDescriptionOf(ticket);
+}
+
+/**
+ * The adaptive step: evaluate, flush warnings + log lines, materialize or
+ * clean up. A failed appendix resolution throws (the caller reports it like
+ * a plan-mode setup failure).
+ * @returns the adaptive materialization result.
+ * @throws when the leg routed to plan but the appendix cannot be materialized.
+ */
+function runAdaptiveModeAppendixStep(customParams, ticket) {
+    var result = developmentModeAdaptive.materializeAdaptiveAppendix(customParams, ticketTextForAdaptive(ticket));
+    (result.warnings || []).forEach(function (w) { console.warn(w); });
+    (result.logLines || []).forEach(function (l) { console.log(l); });
+    if (result.error) {
+        throw new Error(result.error);
+    }
+    if (result.materialized) {
+        branchSetup.ensureGitInfoExclude(
+            developmentModePlan.PLAN_APPENDIX_FILE_PATH,
+            developmentModePlan.PLAN_APPENDIX_EXCLUDE_COMMENT,
+            'Could not exclude the plan-mode appendix from git:'
+        );
+    }
+    return result;
+}
+
+/**
+ * The development-mode appendix dispatcher: plan legs take the unchanged
+ * gh-1436 plan path, adaptive legs take the signal-driven decision, every
+ * other mode stays on the zero-IO plan path (which no-ops for non-plan).
+ */
+function runDevelopmentModeAppendixStep(customParams, ticket) {
+    var mode = developmentModeAdaptive.resolvedDevelopmentMode(customParams);
+    if (mode === 'adaptive') {
+        return runAdaptiveModeAppendixStep(customParams, ticket);
+    }
+    return runPlanModeAppendixStep(customParams);
+}
+
+/**
+ * The reporting wrapper for the dispatcher (same contract as
+ * runPlanModeAppendixStepOrReport): a failed setup posts the setup-error
+ * comment (Plan Mode Setup) and rethrows.
+ */
+function runDevelopmentModeAppendixStepOrReport(customParams, config, ticketKey, ticket) {
+    try {
+        return runDevelopmentModeAppendixStep(customParams, ticket);
+    } catch (e) {
+        var modeError = decideErrorMessage(e);
+        console.error('Development-mode appendix setup failed:', modeError);
+        postSetupErrorComment(config, customParams, ticketKey, 'Plan Mode Setup', modeError);
+        emitLegStartFailed(config, customParams, modeError);
+        throw new Error('Development-mode setup failed: ' + modeError);
+    }
+}
+
 /** Fetch [BA]/[SA]/[VD] parent context (step 5) — non-fatal extra context. */
 function runFetchParentContextStep(actualParams) {
     try {
@@ -1165,11 +1241,13 @@ function action(params) {
         baseBranchMarker.writeBaseBranchMarker(config.git.baseBranch);
 
         writeDevBaseHead(folder);
-        // gh-1436: materialize the plan-mode appendix on plan legs (after
+        // gh-1436/gh-1437: materialize the development-mode appendix (after
         // checkout: .git/info/exclude seeding needs the repo; before the agent
-        // launches: the prompt assembly reads it post-setup). Config errors
-        // fail the leg fast, with the offending path named.
-        runPlanModeAppendixStepOrReport(customParams, config, ticketKey);
+        // launches: the prompt assembly reads it post-setup). Plan legs
+        // materialize always; adaptive legs route by ticket signals; other
+        // modes no-op with zero IO. Config errors fail the leg fast, with the
+        // offending path named.
+        runDevelopmentModeAppendixStepOrReport(customParams, config, ticketKey, params.ticket || actualParams.ticket);
         // 2.5. Surface existing remote dev-branch work into the input folder (gh-1164):
         // a resumed leg must see previous rounds' commits instead of mistaking the
         // base branch tip for its own work. Cheap: one ls-remote (+ one log/diff when
@@ -1237,6 +1315,11 @@ if (typeof module !== 'undefined' && module.exports) {
         // gh-1436: plan-mode appendix materialization — exported for unit tests.
         runPlanModeAppendixStep,
         runPlanModeAppendixStepOrReport,
+        // gh-1437: adaptive routing dispatcher — exported for unit tests.
+        runDevelopmentModeAppendixStep,
+        runDevelopmentModeAppendixStepOrReport,
+        runAdaptiveModeAppendixStep,
+        ticketTextForAdaptive,
         // gh-1363: leg-failure report wiring — exported for direct unit testing.
         collectPreflightStateStep,
         currentPreflightLine,
