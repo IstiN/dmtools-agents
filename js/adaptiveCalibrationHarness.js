@@ -67,6 +67,84 @@ function isNonNegativeIntegerText(text) {
     return /^[0-9]+$/.test(String(text));
 }
 
+function isFlagToken(token) {
+    return String(token).indexOf('--') === 0;
+}
+
+function isUnusableFlagValue(value) {
+    return value === undefined || String(value).indexOf('--') === 0;
+}
+
+function applyOutFlag(args, value) {
+    if (isUnusableFlagValue(value)) {
+        args.error = 'option --out expects a path value';
+        return 0;
+    }
+    args.out = String(value);
+    return 1;
+}
+
+function thresholdValueError(flag, value) {
+    return 'option ' + flag + ' expects a non-negative integer, got ' +
+        (value === undefined ? '(missing)' : String(value));
+}
+
+function isValidThresholdValue(value) {
+    return value !== undefined && isNonNegativeIntegerText(value);
+}
+
+function applyThresholdValue(args, key, flag, value) {
+    if (!isValidThresholdValue(value)) {
+        args.error = thresholdValueError(flag, value);
+        return 0;
+    }
+    args.thresholdOverrides[key] = parseInt(value, 10);
+    return 1;
+}
+
+function applyThresholdFlag(args, flag, value) {
+    var key = THRESHOLD_FLAGS[flag];
+    if (!key) {
+        args.error = 'unknown option ' + flag;
+        return 0;
+    }
+    return applyThresholdValue(args, key, flag, value);
+}
+
+function applyFlagArg(args, flag, value) {
+    if (flag === '--out') return applyOutFlag(args, value);
+    return applyThresholdFlag(args, flag, value);
+}
+
+function parseOneArg(args, token, value, positionals) {
+    if (isFlagToken(token)) return applyFlagArg(args, token, value);
+    positionals.push(token);
+    return 0;
+}
+
+function nextParseStep(args, argv, i, positionals) {
+    if (args.error) return 0;
+    return parseOneArg(args, String(argv[i]), argv[i + 1], positionals);
+}
+
+function extraPositionalError(positionals) {
+    if (positionals.length > 1) {
+        return 'unexpected extra argument: ' + positionals[1] + ' — pass exactly one sample path';
+    }
+    return null;
+}
+
+function samplePathOf(positionals) {
+    if (positionals.length === 1) return positionals[0];
+    return null;
+}
+
+function finalizePositionals(args, positionals) {
+    if (args.error) return;
+    args.error = extraPositionalError(positionals);
+    args.sample = samplePathOf(positionals);
+}
+
 /**
  * @returns {{sample: string|null, out: string, thresholdOverrides: Object, error: string|null}}
  */
@@ -74,40 +152,9 @@ function parseCliArgs(argv) {
     var args = { sample: null, out: DEFAULT_OUT, thresholdOverrides: {}, error: null };
     var positionals = [];
     for (var i = 0; i < argv.length; i++) {
-        var token = String(argv[i]);
-        if (token.indexOf('--') === 0) {
-            var flag = token;
-            var value = argv[i + 1];
-            if (flag === '--out') {
-                if (value === undefined || String(value).indexOf('--') === 0) {
-                    args.error = 'option ' + flag + ' expects a path value';
-                    return args;
-                }
-                args.out = String(value);
-                i++;
-                continue;
-            }
-            var key = THRESHOLD_FLAGS[flag];
-            if (!key) {
-                args.error = 'unknown option ' + flag;
-                return args;
-            }
-            if (value === undefined || !isNonNegativeIntegerText(value)) {
-                args.error = 'option ' + flag + ' expects a non-negative integer, got ' +
-                    (value === undefined ? '(missing)' : String(value));
-                return args;
-            }
-            args.thresholdOverrides[key] = parseInt(value, 10);
-            i++;
-            continue;
-        }
-        positionals.push(token);
+        i += nextParseStep(args, argv, i, positionals);
     }
-    if (positionals.length > 1) {
-        args.error = 'unexpected extra argument: ' + positionals[1] + ' — pass exactly one sample path';
-        return args;
-    }
-    args.sample = positionals.length === 1 ? positionals[0] : null;
+    finalizePositionals(args, positionals);
     return args;
 }
 
@@ -129,35 +176,100 @@ function isValidLabel(label) {
     return typeof label === 'string' && VALID_LABELS.indexOf(label) !== -1;
 }
 
+function isAbsent(value) {
+    return value === undefined || value === null;
+}
+
+function normalizedIssue(issue) {
+    return issue || {};
+}
+
+function isBlankKey(key) {
+    return isAbsent(key) || String(key).trim() === '';
+}
+
+function issueKeyLabel(issue, index) {
+    if (isBlankKey(issue.key)) return '(issue #' + (index + 1) + ')';
+    return String(issue.key);
+}
+
+function validOrRenderedLabel(expert) {
+    if (isValidLabel(expert)) return expert;
+    return String(expert);
+}
+
+function expertLabelOf(expert) {
+    return isAbsent(expert) ? '(none)' : validOrRenderedLabel(expert);
+}
+
+function agreementOf(decision, expert) {
+    if (!isValidLabel(expert)) return null;
+    return decision.mode === expert;
+}
+
+function decisionRowFor(issue, index, thresholds) {
+    var signals = developmentModeAdaptive.extractSignals(issue.title, issue.body);
+    var decision = developmentModeAdaptive.decideAdaptiveMode(signals, thresholds);
+    var expert = issue.label;
+    return {
+        key: issueKeyLabel(issue, index),
+        signals: signals,
+        would: decision.mode,
+        expert: expertLabelOf(expert),
+        agree: agreementOf(decision, expert)
+    };
+}
+
 /**
  * One decision row per sample issue: extracted signals, the would-decision
  * the CURRENT thresholds produce, the expert label and the agreement verdict
  * (null when the label is invalid — the row is excluded from the stats).
  */
 function buildDecisionRows(issues, thresholds) {
-    var rows = [];
     var list = Array.isArray(issues) ? issues : [];
-    for (var i = 0; i < list.length; i++) {
-        var issue = list[i] || {};
-        var key = issue.key !== undefined && issue.key !== null && String(issue.key).trim() !== ''
-            ? String(issue.key)
-            : '(issue #' + (i + 1) + ')';
-        var signals = developmentModeAdaptive.extractSignals(issue.title, issue.body);
-        var decision = developmentModeAdaptive.decideAdaptiveMode(signals, thresholds);
-        var expert = issue.label;
-        rows.push({
-            key: key,
-            signals: signals,
-            would: decision.mode,
-            expert: isValidLabel(expert) ? expert : String(expert === undefined || expert === null ? '(none)' : expert),
-            agree: isValidLabel(expert) ? decision.mode === expert : null
-        });
-    }
-    return rows;
+    return list.map(function (issue, i) {
+        return decisionRowFor(normalizedIssue(issue), i, thresholds);
+    });
 }
 
 function round2(value) {
     return Math.round(value * 100) / 100;
+}
+
+function invalidRow(row) {
+    return row.agree === null;
+}
+
+function tallyExpertSide(summary, row) {
+    if (row.expert === 'plan') summary.expertPlan++;
+    else summary.expertDefault++;
+}
+
+function tallyWouldPlan(summary, row) {
+    summary.wouldPlan++;
+    if (row.expert === 'plan') summary.tp++;
+    else summary.fp++;
+}
+
+function tallyNotPlan(summary, row) {
+    if (row.expert === 'default') summary.tn++;
+    else summary.fn++;
+}
+
+function tallyConfusion(summary, row) {
+    if (row.would === 'plan') tallyWouldPlan(summary, row);
+    else tallyNotPlan(summary, row);
+}
+
+function tallyValidRow(summary, row) {
+    tallyExpertSide(summary, row);
+    tallyConfusion(summary, row);
+    if (row.agree) summary.agreeCount++;
+}
+
+function rateOrNull(numerator, denominator) {
+    if (numerator + denominator > 0) return round2(numerator / (numerator + denominator));
+    return null;
 }
 
 /**
@@ -182,26 +294,15 @@ function computeSummary(rows) {
         recall: null
     };
     rows.forEach(function (row) {
-        if (row.agree === null) {
+        if (invalidRow(row)) {
             summary.invalidLabels++;
             return;
         }
         summary.valid++;
-        if (row.expert === 'plan') summary.expertPlan++;
-        else summary.expertDefault++;
-        if (row.would === 'plan') {
-            summary.wouldPlan++;
-            if (row.expert === 'plan') summary.tp++;
-            else summary.fp++;
-        } else if (row.expert === 'default') {
-            summary.tn++;
-        } else {
-            summary.fn++;
-        }
-        if (row.agree) summary.agreeCount++;
+        tallyValidRow(summary, row);
     });
-    if (summary.tp + summary.fp > 0) summary.precision = round2(summary.tp / (summary.tp + summary.fp));
-    if (summary.tp + summary.fn > 0) summary.recall = round2(summary.tp / (summary.tp + summary.fn));
+    summary.precision = rateOrNull(summary.tp, summary.fp);
+    summary.recall = rateOrNull(summary.tp, summary.fn);
     return summary;
 }
 

@@ -37,6 +37,8 @@ var holder = trackersModule.createTrackerHolder();
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         initTracker: holder.initTracker,
-        getTracker: holder.getTracker
+        getTracker: holder.getTracker,
+        ticketSummaryOf: trackersModule.ticketSummaryOf,
+        ticketDescriptionOf: trackersModule.ticketDescriptionOf
     };
 }

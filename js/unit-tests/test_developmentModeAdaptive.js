@@ -778,6 +778,19 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
         assert.contains(captured.logs.join('\n'), 'adaptive: routing to plan (signals: acceptanceBullets=6)');
     });
 
+    test('ADO-shaped ticket (System.Title/System.Description) routes on its real text (gh-1442 parity)', function () {
+        var adoThreeModules = ['Delivery plan:', '1. CSV exporter', '2. PDF renderer', '3. Digest builder'].join('\n');
+        var fs = fsRecorder({ '.git/info/exclude': '' });
+        var captured = captureConsole(function () {
+            loadDevSetup(fs).runDevelopmentModeAppendixStep(
+                { developmentMode: 'adaptive' },
+                { key: 'P-1', fields: { 'System.Title': 'Add export pipeline', 'System.Description': adoThreeModules } });
+            assert.equal(fs.calls.writes.filter(function (w) { return w.path === APPENDIX_PATH; }).length, 1,
+                'ADO ticket with 3 numbered deliverables routes to plan');
+        });
+        assert.contains(captured.logs.join('\n'), 'adaptive: routing to plan (signals: modules=3)');
+    });
+
     test('adaptive + unreadable appendix override → THROWS naming the path (fail fast)', function () {
         var fs = fsRecorder({});
         var cp = { developmentMode: 'adaptive', developmentModeConfig: { plan: { appendixFile: 'missing.md' } } };
@@ -826,7 +839,7 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
             postComment: function (key, body) { posted.push({ key: key, body: body }); },
             moveToStatus: function () { }
         };
-        var trackersStub = { createTracker: function () { return trackerStub; } };
+        var trackersStub = { createTracker: function () { return trackerStub; }, ticketSummaryOf: function (t) { return (t && t.fields && t.fields.summary) || ''; }, ticketDescriptionOf: function (t) { return (t && t.fields && t.fields.description) || ''; } };
         var mocks = {
             file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete,
             cli_execute_command: function () { return ''; }
@@ -883,7 +896,7 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
             postComment: function (key, body) { posted.push({ key: key, body: body }); },
             moveToStatus: function () { }
         };
-        var trackersStub = { createTracker: function () { return trackerStub; } };
+        var trackersStub = { createTracker: function () { return trackerStub; }, ticketSummaryOf: function (t) { return (t && t.fields && t.fields.summary) || ''; }, ticketDescriptionOf: function (t) { return (t && t.fields && t.fields.description) || ''; } };
         var mocks = {
             file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete,
             cli_execute_command: function () { return ''; }

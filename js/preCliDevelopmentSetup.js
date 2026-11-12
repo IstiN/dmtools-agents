@@ -1104,10 +1104,12 @@ function runPlanModeAppendixStepOrReport(customParams, config, ticketKey) {
 // only a failed appendix RESOLUTION (unreadable override, unwritable path)
 // does — the same config-error class the plan path reports.
 
-/** Ticket title+body for the signal extractor: fields.summary + '\n' + fields.description. */
+/** Ticket title+body for the signal extractor — tracker-agnostic (gh-1442
+ *  resolvers: Jira fields.summary/description, ADO System.Title/System.
+ *  Description, GitHub top-level title/body), so adaptive routing reads the
+ *  real text on every tracker instead of silently routing default on ADO. */
 function ticketTextForAdaptive(ticket) {
-    var fields = (ticket && ticket.fields) || {};
-    return String(fields.summary || '') + '\n' + String(fields.description || '');
+    return trackersModule.ticketSummaryOf(ticket) + '\n' + trackersModule.ticketDescriptionOf(ticket);
 }
 
 /**

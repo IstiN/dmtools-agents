@@ -151,8 +151,6 @@ function loadPreCli(workingDir) {
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
             './common/developmentModePlan.js': devModePlanModuleShared,
             './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared,
-            './common/developmentModePlan.js': devModePlanModuleShared,
-            './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared,
             './common/trackers.js': trackersModuleReal
         }),
         modMocks

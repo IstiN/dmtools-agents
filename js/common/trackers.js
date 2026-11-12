@@ -1568,6 +1568,30 @@ function extractTicketKey(result) {
     return null;
 }
 
+/** First non-empty string property from `obj` across `keys`, or '' (gh-1442). */
+function _firstPropOf(obj, keys) {
+    if (!obj || typeof obj !== 'object') return '';
+    for (var i = 0; i < keys.length; i++) {
+        if (obj[keys[i]]) return obj[keys[i]];
+    }
+    return '';
+}
+
+/** Resolve a ticket field from top-level and `fields` candidate keys (gh-1442). */
+function _ticketFieldOf(ticket, topKeys, fieldKeys) {
+    return _firstPropOf(ticket, topKeys) || _firstPropOf(ticket && ticket.fields, fieldKeys);
+}
+
+/** Resolve a ticket's summary/title across Jira, ADO, and GitHub payload shapes (gh-1442). */
+function ticketSummaryOf(ticket) {
+    return _ticketFieldOf(ticket, ['title', 'summary'], ['summary', 'System.Title', 'title']);
+}
+
+/** Resolve a ticket's description/body across Jira, ADO, and GitHub payload shapes (gh-1442). */
+function ticketDescriptionOf(ticket) {
+    return _ticketFieldOf(ticket, ['description', 'body'], ['description', 'System.Description']);
+}
+
 /**
  * A GitHub tracker bound to one repository (agents: move to the tracker abstraction).
  *
@@ -1640,5 +1664,7 @@ module.exports = {
     resolveProjectConfig: resolveProjectConfig,
     createGithubTracker: createGithubTracker,
     createTrackerHolder: createTrackerHolder,
-    extractTicketKey: extractTicketKey
+    extractTicketKey: extractTicketKey,
+    ticketSummaryOf: ticketSummaryOf,
+    ticketDescriptionOf: ticketDescriptionOf
 };
