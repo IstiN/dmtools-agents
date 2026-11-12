@@ -1140,7 +1140,7 @@ function runAdaptiveModeAppendixStep(customParams, ticket) {
  * other mode stays on the zero-IO plan path (which no-ops for non-plan).
  */
 function runDevelopmentModeAppendixStep(customParams, ticket) {
-    var mode = developmentMode.resolveDevelopmentMode(customParams).mode;
+    var mode = developmentModeAdaptive.resolvedDevelopmentMode(customParams);
     if (mode === 'adaptive') {
         return runAdaptiveModeAppendixStep(customParams, ticket);
     }

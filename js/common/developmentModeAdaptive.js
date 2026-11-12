@@ -71,9 +71,11 @@ var ATX_HEADING_RE = /^[ \t]*#{1,6}[ \t]+/;
 
 // A heading (or bare label line) that OPENS an acceptance section: any ATX
 // heading mentioning "acceptance" or a standalone "AC" word, or a bare
-// bold/plain label line that IS exactly the acceptance label.
+// bold/plain label line that IS exactly the acceptance label (colons may sit
+// inside or outside the bold markers: "**Acceptance criteria:**" /
+// "**Acceptance criteria**:" / "Acceptance criteria:").
 var AC_HEADING_WORD_RE = /acceptance|(^|[^a-z0-9])ac([^a-z0-9]|$)/i;
-var AC_BARE_LABEL_RE = /^[ \t]*(?:\*\*|__)?[ \t]*(?:acceptance(?:[ \t]+criterias?)?|ac)[ \t]*(?:\*\*|__)?[ \t]*:?[ \t]*$/i;
+var AC_BARE_LABEL_RE = /^[ \t]*(?:\*\*|__)?[ \t]*(?:acceptance(?:[ \t]+criterias?)?|ac)[ \t]*:?[ \t]*(?:\*\*|__)?[ \t]*:?[ \t]*$/i;
 
 // List-item shapes: bullets ("- ", "* ", "+ ") and ordered items ("1. ", "1) ").
 var BULLET_LINE_RE = /^[ \t]*[-*+][ \t]+\S/;
@@ -350,6 +352,15 @@ function extractSignalsFromTicketText(ticketText) {
     return extractSignals(title, body);
 }
 
+/**
+ * The resolved development mode (the gh-1435 resolver's passthrough) — the
+ * preCli dispatcher's gate, exported so the setup module needs no direct
+ * dependency on the resolver module.
+ */
+function resolvedDevelopmentMode(customParams) {
+    return developmentMode.resolveDevelopmentMode(customParams).mode;
+}
+
 // ── materialization orchestration (the routing carrier) ──────────────────────
 
 /**
@@ -454,6 +465,7 @@ if (typeof module !== 'undefined' && module.exports) {
         routingLogLine: routingLogLine,
         evaluateAdaptiveMode: evaluateAdaptiveMode,
         extractSignalsFromTicketText: extractSignalsFromTicketText,
+        resolvedDevelopmentMode: resolvedDevelopmentMode,
         materializeAdaptiveAppendix: materializeAdaptiveAppendix
     };
 }

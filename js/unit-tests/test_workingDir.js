@@ -28,6 +28,14 @@ function trackersWith(mocks) {
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 
+// gh-1437: the development-mode modules, shared by every preCli require map
+// below (real instances; file IO stays mockable via the per-call mocks).
+var devModeModuleShared = loadModule('js/common/developmentMode.js');
+var devModePlanModuleShared = loadModule('js/common/developmentModePlan.js',
+    makeRequire({ './developmentMode.js': devModeModuleShared }));
+var devModeAdaptiveModuleShared = loadModule('js/common/developmentModeAdaptive.js',
+    makeRequire({ './developmentMode.js': devModeModuleShared, './developmentModePlan.js': devModePlanModuleShared }));
+
 // Real tracker factory (provider probing is pure config/env reads) —
 // preCliDevelopmentSetup requires it for the dev-leg label assertion.
 var trackersModuleReal = loadModule(
@@ -141,10 +149,10 @@ function loadPreCli(workingDir) {
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
-            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
-            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
+            './common/developmentModePlan.js': devModePlanModuleShared,
+            './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared,
+            './common/developmentModePlan.js': devModePlanModuleShared,
+            './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared,
             './common/trackers.js': trackersModuleReal
         }),
         modMocks
@@ -268,8 +276,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
-            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
+            './common/developmentModePlan.js': devModePlanModuleShared,
+            './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared
         }),
             modMocks
         );
@@ -344,8 +352,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
-            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
+            './common/developmentModePlan.js': devModePlanModuleShared,
+            './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared
         }),
             modMocks
         );
@@ -424,8 +432,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             './common/commentMarkup.js': commentMarkupModule,
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
-            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
+            './common/developmentModePlan.js': devModePlanModuleShared,
+            './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared
         }),
             modMocks
         );

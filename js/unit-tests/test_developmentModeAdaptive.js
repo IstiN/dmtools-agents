@@ -186,8 +186,10 @@ suite('gh-1437 UT — extraction rule pins (modules)', function () {
     });
 
     test('a prose line DOES split bullet groups', function () {
-        var s = developmentModeAdaptive.extractSignals('T', ['- a', 'Some prose between lists.', '- b'].join('\n'));
-        assert.equal(s.modules, 2, 'two groups');
+        var withoutProse = developmentModeAdaptive.extractSignals('T', ['- a', '- b', '- c', '- d'].join('\n'));
+        assert.equal(withoutProse.modules, 1, 'contiguous 4-bullet list → one group');
+        var withProse = developmentModeAdaptive.extractSignals('T', ['- a', '- b', 'Some prose between lists.', '- c', '- d'].join('\n'));
+        assert.equal(withProse.modules, 2, 'prose splits into two groups of two');
     });
 
     test('a single stray bullet is not a group (≥2 bullets required)', function () {
@@ -672,8 +674,14 @@ function loadDevSetup(fs, extraMocks) {
         file_delete: fs.file_delete,
         cli_execute_command: function () { return ''; }
     }, extraMocks || {});
+    // FRESH instances sharing THIS test's fs mocks — a shared instance would
+    // fall back to the real file_read/file_write/file_delete globals (the
+    // gh-1436 loader discipline; the appendix materialization must never
+    // touch the real filesystem from a test).
+    var planReal = loadModule('js/common/developmentModePlan.js',
+        makeRequire({ './developmentMode.js': developmentMode }), mocks);
     var adaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
-        makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }));
+        makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': planReal }), mocks);
     return loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({
@@ -824,7 +832,7 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
             cli_execute_command: function () { return ''; }
         };
         var adaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
-            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }));
+            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
@@ -879,7 +887,7 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
             cli_execute_command: function () { return ''; }
         };
         var adaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
-            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }));
+            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
@@ -981,7 +989,9 @@ suite('gh-1437 REG — plan/default modes unaffected; mode semantics preserved',
             './common/developmentModeAdaptive.js': developmentModeAdaptive,
             './common/trackerSlot.js': trackerSlot,
             './configLoader.js': Object.assign({}, configLoaderModule, {
-                loadProjectConfig: function () { return { git: { baseBranch: 'main' } }; }
+                loadProjectConfig: function () {
+                    return { git: { baseBranch: 'main', branchPrefix: { development: 'ai/' } } };
+                }
             }),
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
