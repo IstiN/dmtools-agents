@@ -3756,6 +3756,9 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
                             created_at: new Date().toISOString() },
                           { id: 43293262920, status: 'queued', conclusion: null,
                             path: '.github/workflows/sm-kicker.yml', head_branch: 'main',
+                            created_at: new Date().toISOString() },
+                          { id: 43297113854, status: 'in_progress', conclusion: null,
+                            path: '.github/workflows/release.yml', head_branch: 'main',
                             created_at: new Date().toISOString() }
                       ] },
             onCliExecute: function (cmdOpts) {
