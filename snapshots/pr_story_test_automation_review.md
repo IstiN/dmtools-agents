@@ -156,7 +156,7 @@ Example PR test automation review outputs — keep concise:
 }
 ```
 
-**Severity boundary (gh-1351, 4 tiers)**: a 🪶 NIT changes nothing behavioral and
+**Severity boundary (4 tiers)**: a 🪶 NIT changes nothing behavioral and
 nothing documented (style, naming, formatting); a 💡 SUGGESTION changes clarity of
 the documented/behavioral surface. Behavior or contract breakage is ⚠️/🚨.
 
