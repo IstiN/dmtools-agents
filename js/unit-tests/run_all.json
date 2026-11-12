@@ -88,6 +88,7 @@
         "js/unit-tests/test_gitPushGuard.js",
         "js/unit-tests/test_gitStaging.js",
         "js/unit-tests/test_githubHelpers.js",
+        "js/unit-tests/test_gitlabIssueLink.js",
         "js/unit-tests/test_guestTransplant.js",
         "js/unit-tests/test_guestValidationPath.js",
         "js/unit-tests/test_instructionRefs.js",

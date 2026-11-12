@@ -139,7 +139,7 @@ function defaultDeleteFile(path) {
 // therefore carry the canonical line by construction. Bot-side awf#19 also
 // accepts Fixes/Part-of, but the pack still emits canonical Closes — a
 // non-canonical keyword never substitutes for it.
-var GITHUB_ISSUE_KEY = /^gh-\d+$/i;
+var ROUTER_ISSUE_KEY = /^g[hl]-\d+$/i; // gh-N (GitHub) and gl-N (GitLab) both close issue #N on their forge
 
 /**
  * Extracts the trailing issue number from a ticket key (gh-737 → '737',
@@ -154,12 +154,12 @@ function extractIssueNumber(ticketKey) {
  * Guarantees the body contains the canonical 'Closes #N' line for the ticket.
  * Idempotent: a body that already closes the same issue is left untouched;
  * any other keyword (Fixes/Part-of) still gets the canonical line added.
- * Keys that are not GitHub router keys (gh-N) leave the body unchanged.
+ * Keys that are not router keys (gh-N / gl-N) leave the body unchanged.
  */
 function ensureClosesLine(body, ticketKey) {
-    // Only GitHub router keys (gh-N) map to a closeable GitHub issue; tracker keys
-    // such as PROJ-123 would produce a bogus 'Closes #123' link.
-    if (!GITHUB_ISSUE_KEY.test(String(ticketKey || '').trim())) return body;
+    // Only router keys (gh-N / gl-N) map to a closeable issue on the target
+    // forge; tracker keys such as PROJ-123 would produce a bogus 'Closes #123' link.
+    if (!ROUTER_ISSUE_KEY.test(String(ticketKey || '').trim())) return body;
     var num = extractIssueNumber(ticketKey);
     if (!num) return body;
 
