@@ -1870,6 +1870,7 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
 // localActions read the silent/source tokens from here (#687).
 var RUN_JOB_PARAMS = {};
 
+// ignore:nesting — pre-existing deep nesting, grandfathered when the nesting gate was enabled; split instead of extending.
 function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     if (rule.localExecution) {
         return processRuleLocally(rule, globalRepoInfo, ruleIndex);
@@ -7699,10 +7700,6 @@ function prCommentBodiesSafe(repoInfo, prNumber) {
     }
 }
 
-function hasLabel(ticket, name) {
-    return (ticket.labels || []).indexOf(name) !== -1;
-}
-
 // No zombie / placeholder check-runs on the head (gh-842/852). A degraded
 // probe (null) reads clean — the legacy green-cover semantics.
 function headGateClean(repoInfo, headSha) {
@@ -7841,21 +7838,6 @@ function headWorkflowRunsSafe(repoInfo, headSha) {
 // Probe failure on EITHER side ⇒ null (caller keeps the legacy behavior —
 // the green-cover skip stands; a degraded read must not turn into a
 // re-dispatch churn, and the next tick retries with a healthy API).
-
-function headCheckRunsSafe(repoInfo, headSha) {
-    try {
-        var res = github_get_commit_check_runs({
-            workspace: repoInfo.owner,
-            repository: repoInfo.repo,
-            commitSha: headSha
-        });
-        var parsed = mcpParse(res);
-        return (parsed && parsed.check_runs) || [];
-    } catch (e) {
-        console.warn('  ⚠️  head check-run probe failed: ' + (e.message || e));
-        return null;
-    }
-}
 
 function headCheckRunZombies(repoInfo, headSha) {
     // → null (probe degraded — caller keeps legacy behavior) | the
@@ -9613,6 +9595,7 @@ function ensureDeadZoneScan(machineAuthor) {
     return tickDeadZone;
 }
 
+// ignore:nesting — pre-existing deep nesting, grandfathered when the nesting gate was enabled; split instead of extending.
 function action(params) {
     var p     = params.jobParams || params;
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;

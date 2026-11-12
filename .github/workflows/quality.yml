@@ -17,6 +17,13 @@
 #   regression) and upload it. The release notes carry 'main@<sha>' so repeated triggers for
 #   the same HEAD are skipped. Concurrent merges are serialized by the concurrency group.
 # No baseline asset yet (first run / fork): bootstrap from the measured main, no comparison.
+# Grandfathering code that newly ENTERS the gate (a file that was previously
+#   uninstrumentable, so all its functions were N/A): merge the PR head's
+#   `NEW > threshold` entries into the released asset (max of old/new never
+#   needed — they are absent) and `gh release upload --clobber` it before the PR
+#   runs; --update-baseline never adds entries by itself.
+# Coverage holes fail: the instrument step runs with --exit-on-error and the
+#   ratchet step re-runs crap4js with --require-coverage over production js/**.
 #
 # Coverage comes from the unit suite run in the same job (instrumented tree), so the
 # ratchet is evaluated with the unit-test results of the head.
@@ -75,7 +82,7 @@ env:
   # Threshold for functions NOT in crap-baseline.json (new or renamed code).
   CRAP_THRESHOLD: '8'
   CRAP4JS_REPO: 'IstiN/crap4js'
-  CRAP4JS_REF: '83ee6201e554a91d51c298f045c5c4cb47317b6d'
+  CRAP4JS_REF: '2d99360df25cec4c7e713801eb2f6e7ebc7495fb'
   BASELINE_TAG: 'crap-baseline'
   BASELINE_ASSET: 'crap-baseline.json'
 
@@ -200,12 +207,24 @@ jobs:
             "github:${CRAP4JS_REPO}#${CRAP4JS_REF}" nyc@17
 
       - name: Instrument the tree (harness eval-loads bypass nyc's hook)
+        id: instrument
+        # --exit-on-error: a file that fails to instrument (e.g. a duplicate
+        # top-level declaration) FAILS the job instead of being copied raw —
+        # a raw copy has no coverage, so every function in it would drop out
+        # of the CRAP gate unnoticed. Intentionally uninstrumented (copied
+        # verbatim below): the harness itself (js/unit-tests/testRunner.js —
+        # it redeclares its shared loaders by design) and js/test/**
+        # (node:test suites run outside the harness).
         run: |
-          "$RUNNER_TEMP/tools/node_modules/.bin/nyc" instrument --cwd . . \
-            "$RUNNER_TEMP/inst"
-          # nyc instrument copies only .js — add the json/md/sh payloads the
-          # suite reads (configs, instructions, prompts, fixtures).
+          "$RUNNER_TEMP/tools/node_modules/.bin/nyc" instrument --exit-on-error \
+            --exclude 'js/unit-tests/testRunner.js' --exclude 'js/test/**' \
+            --cwd . . "$RUNNER_TEMP/inst"
+          # nyc instrument copies only instrumented sources — add the
+          # json/md/sh/.mjs/.cjs payloads the suite reads (configs,
+          # instructions, prompts, fixtures; .mjs/.cjs stay raw as before)…
           rsync -a --exclude '*.js' --exclude '.git' ./ "$RUNNER_TEMP/inst/"
+          # …and the intentionally uninstrumented .js files excluded above.
+          rsync -a --ignore-existing --exclude '.git' ./ "$RUNNER_TEMP/inst/"
           # (the factory board — and its pristine-app source guard — moved to
           # the dmtools-factory repo; nothing browser-side is text-read here anymore)
           # Tests call `git ls-files` (agentDocsCoverage): give the copied tree a throwaway
@@ -249,10 +268,36 @@ jobs:
             --threshold "${CRAP_THRESHOLD}" \
             --baseline "$RUNNER_TEMP/base/$BASELINE_ASSET" > "$RUNNER_TEMP/crap.txt"
           code=$?
+          # Production functions without a CRAP score (N/A coverage or a parse
+          # failure) are invisible to the ratchet above — fail on any of them.
+          "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" js \
+            --exclude 'js/unit-tests/**' --exclude 'js/test/**' --exclude 'js/integration-tests/**' \
+            --coverage "$RUNNER_TEMP/cov/coverage-final.json" --threshold 99999 \
+            --require-coverage > /dev/null || code=2
           head -30 "$RUNNER_TEMP/crap.txt"
           sed -n '/^CRAP Ratchet/,$p' "$RUNNER_TEMP/crap.txt" | tee -a "$GITHUB_STEP_SUMMARY"
           if grep -q '^improved ' "$RUNNER_TEMP/crap.txt"; then echo "improved=true" >> "$GITHUB_OUTPUT"; fi
           exit $code
+
+      - name: Module-size ratchet (<= 800 lines / 40 top-level functions per module)
+        # Per-function CRAP never flags a god module made of small functions.
+        # Production modules (js/**, tests excluded) must stay within 800
+        # physical lines and 40 top-level functions; modules already over a
+        # limit are pinned in ci/module-size-baseline.json with their current
+        # size and may only shrink (crap4js module-size --baseline). After
+        # splitting a pinned module, lower its pin (re-run with
+        # --write-baseline) so the gain is locked in.
+        if: always() && steps.instrument.outcome != 'skipped'
+        run: |
+          "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" module-size \
+            --exclude 'js/unit-tests/**' --exclude 'js/test/**' --exclude 'js/integration-tests/**' \
+            --baseline ci/module-size-baseline.json js
+
+      - name: Nesting gate (control-flow nesting <= 5)
+        # Pre-existing offenders carry a `// ignore:nesting` marker above the
+        # function; new deep nesting fails.
+        if: always() && steps.instrument.outcome != 'skipped'
+        run: '"$RUNNER_TEMP/tools/node_modules/.bin/crap4js" nesting js'
 
       - name: Duplication gate (production JS duplicated lines <= 1%, ratcheted)
         # Ratchet, not an absolute bar: a pinned set of production JS files

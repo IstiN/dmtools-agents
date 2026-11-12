@@ -150,13 +150,17 @@ function validateAgentJson(agentPath, options) {
         result.resolvedPrompts.base = params.cliPrompts;
 
         // Validate each prompt reference
-        params.cliPrompts.forEach(function(prompt, idx) {
+        params.cliPrompts.forEach(function(entry, idx) {
+            // Conditional prompt entries: { id, prompt: '<path>', condition: '<js path>' }.
+            var prompt = (entry && typeof entry === 'object' && typeof entry.prompt === 'string') ? entry.prompt : entry;
             if (typeof prompt !== 'string') {
                 addError(result, 'cliPrompts[' + idx + '] is not a string: ' + typeof prompt);
                 return;
             }
             // If it's a file path, check it exists
-            if (prompt.indexOf('./') === 0 || prompt.indexOf('agents/') === 0) {
+            // A conditional entry may reference a file generated at run time.
+            var conditional = prompt !== entry && !!entry.condition;
+            if (!conditional && (prompt.indexOf('./') === 0 || prompt.indexOf('agents/') === 0)) {
                 if (!fileExists(prompt)) {
                     addError(result, 'cliPrompts[' + idx + '] file not found: ' + prompt);
                 }
