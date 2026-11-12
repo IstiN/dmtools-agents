@@ -550,3 +550,28 @@ config; dispatch effects become pipeline triggers with variables
 issue-close and pipeline→issue mapping need runner-side handling.
 Jira-backed state is the original smAgent path (`source: 'jira'`, JQL
 rules) — the same engine drives both, so a mixed fleet is fine.
+
+---
+
+## 11. Merge policy on `main` (rulesets, dmtools-agents)
+
+`main` is changed **only** by PRs merged by the SM merge app
+**dmtools-factory-bot** (GitHub App id `5357829`, token minted from
+`secrets.APP_ID` / `secrets.APP_PRIVATE_KEY` in `machine-merge.yml` /
+`machine-sm.yml`) after review and the quality gates. Two rulesets enforce it:
+
+| Ruleset | Rules | Bypass |
+|---|---|---|
+| `main-protection` | `pull_request` (0 approvals), `required_status_checks` strict: `crap`, `gate`, `docs-freshness`, `docs-coverage-tests`; `non_fast_forward`; `deletion` | **none** — the bot must pass every check too |
+| `main-merge-only-sm` | `update` (restrict updates) | dmtools-factory-bot (Integration `5357829`, `always`) |
+
+Consequences:
+
+- Humans (including repo admins) and every other app/`github-actions[bot]`
+  cannot push to or merge into `main`; label the PR (`pr_approved` +
+  `ai_validating`) and let the merge bot conclude it.
+- The required checks must report on **every** PR: `quality.yml` and
+  `agent-docs.yml` have no `pull_request` path filters — never add one.
+- The agent-pack release lands its `versions.json` ledger through a PR
+  opened and squash-merged with the dmtools-factory-bot token
+  (`agent-pack-release.yml`), not a direct push.
