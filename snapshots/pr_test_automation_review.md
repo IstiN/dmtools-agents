@@ -400,7 +400,7 @@ Example inline comment:
 
 ---
 
-### [13] `./agents/instructions/pr_review/base/review_verdict_rules.md`
+### [13] `./agents/instructions/pr_review/review_verdict_rules.md`
 
 # Review verdict rules — machine protocol (binding)
 
