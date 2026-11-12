@@ -28,6 +28,10 @@ var prHelper = require('./pullRequest.js');
 // gh-1248: the review-discussion fetch/render blocks — one canonical copy
 // shared with common/githubHelpers.js (githubReviewFetch.js).
 var githubReviewFetch = require('./githubReviewFetch.js');
+// GitLab MR↔issue linkage wait (gitlabIssueLink.js) — the factory post-run
+// check races GitLab's async 'Closes #N' reference extraction. Optional so
+// the scm.js test-harness module maps stay untouched: absent → passthrough.
+var _gitlabIssueLink; try { _gitlabIssueLink = require('./gitlabIssueLink.js'); } catch (e) { _gitlabIssueLink = { afterMrCreated: function (mr) { return mr; } }; }
 
 function _parseJson(raw) {
     return loseJson.parseJsonLose(raw);
@@ -1069,13 +1073,8 @@ function _gitlabCreatePr(workspace, repository, options) {
         description: options.body || '',
         removeSourceBranch: options.removeSourceBranch === false ? 'false' : 'true'
     });
-    var mr = _normalizeGitLabMr(_parseJson(raw));
-    return {
-        success: true,
-        prUrl: mr && mr.html_url,
-        number: mr && mr.number,
-        output: raw
-    };
+    var mr = _gitlabIssueLink.afterMrCreated(_normalizeGitLabMr(_parseJson(raw)), options.body);
+    return { success: true, prUrl: mr && mr.html_url, number: mr && mr.number, output: raw };
 }
 
 function _createGitLabProvider(workspace, repository) {

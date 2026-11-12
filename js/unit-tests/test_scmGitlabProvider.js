@@ -419,6 +419,50 @@ suite('scm gitlab provider', function () {
         assert.deepEqual(out, { success: true, prUrl: null, number: null, output: null });
     });
 
+    // ── gitlabIssueLink wiring (factory MR↔issue linkage race) ─────────────
+    // GitLab records the 'Closes #N' reference asynchronously; the factory
+    // pipeline fails the dev leg when related_merge_requests is still empty
+    // right after dmtools exits, so createPr hands the created MR to
+    // gitlabIssueLink.afterMrCreated (the wait itself is pinned by
+    // test_gitlabIssueLink.js). The require is optional: without the module
+    // in the harness map, createPr falls back to an inert passthrough.
+
+    function makeGitlabWithIssueLink(mocks, issueLinkMock) {
+        var mod = loadModule('js/common/scm.js',
+            makeRequire({
+                './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
+                    makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
+                './githubReviewFetch.js': githubReviewFetchReal(mocks),
+                './pullRequest.js': pullRequestReal(),
+                './loseJson.js': loseJsonReal(),
+                './gitlabIssueLink.js': issueLinkMock
+            }), mocks);
+        return mod.createScm({ scm: { provider: 'gitlab' }, repository: { owner: 'mygroup', repo: 'my-repo' } });
+    }
+
+    test('createPr hands the normalized MR and the body to gitlabIssueLink.afterMrCreated', function () {
+        var waited = [];
+        var scm = makeGitlabWithIssueLink({
+            gitlab_create_mr: function () { return '{"iid":31,"web_url":"http://gl/mr/31"}'; }
+        }, {
+            afterMrCreated: function (mr, body) { waited.push({ number: mr && mr.number, body: body }); return mr; }
+        });
+        var out = scm.createPr({ branchName: 'feat/x', title: 'T', body: 'Closes #7\n\nWhat changed…' });
+        assert.deepEqual(waited, [{ number: 31, body: 'Closes #7\n\nWhat changed…' }]);
+        assert.equal(out.success, true);
+        assert.equal(out.number, 31, 'afterMrCreated is a passthrough — the pinned result shape is unchanged');
+    });
+
+    test('createPr stays inert without the gitlabIssueLink module (test-harness fallback)', function () {
+        var scm = makeGitlab({
+            gitlab_create_mr: function () { return '{"iid":5,"web_url":"http://gl/mr/5"}'; },
+            cli_execute_command: function () { throw new Error('fallback stub must not poll'); }
+        });
+        var out = scm.createPr({ branchName: 'b', title: 't', body: 'Closes #7' });
+        assert.equal(out.success, true);
+        assert.equal(out.number, 5);
+    });
+
     test('updateBranch rebases the MR on the configured or given workspace', function () {
         var calls = [];
         var scm = makeGitlab({
