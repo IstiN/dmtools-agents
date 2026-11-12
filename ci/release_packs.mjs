@@ -43,6 +43,17 @@ import { execSync } from 'node:child_process';
 // carry launch.json (+ loop/verdict.sh for review packs) inside the zip.
 import { launchExtras, mergeManifest } from './pack_launch_contract.cjs';
 
+// gh-1436 (#1456): the dev leg configs reference the plan-mode appendix as a
+// static cliPrompts prompt, but the file is RUNTIME-materialized by the leg's
+// preCli setup (js/common/developmentModePlan.js owns the path + the default
+// text) and never committed. `dmtools compile` requires every referenced
+// prompt to exist on this checkout — the release builder materializes it from
+// the engine default before any compile runs (live: release runs 43197696854 /
+// 43197477388 / 43198225209 failed on the missing file). Untracked by
+// construction (ci/runtime-artifact-patterns.txt); the ledger commit stages
+// versions.json only, so it can never ride a release commit.
+import developmentModePlan from '../js/common/developmentModePlan.js';
+
 // Release-guard classification (gh-690): versions.json is the version
 // LEDGER — data, not an agent. The old inline filter in allAgents() swept it
 // in as a phantom "versions" agent (a bogus ledger key plus a phantom
@@ -637,6 +648,14 @@ function main() {
   }
   console.log(`Affected agents (${affected.length}): ${affected.join(', ') || '<none — factory-setup-only>'}`);
   mkdirSync(OUT_DIR, { recursive: true });
+
+  // gh-1436 (#1456): materialize the plan-mode appendix exactly the way a leg
+  // runtime would — the engine default text, at the engine-owned path — so
+  // `dmtools compile` below resolves the static cliPrompts reference.
+  const appendixPath = join(ROOT, developmentModePlan.PLAN_APPENDIX_FILE_PATH);
+  mkdirSync(dirname(appendixPath), { recursive: true });
+  writeFileSync(appendixPath, developmentModePlan.DEFAULT_PLAN_APPENDIX);
+  console.log(`materialized plan-mode appendix: ${developmentModePlan.PLAN_APPENDIX_FILE_PATH}`);
 
   // Bump ONLY the affected agents (incremental versioning), but BUILD and
   // catalog EVERY agent: each release must be a self-contained snapshot.
