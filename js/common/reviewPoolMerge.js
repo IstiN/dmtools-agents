@@ -1,0 +1,306 @@
+/**
+ * reviewPoolMerge.js — the gh-1406 §5 pool duties at the filter merge point:
+ * the pure machinery that turns N reviewers' candidate lists into ONE
+ * deduplicated census input for the gh-1403 filter leg.
+ *
+ * §5 duties (build with #1403 — reviewFilter.js stays the per-round filter
+ * engine; this module is the pool layer around it):
+ *   - cross-reviewer dedup: base and security flagging the same defect
+ *     become ONE candidate identity (path + line + claim fingerprint);
+ *     severity may only ESCALATE (the merged candidate carries the most
+ *     severe of its sources) and the merged entry names every reviewer
+ *     that raised it (census attribution + the packet);
+ *   - weighted retention: filterWeight "high" candidates cannot be silently
+ *     dropped — a drop/demote verdict for a high-weight candidate needs a
+ *     stated reason (the gh-1403 contract already requires reasons; this is
+ *     the pool-layer defense-in-depth) and every high-weight drop/demote
+ *     surfaces explicitly in the packet;
+ *   - availability is fail-open: an enabled reviewer whose candidate
+ *     payload is missing is noted in the packet ("X unavailable this
+ *     round") and the round proceeds (§4); required reviewers are the
+ *     merge gate's business (reviewPoolMarkers — §7), never the filter's.
+ *
+ * Candidate payload shape (per reviewer, one file/record per reviewer):
+ *   { reviewer: "security", candidates: [{ id, path, line, severity, claim }] }
+ * The merged output feeds reviewFilter.buildFilterInputJson directly (id,
+ * path, line, claim survive; reviewers/highWeight are pool metadata the
+ * filter never sees — the finder's identity must not anchor it).
+ *
+ * Pure module — no dmtools globals; JSON-safe data only. Requires hoisted
+ * (gh-823 pack-require rule). Keep it GraalJS-clean (var + plain functions).
+ */
+'use strict';
+
+var reviewPolicy = require('./reviewPolicy.js');
+
+// The claim fingerprint length for the dedup key — identical-defect claims
+// from two reviewers rarely agree verbatim beyond this prefix after
+// normalization; the identity is path+line anchored, so the prefix guards
+// against false merges at the same spot, not against paraphrase misses
+// (a paraphrased duplicate posts twice — the filter, not the merge, judges).
+var CLAIM_FINGERPRINT_MAX = 120;
+
+// ── claim fingerprint + identity ─────────────────────────────────────────────
+
+/**
+ * The normalized claim fingerprint: lowercase, whitespace-collapsed, claim
+ * truncated to the fingerprint length. Two candidates merge only on
+ * path+line+identical fingerprint.
+ */
+function claimFingerprint(claim) {
+    var text = String(claim || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    if (text.length > CLAIM_FINGERPRINT_MAX) text = text.substring(0, CLAIM_FINGERPRINT_MAX);
+    return text;
+}
+
+/** The candidate identity key (§5 cross-reviewer dedup). */
+function candidateIdentity(path, line, claim) {
+    return String(path || '') + ':' + String(line === undefined || line === null ? '' : line) + ':' +
+        claimFingerprint(claim);
+}
+
+/** The severity rank (lower = more severe; unknown tiers rank last). */
+function severityRank(severity) {
+    var idx = reviewPolicy.TIERS.indexOf(String(severity || '').toUpperCase());
+    return idx === -1 ? reviewPolicy.TIERS.length : idx;
+}
+
+/**
+ * The more severe of two tiers (§5: "severity may only escalate"). Unknown
+ * tiers lose to known ones.
+ */
+function mostSevere(a, b) {
+    return severityRank(a) <= severityRank(b) ? String(a || '').toUpperCase() : String(b || '').toUpperCase();
+}
+
+// ── candidate merging ────────────────────────────────────────────────────────
+
+function candidateListOf(list) {
+    return list && Array.isArray(list.candidates) ? list.candidates : [];
+}
+
+function reviewerNameOf(list, index) {
+    return (list && list.reviewer) || 'reviewer-' + index;
+}
+
+function filterWeightOf(list) {
+    return list && list.filterWeight === 'high' ? 'high' : 'normal';
+}
+
+/**
+ * One merged candidate entry — the pool metadata rides alongside the
+ * filter-visible fields (id/path/line/severity/claim).
+ */
+function mergedCandidateOf(c, id, reviewer, highWeight) {
+    return {
+        id: id,
+        path: String((c && c.path) || ''),
+        line: c ? c.line : undefined,
+        severity: String((c && c.severity) || '').toUpperCase(),
+        claim: String((c && c.claim) || ''),
+        reviewers: [reviewer],
+        highWeight: highWeight === true
+    };
+}
+
+/**
+ * The pool merge (§5): N candidate lists → ONE deduplicated candidate list.
+ * Identity = path + line + claim fingerprint. Same reviewer re-raising the
+ * same identity is deduped (first wins, noted); two DIFFERENT reviewers on
+ * one identity merge into a single candidate (severity may only escalate,
+ * reviewers recorded). Returns { merged, notes }.
+ */
+function mergeCandidateLists(lists) {
+    var byIdentity = {};
+    var merged = [];
+    var notes = [];
+    var input = Array.isArray(lists) ? lists : [];
+    for (var i = 0; i < input.length; i++) {
+        var list = input[i] || {};
+        var reviewer = reviewerNameOf(list, i);
+        var highWeight = filterWeightOf(list) === 'high';
+        var candidates = candidateListOf(list);
+        for (var c = 0; c < candidates.length; c++) {
+            var candidate = candidates[c] || {};
+            var identity = candidateIdentity(candidate.path, candidate.line, candidate.claim);
+            var existing = byIdentity[identity];
+            if (!existing) {
+                var entry = mergedCandidateOf(candidate, merged.length, reviewer, highWeight);
+                byIdentity[identity] = entry;
+                merged.push(entry);
+                continue;
+            }
+            if (existing.reviewers.indexOf(reviewer) !== -1) {
+                notes.push('duplicate candidate from ' + reviewer + ' at ' + existing.path + ':' +
+                    existing.line + ' — first wins');
+                continue;
+            }
+            // Cross-reviewer match: one identity, severity escalates only.
+            var before = existing.severity;
+            existing.severity = mostSevere(existing.severity, candidate.severity);
+            existing.highWeight = existing.highWeight || highWeight;
+            existing.reviewers.push(reviewer);
+            notes.push('cross-reviewer match at ' + existing.path + ':' + existing.line + ' — ' +
+                existing.reviewers.join(' + ') +
+                (existing.severity !== before ? '; severity escalated ' + before + ' → ' + existing.severity : ''));
+        }
+    }
+    return { merged: merged, notes: notes };
+}
+
+// ── weighted retention (§5) ──────────────────────────────────────────────────
+
+function mergedById(merged, id) {
+    var list = Array.isArray(merged) ? merged : [];
+    for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].id === id) return list[i];
+    }
+    return null;
+}
+
+/**
+ * Weighted retention over the filter verdicts (the gh-1403 verdict shape:
+ * { id, decision: keep|demote|drop, tier?, reason? }): a drop/demote of a
+ * high-weight candidate without a stated reason is REFUSED (fail-open to
+ * keep) with a note — silence is never precision for a high-weight source.
+ * Returns { verdicts (the retention-checked list), refused, notes }.
+ */
+function applyWeightedRetention(merged, verdicts) {
+    var out = [];
+    var refused = [];
+    var notes = [];
+    var list = Array.isArray(verdicts) ? verdicts : [];
+    for (var i = 0; i < list.length; i++) {
+        var v = list[i] || {};
+        var candidate = mergedById(merged, v.id);
+        var suppressive = v && (v.decision === 'drop' || v.decision === 'demote');
+        if (candidate && candidate.highWeight && suppressive &&
+            (!v.reason || !String(v.reason).trim())) {
+            refused.push({ id: v.id, reviewer: candidate.reviewers.join(', '), decision: v.decision });
+            notes.push('weighted retention: ' + v.decision + ' refused for high-weight candidate ' + v.id +
+                ' (' + candidate.reviewers.join(', ') + ') — demote/drop needs a stated reason');
+            out.push({ id: v.id, decision: 'keep' });
+            continue;
+        }
+        out.push(v);
+    }
+    return { verdicts: out, refused: refused, notes: notes };
+}
+
+/**
+ * The high-weight outcomes of an applied verdict list — every drop/demote
+ * of a high-weight candidate, with its stated reason. The packet surfaces
+ * these explicitly (§5: "demote/drop requires a stated reason, surfaced in
+ * the packet").
+ */
+function highWeightOutcomesOf(merged, applied) {
+    var out = [];
+    var list = Array.isArray(applied) ? applied : [];
+    for (var i = 0; i < list.length; i++) {
+        var a = list[i] || {};
+        if (a.decision !== 'drop' && a.decision !== 'demote') continue;
+        var candidate = mergedById(merged, a.id);
+        if (!candidate || !candidate.highWeight) continue;
+        out.push({
+            id: a.id,
+            decision: a.decision,
+            reviewers: candidate.reviewers.slice(),
+            path: candidate.path,
+            line: candidate.line,
+            reason: a.reason || null
+        });
+    }
+    return out;
+}
+
+// ── the availability + packet lines (§4 fail-open, §5 visibility) ───────────
+
+/**
+ * The availability packet lines for a round: one line per enabled reviewer
+ * whose candidates did not arrive (fail-open — the round proceeds, the
+ * packet notes it) and one summary line for what did.
+ */
+function availabilityPacketLines(arrived, unavailable, roundName) {
+    var lines = [];
+    var round = String(roundName || 'review');
+    var arrivedNames = Array.isArray(arrived) ? arrived : [];
+    var missingNames = Array.isArray(unavailable) ? unavailable : [];
+    if (arrivedNames.length > 0) {
+        lines.push('👥 Reviewer pool (' + round + '): candidates from ' + arrivedNames.join(', ') + '.');
+    }
+    for (var i = 0; i < missingNames.length; i++) {
+        lines.push('👥 Reviewer pool (' + round + '): ' + missingNames[i] +
+            ' unavailable this round — the round proceeds without its candidates (fail-open; ' +
+            'required reviewers gate the merge, not the filter).');
+    }
+    return lines;
+}
+
+/**
+ * One digest line for a dropped pool candidate (reviewer-attributed — §5
+ * drop visibility; the gh-1403 digest shape plus the source reviewers).
+ */
+function droppedPoolCandidateLine(drop) {
+    var d = drop || {};
+    var loc = String(d.path || 'unknown path') + (d.line === undefined || d.line === null ? '' : ':' + d.line);
+    var claim = String(d.claim || '').replace(/\s+/g, ' ').trim();
+    if (claim.length > 160) claim = claim.substring(0, 159) + '…';
+    return '- `' + loc + '` — ' + claim + ' — 🧯 filter drop [' + String((d.reviewers || []).join(', ')) + ']: ' +
+        String(d.reason || 'no reason given');
+}
+
+/**
+ * The pool packet (§5): availability lines + the high-weight outcomes +
+ * the merged-candidate census line. Empty array when there is nothing to
+ * say (a single-reviewer round with everything kept says nothing).
+ */
+function buildPoolPacket(ctx) {
+    var c = ctx || {};
+    var lines = availabilityPacketLines(c.arrived, c.unavailable, c.roundName);
+    var merged = Array.isArray(c.merged) ? c.merged : [];
+    if (merged.length > 0) {
+        var reviewers = {};
+        for (var m = 0; m < merged.length; m++) {
+            var rs = merged[m].reviewers || [];
+            for (var r = 0; r < rs.length; r++) reviewers[rs[r]] = true;
+        }
+        lines.push('👥 Pool census: ' + merged.length + ' candidate(s) after cross-reviewer dedup (sources: ' +
+            Object.keys(reviewers).sort().join(', ') + ').');
+    }
+    var high = Array.isArray(c.highWeightOutcomes) ? c.highWeightOutcomes : [];
+    for (var h = 0; h < high.length; h++) {
+        var o = high[h];
+        lines.push('⚖️ Weighted retention: ' + o.decision + ' of high-weight candidate #' + o.id +
+            ' from ' + (o.reviewers || []).join(', ') + ' at ' + o.path +
+            (o.line === undefined || o.line === null ? '' : ':' + o.line) +
+            ' — reason: ' + String(o.reason || '(stated in the filter verdict)'));
+    }
+    var dropped = Array.isArray(c.dropped) ? c.dropped : [];
+    for (var d = 0; d < dropped.length; d++) {
+        var candidate = mergedById(merged, dropped[d].id);
+        lines.push(droppedPoolCandidateLine({
+            path: dropped[d].path || (candidate && candidate.path),
+            line: dropped[d].line !== undefined ? dropped[d].line : (candidate && candidate.line),
+            claim: dropped[d].claim || (candidate && candidate.claim),
+            reviewers: candidate ? candidate.reviewers : [],
+            reason: dropped[d].reason
+        }));
+    }
+    return lines;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        CLAIM_FINGERPRINT_MAX: CLAIM_FINGERPRINT_MAX,
+        claimFingerprint: claimFingerprint,
+        candidateIdentity: candidateIdentity,
+        severityRank: severityRank,
+        mostSevere: mostSevere,
+        mergeCandidateLists: mergeCandidateLists,
+        applyWeightedRetention: applyWeightedRetention,
+        highWeightOutcomesOf: highWeightOutcomesOf,
+        availabilityPacketLines: availabilityPacketLines,
+        droppedPoolCandidateLine: droppedPoolCandidateLine,
+        buildPoolPacket: buildPoolPacket
+    };
+}

@@ -38,6 +38,10 @@ var MARKER_SUFFIX = ' -->';
 // (one marker grammar; the reason field separates the dedup budgets).
 var HOLD_REASON = 'required-reviewer';
 
+function isNonEmptyString(v) {
+    return typeof v === 'string' && v.trim() !== '';
+}
+
 // ── markers (§7) ─────────────────────────────────────────────────────────────
 
 /**
