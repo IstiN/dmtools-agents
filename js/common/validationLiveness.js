@@ -57,18 +57,19 @@ var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
 // counts as busy.
 var POOL_STALE_NON_RUNNING_MS = 6 * 60 * 60 * 1000;
 
+/** True when a single run materially occupies the pool (see poolBusy). */
+function runOccupiesPool(r, nowMs, limit) {
+    var st = String((r && r.status) || '').toLowerCase();
+    if (ACTIVE_RUN_STATES.indexOf(st) === -1) return false;
+    if (st === 'in_progress') return true;
+    var created = Date.parse(r.created_at || r.run_started_at || '');
+    return isNaN(created) || (nowMs - created) <= limit; // unknown age: busy
+}
+
 /** True when `runs` carry a run that materially occupies the pool. */
 function poolBusy(runs, nowMs, staleMs) {
     var limit = typeof staleMs === 'number' ? staleMs : POOL_STALE_NON_RUNNING_MS;
-    return (runs || []).some(function (r) {
-        if (!r) return false;
-        var st = String(r.status || '').toLowerCase();
-        if (ACTIVE_RUN_STATES.indexOf(st) === -1) return false;
-        if (st === 'in_progress') return true;
-        var created = Date.parse(r.created_at || r.run_started_at || '');
-        if (isNaN(created)) return true; // unknown age: fail closed (busy)
-        return (nowMs - created) <= limit;
-    });
+    return (runs || []).some(function (r) { return runOccupiesPool(r, nowMs, limit); });
 }
 
 // gh-1101: post-conclusion check-visibility grace. Applies ONLY to the
