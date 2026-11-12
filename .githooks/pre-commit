@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# Pre-commit hook for IstiN/dmtools-agents:
+#   1. Runtime-artifact guard (gh-1365) — blocks generated/session files.
+#   2. Quality gate on staged js/**/*.js (excluding unit-tests/test/integration-tests):
+#      - nyc instrument --exit-on-error (catches duplicate declarations / parse errors)
+#      - crap4js module-size against ci/module-size-baseline.json + crap4js nesting
+#      - targeted unit test coverage via nyc + crap4js --threshold 8 --baseline ...
+#
+# Activate via: git config core.hooksPath .githooks (or bash scripts/install-hooks.sh)
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# 1. Runtime-artifact guard (gh-1365)
+hits="$(git ls-files --ignored --cached --exclude-from="$REPO_ROOT/ci/runtime-artifact-patterns.txt")"
+if [ -n "$hits" ]; then
+  echo "pre-commit: tracked runtime artifact(s) match ci/runtime-artifact-patterns.txt:" >&2
+  echo "$hits" >&2
+  exit 1
+fi
+
+# 2. Collect staged paths (Added/Copied/Modified/Renamed)
+STAGED_FILES=()
+while IFS= read -r f; do
+  [ -n "$f" ] && STAGED_FILES+=("$f")
+done < <(git diff --cached --name-only --diff-filter=ACMR)
+
+if [ "${#STAGED_FILES[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+# Classify staged JS files & resolve matching unit tests via ci/preCommitGate.cjs
+GATE_JSON="$(node "$REPO_ROOT/ci/preCommitGate.cjs" --resolve-tests "${STAGED_FILES[@]}")"
+
+PROD_JS=()
+while IFS= read -r f; do
+  [ -n "$f" ] && PROD_JS+=("$f")
+done < <(node -e 'const d=JSON.parse(process.argv[1]); for(const f of d.prodJs) console.log(f);' "$GATE_JSON")
+
+TEST_FILES=()
+while IFS= read -r f; do
+  [ -n "$f" ] && TEST_FILES+=("$f")
+done < <(node -e 'const d=JSON.parse(process.argv[1]); for(const f of d.testFiles) console.log(f);' "$GATE_JSON")
+
+# If no production js/**/*.js files are staged, only run staged unit tests (if any)
+if [ "${#PROD_JS[@]}" -eq 0 ]; then
+  if [ "${#TEST_FILES[@]}" -gt 0 ]; then
+    echo "pre-commit: running ${#TEST_FILES[@]} staged unit test file(s)..."
+    node "$REPO_ROOT/js/unit-tests/node_testRunner.js" "${TEST_FILES[@]}"
+  fi
+  exit 0
+fi
+
+# 3. Ensure crap4js + nyc are cached in .cache/crap-tools at CRAP4JS_REF from quality.yml
+CRAP4JS_REF="$(node "$REPO_ROOT/ci/preCommitGate.cjs" --extract-ref "$REPO_ROOT/.github/workflows/quality.yml")"
+TOOLS_DIR="$REPO_ROOT/.cache/crap-tools"
+REF_MARKER="$TOOLS_DIR/.crap4js-ref"
+NYC_BIN="$TOOLS_DIR/node_modules/.bin/nyc"
+CRAP4JS_BIN="$TOOLS_DIR/node_modules/.bin/crap4js"
+
+if [ ! -x "$NYC_BIN" ] || [ ! -x "$CRAP4JS_BIN" ] || [ ! -f "$REF_MARKER" ] || [ "$(cat "$REF_MARKER" 2>/dev/null || true)" != "$CRAP4JS_REF" ]; then
+  echo "pre-commit: installing crap4js@${CRAP4JS_REF} + nyc@17.1.0 into .cache/crap-tools..."
+  mkdir -p "$TOOLS_DIR"
+  npm install --prefix "$TOOLS_DIR" --no-save --no-audit --no-fund \
+    "github:IstiN/crap4js#${CRAP4JS_REF}" nyc@17.1.0 >/dev/null
+  printf '%s' "$CRAP4JS_REF" > "$REF_MARKER"
+fi
+
+# 4. Ensure crap-baseline.json is cached in .cache/crap-baseline.json
+BASELINE_FILE="$REPO_ROOT/.cache/crap-baseline.json"
+if [ ! -s "$BASELINE_FILE" ]; then
+  mkdir -p "$REPO_ROOT/.cache"
+  echo "pre-commit: fetching crap-baseline.json into .cache/..."
+  if command -v gh >/dev/null 2>&1 && gh release download crap-baseline --repo IstiN/dmtools-agents --pattern crap-baseline.json --dir "$REPO_ROOT/.cache" --clobber >/dev/null 2>&1; then
+    :
+  elif curl -fsSL "https://github.com/IstiN/dmtools-agents/releases/download/crap-baseline/crap-baseline.json" -o "$BASELINE_FILE" 2>/dev/null; then
+    :
+  else
+    rm -f "$BASELINE_FILE"
+  fi
+fi
+
+BASELINE_ARGS=()
+if [ -s "$BASELINE_FILE" ]; then
+  BASELINE_ARGS=(--baseline "$BASELINE_FILE")
+fi
+
+# 5. Step (1): nyc instrument --exit-on-error on staged prod files (catches duplicate declarations)
+TMP_WORK="$(mktemp -d "$REPO_ROOT/.cache/precommit-tmp.XXXXXX")"
+trap 'rm -rf "$TMP_WORK"' EXIT
+
+mkdir -p "$TMP_WORK/src" "$TMP_WORK/instrumented"
+for f in "${PROD_JS[@]}"; do
+  mkdir -p "$TMP_WORK/src/$(dirname "$f")"
+  cp "$f" "$TMP_WORK/src/$f"
+done
+
+echo "pre-commit: checking syntax / duplicate declarations via nyc instrument (${#PROD_JS[@]} file(s))..."
+"$NYC_BIN" instrument --exit-on-error "$TMP_WORK/src" "$TMP_WORK/instrumented" >/dev/null
+
+# 6. Step (2): crap4js module-size + crap4js nesting on staged prod files
+echo "pre-commit: checking module-size (<=500) and nesting..."
+"$CRAP4JS_BIN" module-size --max-lines 500 \
+  --baseline "$REPO_ROOT/ci/module-size-baseline.json" \
+  "${PROD_JS[@]}"
+"$CRAP4JS_BIN" nesting "${PROD_JS[@]}"
+
+# 7. Step (3): Run matching unit tests with instrumented staged files and check CRAP <= 8
+if [ "${#TEST_FILES[@]}" -gt 0 ]; then
+  echo "pre-commit: running ${#TEST_FILES[@]} matching unit test(s) under nyc for CRAP gate..."
+  OVERLAY="$TMP_WORK/overlay"
+  mkdir -p "$OVERLAY"
+  for entry in "$REPO_ROOT"/* "$REPO_ROOT"/.[!.]*; do
+    [ -e "$entry" ] || continue
+    base="$(basename "$entry")"
+    case "$base" in
+      .git|.cache|js) continue ;;
+    esac
+    ln -s "$entry" "$OVERLAY/$base"
+  done
+  cp -R "$REPO_ROOT/js" "$OVERLAY/js"
+  cp -R "$TMP_WORK/instrumented/js/." "$OVERLAY/js/"
+  ln -s "$OVERLAY" "$OVERLAY/agents"
+
+  COV_JSON="$TMP_WORK/coverage/coverage-final.json"
+  (
+    cd "$OVERLAY"
+    node "$REPO_ROOT/ci/run_with_coverage.js" \
+      "$OVERLAY/js/unit-tests/node_testRunner.js" \
+      "$COV_JSON" \
+      "${TEST_FILES[@]}"
+  )
+
+  # Normalize instrumented overlay paths in coverage-final.json back to REPO_ROOT paths
+  node -e '
+    const fs = require("fs");
+    const covPath = process.argv[1];
+    const overlay = fs.realpathSync(process.argv[2]);
+    const tmpInst = fs.realpathSync(process.argv[3]);
+    const root = fs.realpathSync(process.argv[4]);
+    const raw = JSON.parse(fs.readFileSync(covPath, "utf8"));
+    const out = {};
+    for (const [k, v] of Object.entries(raw)) {
+      let nk = k;
+      if (nk.startsWith(tmpInst + "/")) nk = root + "/" + nk.slice(tmpInst.length + 1);
+      else if (nk.startsWith(overlay + "/")) nk = root + "/" + nk.slice(overlay.length + 1);
+      v.path = nk;
+      out[nk] = v;
+    }
+    fs.writeFileSync(covPath, JSON.stringify(out));
+  ' "$COV_JSON" "$OVERLAY" "$TMP_WORK/src" "$REPO_ROOT"
+
+  "$CRAP4JS_BIN" \
+    --threshold 8 \
+    --coverage "$COV_JSON" \
+    --require-coverage \
+    "${BASELINE_ARGS[@]}" \
+    "${PROD_JS[@]}"
+else
+  echo "pre-commit: warning: no matching unit test found for: ${PROD_JS[*]} — enforcing CC <= 8 static check..." >&2
+  "$CRAP4JS_BIN" complexity --max 8 "${PROD_JS[@]}"
+fi
