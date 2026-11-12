@@ -8058,8 +8058,10 @@ function repoPoolFree(repoInfo) {
             perPage: 50
         })) || {};
         var list = runs.workflow_runs || runs.workflowRuns || [];
-        // Stale queued/waiting runs (no job, no runner) age out — a
-        // 21h-queued zombie pinned fa #2133 forever (live 2026-11-12).
+        // Stale queued/waiting runs (no job, no runner) age out and
+        // machine-loop orchestration runs (machine-sm.yml, sm-kicker.yml,
+        // machine-merge.yml, merge-trigger.yml) are excluded so the
+        // running SM tick never self-blocks the pool probe (live fa #2133).
         return !validationLivenessModule.poolBusy(list, Date.now());
     } catch (ePool) {
         console.warn('  ⚠️  pool-free probe failed: ' + (ePool.message || ePool));
