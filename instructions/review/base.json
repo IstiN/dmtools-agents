@@ -5,7 +5,6 @@
   "mayRaise": ["BLOCKING", "IMPORTANT", "SUGGESTION", "NIT"],
   "filterWeight": "normal",
   "isFiltered": true,
-  "isRequired": true,
   "rounds": ["all"],
   "triggerPaths": [],
   "options": {},

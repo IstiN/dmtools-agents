@@ -56,7 +56,7 @@ function buildPassMarkerComment(skillName, headSha, nowIso) {
         at: String(nowIso || '')
     };
     return PASS_MARKER_PREFIX + JSON.stringify(payload, reviewVerdicts.markerSafeReplacer) +
-        MARKER_SUFFIX + '\n\uD83E\uDD16 Reviewer pool (gh-1406): `' + String(skillName || '') +
+        MARKER_SUFFIX + '\n\uD83E\uDD16 Reviewer pool: `' + String(skillName || '') +
         '` completed its review pass on head ' + String(headSha || '').substring(0, 7) + '.';
 }
 
@@ -118,7 +118,7 @@ function buildPoolOutcomeMarkerComment(headSha, roundName, entries, nowIso) {
     var names = poolOutcomeNamesOf(reviewers);
     return POOL_MARKER_PREFIX + JSON.stringify(payload, reviewVerdicts.markerSafeReplacer) +
         MARKER_SUFFIX + '\n\uD83E\uDD16 Reviewer pool round `' + String(roundName || '') +
-        '` (gh-1406) on head ' + String(headSha || '').substring(0, 7) + ': ' +
+        '` pool round on head ' + String(headSha || '').substring(0, 7) + ': ' +
         (names.length ? names.join(', ') : '(no enabled reviewers)') + '.';
 }
 
@@ -193,11 +193,11 @@ function requiredHoldNote(payload, headSha) {
     var names = payload.missing.join(', ') || '(none)';
     var head = String(headSha || '').substring(0, 7);
     if (payload.escalated) {
-        return '\uD83E\uDD16 Merge hold ESCALATED (gh-1406): the required reviewer(s) ' + names +
+        return '\uD83E\uDD16 Merge hold ESCALATED: the required reviewer(s) ' + names +
             ' still have no PASS marker on head ' + head +
             ' — needs-human; the review leg exhausted its retry budget (never silent merge, never silent approval).';
     }
-    return '\uD83E\uDD16 Merge hold (gh-1406): required reviewer(s) ' + names +
+    return '\uD83E\uDD16 Merge hold: required reviewer(s) ' + names +
         ' have no PASS marker on head ' + head +
         ' — the merge is withheld until their review legs complete (retry with backoff; a failed required leg never merges).';
 }

@@ -24,15 +24,18 @@
  *     only carry the tunable fields (reviewPoolSchema POL_TUNABLE_FIELDS);
  *   - defaults are the safe general behavior (§2 table): a minimal file
  *     {"name","lens"} defines a FULL reviewer — mayRaise all tiers,
- *     filterWeight normal, isFiltered true, isRequired false, rounds ["all"],
+ *     filterWeight normal, isFiltered true, rounds ["all"],
  *     triggerPaths [], options {}, model null, isEnabled true;
  *   - rounds semantics (§6): ["first"] / ["hunks"] / ["first","hunks"] /
  *     ["all"] (exclusive) — `first` counts COMPLETED passes (the PASS
  *     marker), `hunks` fires on new hunks hitting triggerPaths;
- *   - the merge gate (§7): every reviewer leg stamps a head-carried PASS
- *     marker; the round stamps ONE pool-outcome marker naming the enabled
- *     reviewers and their required flags; required reviewers without a
- *     same-head PASS marker hold the merge (never silent merge, never
+ *   - the merge gate (§7, the 2026-11-12 revision): merge gating is POOL
+ *     POLICY — reviewPolicy.required names the gating reviewers (repo-owned,
+ *     factory default ['base','security']); every reviewer leg stamps a
+ *     head-carried PASS marker; the round stamps ONE pool-outcome marker
+ *     naming the enabled reviewers and their required flags; required
+ *     reviewers without a same-head PASS marker hold the merge (never
+ *     silent merge, never
  *     silent approval — gh-957 doctrine).
  *
  * Marker family (the `dmtools:` head-carried shapes) — see
@@ -345,6 +348,25 @@ function resolvePool(io, config, jobParams, opts) {
     poolLensWarnings(io, skills, order, warnings);
     var reviewers = [];
     for (var f = 0; f < order.length; f++) reviewers.push(skills[order[f]]);
+    var probe = { reviewers: reviewers, policy: policy };
+    var unresolved = unresolvedRequiredNames(probe);
+    if (unresolved.length > 0) {
+        if (policy.requiredIsDefault) {
+            // The factory default list adapts to what actually loaded (an io
+            // failure or a trimmed factory dir must keep the fail-soft
+            // resolvePool contract — the gate applies to loaded reviewers).
+            warnings.push('reviewPolicy.required (factory default) names reviewer(s) not loaded: ' +
+                unresolved.join(', ') + ' — the merge gate applies to loaded reviewers only');
+        } else {
+            throw poolSchema.skillError('reviewPolicy.required names unknown reviewer(s): ' +
+                unresolved.join(', ') + ' — loaded reviewers: ' + order.join(', ') +
+                ' (a misspelled gate silently gates nothing)');
+        }
+    }
+    for (var d = 0; d < disabledRequiredNames(probe).length; d++) {
+        warnings.push('reviewPolicy.required names disabled reviewer "' +
+            disabledRequiredNames(probe)[d] + '" — it never runs, so it cannot gate the merge');
+    }
     return {
         policy: policy,
         reviewers: reviewers,
@@ -376,9 +398,51 @@ function findSkill(pool, name) {
     return null;
 }
 
-/** The required reviewers of a resolved pool (§7). */
+/** The required names of a resolved pool (§7 — reviewPolicy.required). */
+function requiredNamesOf(pool) {
+    var req = pool && pool.policy && pool.policy.required;
+    return Array.isArray(req) ? req : [];
+}
+
+/** True when the pool's reviewPolicy.required names this reviewer. */
+function isRequiredReviewer(pool, name) {
+    return requiredNamesOf(pool).indexOf(name) !== -1;
+}
+
+/**
+ * The required reviewers of a resolved pool (§7): enabled AND named by
+ * reviewPolicy.required. A required-but-disabled reviewer never runs, so it
+ * can never gate (resolvePool warns instead of deadlocking the merge lane).
+ */
 function requiredReviewers(pool) {
-    return enabledReviewers(pool).filter(function(s) { return s.isRequired === true; });
+    var req = requiredNamesOf(pool);
+    return enabledReviewers(pool).filter(function(s) { return req.indexOf(s.name) !== -1; });
+}
+
+/**
+ * §8 check 8: every reviewPolicy.required entry must name a LOADED reviewer
+ * (enabled or not). Returns the list of unresolved names — resolvePool turns
+ * a non-empty list into a hard error ("a misspelled gate silently gates
+ * nothing"), the validator surfaces the same through this predicate.
+ */
+function unresolvedRequiredNames(pool) {
+    var req = requiredNamesOf(pool);
+    var out = [];
+    for (var i = 0; i < req.length; i++) {
+        if (!findSkill(pool, req[i])) out.push(req[i]);
+    }
+    return out;
+}
+
+/** §7 warn: required entries naming reviewers the pool loaded but disabled. */
+function disabledRequiredNames(pool) {
+    var req = requiredNamesOf(pool);
+    var out = [];
+    for (var i = 0; i < req.length; i++) {
+        var s = findSkill(pool, req[i]);
+        if (s && s.isEnabled === false) out.push(req[i]);
+    }
+    return out;
 }
 
 // ── rounds gating (§6) ───────────────────────────────────────────────────────
@@ -445,7 +509,7 @@ function poolSummaryLine(pool) {
     for (var i = 0; i < reviewers.length; i++) {
         var s = reviewers[i];
         var flags = [];
-        if (s.isRequired) flags.push('required');
+        if (isRequiredReviewer(pool, s.name)) flags.push('required');
         if (s.isEnabled === false) flags.push('disabled');
         if (s.filterWeight === 'high') flags.push('weight:high');
         flags.push(s.rounds.join('+'));
@@ -468,6 +532,10 @@ if (typeof module !== 'undefined' && module.exports) {
         enabledReviewers: enabledReviewers,
         findSkill: findSkill,
         requiredReviewers: requiredReviewers,
+        requiredNamesOf: requiredNamesOf,
+        isRequiredReviewer: isRequiredReviewer,
+        unresolvedRequiredNames: unresolvedRequiredNames,
+        disabledRequiredNames: disabledRequiredNames,
         triggerPathsHit: triggerPathsHit,
         roundsDecide: roundsDecide,
         reviewerShouldRun: reviewerShouldRun,

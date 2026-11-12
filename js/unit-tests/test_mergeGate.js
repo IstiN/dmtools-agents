@@ -962,7 +962,8 @@ suite('mergeGate: gh-1406 required-reviewer pool clause', function () {
         // The held line names the missing required reviewer.
         var lines = mMergeGate().outcomeLines(r.out);
         assert.ok(lines[0].indexOf('security') !== -1, 'held line names the missing reviewer: ' + lines[0]);
-        assert.ok(lines[0].indexOf('gh-1406') !== -1);
+        assert.ok(lines[0].indexOf('never merges') !== -1, 'held line carries the generic invariant, not an issue id: ' + lines[0]);
+        assert.ok(lines[0].indexOf('gh-1406') === -1, 'no issue id in the PR-facing hold line');
     });
 
     test('a failed hold post never lifts the hold (fail-closed decision, soft marker)', function () {

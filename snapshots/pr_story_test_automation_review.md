@@ -117,6 +117,8 @@ flowchart TD
 Read PR files to understand WHAT changed. Read ticket files to understand WHY
 it changed and verify against requirements.
 
+<!-- Pack-reachability anchor: the deprecated v1 instruction shims are listed in instructions/pr_review/deprecated-v1.md (frozen; removed in the next major release). -->
+
 
 ---
 

@@ -652,9 +652,9 @@ suite('reviewPolicy — gh-1406 reviewer-pool schema extension', function() {
         var e = validationErrorMessage(function() {
             mod.validateReviewPolicy({ reviewers: { security: { isRequired: true } } }, 'test');
         });
-        assert.ok(e, 'isRequired is a contract field — must throw');
+        assert.ok(e, 'isRequired is not tunable (a removed field) — must throw');
         assert.ok(e.message.indexOf('isRequired') !== -1);
-        assert.ok(e.message.indexOf('factory invariants') !== -1, 'error names the contract-field rule');
+        assert.ok(e.message.indexOf('reviewPolicy.required') !== -1, 'error carries the migration hint');
         var e2 = validationErrorMessage(function() {
             mod.validateReviewPolicy({ reviewers: { security: { lens: '.dmtools/review/own.md' } } }, 'test');
         });

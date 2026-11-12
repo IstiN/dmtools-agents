@@ -628,7 +628,7 @@ function outcomeLines(out) {
     if (out.held && out.holdReason === reviewPoolMarkers.HOLD_REASON) {
         return ['\uD83E\uDD16 merge hold on PR #' + out.prNumber + ': required reviewer(s) ' +
             (out.poolMissing || []).join(', ') + ' missing a PASS marker on the current head — merge deferred ' +
-            '(gh-1406: a failed required review leg never merges); resolution: the reviewer leg completes ' +
+            '(a failed required review leg never merges); resolution: the reviewer leg completes ' +
             '(retry with backoff, needs-human past the hold valve); ' + holdStampLine(out)];
     }
     if (out.held) {

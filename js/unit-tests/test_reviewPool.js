@@ -41,13 +41,11 @@ var BASE_JSON = JSON.stringify({
     name: 'base',
     lens: 'instructions/pr_review/generalist/lens.md',
     roleLine: 'Senior Code Reviewer',
-    isRequired: true,
     rounds: ['all']
 });
 var SECURITY_JSON = JSON.stringify({
     name: 'security',
     lens: 'instructions/pr_review/security/lens.md',
-    isRequired: true,
     rounds: ['first', 'hunks'],
     triggerPaths: [],
     mayRaise: ['BLOCKING', 'IMPORTANT', 'SUGGESTION', 'NIT'],
@@ -75,7 +73,6 @@ suite('reviewPool — skill-file schema and defaults (§2)', function() {
         assert.deepEqual(s.mayRaise, ['BLOCKING', 'IMPORTANT', 'SUGGESTION', 'NIT']);
         assert.equal(s.filterWeight, 'normal');
         assert.equal(s.isFiltered, true);
-        assert.equal(s.isRequired, false);
         assert.deepEqual(s.rounds, ['all']);
         assert.deepEqual(s.triggerPaths, []);
         assert.deepEqual(s.options, {});
@@ -89,6 +86,13 @@ suite('reviewPool — skill-file schema and defaults (§2)', function() {
         var e2 = skillErrorOf(function() { mod.validateSkillDefinition({ name: 'x' }, 't'); });
         assert.ok(e2 && e2.message.indexOf('"lens"') !== -1);
         assert.equal(e2.name, 'ReviewSkillValidationError');
+    });
+
+    test('the removed isRequired field warns with the migration hint (2026-11-12 revision)', function() {
+        var r = mod.validateSkillDefinition({ name: 'x', lens: 'x.md', isRequired: true }, 't');
+        assert.equal(r.warnings.length, 1);
+        assert.ok(r.warnings[0].indexOf('isRequired') !== -1, r.warnings[0]);
+        assert.ok(r.warnings[0].indexOf('reviewPolicy.required') !== -1, r.warnings[0]);
     });
 
     test('unknown top-level fields are WARNED (typo protection), never dropped silently', function() {
@@ -110,8 +114,6 @@ suite('reviewPool — skill-file schema and defaults (§2)', function() {
     });
 
     test('booleans take the is prefix and must be booleans; filterWeight is the enum', function() {
-        var e1 = skillErrorOf(function() { mod.validateSkillDefinition({ name: 'x', lens: 'x.md', isRequired: 'yes' }, 't'); });
-        assert.ok(e1 && e1.message.indexOf('isRequired must be a boolean') !== -1);
         var e2 = skillErrorOf(function() { mod.validateSkillDefinition({ name: 'x', lens: 'x.md', isFiltered: 1 }, 't'); });
         assert.ok(e2 && e2.message.indexOf('isFiltered must be a boolean') !== -1);
         var e3 = skillErrorOf(function() { mod.validateSkillDefinition({ name: 'x', lens: 'x.md', filterWeight: 'heavy' }, 't'); });
@@ -147,7 +149,6 @@ suite('reviewPool — same-name repo tuning (extend, never replace)', function()
         assert.deepEqual(tuned.options, { referencePack: 'own/' });
         assert.equal(tuned.model, 'openai/x');
         // Contract fields ride untouched.
-        assert.equal(tuned.isRequired, true);
         assert.equal(tuned.lens, factory.lens);
     });
 
@@ -156,8 +157,9 @@ suite('reviewPool — same-name repo tuning (extend, never replace)', function()
         var e = skillErrorOf(function() {
             mod.validateRepoTuning({ name: 'security', isRequired: false }, factory, 'repo');
         });
-        assert.ok(e, 'isRequired is contract — must throw');
+        assert.ok(e, 'a stale isRequired in a same-name file must throw (removed field)');
         assert.ok(e.message.indexOf('extend, never replace') !== -1, 'error names the invariant: ' + e.message);
+        assert.ok(e.message.indexOf('reviewPolicy.required') !== -1, 'error carries the migration hint: ' + e.message);
         assert.ok(e.message.indexOf('may only TUNE') !== -1);
         var e2 = skillErrorOf(function() {
             mod.validateRepoTuning({ name: 'security', lens: '.dmtools/review/own-lens.md' }, factory, 'repo');
@@ -184,7 +186,6 @@ suite('reviewPool — same-name repo tuning (extend, never replace)', function()
         assert.deepEqual(pool.repoNames, ['legal']);
         var legal = mod.findSkill(pool, 'legal');
         assert.ok(legal, 'repo-defined reviewer is in the pool');
-        assert.equal(legal.isRequired, false, 'defaults apply to repo reviewers');
         assert.equal(legal.roleLine, 'Specialized Code Reviewer \u2014 legal');
     });
 });
@@ -200,12 +201,67 @@ suite('reviewPool — pool resolution (§2 loading + §3 tuning)', function() {
         assert.deepEqual(pool.factoryNames, ['base', 'security']);
         assert.equal(pool.warnings.length, 0);
         var security = mod.findSkill(pool, 'security');
-        assert.equal(security.isRequired, true);
         assert.deepEqual(security.rounds, ['first', 'hunks']);
         assert.deepEqual(security.triggerPaths, [], 'security ships without a path limitation');
         assert.deepEqual(security.mayRaise, ['BLOCKING', 'IMPORTANT', 'SUGGESTION', 'NIT']);
-        var base = mod.findSkill(pool, 'base');
-        assert.equal(base.isRequired, true);
+        // The merge gate is pool policy now: factory default names base + security.
+        assert.deepEqual(pool.policy.required, ['base', 'security']);
+        assert.equal(mod.isRequiredReviewer(pool, 'base'), true);
+        assert.equal(mod.isRequiredReviewer(pool, 'security'), true);
+        assert.deepEqual(mod.requiredReviewers(pool).map(function(s) { return s.name; }), ['base', 'security']);
+        assert.deepEqual(mod.unresolvedRequiredNames(pool), []);
+    });
+
+    test('reviewPolicy.required is repo-owned: shrink to [] or a subset', function() {
+        var pool = mod.resolvePool(makeIo(FACTORY_FILES, FACTORY_DIRS), { reviewPolicy: { required: [] } }, {});
+        assert.deepEqual(pool.policy.required, [], 'an explicit empty list gates nothing');
+        assert.deepEqual(mod.requiredReviewers(pool), []);
+        var pool2 = mod.resolvePool(makeIo(FACTORY_FILES, FACTORY_DIRS), { reviewPolicy: { required: ['security'] } }, {});
+        assert.deepEqual(mod.requiredReviewers(pool2).map(function(s) { return s.name; }), ['security']);
+    });
+
+    test('the factory default required list adapts to a partial factory set (warning, fail-soft)', function() {
+        var io = makeIo({
+            'instructions/review/base.json': BASE_JSON,
+            '.dmtools/review/legal.json': JSON.stringify({ name: 'legal', lens: '.dmtools/review/legal.lens.md' })
+        }, { 'instructions/review': ['base.json'], '.dmtools/review': ['legal.json'] });
+        var pool = mod.resolvePool(io, {}, {});
+        var warned = false;
+        pool.warnings.forEach(function(w) { if (w.indexOf('not loaded') !== -1) warned = true; });
+        assert.ok(warned, 'default security not loaded — warn, never throw: ' + JSON.stringify(pool.warnings));
+        assert.deepEqual(mod.requiredReviewers(pool).map(function(s) { return s.name; }), ['base']);
+    });
+
+    test('a required entry naming an unknown reviewer is a hard error (§8 check 8)', function() {
+        var e = skillErrorOf(function() {
+            mod.resolvePool(makeIo(FACTORY_FILES, FACTORY_DIRS), { reviewPolicy: { required: ['secuirty'] } }, {});
+        });
+        assert.ok(e, 'a misspelled gate silently gates nothing — must throw');
+        assert.ok(e.message.indexOf('secuirty') !== -1, e.message);
+        assert.ok(e.message.indexOf('reviewPolicy.required') !== -1, e.message);
+    });
+
+    test('a required-but-disabled reviewer warns (it can never gate)', function() {
+        var files = {};
+        for (var k in FACTORY_FILES) files[k] = FACTORY_FILES[k];
+        files['.dmtools/review/security.json'] = JSON.stringify({ name: 'security', isEnabled: false });
+        var io = makeIo(files, {
+            'instructions/review': ['base.json', 'security.json'],
+            '.dmtools/review': ['security.json']
+        });
+        var pool = mod.resolvePool(io, {}, {});
+        assert.equal(pool.warnings.length, 1, 'exactly the disabled-required warning: ' + JSON.stringify(pool.warnings));
+        assert.ok(pool.warnings[0].indexOf('security') !== -1 && pool.warnings[0].indexOf('cannot gate') !== -1, pool.warnings[0]);
+        assert.deepEqual(mod.requiredReviewers(pool).map(function(s) { return s.name; }), ['base']);
+    });
+
+    test('required list rejects non-strings, empties and duplicates', function() {
+        var e1 = skillErrorOf(function() { reviewPolicy.validateReviewPolicy({ required: [''] }, 't'); });
+        assert.ok(e1 && e1.message.indexOf('non-empty') !== -1);
+        var e2 = skillErrorOf(function() { reviewPolicy.validateReviewPolicy({ required: ['a', 'a'] }, 't'); });
+        assert.ok(e2 && e2.message.indexOf('more than once') !== -1);
+        var e3 = skillErrorOf(function() { reviewPolicy.validateReviewPolicy({ required: 'base' }, 't'); });
+        assert.ok(e3 && e3.message.indexOf('must be an array') !== -1);
     });
 
     test('repo same-name tuning merges onto the factory reviewer', function() {
@@ -219,7 +275,7 @@ suite('reviewPool — pool resolution (§2 loading + §3 tuning)', function() {
         var pool = mod.resolvePool(io, {}, {});
         var security = mod.findSkill(pool, 'security');
         assert.deepEqual(security.rounds, ['all'], 'repo tuning wins over the factory rounds');
-        assert.equal(security.isRequired, true, 'factory contract field rides untouched');
+        assert.equal(mod.isRequiredReviewer(pool, 'security'), true, 'policy required rides untouched');
         assert.deepEqual(pool.factoryNames, ['base', 'security']);
         assert.deepEqual(pool.repoNames, [], 'same-name tuning is not a repo-defined reviewer');
     });
@@ -527,10 +583,10 @@ suite('reviewPool — poolSummaryLine (run-context stamp)', function() {
         var full = mod.validateSkillDefinition(SECURITY_JSON_SAFE(), 'f').skill;
         full.filterWeight = 'high';
         var minimal = { name: 'a11y', rounds: ['first'] };
-        var line = mod.poolSummaryLine({ reviewers: [full, minimal] });
+        var line = mod.poolSummaryLine({ policy: { required: ['security'] }, reviewers: [full, minimal] });
         assert.equal(line, 'reviewer pool: security (required, weight:high, first+hunks) · a11y (first)');
         var disabled = mod.applyTuning(full, { isEnabled: false });
-        var line2 = mod.poolSummaryLine({ reviewers: [disabled] });
+        var line2 = mod.poolSummaryLine({ policy: { required: ['security'] }, reviewers: [disabled] });
         assert.equal(line2, 'reviewer pool: security (required, disabled, weight:high, first+hunks)');
     });
 });

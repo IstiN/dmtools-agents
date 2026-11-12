@@ -107,14 +107,24 @@ suite('reviewPromptFreshness — every reviewer leg carries the full base contra
     test('the factory skill files exist and parse (base + security, gh-1406 §4)', function() {
         var base = JSON.parse(readText('instructions/review/base.json'));
         assert.equal(base.name, 'base');
-        assert.equal(base.isRequired, true, 'the factory base reviewer gates the merge');
         assert.equal(base.lens, 'instructions/pr_review/generalist/lens.md');
         var security = JSON.parse(readText('instructions/review/security.json'));
         assert.equal(security.name, 'security');
-        assert.equal(security.isRequired, true, 'the security reviewer is the factory merge gate (gh-1406 §7)');
-        assert.equal(security.isRequired === true && security.rounds.indexOf('first') !== -1 &&
+        assert.equal(security.rounds.indexOf('first') !== -1 &&
             security.rounds.indexOf('hunks') !== -1, true, 'security ships rounds ["first","hunks"]');
         assert.deepEqual(security.triggerPaths, [], 'security ships triggerPaths [] — no path limitation');
         assert.ok(security.mayRaise.indexOf('BLOCKING') !== -1, 'mayRaise includes BLOCKING explicitly');
+        // 2026-11-12 revision: merge gating is pool policy, not a skill field —
+        // the factory DEFAULT policy names base + security, and no skill file
+        // carries the removed isRequired field.
+        var reviewPolicy = loadModule('js/common/reviewPolicy.js',
+            makeRequire({ './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}) }), {}) }), {});
+        assert.deepEqual(reviewPolicy.defaultPolicy().required, ['base', 'security'],
+            'the factory default merge-gate policy is [base, security]');
+        [base, security].forEach(function(skill) {
+            assert.equal(skill.isRequired, undefined,
+                skill.name + ': isRequired was removed from the schema (reviewPolicy.required is the gate)');
+        });
     });
 });

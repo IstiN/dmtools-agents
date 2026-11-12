@@ -279,7 +279,7 @@ jobs:
           if grep -q '^improved ' "$RUNNER_TEMP/crap.txt"; then echo "improved=true" >> "$GITHUB_OUTPUT"; fi
           exit $code
 
-      - name: Review skill files (gh-1406 §8 — lens/contract CI gate)
+      - name: Review skill files (lens/contract CI gate)
         # The reviewer pool's skill files are CONTRACT, not prose: every
         # reviewer (factory instructions/review/*.json + repo .dmtools/review/*.json)
         # must resolve to an existing non-empty lens, same-name files may only

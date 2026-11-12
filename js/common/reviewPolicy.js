@@ -245,16 +245,16 @@ function validateSeverityEntry(tier, raw) {
 /** Shape gate: the policy must be a plain object with known keys only. */
 function validatePolicyShape(raw) {
     if (!isPlainObject(raw)) {
-        throw policyError('reviewPolicy must be an object { preset, severities, bounds, identity, verification, reviewers, promptAppend }, got: ' + JSON.stringify(raw));
+        throw policyError('reviewPolicy must be an object { preset, severities, bounds, identity, verification, required, reviewers, promptAppend }, got: ' + JSON.stringify(raw));
     }
-    var unknown = unknownKeysOf(raw, { preset: 1, severities: 1, bounds: 1, identity: 1, verification: 1, reviewers: 1, promptAppend: 1 });
+    var unknown = unknownKeysOf(raw, { preset: 1, severities: 1, bounds: 1, identity: 1, verification: 1, required: 1, reviewers: 1, promptAppend: 1 });
     if (unknown.length > 0) {
         throw policyError('reviewPolicy has unknown key(s): ' + unknown.join(', ') +
-            ' — known keys: preset, severities, bounds, identity, verification, reviewers, promptAppend');
+            ' — known keys: preset, severities, bounds, identity, verification, required, reviewers, promptAppend');
     }
 }
 
-// ── gh-1406: the reviewer-pool keys (reviewers, promptAppend) ────────────────
+// ── gh-1406: the reviewer-pool keys (required, reviewers, promptAppend) ─────
 //
 // The validators live in reviewPoolSchema.js (validateRounds,
 // validateReviewerTuning, validateReviewersTuning, validatePromptAppend —
@@ -347,6 +347,7 @@ function validateReviewPolicy(raw, source) {
     if (raw.identity !== undefined && raw.identity !== null && !isPlainObject(raw.identity)) {
         throw policyError('reviewPolicy.identity must be an object (gh-1332 knobs)');
     }
+    var requiredIsDefault = raw.required === undefined || raw.required === null;
     return {
         preset: preset,
         source: source || 'built-in default',
@@ -354,6 +355,8 @@ function validateReviewPolicy(raw, source) {
         severities: severityTableFor(preset, raw.severities),
         bounds: boundsOrDefault(raw),
         identity: raw.identity || {},
+        required: poolSchema.validateRequiredList(raw.required, source),
+        requiredIsDefault: requiredIsDefault,
         reviewers: poolSchema.validateReviewersTuning(raw.reviewers),
         promptAppend: poolSchema.validatePromptAppend(raw.promptAppend)
     };
