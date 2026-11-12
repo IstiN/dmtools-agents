@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-12T06:39:53.651Z",
+  "ticketKey": "gh-1436",
+  "headSha": "93ede1ac99698eb074aa95cacbc8aaac3cc1e59d",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:7922073169895619",
+      "size": 106773
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:78a1805d36e47693",
+      "size": 9541164
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:484fce38127872a6",
+      "size": 4438
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:b62c9101d6ce7260",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:c01df515ba4546fc",
+      "size": 11923
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:aad2e504be69215f",
+      "size": 113
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:1335043049dd0c64",
+      "size": 3308
+    },
+    "request.md": {
+      "hash": "fnv1a64:79e6b0cf39b828f2",
+      "size": 5424
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:349512ac1497ce62",
+      "size": 1907
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:76316941f83c6868",
+      "size": 508
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:9827ca32c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:405d62828d796dc7",
+      "size": 5527
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:79e6b0cf39b828f2",
+      "size": 5424
+    }
+  },
+  "comments": [
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-11:ac06b91e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-11",
+      "updatedAt": "2026-11-11",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: red CI (`docs-freshness` check) — generated agent docs are stale**\n\nCI on `21d06ac7` fails `docs-freshness`: *\"docs/agents/generated or snapshots is stale. Run 'node js/agentDocGenerator.js && node generate_agent_snapshots.js' and commit the result.\"*\n\nThis PR edits the dev-leg agent configs (`story_development.json`, `bug_development.json` — the new conditional `developmentModePlan` cliPrompts entry), and `story_development_dynamic_repo.json` inherits the entry via `parent.merge`, so the generated docs and snapshots drift. Verified locally on this branch — running the two generators produces uncommitted diffs in exactly the files the check flags:\n\n```\ndocs/agents/generated/bug_development.md\ndocs/agents/generated/story_development.md\ndocs/agents/generated/story_development_dynamic_repo.md\nsnapshots/bug_development.md\nsnapshots/story_development.md\n```\n\n**Fix**:\n\n```bash\nnode js/agentDocGenerator.js && node generate_agent_snapshots.js\ngit add docs/agents/generated snapshots && git commit\n```\n\nThen re-push and confirm both CI checks (`crap`, `docs-freshness`) go green."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-11:9c6f71ce",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-11",
+      "updatedAt": "2026-11-11",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING (red `crap` CI) — fixed.** The eager dmtools-global references are now resolved **after** the active-mode gate, exactly as requested — both in one pass:\n\n- `js/common/developmentModePlan.js` — `readAppendixText`: `var read = (io && io.file_read) || file_read;` moved below the `!isPlanMode` early-out (the eager `file_read` reference you flagged at line 172 was the same latent pattern, masked only because the harness defines it).\n- `js/common/developmentModePlan.js` — `materializePlanAppendix`: `var write = (io && io.file_write) || file_write;` moved after the inactive **and** the override-error gates, so it resolves only when a write is actually due.\n\nAn inactive leg now touches no IO surface at all — restored the module's own P1 spirit as you noted. The restructure landed via the periodic WIP auto-save commit (`db7b02a6b`) and was finished/cleaned in `8ce45f29b`; the dead duplicate `if (resolved.error)` gate the auto-save captured mid-edit is dropped.\n\n**TDD**: added a reproducing regression test in `js/unit-tests/test_developmentModePlan.js` (`gh-1436 UT — plan-mode gating > inactive leg with NO io never references the dmtools IO globals`) — with `file_read`/`file_write` absent from the global object (host-portable `globalThis` handle), both calls must complete and return `{active:false}`. It fails on the pre-fix module (`file_write is not defined`) and passes on the fixed one; it runs on the Node crap-check harness **and** the canonical dmtools runner (an earlier draft used Node's `global` and was red on `dmtools run` — fixed in `d4c592f8c`).\n\n**Measured, full suite (`node js/unit-tests/node_testRunner.js` over all 256 `run_all.json` files)**:\n\n```text\nbefore: 9651 passed, 25 failed   (all 25: \"Plan-mode setup failed: ReferenceError: file_write is not defined\")\nafter:  9677 passed,   0 failed  (identical totals locally to the CI crap run; +1 = the new regression test)\n```\n\nCanonical runner parity: `dmtools run js/unit-tests/run_developmentModePlan.json` → 39 passed, 0 failed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-11:2835935b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-11",
+      "updatedAt": "2026-11-11",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING (red `docs-freshness` CI) — fixed.** Regenerated and committed exactly the 5 files you listed:\n\n```bash\nnode js/agentDocGenerator.js && node generate_agent_snapshots.js\n```\n\n- `docs/agents/generated/bug_development.md`\n- `docs/agents/generated/story_development.md`\n- `docs/agents/generated/story_development_dynamic_repo.md`\n- `snapshots/bug_development.md`\n- `snapshots/story_development.md`\n\nCommitted in `3bae7527f`. The diff is only the new conditional `developmentModePlan` cliPrompts entry (plus the `developmentModeConfig.plan` param the generator now discovers); the runtime path is documented via the generator's standard missing-file marker — the appendix is materialized at leg runtime and intentionally never committed (`ci/runtime-artifact-patterns.txt` + `.git/info/exclude` seeding own that).\n\n**Verification** — regenerated a second time on the committed tree: `git diff --exit-code -- docs/agents/generated snapshots` is clean, so the `docs-freshness` step (`Regenerate → git diff --exit-code`) passes."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-11:55dffa06",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-11",
+      "updatedAt": "2026-11-11",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: Red CI on two checks — the `crap` unit-test check fails with 25 new test failures (measured: base 3 pre-existing → this branch 28 failed, 25 new) from one eager `file_write` global reference in `materializePlanAppendix` (`js/common/developmentModePlan.js:211`), and the `docs-freshness` check fails because the dev-leg config edits were not regenerated into `docs/agents/generated` + `snapshots`. The design itself is sound: the conditional cliPrompts wiring, P1 default-mode gating, AC5 verbatim override, fail-fast on unreadable override, and the encoded-config pass-through are all well-tested and pin the ticket contract.\n\n**Key Issues**:\n- 🚨 `js/common/developmentModePlan.js:211` — `var write = (io && io.file_write) || file_write;` is evaluated before the inactive-mode early-out; in the Node test harness `file_write` is undefined, so every `preCliDevelopmentSetup.action()` test leg now throws `Plan-mode setup failed: ReferenceError: file_write is not defined` (25 new failures across test_preCliDevelopmentSetup/test_workingDir/test_developmentModePlan). Same eager pattern for `file_read` at line 172 is masked only because the harness defines it.\n- 🚨 docs-freshness — `story_development.json`/`bug_development.json` edits drift from `docs/agents/generated/*.md` and `snapshots/*.md` (verified: running the two generators yields diffs in 5 files). Regenerate and commit.\n\n**Digest** (no threads — none of these defend correctness/CI/ticket contract):\n- 💡 `js/common/developmentModePlan.js:216` — inactive-mode return is `{ok:false, active:false}`: `ok:false` on the successful no-op path is a misleading contract (caller must check `active` first); consider `{ok:true, active:false}` or documenting the invariant.\n- 🪶 `js/unit-tests/test_workingDir.js:144-147` — duplicate `'./common/developmentModePlan.js'` key in the require map (last wins; drop one).\n- 🪶 `js/unit-tests/test_preCliDevelopmentSetup.js:1981` and `:2441` — misaligned indentation of the added require-map entries (17-col vs 13/9-col siblings).\n\n**Next Steps**:\n1. Make the `file_write`/`file_read` resolution lazy (after the mode gate) — one-line restructure, restores 25 tests.\n2. Run `node js/agentDocGenerator.js && node generate_agent_snapshots.js` and commit the 5 generated files.\n3. Re-push; both CI checks must be green before merge. AC2/AC4/AC6 remain with the test-automation lane per the PR description — no gap flagged here."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-11:96c2ae09",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-11",
+      "updatedAt": "2026-11-11",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: red CI (`crap` check) — 25 new unit-test failures, all from one eager `file_write` global reference**\n\nCI on `21d06ac7` fails with `9651 passed, 25 failed`. Measured locally against this branch and against `origin/main`:\n\n- `origin/main`: 10451 passed, **3 failed** (pre-existing set: Story Questions pattern, gh-922 dedup scratch, wiki_publisher validation)\n- this branch: 10464 passed, **28 failed** → **25 new failures, all introduced by this PR** (test_preCliDevelopmentSetup.js ×19, test_workingDir.js ×3, test_developmentModePlan.js ×1 + cascades in the gh-716/gh-1042/gh-1364 suites)\n\nEvery new failure carries the same signature: `Plan-mode setup failed: ReferenceError: file_write is not defined`.\n\n**Root cause** — `materializePlanAppendix` resolves the dmtools global **eagerly, before the mode gate**:\n\n```javascript\nfunction materializePlanAppendix(customParams, io) {\n    var write = (io && io.file_write) || file_write;   // ← line 211: evaluated even when mode ≠ plan\n    var resolved = readAppendixText(customParams, io);\n    if (!resolved.active) { ... }                       // ← the zero-IO early-out happens too late\n```\n\nIn production dmtools GralJS `file_write` is a defined global, so real legs don't crash — but in the Node test harness (`js/unit-tests/node_testRunner.js`, which the CI `crap` check runs) `file_write` does not exist, so **every** `preCliDevelopmentSetup.action()` invocation now throws, the new wrapper (`runPlanModeAppendixStepOrReport`) catches it, posts a setup-error comment and fails the leg. That is why 19 previously-green tests (base passes `test_preCliDevelopmentSetup.js` 100/0 — verified) go red, including suites unrelated to plan mode. The PR description's verification claim (\"no new failures vs base — 15 pre-existing, identical set\") is factually wrong on both numbers.\n\n**Fix** (mirrors the `readAppendixText` structure — note its `var read = ... || file_read;` on line 172 is the same eager pattern, currently masked only because the harness defines `file_read`; fix both in one pass):\n\n```javascript\nfunction materializePlanAppendix(customParams, io) {\n    var resolved = readAppendixText(customParams, io);\n    if (!resolved.active) {\n        return { ok: false, active: false, ... };\n    }\n    var write = (io && io.file_write) || file_write;   // resolved only on active plan legs\n    ...\n```\n\nThis also restores the module's own P1 spirit: an inactive leg should not *touch* the IO surface at all, only skip it."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-11:089a9866",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-11",
+      "updatedAt": "2026-11-11",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🛑 rework arm withheld on head 93ede1ac99698eb074aa95cacbc8aaac3cc1e59d — 3/3 red arming attempts left the head unchanged (gh-917). The rework leg keeps closing without a fix (a violation class the agent cannot repair without the local toolchain) — the machine stops retrying here. A human owns this PR: push a fix (a NEW head restarts the budget and validation) or resolve the violation at its source."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-11:84423c83",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-11",
+      "updatedAt": "2026-11-11",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — APPROVE (re-review: both blockers verified fixed)\n\n**Summary**: Both blocking findings from the previous round are verified fixed against the produced state: the dmtools IO globals are now resolved lazily after the active-mode gate in `js/common/developmentModePlan.js` (measured: full suite 10494 passed, 3 failed — exactly the 3 pre-existing `origin/main` failures; canonical `dmtools run js/unit-tests/run_developmentModePlan.json` 39/0), and the generated agent docs are committed fresh (re-running both generators yields an empty `git diff`). No new findings in the rework or the merge-from-main hunks.\n\n**Verification evidence**:\n- F1 fix: `readAppendixText` line 180 / `materializePlanAppendix` line 230 — IO-global resolution now after the mode gates; new host-portable regression test (`globalThis`-based, save/delete/restore) pins that an inactive leg never touches the IO surface.\n- F2 fix: docs/snapshots regenerated in `3bae7527f`; `docs-freshness` step is green (regen → empty diff, verified twice).\n- Merge-from-main content (`#1446` moveOnStart/initiator, `#1447` test fix) rides the branch via merge and does not interact with the plan-mode files; this PR's configs, condition script, gitStaging and runtime-artifact lists are unchanged since the last review.\n\n**Advisory digest** (frozen lines, does not block merge):\n- `js/unit-tests/test_workingDir.js:144-147` — duplicate `'./common/developmentModePlan.js'` require-map key (last wins; drop one).\n- `js/unit-tests/test_preCliDevelopmentSetup.js:1981,2441` — misaligned indentation of the added require-map entries.\n\n**Next Steps**: merge — no rework lap needed. AC2/AC4/AC6 remain with the test-automation lane per the PR description."
+    }
+  ]
+}
