@@ -8,17 +8,10 @@ name: Agent Docs
 #   3. Runs the docs unit tests (agentDocGenerator + docs coverage) via dmtools.
 
 on:
+  # No paths filter on pull_request: docs-freshness + docs-coverage-tests are
+  # REQUIRED checks of the main-protection ruleset, so they must report on
+  # every PR (a filtered-out workflow never reports and blocks the merge).
   pull_request:
-    paths:
-      - '*.json'
-      - 'js/**'
-      - 'instructions/**'
-      - 'prompts/**'
-      - 'docs/agents/**'
-      - 'snapshots/**'
-      - 'crap4dart.yaml'
-      - '.crap-baseline.json'
-      - '.github/workflows/agent-docs.yml'
   push:
     branches: [main]
     paths:
