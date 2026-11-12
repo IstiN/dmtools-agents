@@ -183,19 +183,35 @@ var assert = {
  *                                These are injected as local vars that shadow globals.
  * @returns {Object} module.exports
  */
+var _moduleFactoryCache_ = {};
+
 function loadModule(path, requireFn, mocks) {
     var code = file_read({ path: path });
     if (!code || !code.trim()) {
         throw new Error('loadModule: cannot read file: ' + path);
     }
 
-    // Build preamble that shadows dmtools globals with our mocks
+    // Compiled factories are cached per (path, mock-name set): re-evaluating the
+    // whole module source on every call kept every parsed Source alive in GraalJS
+    // (tens of thousands of compilations, multi-GB heap). Mock values are passed
+    // in per call, so each call still gets fresh module state.
     var _testMocks_ = mocks || {};
-    var preamble = '';
+    var keys = [];
     for (var k in _testMocks_) {
-        if (_testMocks_.hasOwnProperty(k)) {
-            preamble += 'var ' + k + ' = _testMocks_["' + k + '"];\n';
+        if (_testMocks_.hasOwnProperty(k)) keys.push(k);
+    }
+    var sig = path + '|' + keys.join(',');
+    var cached = _moduleFactoryCache_[sig];
+    if (!cached || cached.code !== code) {
+        var preamble = '';
+        for (var i = 0; i < keys.length; i++) {
+            preamble += 'var ' + keys[i] + ' = _testMocks_["' + keys[i] + '"];\n';
         }
+        cached = {
+            code: code,
+            factory: eval('(function(module, exports, require, _testMocks_) {\n' + preamble + code + '\n})')
+        };
+        _moduleFactoryCache_[sig] = cached;
     }
 
     var _testModule_ = { exports: {} };
@@ -203,13 +219,7 @@ function loadModule(path, requireFn, mocks) {
         throw new Error('loadModule: require("' + id + '") not provided for ' + path);
     };
 
-    // eval runs in current scope — can access _testMocks_, _testModule_, _testRequire_
-    eval(
-        '(function(module, exports, require) {\n' +
-        preamble +
-        code +
-        '\n})(_testModule_, _testModule_.exports, _testRequire_)'
-    );
+    cached.factory(_testModule_, _testModule_.exports, _testRequire_, _testMocks_);
 
     return _testModule_.exports;
 }

@@ -150,18 +150,29 @@ function file_list(args) {
     return JSON.stringify({ entries: fs.readdirSync(dir).map(function(n) { return path.join(dir, n); }).sort() });
 }
 
+var moduleFactoryCache = {};
+
 function loadModule(modulePath, requireFn, mocks) {
     var code = file_read(modulePath);
     if (!code || !code.trim()) {
         throw new Error('loadModule: cannot read file: ' + modulePath);
     }
 
+    // Same per-(path, mock-name set) factory cache as testRunner.js.
     var _testMocks_ = mocks || {};
-    var preamble = '';
-    for (var k in _testMocks_) {
-        if (Object.prototype.hasOwnProperty.call(_testMocks_, k)) {
-            preamble += 'var ' + k + ' = _testMocks_["' + k + '"];\n';
+    var keys = Object.keys(_testMocks_);
+    var sig = modulePath + '|' + keys.join(',');
+    var cached = moduleFactoryCache[sig];
+    if (!cached || cached.code !== code) {
+        var preamble = '';
+        for (var i = 0; i < keys.length; i++) {
+            preamble += 'var ' + keys[i] + ' = _testMocks_["' + keys[i] + '"];\n';
         }
+        cached = {
+            code: code,
+            factory: eval('(function(module, exports, require, _testMocks_) {\n' + preamble + code + '\n})')
+        };
+        moduleFactoryCache[sig] = cached;
     }
 
     var _testModule_ = { exports: {} };
@@ -169,12 +180,7 @@ function loadModule(modulePath, requireFn, mocks) {
         throw new Error('loadModule: require("' + id + '") not provided for ' + modulePath);
     };
 
-    eval(
-        '(function(module, exports, require) {\n' +
-        preamble +
-        code +
-        '\n})(_testModule_, _testModule_.exports, _testRequire_)'
-    );
+    cached.factory(_testModule_, _testModule_.exports, _testRequire_, _testMocks_);
 
     return _testModule_.exports;
 }
