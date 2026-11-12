@@ -1033,4 +1033,37 @@ suite('mergeGate: gh-1406 required-reviewer pool clause', function () {
         });
         assert.equal(r.out.held, false);
     });
+
+    test('a required-reviewer hold with no createComment primitive: hold stands, marker skipped', function () {
+        var r = run({
+            comments: poolComments([{ name: 'security', required: true }], []),
+            noCreateComment: true
+        });
+        assert.equal(r.out.held, true, 'the hold decision is io-independent');
+        assert.equal(r.out.markerSkipped, true, 'the marker is observability, never the decision');
+        assert.equal(r.out.holdPosted, false);
+        assert.equal(r.calls.commentsPosted.length, 0);
+    });
+
+    test('an already-ESCALATED hold past the valve is deduped (one escalation per head)', function () {
+        var pm = mReviewPoolMarkers();
+        var comments = poolComments([{ name: 'security', required: true }], []);
+        comments.push({
+            author: { login: BOT },
+            body: pm.buildRequiredReviewerHoldMarker(['security'], HEAD, '2026-11-09T00:00:00Z', true, '2026-11-09T00:00:00Z')
+        });
+        var r = run({ comments: comments }); // NOW is 36h past the hold — valve open, but already escalated
+        assert.equal(r.out.held, true);
+        assert.equal(r.out.escalationDeduped, true, 'no repeated escalation stamp per tick');
+        assert.equal(r.calls.commentsPosted.length, 0);
+        assert.equal(r.calls.labelsAdded.length, 0, 'needs-human was already posted');
+    });
+
+    test('poolPhase direct-call shape: comments undefined + no getComments primitive → skipped, no hold', function () {
+        var out = { head: HEAD, held: false, poolMissing: [] };
+        var held = mMergeGate().poolPhase({}, 'o', 'n', { prNumber: 12, logins: [BOT], nowIso: NOW }, out, undefined);
+        assert.equal(held, false);
+        assert.equal(out.poolSkipped, true);
+        assert.equal(out.held, false);
+    });
 });

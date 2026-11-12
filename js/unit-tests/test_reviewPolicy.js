@@ -730,4 +730,19 @@ suite('reviewPolicy — gh-1406 reviewer-pool schema extension', function() {
         assert.deepEqual(p.reviewers.legal, { isEnabled: true });
         assert.deepEqual(p.promptAppend.legal, ['.dmtools/review/legal.append.md']);
     });
+
+    test('junk tuning entries and empty keys are hard ReviewPolicyValidationErrors (name pinned)', function() {
+        var junk = [
+            { reviewers: { security: 'yes' } },      // non-object tuning entry
+            { reviewers: { '': { isEnabled: true } } }, // empty reviewer key
+            { promptAppend: { '': ['x.md'] } }       // empty append key
+        ];
+        for (var i = 0; i < junk.length; i++) {
+            var e = validationErrorMessage(function() {
+                mod.validateReviewPolicy(junk[i], 'test');
+            });
+            assert.ok(e, 'junk case ' + i + ' must throw');
+            assert.equal(e.name, 'ReviewPolicyValidationError');
+        }
+    });
 });

@@ -179,4 +179,12 @@ suite('reviewPoolMarkers — the required-reviewer gate state (§7)', function()
         assert.equal(holds[0].escalated, true);
         assert.equal(holds[0].at, '2026-11-12T18:00:00Z');
     });
+
+    test('pool-outcome entries without a name are skipped (normalization drops anonymous rows)', function() {
+        var raw = '<!-- dmtools:review-pool {"head":"' + HEAD + '","round":"first",' +
+            '"reviewers":[{"required":true},{"name":"security","required":true}],"at":"2026-11-12T12:00:00Z"} -->';
+        var records = mod.parsePoolOutcomeMarkers([commentOf(raw)], { authorLogins: MACHINE_LOGINS });
+        assert.equal(records.length, 1, 'the nameless entry does not invalidate the record');
+        assert.deepEqual(records[0].reviewers, [{ name: 'security', required: true }]);
+    });
 });

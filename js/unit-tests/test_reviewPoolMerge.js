@@ -212,4 +212,33 @@ suite('reviewPoolMerge — the packet (§4 availability + §5 visibility)', func
         });
         assert.deepEqual(lines, ['👥 Reviewer pool (review): candidates from base.']);
     });
+
+    test('keep verdicts and normal-weight drops never surface as weighted outcomes', function() {
+        var merged = mod.mergeCandidateLists([
+            { reviewer: 'security', filterWeight: 'high',
+                candidates: [{ id: 1, path: 'a.js', line: 2, claim: 'x' }] },
+            { reviewer: 'base',
+                candidates: [{ id: 2, path: 'b.js', line: 3, claim: 'y' }] }
+        ]).merged;
+        var out = mod.highWeightOutcomesOf(merged, [
+            { id: 0, decision: 'keep', reason: 'kept with a stated reason' },
+            { id: 1, decision: 'drop', reason: 'normal-weight drops are the filter\u2019s own business' },
+            { id: 0, decision: 'drop', reason: 'superseded by the referenced fix' }
+        ]);
+        assert.equal(out.length, 1, 'only the high-weight drop surfaces');
+        assert.equal(out[0].id, 0, 'the merged identity id (index-based) surfaces');
+        assert.deepEqual(out[0].reviewers, ['security']);
+        assert.equal(out[0].reason, 'superseded by the referenced fix');
+    });
+
+    test('dropped pool candidate lines truncate very long claims (digest discipline)', function() {
+        var long = new Array(201).join('x');
+        var line = mod.droppedPoolCandidateLine({
+            path: 'a.js', line: 2, claim: long, reviewers: ['security'], reason: 'noise'
+        });
+        assert.ok(line.indexOf('a.js:2') !== -1, line);
+        assert.ok(line.indexOf(long) === -1, 'the 200-char claim is truncated');
+        assert.ok(line.length < 400, 'line stays digest-sized: ' + line.length);
+        assert.ok(line.indexOf('noise') !== -1);
+    });
 });
