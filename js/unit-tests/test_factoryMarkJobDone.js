@@ -342,9 +342,16 @@ suite('factoryMarkJobDone — entry action (mark_job_done_publish.js)', function
   });
 
   test('resolveParams: no input at all degrades to empty strings (no throw)', function () {
-    var p = entryModule.resolveParams(undefined, undefined);
-    assert.equal(p.number, '');
-    assert.equal(p.repo, '');
+    // Isolate from the host env: CI runners expose GITHUB_REPOSITORY through java.lang.System.getenv
+    var originalGetenv = java.lang.System.getenv;
+    java.lang.System.getenv = function () { return null; };
+    try {
+      var p = entryModule.resolveParams(undefined, undefined);
+      assert.equal(p.number, '');
+      assert.equal(p.repo, '');
+    } finally {
+      java.lang.System.getenv = originalGetenv;
+    }
   });
 
   test('action wires cli_execute_command/file_write capturers end-to-end', function () {
