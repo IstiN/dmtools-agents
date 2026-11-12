@@ -279,6 +279,16 @@ jobs:
           if grep -q '^improved ' "$RUNNER_TEMP/crap.txt"; then echo "improved=true" >> "$GITHUB_OUTPUT"; fi
           exit $code
 
+      - name: Review skill files (gh-1406 §8 — lens/contract CI gate)
+        # The reviewer pool's skill files are CONTRACT, not prose: every
+        # reviewer (factory instructions/review/*.json + repo .dmtools/review/*.json)
+        # must resolve to an existing non-empty lens, same-name files may only
+        # TUNE factory reviewers, duplicate names are rejected, and the
+        # promptAppend / reviewPolicy.reviewers targets must exist. Fails the
+        # PR before a misconfigured reviewer silently drops out of the pool.
+        if: always() && steps.instrument.outcome != 'skipped'
+        run: node scripts/validate-review-skills.js .
+
       - name: Module-size ratchet (<= 800 lines / 40 top-level functions per module)
         # Per-function CRAP never flags a god module made of small functions.
         # Production modules (js/**, tests excluded) must stay within 800

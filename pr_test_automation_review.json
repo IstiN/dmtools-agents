@@ -34,7 +34,7 @@
       "./agents/instructions/pr_test_automation_review/general_guidelines.md",
       "./agents/instructions/pr_test_automation_review/few_shots.md",
       "./agents/instructions/pr_test_automation_review/inline_comment_mapping.md",
-      "./agents/instructions/pr_review/base/review_verdict_rules.md",
+      "./agents/instructions/pr_review/review_verdict_rules.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md",
       {

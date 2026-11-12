@@ -148,7 +148,7 @@
       "./agents/instructions/pr_review/base/few_shots_format.md",
       "./agents/instructions/pr_review/generalist/lens.md",
       "./agents/instructions/pr_review/generalist/few_shots.md",
-      "./agents/instructions/pr_review/base/review_verdict_rules.md",
+      "./agents/instructions/pr_review/review_verdict_rules.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md",
       {
