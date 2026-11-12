@@ -1568,17 +1568,18 @@ function extractTicketKey(result) {
     return null;
 }
 
-/** Resolve a ticket field from top-level and `fields` candidate keys (gh-1442). */
-function _ticketFieldOf(ticket, topKeys, fieldKeys) {
-    if (!ticket || typeof ticket !== 'object') return '';
-    var f = (ticket.fields && typeof ticket.fields === 'object') ? ticket.fields : {};
-    for (var i = 0; i < topKeys.length; i++) {
-        if (ticket[topKeys[i]]) return ticket[topKeys[i]];
-    }
-    for (var j = 0; j < fieldKeys.length; j++) {
-        if (f[fieldKeys[j]]) return f[fieldKeys[j]];
+/** First non-empty string property from `obj` across `keys`, or '' (gh-1442). */
+function _firstPropOf(obj, keys) {
+    if (!obj || typeof obj !== 'object') return '';
+    for (var i = 0; i < keys.length; i++) {
+        if (obj[keys[i]]) return obj[keys[i]];
     }
     return '';
+}
+
+/** Resolve a ticket field from top-level and `fields` candidate keys (gh-1442). */
+function _ticketFieldOf(ticket, topKeys, fieldKeys) {
+    return _firstPropOf(ticket, topKeys) || _firstPropOf(ticket && ticket.fields, fieldKeys);
 }
 
 /** Resolve a ticket's summary/title across Jira, ADO, and GitHub payload shapes (gh-1442). */
