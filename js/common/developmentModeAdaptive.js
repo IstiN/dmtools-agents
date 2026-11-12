@@ -382,6 +382,32 @@ function resolvedDevelopmentMode(customParams) {
 // ── materialization orchestration (the routing carrier) ──────────────────────
 
 /**
+ * Readability probe: true when the appendix file exists (unreadable ⇒ assume
+ * stale so a failed delete still warns).
+ */
+function staleAppendixExists(io) {
+    var read = (io && io.file_read) || file_read;
+    try {
+        return typeof read({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH }) === 'string';
+    } catch (e) {
+        return true;
+    }
+}
+
+/**
+ * Delete the appendix, contained — the platform returns {deleted:bool} and
+ * never throws; the catch is defensive only, keeping "never fatal".
+ */
+function deleteStaleAppendix(io) {
+    var remove = (io && io.file_delete) || file_delete;
+    try {
+        return remove({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH });
+    } catch (e) {
+        return null; // defensive only — the platform does not throw
+    }
+}
+
+/**
  * Best-effort removal of a stale materialized appendix — the hygiene that
  * keeps routed-default and shadow legs byte-identical to default-mode legs
  * even on a reused workspace. Silent on success, one honest warning on a
@@ -391,28 +417,15 @@ function resolvedDevelopmentMode(customParams) {
  * returns {deleted:true|false} (verified by runtime probe). So the delete
  * result is consulted, and the warning fires only when a file ACTUALLY
  * existed and survived the call: a plain {deleted:false} on an empty
- * workspace is the normal clean response and stays quiet. The catch is
- * defensive only (the platform does not throw), keeping "never fatal".
+ * workspace is the normal clean response and stays quiet.
  */
 function removeStaleAppendix(io) {
-    var read = (io && io.file_read) || file_read;
-    var remove = (io && io.file_delete) || file_delete;
-    var path = developmentModePlan.PLAN_APPENDIX_FILE_PATH;
-    var existed = true; // unreadable probe ⇒ assume stale so a failed delete still warns
-    try {
-        existed = typeof read({ path: path }) === 'string';
-    } catch (e) {
-        existed = true;
-    }
-    var result = null;
-    try {
-        result = remove({ path: path });
-    } catch (e) {
-        result = null; // defensive only — the platform does not throw
-    }
+    var existed = staleAppendixExists(io);
+    var result = deleteStaleAppendix(io);
     if (existed && !(result && result.deleted === true)) {
         console.warn('Could not remove the stale plan-mode appendix at "' +
-            path + '": ' + developmentMode.describeRawValue(result));
+            developmentModePlan.PLAN_APPENDIX_FILE_PATH + '": ' +
+            developmentMode.describeRawValue(result));
     }
 }
 

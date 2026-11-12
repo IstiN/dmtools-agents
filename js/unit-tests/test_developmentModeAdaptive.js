@@ -601,6 +601,19 @@ suite('gh-1437 UT — materializeAdaptiveAppendix (fs recorder)', function () {
         assert.contains(captured.warns[0], APPENDIX_PATH, 'warning names the path');
     });
 
+    test('unreadable probe + failed delete → one honest warning (probe throw is assumed stale)', function () {
+        var fs = fsRecorder({});
+        fs.file_read = function () { throw new Error('fs probe boom'); };
+        fs.file_delete = function () { return { deleted: false }; };
+        var captured = captureConsole(function () {
+            var r = developmentModeAdaptive.materializeAdaptiveAppendix({ developmentMode: 'adaptive' }, SMALL_TICKET_TEXT, fs);
+            assert.equal(r.ok, true, 'cleanup failure does not fail the step');
+            assert.notOk(r.error);
+        });
+        assert.equal(captured.warns.length, 1, 'an unreadable probe assumes stale — a failed delete must warn');
+        assert.contains(captured.warns[0], APPENDIX_PATH, 'warning names the path');
+    });
+
     test('appendix write failure → ok:false + honest error, never a throw', function () {
         var fs = fsRecorder({});
         fs.file_write = function () { throw new Error('disk full'); };
