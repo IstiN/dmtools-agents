@@ -49,11 +49,10 @@ var FIX_VALUES = ['mandatory', 'opportunistic', 'never'];
 // passes — the enum stays two-valued until that trial data exists.
 var VERIFICATION_VALUES = ['none', 'filter'];
 
-// gh-1406 §2/§3: the reviewer-pool tuning keys. A `reviewPolicy.reviewers.<name>`
-// entry (and a same-name repo skill file — reviewPool enforces the same set)
-// may TUNE exactly these fields; the reviewer's contract fields (name, lens,
-// roleLine, mayRaise, filterWeight, isFiltered, isRequired) are factory
-// invariants and can never be re-defined by repo configuration.
+// gh-1406 §2/§3: the reviewer-pool tuning keys — a `reviewPolicy.reviewers.<name>` entry
+// (or a same-name repo skill file) may TUNE exactly these; the contract fields (name, lens,
+// roleLine, mayRaise, filterWeight, isFiltered, isRequired) are factory invariants, never
+// repo-re-definable.
 var POOL_TUNABLE_FIELDS = ['isEnabled', 'rounds', 'triggerPaths', 'options', 'model'];
 
 // gh-1406 §6: the rounds flags. `["all"]` is exclusive — it cannot combine.

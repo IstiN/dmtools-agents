@@ -191,7 +191,13 @@ function loadModule(modulePath, requireFn, mocks) {
 // Pure common modules loaded for real when a test's mock map omits them.
 var REAL_COMMON_MODULES = {
     branchSetup: 'js/common/branchSetup.js',
-    jiraWikiToMarkdown: 'js/common/jiraWikiToMarkdown.js'
+    jiraWikiToMarkdown: 'js/common/jiraWikiToMarkdown.js',
+    // gh-1406: mergeGate now loads the marker grammar (js/common/reviewPoolMarkers.js);
+    // suites shim mergeGate's siblings but need the real marker module. The
+    // chain is pure end-to-end: reviewPoolMarkers → reviewVerdicts → machineAuthor.
+    reviewPoolMarkers: 'js/common/reviewPoolMarkers.js',
+    reviewVerdicts: 'js/common/reviewVerdicts.js',
+    machineAuthor: 'js/common/machineAuthor.js'
 };
 
 function makeRequire(moduleMap) {
@@ -207,7 +213,7 @@ function makeRequire(moduleMap) {
         if (moduleMap[noExt]) return withModuleCompat(moduleMap[noExt]);
         if (moduleMap['./' + base]) return withModuleCompat(moduleMap['./' + base]);
 
-        if (REAL_COMMON_MODULES[noExt]) return loadModule(REAL_COMMON_MODULES[noExt]);
+        if (REAL_COMMON_MODULES[noExt]) return loadModule(REAL_COMMON_MODULES[noExt], makeRequire({}));
         throw new Error('makeRequire: module not found: ' + id);
     };
 }
