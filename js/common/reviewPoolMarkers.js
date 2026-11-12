@@ -85,41 +85,63 @@ function hasCompletedOnHead(passMarkers, skillName, headSha) {
     return false;
 }
 
+/** The {name, required} normalization of the round's enabled reviewers. */
+function poolOutcomeEntriesOf(entries) {
+    var list = Array.isArray(entries) ? entries : [];
+    return list.map(function(e) {
+        return { name: String((e && e.name) || ''), required: (e && e.required) === true };
+    });
+}
+
+/** The human note's reviewer list: ⛔ marks the required ones. */
+function poolOutcomeNamesOf(entries) {
+    var names = [];
+    for (var i = 0; i < entries.length; i++) {
+        names.push((entries[i].required ? '\u26D4 ' : '') + String((entries[i] && entries[i].name) || ''));
+    }
+    return names;
+}
+
 /**
  * The round's pool-outcome marker comment (§7): ONE per round, naming the
  * enabled reviewers the round expected plus their required flags and
  * completion state. This is the merge gate's expectation record.
  */
 function buildPoolOutcomeMarkerComment(headSha, roundName, entries, nowIso) {
-    var list = Array.isArray(entries) ? entries : [];
+    var reviewers = poolOutcomeEntriesOf(entries);
     var payload = {
         head: String(headSha || ''),
         round: String(roundName || ''),
-        reviewers: list.map(function(e) {
-            return { name: String((e && e.name) || ''), required: (e && e.required) === true };
-        }),
+        reviewers: reviewers,
         at: String(nowIso || '')
     };
-    var names = [];
-    for (var i = 0; i < list.length; i++) {
-        names.push((list[i].required ? '\u26D4 ' : '') + String((list[i] && list[i].name) || ''));
-    }
+    var names = poolOutcomeNamesOf(reviewers);
     return POOL_MARKER_PREFIX + JSON.stringify(payload, reviewVerdicts.markerSafeReplacer) +
         MARKER_SUFFIX + '\n\uD83E\uDD16 Reviewer pool round `' + String(roundName || '') +
         '` (gh-1406) on head ' + String(headSha || '').substring(0, 7) + ': ' +
         (names.length ? names.join(', ') : '(no enabled reviewers)') + '.';
 }
 
-function poolRecordFromPayload(parsed) {
-    if (!parsed || !isNonEmptyString(parsed.head)) return null;
-    var reviewers = Array.isArray(parsed.reviewers) ? parsed.reviewers : [];
+/** The {name, required} entries of a parsed pool payload (nameless skipped). */
+function poolEntryListOf(reviewers) {
     var entries = [];
-    for (var i = 0; i < reviewers.length; i++) {
-        var e = reviewers[i] || {};
+    var list = Array.isArray(reviewers) ? reviewers : [];
+    for (var i = 0; i < list.length; i++) {
+        var e = list[i] || {};
         if (!isNonEmptyString(e.name)) continue;
         entries.push({ name: e.name, required: e.required === true });
     }
-    return { head: String(parsed.head), round: String(parsed.round || ''), reviewers: entries, at: String(parsed.at || '') };
+    return entries;
+}
+
+function poolRecordFromPayload(parsed) {
+    if (!parsed || !isNonEmptyString(parsed.head)) return null;
+    return {
+        head: String(parsed.head),
+        round: String(parsed.round || ''),
+        reviewers: poolEntryListOf(parsed.reviewers),
+        at: String(parsed.at || '')
+    };
 }
 
 /** The trusted pool-outcome markers (machineAuthor allowlist, fail closed). */
@@ -153,12 +175,8 @@ function requiredReviewerGaps(outcome, passMarkers, headSha) {
     return gaps;
 }
 
-/**
- * The required-reviewer merge-hold marker (the shared dmtools:merge-hold
- * family, reason "required-reviewer" — a separate dedup budget from the
- * open-threads and verdict holds).
- */
-function buildRequiredReviewerHoldMarker(missing, headSha, nowIso, escalated, heldSince) {
+/** The merge-hold payload of the required-reviewer hold (shared grammar). */
+function requiredHoldPayload(missing, headSha, nowIso, escalated, heldSince) {
     var payload = {
         reason: HOLD_REASON,
         missing: Array.isArray(missing) ? missing : [],
@@ -167,16 +185,32 @@ function buildRequiredReviewerHoldMarker(missing, headSha, nowIso, escalated, he
         escalated: escalated === true
     };
     if (heldSince) payload.heldSince = heldSince;
+    return payload;
+}
+
+/** The human note under the marker: the plain hold, or the ESCALATED one. */
+function requiredHoldNote(payload, headSha) {
     var names = payload.missing.join(', ') || '(none)';
-    var note = escalated
-        ? '\uD83E\uDD16 Merge hold ESCALATED (gh-1406): the required reviewer(s) ' + names +
-          ' still have no PASS marker on head ' + String(headSha || '').substring(0, 7) +
-          ' — needs-human; the review leg exhausted its retry budget (never silent merge, never silent approval).'
-        : '\uD83E\uDD16 Merge hold (gh-1406): required reviewer(s) ' + names +
-          ' have no PASS marker on head ' + String(headSha || '').substring(0, 7) +
-          ' — the merge is withheld until their review legs complete (retry with backoff; a failed required leg never merges).';
+    var head = String(headSha || '').substring(0, 7);
+    if (payload.escalated) {
+        return '\uD83E\uDD16 Merge hold ESCALATED (gh-1406): the required reviewer(s) ' + names +
+            ' still have no PASS marker on head ' + head +
+            ' — needs-human; the review leg exhausted its retry budget (never silent merge, never silent approval).';
+    }
+    return '\uD83E\uDD16 Merge hold (gh-1406): required reviewer(s) ' + names +
+        ' have no PASS marker on head ' + head +
+        ' — the merge is withheld until their review legs complete (retry with backoff; a failed required leg never merges).';
+}
+
+/**
+ * The required-reviewer merge-hold marker (the shared dmtools:merge-hold
+ * family, reason "required-reviewer" — a separate dedup budget from the
+ * open-threads and verdict holds).
+ */
+function buildRequiredReviewerHoldMarker(missing, headSha, nowIso, escalated, heldSince) {
+    var payload = requiredHoldPayload(missing, headSha, nowIso, escalated, heldSince);
     return '<!-- dmtools:merge-hold ' + JSON.stringify(payload, reviewVerdicts.markerSafeReplacer) +
-        MARKER_SUFFIX + '\n' + note;
+        MARKER_SUFFIX + '\n' + requiredHoldNote(payload, headSha);
 }
 
 function holdRecordFromPayload(parsed) {

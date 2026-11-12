@@ -104,6 +104,35 @@ function mergedCandidateOf(c, id, reviewer, highWeight) {
 }
 
 /**
+ * ONE candidate against the merged identity map: first sight creates the
+ * entry, a same-reviewer repeat is deduped (first wins, noted), a
+ * cross-reviewer match merges in place (severity may only escalate, §5).
+ */
+function mergeOneCandidate(byIdentity, merged, notes, candidate, reviewer, highWeight) {
+    var identity = candidateIdentity(candidate.path, candidate.line, candidate.claim);
+    var existing = byIdentity[identity];
+    if (!existing) {
+        var entry = mergedCandidateOf(candidate, merged.length, reviewer, highWeight);
+        byIdentity[identity] = entry;
+        merged.push(entry);
+        return;
+    }
+    if (existing.reviewers.indexOf(reviewer) !== -1) {
+        notes.push('duplicate candidate from ' + reviewer + ' at ' + existing.path + ':' +
+            existing.line + ' — first wins');
+        return;
+    }
+    // Cross-reviewer match: one identity, severity escalates only.
+    var before = existing.severity;
+    existing.severity = mostSevere(existing.severity, candidate.severity);
+    existing.highWeight = existing.highWeight || highWeight;
+    existing.reviewers.push(reviewer);
+    notes.push('cross-reviewer match at ' + existing.path + ':' + existing.line + ' — ' +
+        existing.reviewers.join(' + ') +
+        (existing.severity !== before ? '; severity escalated ' + before + ' → ' + existing.severity : ''));
+}
+
+/**
  * The pool merge (§5): N candidate lists → ONE deduplicated candidate list.
  * Identity = path + line + claim fingerprint. Same reviewer re-raising the
  * same identity is deduped (first wins, noted); two DIFFERENT reviewers on
@@ -117,32 +146,10 @@ function mergeCandidateLists(lists) {
     var input = Array.isArray(lists) ? lists : [];
     for (var i = 0; i < input.length; i++) {
         var list = input[i] || {};
-        var reviewer = reviewerNameOf(list, i);
-        var highWeight = filterWeightOf(list) === 'high';
         var candidates = candidateListOf(list);
         for (var c = 0; c < candidates.length; c++) {
-            var candidate = candidates[c] || {};
-            var identity = candidateIdentity(candidate.path, candidate.line, candidate.claim);
-            var existing = byIdentity[identity];
-            if (!existing) {
-                var entry = mergedCandidateOf(candidate, merged.length, reviewer, highWeight);
-                byIdentity[identity] = entry;
-                merged.push(entry);
-                continue;
-            }
-            if (existing.reviewers.indexOf(reviewer) !== -1) {
-                notes.push('duplicate candidate from ' + reviewer + ' at ' + existing.path + ':' +
-                    existing.line + ' — first wins');
-                continue;
-            }
-            // Cross-reviewer match: one identity, severity escalates only.
-            var before = existing.severity;
-            existing.severity = mostSevere(existing.severity, candidate.severity);
-            existing.highWeight = existing.highWeight || highWeight;
-            existing.reviewers.push(reviewer);
-            notes.push('cross-reviewer match at ' + existing.path + ':' + existing.line + ' — ' +
-                existing.reviewers.join(' + ') +
-                (existing.severity !== before ? '; severity escalated ' + before + ' → ' + existing.severity : ''));
+            mergeOneCandidate(byIdentity, merged, notes, candidates[c] || {},
+                reviewerNameOf(list, i), filterWeightOf(list) === 'high');
         }
     }
     return { merged: merged, notes: notes };
