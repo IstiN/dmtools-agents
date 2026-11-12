@@ -46,12 +46,6 @@ var KNOWN_FIELDS = ['name', 'lens', 'roleLine', 'mayRaise', 'filterWeight',
     'isFiltered', 'rounds', 'triggerPaths', 'options',
     'model', 'isEnabled'];
 
-// Fields REMOVED from the schema (the owner's 2026-11-12 revision: merge
-// gating is pool policy, not a per-reviewer flag). A stale file carrying one
-// gets a pointed migration warning instead of the generic unknown-field note.
-var REMOVED_FIELD_HINTS = {
-    isRequired: 'merge gating moved to reviewPolicy.required (the pool-wide reviewer list)'
-};
 var KNOWN_FIELD_SET = keySetOf(KNOWN_FIELDS);
 
 // §2 defaults — the safe general behavior. `roleLine` is derived, not
@@ -196,13 +190,8 @@ function validateReviewerTuning(name, raw) {
     }
     var unknown = unknownKeysOf(raw, keySetOf(POL_TUNABLE_FIELDS));
     if (unknown.length > 0) {
-        var hints = [];
-        for (var u = 0; u < unknown.length; u++) {
-            if (REMOVED_FIELD_HINTS[unknown[u]]) hints.push(unknown[u] + ': ' + REMOVED_FIELD_HINTS[unknown[u]]);
-        }
         throw policyError('reviewPolicy.reviewers.' + name + ' has unknown key(s): ' + unknown.join(', ') +
-            ' — only ' + POL_TUNABLE_FIELDS.join(', ') + ' are tunable; contract fields (lens, mayRaise, filterWeight, isFiltered, roleLine) are factory invariants' +
-            (hints.length > 0 ? ' — ' + hints.join('; ') : ''));
+            ' — only ' + POL_TUNABLE_FIELDS.join(', ') + ' are tunable; contract fields (lens, mayRaise, filterWeight, isFiltered, roleLine) are factory invariants');
     }
     var out = {};
     for (var i = 0; i < POL_TUNABLE_FIELDS.length; i++) {
@@ -304,16 +293,6 @@ function validateOptions(value, source) {
 function skillUnknownFieldWarnings(raw, source) {
     var warnings = [];
     var unknown = unknownKeysOf(raw, KNOWN_FIELD_SET);
-    var removed = [];
-    for (var i = unknown.length - 1; i >= 0; i--) {
-        if (REMOVED_FIELD_HINTS[unknown[i]]) {
-            removed.push(unknown[i] + ' (' + REMOVED_FIELD_HINTS[unknown[i]] + ')');
-            unknown.splice(i, 1);
-        }
-    }
-    if (removed.length > 0) {
-        warnings.push(source + ': removed field(s) ' + removed.join(', '));
-    }
     if (unknown.length > 0) {
         warnings.push(source + ': unknown field(s) ' + unknown.join(', ') +
             ' — known fields: ' + KNOWN_FIELDS.join(', ') +
@@ -451,14 +430,9 @@ function validateRepoTuning(raw, factorySkill, source) {
     }
     var unknown = unknownKeysOf(raw, keySetOf(POL_TUNABLE_FIELDS.concat(['name'])));
     if (unknown.length > 0) {
-        var hints = [];
-        for (var u = 0; u < unknown.length; u++) {
-            if (REMOVED_FIELD_HINTS[unknown[u]]) hints.push(unknown[u] + ': ' + REMOVED_FIELD_HINTS[unknown[u]]);
-        }
         throw skillError(source + ': a same-name file for the factory reviewer ' + factorySkill.name +
             ' may only TUNE ' + POL_TUNABLE_FIELDS.join(', ') +
-            ' — found ' + unknown.join(', ') + ' (extend, never replace: factory reviewers are not re-definable)' +
-            (hints.length > 0 ? ' — ' + hints.join('; ') : ''));
+            ' — found ' + unknown.join(', ') + ' (extend, never replace: factory reviewers are not re-definable)');
     }
     if (raw.name !== undefined && String(raw.name) !== String(factorySkill.name)) {
         throw skillError(source + ': name ' + JSON.stringify(raw.name) +

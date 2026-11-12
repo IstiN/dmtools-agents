@@ -88,13 +88,6 @@ suite('reviewPool — skill-file schema and defaults (§2)', function() {
         assert.equal(e2.name, 'ReviewSkillValidationError');
     });
 
-    test('the removed isRequired field warns with the migration hint (2026-11-12 revision)', function() {
-        var r = mod.validateSkillDefinition({ name: 'x', lens: 'x.md', isRequired: true }, 't');
-        assert.equal(r.warnings.length, 1);
-        assert.ok(r.warnings[0].indexOf('isRequired') !== -1, r.warnings[0]);
-        assert.ok(r.warnings[0].indexOf('reviewPolicy.required') !== -1, r.warnings[0]);
-    });
-
     test('unknown top-level fields are WARNED (typo protection), never dropped silently', function() {
         var r = mod.validateSkillDefinition(
             { name: 'x', lens: 'x.md', filterWeigth: 'high', extra: 1 }, 't');
@@ -157,9 +150,8 @@ suite('reviewPool — same-name repo tuning (extend, never replace)', function()
         var e = skillErrorOf(function() {
             mod.validateRepoTuning({ name: 'security', isRequired: false }, factory, 'repo');
         });
-        assert.ok(e, 'a stale isRequired in a same-name file must throw (removed field)');
+        assert.ok(e, 'isRequired is not tunable — a same-name file carrying it must throw');
         assert.ok(e.message.indexOf('extend, never replace') !== -1, 'error names the invariant: ' + e.message);
-        assert.ok(e.message.indexOf('reviewPolicy.required') !== -1, 'error carries the migration hint: ' + e.message);
         assert.ok(e.message.indexOf('may only TUNE') !== -1);
         var e2 = skillErrorOf(function() {
             mod.validateRepoTuning({ name: 'security', lens: '.dmtools/review/own-lens.md' }, factory, 'repo');
