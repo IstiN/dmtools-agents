@@ -172,37 +172,47 @@ function countBulletGroups(lines, bulletIndexes) {
  *   Acceptance/AC sections.
  * - bodyTokens: chars/4 backstop over title + body (floor).
  */
+function emptySignalScan() {
+    return { acceptanceItems: 0, numberedOutside: 0, bulletIndexesOutside: [], inAcceptance: false };
+}
+
+/** Classify one line into the scan accumulator (AC sections toggle on headings). */
+function scanSignalLine(state, line, lineIndex) {
+    if (isAcceptanceSectionStart(line)) {
+        state.inAcceptance = true;
+        return;
+    }
+    if (isAtxHeading(line)) {
+        state.inAcceptance = false;
+        return;
+    }
+    if (state.inAcceptance) {
+        if (isBulletLine(line) || isNumberedLine(line)) state.acceptanceItems++;
+        return;
+    }
+    if (isBulletLine(line)) {
+        state.bulletIndexesOutside.push(lineIndex);
+    } else if (isNumberedLine(line)) {
+        state.numberedOutside++;
+    }
+}
+
+function scanSignalLines(lines) {
+    var state = emptySignalScan();
+    lines.forEach(function (line, i) {
+        scanSignalLine(state, line, i);
+    });
+    return state;
+}
+
 function extractSignals(title, body) {
     var fullText = String(title == null ? '' : title) + '\n' + String(body == null ? '' : body);
     var lines = fullText.split(/\r?\n/);
-    var acceptanceItems = 0;
-    var numberedOutside = 0;
-    var bulletIndexesOutside = [];
-    var inAcceptance = false;
-    for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-        if (isAcceptanceSectionStart(line)) {
-            inAcceptance = true;
-            continue;
-        }
-        if (isAtxHeading(line)) {
-            inAcceptance = false;
-            continue;
-        }
-        if (inAcceptance) {
-            if (isBulletLine(line) || isNumberedLine(line)) acceptanceItems++;
-            continue;
-        }
-        if (isBulletLine(line)) {
-            bulletIndexesOutside.push(i);
-        } else if (isNumberedLine(line)) {
-            numberedOutside++;
-        }
-    }
-    var modules = Math.max(numberedOutside, maxModuleNumber(fullText), countBulletGroups(lines, bulletIndexesOutside));
+    var state = scanSignalLines(lines);
+    var modules = Math.max(state.numberedOutside, maxModuleNumber(fullText), countBulletGroups(lines, state.bulletIndexesOutside));
     return {
         modules: modules,
-        acceptanceBullets: acceptanceItems,
+        acceptanceBullets: state.acceptanceItems,
         bodyTokens: Math.floor(fullText.length / 4)
     };
 }
@@ -215,6 +225,15 @@ function adaptiveConfigBlock(customParams) {
         : null;
 }
 
+function isThresholdUnset(block, key) {
+    return !block || !Object.prototype.hasOwnProperty.call(block, key) ||
+        block[key] === null || block[key] === undefined;
+}
+
+function isNonNegativeIntegerValue(raw) {
+    return typeof raw === 'number' && isFinite(raw) && raw >= 0 && raw % 1 === 0;
+}
+
 /**
  * One threshold setting: absent/null → default (silent); a non-negative
  * integer → the value; anything else → ONE warning naming the config path
@@ -222,12 +241,11 @@ function adaptiveConfigBlock(customParams) {
  */
 function thresholdSetting(block, key, warnings) {
     var fallback = DEFAULT_ADAPTIVE_THRESHOLDS[key];
-    if (!block || !Object.prototype.hasOwnProperty.call(block, key) ||
-        block[key] === null || block[key] === undefined) {
+    if (isThresholdUnset(block, key)) {
         return fallback;
     }
     var raw = block[key];
-    if (typeof raw === 'number' && isFinite(raw) && raw >= 0 && raw % 1 === 0) {
+    if (isNonNegativeIntegerValue(raw)) {
         return raw;
     }
     warnings.push('⚠️ developmentModeConfig.adaptive.' + key + ': expected a non-negative integer, got ' +
