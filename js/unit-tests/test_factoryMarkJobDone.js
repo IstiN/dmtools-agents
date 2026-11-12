@@ -477,8 +477,17 @@ suite('factoryMarkJobDone — entry action edge branches (gh-1225)', function ()
     './publishParams.js': publishParamsReal(),
       './mark_job_done.js': mjdModule
     }), {});
-    assert.equal(entryModule.envValue('NUMBER'), '');
-    assert.equal(entryModule.envValue('GITHUB_REPOSITORY'), '');
+    // Hide the runtime's java env bridge (both dmtools runtimes install a
+    // java.lang.System.getenv shim by default) for the duration, then restore.
+    var hadJava = Object.prototype.hasOwnProperty.call(globalThis, 'java');
+    var savedJava = globalThis.java;
+    globalThis.java = undefined;
+    try {
+      assert.equal(entryModule.envValue('NUMBER'), '');
+      assert.equal(entryModule.envValue('GITHUB_REPOSITORY'), '');
+    } finally {
+      if (hadJava) globalThis.java = savedJava; else delete globalThis.java;
+    }
   });
 
   test('action resolves the dmtools globals when deps is omitted (default deps = {})', function () {
