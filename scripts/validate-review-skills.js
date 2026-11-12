@@ -174,7 +174,8 @@ if (pool) {
         names[s.name] = true;
         var src = pool.factoryNames.indexOf(s.name) !== -1 ? 'factory' : 'repo';
         console.log('\u2705 reviewer "' + s.name + '" (' + src + ') — lens ' + s.lens +
-            ' | required:' + s.isRequired + ' | rounds:[' + s.rounds.join(',') + '] | weight:' + s.filterWeight);
+            ' | required:' + (reviewPool.isRequiredReviewer(pool, s.name) ? 'true' : 'false') +
+            ' | rounds:[' + s.rounds.join(',') + '] | weight:' + s.filterWeight);
     });
     // Check 4 (duplicate names) already throws inside resolvePool; the
     // warnings ride out of the loader (unknown fields, lens problems,
@@ -213,6 +214,70 @@ if (rawPolicy && rawPolicy.reviewers && pool) {
         }
     });
 }
+
+// ── check 8: reviewPolicy.required entries resolve to defined reviewers
+// (belt: resolvePool already hard-errors; report against the RAW policy even
+// when the pool resolution short-circuited for another reason) ──────────────
+if (rawPolicy && rawPolicy.required !== undefined && rawPolicy.required !== null && pool) {
+    var known = {};
+    pool.reviewers.forEach(function(s) { known[s.name] = true; });
+    (Array.isArray(rawPolicy.required) ? rawPolicy.required : []).forEach(function(name) {
+        if (known[name] === undefined) {
+            report('error', 'reviewPolicy.required names the unknown reviewer "' + name +
+                '" — a misspelled gate silently gates nothing. Defined reviewers: ' +
+                pool.reviewers.map(function(s) { return s.name; }).join(', '));
+        }
+    });
+}
+
+// ── migration signal: deprecated v1 instruction paths (the 2026-11-12
+// instruction-file split restored frozen v1 shims with deprecation banners;
+// a repo still PINNING a v1 path degrades its own prompts when the shims are
+// removed at the next major — warn loudly now) ─────────────────────────────
+var DEPRECATED_V1_PATHS = [
+    ['instructions/pr_review/general_guidelines.md', 'instructions/pr_review/generalist/lens.md'],
+    ['instructions/pr_review/output_rules.md', 'instructions/pr_review/base/input_context.md + instructions/pr_review/base/output_rules.md'],
+    ['instructions/pr_review/formatting_rules.md', 'instructions/pr_review/base/formatting_rules.md'],
+    ['instructions/pr_review/review_verdict_rules.md', 'instructions/pr_review/base/review_verdict_rules.md'],
+    ['instructions/pr_review/few_shots.md', 'instructions/pr_review/generalist/few_shots.md'],
+    ['instructions/pr_test_automation_review/output_rules.md', 'instructions/pr_review/base/output_rules.md'],
+    ['instructions/pr_test_automation_review/formatting_rules.md', 'instructions/pr_review/base/formatting_rules.md']
+];
+function scanForV1Paths(where, text) {
+    if (!text) return;
+    DEPRECATED_V1_PATHS.forEach(function(pair) {
+        if (String(text).indexOf(pair[0]) !== -1) {
+            report('warning', where + ' pins the deprecated v1 path "' + pair[0] +
+                '" — moved to ' + pair[1] + ' (the v1 shim is frozen and will be REMOVED in the next major release)');
+        }
+    });
+}
+(function warnDeprecatedV1Pins() {
+    if (!projectConfig) return;
+    var arrays = [];
+    if (Array.isArray(projectConfig.globalCliPrompts)) arrays.push(['globalCliPrompts', projectConfig.globalCliPrompts]);
+    ['cliPrompts', 'cliPromptOverrides', 'additionalInstructions', 'instructionOverrides'].forEach(function(key) {
+        var map = projectConfig[key];
+        if (map && typeof map === 'object') {
+            Object.keys(map).forEach(function(ctx) {
+                var v = map[ctx];
+                if (Array.isArray(v)) arrays.push([key + '[' + ctx + ']', v]);
+                else if (typeof v === 'string') arrays.push([key + '[' + ctx + ']', [v]]);
+            });
+        }
+    });
+    arrays.forEach(function(entry) {
+        entry[1].forEach(function(v) { scanForV1Paths('config ' + entry[0], v); });
+    });
+    var runnersDir = path.join(repoRoot, '.dmtools', 'runners');
+    try {
+        fs.readdirSync(runnersDir).forEach(function(f) {
+            if (!/\.json$/.test(f)) return;
+            scanForV1Paths('runner .dmtools/runners/' + f,
+                fs.readFileSync(path.join(runnersDir, f), 'utf8'));
+        });
+    } catch (e) { /* no runners dir — nothing to scan */ }
+})();
 
 console.log('');
 console.log('reviewer pool: ' + (pool ? pool.reviewers.length : 0) + ' reviewer(s) validated · ' +

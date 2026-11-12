@@ -19,6 +19,7 @@
         "js/unit-tests/test_branchLegGuard.js",
         "js/unit-tests/test_agentValidator.js",
         "js/unit-tests/test_branchNaming.js",
+        "js/unit-tests/test_deprecatedInstructionShims.js",
         "js/unit-tests/test_thinActionWrappers.js",
         "js/unit-tests/test_branchSetup.js",
         "js/unit-tests/test_bugBookkeeping.js",
