@@ -553,7 +553,7 @@ rules) — the same engine drives both, so a mixed fleet is fine.
 
 ---
 
-## 11. Merge policy on `main` (rulesets, dmtools-agents)
+## 11. Merge policy on `main` (rulesets, dmtools-agents — verified)
 
 `main` is changed **only** by PRs merged by the SM merge app
 **dmtools-factory-bot** (GitHub App id `5357829`, token minted from
