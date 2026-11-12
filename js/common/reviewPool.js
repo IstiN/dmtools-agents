@@ -369,6 +369,10 @@ function loadRepoDir(io, dir, factorySkills, warnings, repoDefined) {
         if (!raw) continue;
         var name = isPlainObject(raw) && isNonEmptyString(raw.name) ? raw.name : '';
         if (name && hasKey(factorySkills, name)) {
+            if (repoDefined && repoDefined.indexOf(name) !== -1) {
+                throw skillError('duplicate reviewer name "' + name + '" (' + path + ') — a repo reviewer is defined once; ' +
+                    'same-name files may only TUNE factory reviewers');
+            }
             var tuning = validateRepoTuning(raw, factorySkills[name], path);
             for (var w = 0; w < tuning.warnings.length; w++) warnings.push(tuning.warnings[w]);
             factorySkills[name] = applyTuning(factorySkills[name], tuning.tuning);

@@ -224,6 +224,27 @@ suite('reviewPool — pool resolution (§2 loading + §3 tuning)', function() {
         assert.deepEqual(pool.repoNames, [], 'same-name tuning is not a repo-defined reviewer');
     });
 
+    test('a second same-name file for an already repo-defined reviewer is a duplicate-name error (§8 check 4)', function() {
+        var files = {};
+        for (var k in FACTORY_FILES) files[k] = FACTORY_FILES[k];
+        files['.dmtools/review/twin1.json'] = JSON.stringify({
+            name: 'twin', lens: '.dmtools/review/legal.lens.md', roleLine: 'first twin'
+        });
+        files['.dmtools/review/twin2.json'] = JSON.stringify({
+            name: 'twin', lens: '.dmtools/review/legal.lens.md', roleLine: 'second twin'
+        });
+        var io = makeIo(files, {
+            'instructions/review': ['base.json'],
+            '.dmtools/review': ['twin1.json', 'twin2.json']
+        });
+        var e = skillErrorOf(function() {
+            mod.resolvePool(io, {}, {});
+        });
+        assert.ok(e, 'duplicate repo reviewer names must be a hard error, not a silent merge');
+        assert.ok(e.message.indexOf('duplicate reviewer name') !== -1, e.message);
+        assert.ok(e.message.indexOf('twin') !== -1, e.message);
+    });
+
     test('reviewPolicy.reviewers tuning applies (and unknown names are a hard error)', function() {
         var io = makeIo(FACTORY_FILES, FACTORY_DIRS);
         var pool = mod.resolvePool(io, { reviewPolicy: { reviewers: { security: { isEnabled: false } } } }, {});
