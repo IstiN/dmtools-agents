@@ -83,6 +83,7 @@
         "js/unit-tests/test_finishTestCasesGeneration.js",
         "js/unit-tests/test_forkCheckout.js",
         "js/unit-tests/test_forkDispatch.js",
+        "js/unit-tests/test_ghTokenKeeper.js",
         "js/unit-tests/test_gitOps.js",
         "js/unit-tests/test_gitPushGuard.js",
         "js/unit-tests/test_gitStaging.js",

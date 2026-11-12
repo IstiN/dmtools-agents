@@ -8,6 +8,14 @@ if [ ! -s "${RUN_OUTPUT}" ]; then
   echo "::warning::no run output captured — skipping token publish"
   exit 0
 fi
+
+# gh-1450: a >1h leg outlives GitHub's fixed 1-hour App-token TTL — apply the
+# freshest credential before the first gh call (no-op when the helper is
+# absent; see scripts/gh-auth-refresh.sh).
+if [ -f "$(dirname "$0")/gh-auth-refresh.sh" ]; then
+  . "$(dirname "$0")/gh-auth-refresh.sh"
+  gh_auth_refresh_apply
+fi
 # Sum every fa-tokens ledger line (resume-aware: one line per
 # session segment). Balanced-brace JSON after the marker.
 read -r SUM_IN SUM_OUT SUM_CR MODEL < <(python3 - "${RUN_OUTPUT}" <<'PY' || true

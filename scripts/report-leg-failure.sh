@@ -54,6 +54,14 @@
 # holds — the advertised verification command actually verifies.
 set -u
 
+
+# gh-1450: a >1h leg outlives GitHub's fixed 1-hour App-token TTL — apply the
+# freshest credential before the first gh call (no-op when the helper is
+# absent; see scripts/gh-auth-refresh.sh).
+if [ -f "$(dirname "$0")/gh-auth-refresh.sh" ]; then
+  . "$(dirname "$0")/gh-auth-refresh.sh"
+  gh_auth_refresh_apply
+fi
 REPO="${GITHUB_REPOSITORY:-}"
 NUMBER="${NUMBER:-}"
 OUTCOME="${OUTCOME:-}"

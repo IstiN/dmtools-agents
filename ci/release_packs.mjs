@@ -113,6 +113,9 @@ const FACTORY_SETUP_SCRIPTS = [
   'collect-fa-crash-log.sh',
   'fa-trace-watchdog.sh',
   'report-leg-failure.sh',
+  // gh-1450: sourced by the glue scripts above — the fresh-credential apply
+  // that keeps the >1h-leg graceful path past the App token's 1-hour TTL.
+  'gh-auth-refresh.sh',
   'run-teammate-local.sh',
   'run-sm-local.sh',
 ];
