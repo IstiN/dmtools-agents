@@ -447,7 +447,7 @@ Write `outputs/pr_review.json` with `recommendation`, `summary`, `generalComment
 
 ---
 
-### [15] `./agents/instructions/pr_review/review_verdict_rules.md`
+### [15] `./agents/instructions/pr_review/base/review_verdict_rules.md`
 
 # Review verdict rules — machine protocol (binding)
 

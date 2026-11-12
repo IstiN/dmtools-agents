@@ -62,18 +62,15 @@ suite('reviewPromptFreshness — every reviewer leg carries the full base contra
         var base = listTrackedBaseFiles();
         var configs = listReviewerConfigs();
         assert.ok(configs.length >= 4, 'expected the 4 reviewer legs, got: ' + configs.join(', '));
-        // review_verdict_rules.md stays at its INCIDENT-ANCHORED path
-        // (instructions/pr_review/, the #605/pr-320 anchor in
-        // test_instructionRefs R4) — the freshness gate guards it too, at
-        // that path, so a leg can never drop the verdict protocol.
-        var anchored = 'instructions/pr_review/review_verdict_rules.md';
-        var anchoredRef = './agents/' + anchored;
+        // review_verdict_rules.md lives IN the base set (ticket §1 layout);
+        // its pack reachability is pinned separately by the #605 anchor in
+        // test_instructionRefs R4.
         var failures = [];
         configs.forEach(function(configPath) {
             var config = JSON.parse(readText(configPath));
             var prompts = (config.params && config.params.cliPrompts) || [];
             var paths = prompts.map(promptPathOf);
-            base.concat([anchored]).forEach(function(basePath) {
+            base.forEach(function(basePath) {
                 var referenced = './agents/' + basePath;
                 if (paths.indexOf(referenced) === -1) {
                     failures.push(configPath + ': missing base contract file ' + referenced +

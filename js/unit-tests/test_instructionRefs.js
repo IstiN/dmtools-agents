@@ -253,7 +253,7 @@ suite('instructionRefs — pack reference integrity', function () {
             '#600 regression: github_comment_format.md is no longer reachable ' +
             '— story_development/bug_development/pr_review/pr_rework packs ' +
             'would ship without it (live crash 2026-10-01)');
-        assert.ok(c.reachable['instructions/pr_review/review_verdict_rules.md'],
+        assert.ok(c.reachable['instructions/pr_review/base/review_verdict_rules.md'],
             '#605 regression: review_verdict_rules.md is no longer reachable ' +
             '— the pr_review pack would ship without it (live crash pr-320)');
         assert.ok(c.reachable['prompts/codegraph_tools.md'],

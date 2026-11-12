@@ -443,7 +443,7 @@ await db.query(query, [email]);
 
 ---
 
-### [11] `./agents/instructions/pr_review/review_verdict_rules.md`
+### [11] `./agents/instructions/pr_review/base/review_verdict_rules.md`
 
 # Review verdict rules — machine protocol (binding)
 

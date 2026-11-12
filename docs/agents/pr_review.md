@@ -38,4 +38,14 @@ Set in the project `.dmtools/config.js` (e.g. `reviewPolicy: { verification: 'fi
 
 **Trial opt-in** (gh-1403): this repository opts in via `.dmtools/config.js` in #1408 — post-merge, once a pack release cut from post-gh-1403 main is out (the knob ships blockless until then: a `reviewPolicy` block, even with `'none'`, crashes released pre-gh-1403 packs at leg setup). The trial bar is fewer rework laps per PR AND higher precision AND ≈ 0 wrongly-dropped findings. Revert to `none` if the trial fails.
 
+## Reviewer pool (gh-1406)
+
+The review leg is a POOL of reviewer legs: the generalist (`base`) plus specialists (factory ships `security`; repos add their own). Every leg assembles `[roleLine → instructions/pr_review/base/* → lens → repo appends → few-shots + verdict rules]` and produces candidate findings only — the census and verdict stay the machine's (one census, one verdict).
+
+- Skill files: factory `instructions/review/<name>.json`; repo `.dmtools/review/<name>.json`. Required fields `name` + `lens`; everything defaults (all tiers, `filterWeight: "normal"`, `isFiltered: true`, `isRequired: false`, `rounds: ["all"]`, `triggerPaths: []`). A same-name repo file may only TUNE a factory reviewer (`isEnabled`, `rounds`, `triggerPaths`, `options`, `model`) — contract fields cannot be re-defined, and duplicate names fail the load.
+- Pool config: `reviewPolicy: { reviewers: { security: { isEnabled: true } }, promptAppend: { base: ['.dmtools/review/base.append.md'] } }` — `promptAppend` is additive-only (appends after the lens).
+- `rounds: ["first","hunks"]` (specialist default) — full pass up front; later rounds only when new hunks touch `triggerPaths` (`first` counts completed passes, not attempts: a 429-failed leg re-fires until its completion marker exists).
+- `isRequired: true` (factory `base` + `security`) gates the MERGE: every required reviewer needs a same-head PASS marker, else the gh-1370 lane withholds the merge — retry with backoff, owner escalation past budget, never a silent merge.
+- Validation: `node scripts/validate-review-skills.js .` — deterministic config check (schema, lens existence, duplicate names, tuning limits, prompt targets); wire it into CI next to the docs-coverage gate. Worked example (repo-defined legal reviewer + appends): the [`example/reviewer-pool`](https://github.com/ajaxspace/dm_tools_worflow_test_example/tree/example/reviewer-pool) branch of the factory test repo.
+
 - `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).

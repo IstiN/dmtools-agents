@@ -4,6 +4,22 @@
  * Tests the shared encoded_config builder used by smAgent.js and autoStart.js.
  */
 
+// Hermetic DEFAULT_TRACKER: the deployment-level env var leaks through the
+// REAL Java bridge on the dmtools host (java.lang.System.getenv) and flips
+// tracker-sensitive expectations (which tracker comment-format prompt is the
+// "active" one, gfm vs ado/jira sections). Unit tests pin the CONFIG-derived
+// tracker, so the shim answers null for DEFAULT_TRACKER — the code under test
+// then falls through to config/customParams — and defers every other name to
+// the real bridge.
+var __scope__ = typeof globalThis !== 'undefined' ? globalThis : (typeof global !== 'undefined' ? global : this);
+var __realJava__ = __scope__ ? __scope__.java : undefined;
+__scope__.java = {
+    lang: { System: { getenv: function(name) {
+        if (name === 'DEFAULT_TRACKER') { return null; }
+        try { return __realJava__.lang.System.getenv(name); } catch (eEnv) { return null; }
+    } } }
+};
+
 function makeFileMapReader(fileMap) {
     return function(readOpts) {
         var p = readOpts.path;

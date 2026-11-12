@@ -17,7 +17,7 @@
       "formalGithubReview": true
     },
     "cliPrompts": [
-      "pack:instructions/pr_review/review_verdict_rules.md"
+      "pack:instructions/pr_review/base/review_verdict_rules.md"
     ]
   }
 }
