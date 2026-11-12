@@ -225,6 +225,9 @@ suite('release workflow wiring', function () {
         assert.ok(wf.indexOf('GH_TOKEN: ${{ steps.app-token.outputs.token }}') !== -1,
             'the ledger step must use the app token, not GITHUB_TOKEN / PAT');
         assert.ok(wf.indexOf('x-access-token:${GH_TOKEN}') !== -1, 'the push remote carries the app token');
+        var unset = wf.indexOf('git config --local --unset-all http.https://github.com/.extraheader');
+        assert.ok(unset !== -1 && unset < wf.indexOf('git push origin HEAD:main'),
+            'checkout\'s persisted GITHUB_TOKEN extraheader must be dropped, else the push runs as github-actions[bot] and is declined');
         assert.ok(wf.indexOf('git commit -m "chore(release): bump agent versions [skip ci]"') !== -1,
             '[skip ci] keeps the ledger push from re-triggering a release');
     });
