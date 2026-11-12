@@ -371,4 +371,166 @@ suite('reviewPool — rounds and triggerPaths gating (§6)', function() {
         assert.equal(mod.reviewerShouldRun(disabled, { firstDone: false, hasNewHunks: true, hunksHitTrigger: true }), false);
         assert.equal(mod.reviewerShouldRun(null, { firstDone: false, hasNewHunks: true, hunksHitTrigger: true }), false);
     });
+
+    test('roundsDecide: unknown round flags never fire (the gate is closed to typos)', function() {
+        var state = { firstDone: false, hasNewHunks: true, hunksHitTrigger: true };
+        assert.equal(mod.roundsDecide(['nonsense'], state), false);
+        assert.equal(mod.roundsDecide('first', state), false, 'a non-array rounds value decides nothing');
+        assert.equal(mod.roundsDecide(null, null), false, 'missing rounds and state degrade to no-run');
+    });
+});
+
+// ── gh-1406 CRAP-gate lap: edge branches pinned before the CRAP-split ────────
+// The crap ratchet flagged the pool functions as NEW > 8; the fix splits
+// them into smaller helpers. These tests pin the previously-uncovered
+// branches FIRST so the split provably keeps behavior identical.
+
+suite('reviewPool — skill-file validation edge branches (§2/§8)', function() {
+
+    test('a non-object skill file is a hard error', function() {
+        var e1 = skillErrorOf(function() { mod.validateSkillDefinition('nope', 't'); });
+        assert.ok(e1 && e1.message.indexOf('must be a JSON object') !== -1);
+        var e2 = skillErrorOf(function() { mod.validateSkillDefinition(null, 't'); });
+        assert.ok(e2 && e2.message.indexOf('must be a JSON object') !== -1);
+    });
+
+    test('roleLine must be a non-empty string when present; an explicit roleLine is kept', function() {
+        var e = skillErrorOf(function() {
+            mod.validateSkillDefinition({ name: 'x', lens: 'x.md', roleLine: '   ' }, 't');
+        });
+        assert.ok(e && e.message.indexOf('roleLine must be a non-empty string') !== -1);
+        var ok = mod.validateSkillDefinition({ name: 'x', lens: 'x.md', roleLine: 'Custom Persona' }, 't');
+        assert.equal(ok.skill.roleLine, 'Custom Persona', 'explicit roleLine wins over the derived one');
+    });
+
+    test('model must be a string or null (skill file)', function() {
+        var e = skillErrorOf(function() {
+            mod.validateSkillDefinition({ name: 'x', lens: 'x.md', model: 42 }, 't');
+        });
+        assert.ok(e && e.message.indexOf('model must be a string or null') !== -1);
+        var ok = mod.validateSkillDefinition({ name: 'x', lens: 'x.md', model: 'openai/x' }, 't');
+        assert.equal(ok.skill.model, 'openai/x');
+    });
+
+    test('explicit isEnabled false is legal in a skill file', function() {
+        var r = mod.validateSkillDefinition({ name: 'x', lens: 'x.md', isEnabled: false }, 't');
+        assert.equal(r.skill.isEnabled, false);
+    });
+});
+
+suite('reviewPool — same-name repo tuning edge branches (§8 check 5)', function() {
+
+    test('a non-object same-name tuning file is a hard error naming the factory reviewer', function() {
+        var factory = mod.validateSkillDefinition(SECURITY_JSON_SAFE(), 'factory').skill;
+        var e = skillErrorOf(function() { mod.validateRepoTuning('nope', factory, 'repo'); });
+        assert.ok(e && e.message.indexOf('must be a JSON object') !== -1);
+        assert.ok(e.message.indexOf('security') !== -1, 'the error names the tuned factory reviewer');
+    });
+
+    test('tuned model must be a string or null (repo tuning)', function() {
+        var factory = mod.validateSkillDefinition(SECURITY_JSON_SAFE(), 'factory').skill;
+        var e = skillErrorOf(function() {
+            mod.validateRepoTuning({ name: 'security', model: 42 }, factory, 'repo');
+        });
+        assert.ok(e && e.message.indexOf('model must be a string or null') !== -1);
+    });
+});
+
+suite('reviewPool — pool resolution edge branches (io failure shapes)', function() {
+
+    test('an io without listFiles degrades to an empty pool (capability miss)', function() {
+        var pool = mod.resolvePool({ readFile: function() { return null; } }, {}, {});
+        assert.deepEqual(pool.reviewers, []);
+        assert.deepEqual(pool.factoryNames, []);
+    });
+
+    test('a throwing listFiles degrades to an empty pool (fail-soft dir read)', function() {
+        var io = makeIo(FACTORY_FILES, FACTORY_DIRS);
+        io.listFiles = function() { throw new Error('dir boom'); };
+        var pool = mod.resolvePool(io, {}, {});
+        assert.deepEqual(pool.reviewers, []);
+    });
+
+    test('a throwing readFile degrades to missing (no reviewers, no crash)', function() {
+        var io = makeIo(FACTORY_FILES, FACTORY_DIRS);
+        io.readFile = function() { throw new Error('read boom'); };
+        var pool = mod.resolvePool(io, {}, {});
+        assert.deepEqual(pool.factoryNames, [], 'unreadable factory files contribute no reviewers');
+        assert.deepEqual(pool.reviewers, []);
+    });
+
+    test('a listed repo skill file that cannot be read is skipped silently', function() {
+        var files = {};
+        for (var k in FACTORY_FILES) files[k] = FACTORY_FILES[k];
+        var io = makeIo(files, {
+            'instructions/review': ['base.json', 'security.json'],
+            '.dmtools/review': ['ghost.json'] // listed, but no content behind it
+        });
+        var pool = mod.resolvePool(io, {}, {});
+        assert.deepEqual(pool.repoNames, [], 'unreadable repo files define nothing');
+        assert.deepEqual(pool.factoryNames, ['base', 'security']);
+    });
+
+    test('a repo-defined reviewer with an unknown field is warned (typo protection rides the loader)', function() {
+        var files = {};
+        for (var k in FACTORY_FILES) files[k] = FACTORY_FILES[k];
+        files['.dmtools/review/legal.json'] = JSON.stringify({ name: 'legal', lens: 'legal.md', mayRaize: ['NIT'] });
+        var io = makeIo(files, {
+            'instructions/review': ['base.json'],
+            '.dmtools/review': ['legal.json']
+        });
+        var pool = mod.resolvePool(io, {}, {});
+        assert.ok(pool.warnings.join('\n').indexOf('mayRaize') !== -1,
+            'unknown field warns: ' + pool.warnings.join('\n'));
+        assert.deepEqual(pool.repoNames, ['legal']);
+    });
+
+    test('listFiles entry shapes: strings, {name}, {path} load; null/empty/non-json entries skip', function() {
+        var files = {};
+        for (var k in FACTORY_FILES) files[k] = FACTORY_FILES[k];
+        var io = makeIo(files, {});
+        io.listFiles = function(dir) {
+            if (dir === 'instructions/review') {
+                return ['base.json', { name: 'security.json' }, { path: 'ghost.json' }, null, 'README.md', ''];
+            }
+            return [];
+        };
+        var pool = mod.resolvePool(io, {}, {});
+        assert.deepEqual(pool.factoryNames, ['base', 'security'],
+            'string, {name} and {path} entries load; null, empty and non-json entries skip');
+    });
+
+    test('a throwing promptAppend readFile warns and resolves empty (legs fail open)', function() {
+        var io = makeIo(FACTORY_FILES, FACTORY_DIRS);
+        io.readFile = function(p) {
+            if (p === '.dmtools/review/base.append.md') throw new Error('append boom');
+            if (FACTORY_FILES[p] !== undefined) return FACTORY_FILES[p];
+            return null;
+        };
+        var pool = mod.resolvePool(io, {
+            reviewPolicy: { promptAppend: { base: ['.dmtools/review/base.append.md'] } }
+        }, {});
+        assert.deepEqual(pool.appends.base, [], 'an unreadable append file resolves empty');
+        assert.ok(pool.warnings.join('\n').indexOf('base.append.md') !== -1);
+    });
+});
+
+suite('reviewPool — poolSummaryLine (run-context stamp)', function() {
+
+    test('empty, null and shapeless pools render the empty line', function() {
+        assert.equal(mod.poolSummaryLine({ reviewers: [] }), 'reviewer pool: (empty)');
+        assert.equal(mod.poolSummaryLine(null), 'reviewer pool: (empty)');
+        assert.equal(mod.poolSummaryLine({}), 'reviewer pool: (empty)');
+    });
+
+    test('each reviewer renders its pool-relevant flags in order', function() {
+        var full = mod.validateSkillDefinition(SECURITY_JSON_SAFE(), 'f').skill;
+        full.filterWeight = 'high';
+        var minimal = { name: 'a11y', rounds: ['first'] };
+        var line = mod.poolSummaryLine({ reviewers: [full, minimal] });
+        assert.equal(line, 'reviewer pool: security (required, weight:high, first+hunks) · a11y (first)');
+        var disabled = mod.applyTuning(full, { isEnabled: false });
+        var line2 = mod.poolSummaryLine({ reviewers: [disabled] });
+        assert.equal(line2, 'reviewer pool: security (required, disabled, weight:high, first+hunks)');
+    });
 });
