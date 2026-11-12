@@ -49,6 +49,28 @@
 // serialized via fn.toString() and cannot close over module scope).
 var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
 
+// Pool-free probe staleness (live fa #2133, 2026-11-12): a run stuck
+// 'queued'/'waiting'/'pending' for hours (fa Machine Merge Bot 43095117429,
+// queued since 2026-11-11T20:17Z) never materializes a job and holds no
+// runner — counting it as BUSY deferred the gh-852 placeholder reset on
+// every tick forever. Only NON-running states age out; in_progress always
+// counts as busy.
+var POOL_STALE_NON_RUNNING_MS = 6 * 60 * 60 * 1000;
+
+/** True when `runs` carry a run that materially occupies the pool. */
+function poolBusy(runs, nowMs, staleMs) {
+    var limit = typeof staleMs === 'number' ? staleMs : POOL_STALE_NON_RUNNING_MS;
+    return (runs || []).some(function (r) {
+        if (!r) return false;
+        var st = String(r.status || '').toLowerCase();
+        if (ACTIVE_RUN_STATES.indexOf(st) === -1) return false;
+        if (st === 'in_progress') return true;
+        var created = Date.parse(r.created_at || r.run_started_at || '');
+        if (isNaN(created)) return true; // unknown age: fail closed (busy)
+        return (nowMs - created) <= limit;
+    });
+}
+
 // gh-1101: post-conclusion check-visibility grace. Applies ONLY to the
 // re-DISPATCH decision (a just-concluded run's check-runs may not be
 // visible yet) — never to latching a green verdict.
@@ -556,6 +578,8 @@ module.exports = {
     ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
     CONCLUDED_REDISPATCH_GRACE_MS: CONCLUDED_REDISPATCH_GRACE_MS,
     concludedWithin: concludedWithin,
+    POOL_STALE_NON_RUNNING_MS: POOL_STALE_NON_RUNNING_MS,
+    poolBusy: poolBusy,
     STALE_CANCEL_MARKER_RE: STALE_CANCEL_MARKER_RE,
     staleCancelMarkerLine: staleCancelMarkerLine,
     SILENT_UPDATE_MAX_FAILURES: SILENT_UPDATE_MAX_FAILURES,

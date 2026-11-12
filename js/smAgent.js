@@ -8058,11 +8058,9 @@ function repoPoolFree(repoInfo) {
             perPage: 50
         })) || {};
         var list = runs.workflow_runs || runs.workflowRuns || [];
-        var busy = list.some(function (r) {
-            return r && validationLivenessModule.ACTIVE_RUN_STATES
-                .indexOf(String(r.status || '').toLowerCase()) !== -1;
-        });
-        return !busy;
+        // Stale queued/waiting runs (no job, no runner) age out — a
+        // 21h-queued zombie pinned fa #2133 forever (live 2026-11-12).
+        return !validationLivenessModule.poolBusy(list, Date.now());
     } catch (ePool) {
         console.warn('  ⚠️  pool-free probe failed: ' + (ePool.message || ePool));
         return null;
