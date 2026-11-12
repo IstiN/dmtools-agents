@@ -548,3 +548,27 @@ suite('validationLiveness workflows-permission rejection (gh-1106)', function ()
             'multi-body scan finds the marker (sha compare is case-insensitive)');
     });
 });
+
+suite('validationLiveness poolBusy — stale queued runs age out (fa #2133)', function () {
+    var NOW = Date.parse('2026-11-12T17:30:00Z');
+    test('an in_progress run is busy regardless of age', function () {
+        assert.equal(live.poolBusy([{ status: 'in_progress', created_at: '2026-11-10T00:00:00Z' }], NOW), true);
+    });
+    test('a fresh queued run is busy', function () {
+        assert.equal(live.poolBusy([{ status: 'queued', created_at: '2026-11-12T17:00:00Z' }], NOW), true);
+    });
+    test('a 21h-queued zombie does NOT pin the pool (live fa 43095117429)', function () {
+        assert.equal(live.poolBusy([{ status: 'queued', created_at: '2026-11-11T20:17:34Z' }], NOW), false);
+    });
+    test('completed runs and empty lists are free; unknown age fails closed', function () {
+        assert.equal(live.poolBusy([{ status: 'completed', created_at: '2026-11-12T17:29:00Z' }], NOW), false);
+        assert.equal(live.poolBusy([], NOW), false);
+        assert.equal(live.poolBusy(null, NOW), false);
+        assert.equal(live.poolBusy([{ status: 'waiting' }], NOW), true);
+    });
+    test('custom staleMs and mixed lists', function () {
+        var runs = [{ status: 'queued', created_at: '2026-11-12T16:00:00Z' }, { status: 'completed' }];
+        assert.equal(live.poolBusy(runs, NOW, 60 * 60 * 1000), false);
+        assert.equal(live.poolBusy(runs, NOW), true);
+    });
+});
