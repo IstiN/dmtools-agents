@@ -387,12 +387,19 @@ suite('gh-1436 UT — condition script', function () {
 
     test('default / missing mode → false without reading anything', function () {
         var loaded = loadConditionWith({});
-        ['', 'default', 'PLAN', 'adaptive'].forEach(function (mode) {
+        ['', 'default', 'PLAN'].forEach(function (mode) {
             var cp = mode === '' ? {} : { developmentMode: mode };
             var ok = loaded.mod.action({ jobParams: { customParams: cp } });
             assert.equal(ok, false, 'mode ' + JSON.stringify(mode) + ' → excluded');
         });
-        assert.equal(loaded.fs.calls.reads.length, 0, 'non-plan modes never touch the filesystem');
+        assert.equal(loaded.fs.calls.reads.length, 0, 'non-plan/non-adaptive modes never touch the filesystem');
+        // gh-1437: adaptive legs DO probe the file (the materialization is the
+        // decision record) — pinned here so the surface stays explicit.
+        var adaptive = loadConditionWith({});
+        assert.equal(adaptive.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), false,
+            'adaptive without a materialized appendix → excluded');
+        assert.deepEqual(adaptive.fs.calls.reads, ['.dmtools/development-mode-plan-appendix.md'],
+            'adaptive probes exactly the runtime path');
     });
 
     test('plan mode but file missing/unreadable → false (no dangling prompt read)', function () {
@@ -463,10 +470,12 @@ function loadDevSetup(fs, extraMocks) {
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function () { } },
             './common/trackers.js': trackersModuleReal,
             './common/developmentMode.js': developmentMode,
-            // FRESH instance sharing THIS test's fs mocks — a shared instance
+            // FRESH instances sharing THIS test's fs mocks — a shared instance
             // would fall back to the real file_read/file_write globals.
             './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-                makeRequire({ './developmentMode.js': developmentMode }), mocks)
+                makeRequire({ './developmentMode.js': developmentMode }), mocks),
+            './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
+                makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks)
         }),
         mocks
     );
@@ -551,7 +560,10 @@ suite('gh-1436 IT — dev leg preCli plan-mode appendix step', function () {
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () { } },
                 './common/trackers.js': trackersStub,
                 './common/developmentMode.js': developmentMode,
-                './common/developmentModePlan.js': developmentModePlan
+                './common/developmentModePlan.js': developmentModePlan,
+                './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
+                    makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }),
+                    { file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete, cli_execute_command: function () { return ''; } })
             }),
             { file_read: fs.file_read, file_write: fs.file_write, cli_execute_command: function () { return ''; } }
         );
@@ -579,7 +591,7 @@ suite('gh-1436 IT — dev leg preCli plan-mode appendix step', function () {
             moveToStatus: function () { }
         };
         var trackersStub = { createTracker: function () { return trackerStub; } };
-        var mocks = { file_read: fs.file_read, file_write: fs.file_write, cli_execute_command: function () { return ''; } };
+        var mocks = { file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete, cli_execute_command: function () { return ''; } };
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
@@ -600,7 +612,9 @@ suite('gh-1436 IT — dev leg preCli plan-mode appendix step', function () {
                 './common/trackers.js': trackersStub,
                 './common/developmentMode.js': developmentMode,
                 './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-                    makeRequire({ './developmentMode.js': developmentMode }), mocks)
+                    makeRequire({ './developmentMode.js': developmentMode }), mocks),
+                './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
+                    makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks)
             }),
             mocks
         );

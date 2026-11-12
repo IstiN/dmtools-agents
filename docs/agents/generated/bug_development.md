@@ -67,6 +67,7 @@ _Pre-CLI Development Setup Action_
   - `contexts`
   - `developmentMode`
   - `developmentModeConfig`
+  - `developmentModeConfig.adaptive`
   - `developmentModeConfig.plan`
   - `dryRun`
   - `feedbackLoop`
@@ -157,6 +158,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `contexts` _(used by JS action)_
 - `developmentMode` _(used by JS action)_
 - `developmentModeConfig` _(used by JS action)_
+- `developmentModeConfig.adaptive` _(used by JS action)_
 - `developmentModeConfig.plan` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `feedbackLoop.qualityGates.gates` _(used by JS action)_
