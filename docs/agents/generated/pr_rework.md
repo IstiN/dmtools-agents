@@ -143,6 +143,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabels`:
 
   ```json

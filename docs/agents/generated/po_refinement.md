@@ -66,6 +66,7 @@ _Close Question Ticket Post-Action_
 
 ## Custom params
 
+- `responseTarget`: `"tracker"`
 - `parentContextFetch`:
 
   ```json

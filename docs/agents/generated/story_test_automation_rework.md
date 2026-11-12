@@ -91,6 +91,7 @@ _Story Test Automation Rework Action_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_story_test_rework_triggered"`
 - `checkOpenPR`: `true`
 - `branchCreateFnPath` _(used by JS action)_

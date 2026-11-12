@@ -294,8 +294,14 @@ suite('instructionRefs — pack reference integrity', function () {
         requiredConfigs.forEach(function (name) {
             var cfg = JSON.parse(readText(name));
             var byTracker = (cfg.params && cfg.params.cliPromptsByTracker) || {};
-            assert.ok(Array.isArray(byTracker.jira) && byTracker.jira.indexOf('./agents/instructions/tracker/jira_comment_format.md') !== -1,
-                name + ' must wire jira_comment_format.md in cliPromptsByTracker.jira');
+            // PR/SCM workflows: response.md is GFM — Jira wiki only behind the tracker-target condition.
+            var gated = Array.isArray(byTracker.jira) && byTracker.jira.some(function (e) {
+                return e && typeof e === 'object' && e.prompt === './agents/instructions/common/markdown_output_format.md' &&
+                    e.condition === 'agents/js/conditions/isResponseToScm.js';
+            });
+            assert.ok(gated, name + ' must wire markdown_output_format.md (isResponseToScm) in cliPromptsByTracker.jira');
+            assert.equal(byTracker.jira.indexOf('./agents/instructions/tracker/jira_comment_format.md'), -1,
+                name + ' must not wire jira_comment_format.md unconditionally');
             assert.ok(Array.isArray(byTracker.ado) && byTracker.ado.indexOf('./agents/instructions/tracker/ado_comment_format.md') !== -1,
                 name + ' must wire ado_comment_format.md in cliPromptsByTracker.ado');
             assert.ok(Array.isArray(byTracker.github) && byTracker.github.indexOf('./agents/instructions/common/github_comment_format.md') !== -1,

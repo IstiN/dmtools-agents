@@ -143,6 +143,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_bug_development_triggered"`
 - `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_

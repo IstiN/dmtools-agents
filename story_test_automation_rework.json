@@ -16,6 +16,7 @@
     "preCliJSAction": "agents/js/preCliStoryTestAutomationSetup.js",
     "postJSAction": "agents/js/storyTestAutomationRework.js",
     "customParams": {
+      "responseTarget": "scm",
       "removeLabel": "sm_story_test_rework_triggered",
       "checkOpenPR": true
     },
@@ -42,7 +43,17 @@
     ],
     "cliPromptsByTracker": {
       "jira": [
-        "./agents/instructions/tracker/jira_comment_format.md"
+        {
+          "id": "responseFormatJiraWiki",
+          "prompt": "./agents/instructions/tracker/jira_comment_format.md",
+          "condition": "agents/js/conditions/isResponseToTracker.js"
+        },
+        {
+          "id": "responseFormatMarkdown",
+          "prompt": "./agents/instructions/common/markdown_output_format.md",
+          "condition": "agents/js/conditions/isResponseToScm.js"
+        },
+        "./agents/instructions/tracker/jira_context.md"
       ],
       "ado": [
         "./agents/instructions/tracker/ado_comment_format.md"

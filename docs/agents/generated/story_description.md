@@ -58,6 +58,7 @@ _Write Content Output — unified post-action for content-generating agents_
 
 ## Custom params
 
+- `responseTarget`: `"tracker"`
 - `contentOutput`:
 
   ```json

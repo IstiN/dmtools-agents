@@ -92,6 +92,7 @@ _Post Story Test Automation Review Comments Action_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_story_test_review_triggered"`
 - `checkOpenPR`: `true`
 - `branchCreateFnPath` _(used by JS action)_

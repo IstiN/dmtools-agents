@@ -92,6 +92,7 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_test_rework_triggered"`
 - `checkOpenPR`: `true`
 - `branchCreateFnPath` _(used by JS action)_

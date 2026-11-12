@@ -82,6 +82,7 @@ _Post Test Automation Results Action (postJSAction for test_case_automation)_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_test_automation_triggered"`
 - `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_

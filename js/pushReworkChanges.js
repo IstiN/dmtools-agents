@@ -14,6 +14,7 @@ const commentMarkup = require('./common/commentMarkup.js');
 var trackersModule = require('./common/trackers.js');
 var submoduleHelper = require('./common/submodules.js');
 var prHelper = require('./common/pullRequest.js');
+var jiraWikiToMarkdown = require('./common/jiraWikiToMarkdown.js').jiraWikiToMarkdown;
 var ghHelpers = require('./common/githubHelpers.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var autoStart = require('./common/autoStart.js');
@@ -1709,7 +1710,7 @@ function postPRComment(scm, pullRequestId, fixSummary, ticketKey, repliesPosted)
             commentText = '## 🔧 Rework Complete — ' + ticketKey + '\n\n' +
                 'All PR review comments have been addressed. See fix summary below.\n\n' +
                 '---\n\n' +
-                fixSummary;
+                jiraWikiToMarkdown(fixSummary);
         }
         scm.addComment(pullRequestId, commentText);
         console.log('✅ Posted fix summary to PR #' + pullRequestId);

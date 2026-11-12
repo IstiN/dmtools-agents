@@ -14,6 +14,7 @@
     "alwaysPostComments": true,
     "postJSAction": "agents/js/writeContentOutput.js",
     "customParams": {
+      "responseTarget": "tracker",
       "contentOutput": {
         "target": "jira_field",
         "field": "Description",
@@ -37,7 +38,17 @@
     ],
     "cliPromptsByTracker": {
       "jira": [
-        "./agents/instructions/tracker/jira_comment_format.md"
+        {
+          "id": "responseFormatJiraWiki",
+          "prompt": "./agents/instructions/tracker/jira_comment_format.md",
+          "condition": "agents/js/conditions/isResponseToTracker.js"
+        },
+        {
+          "id": "responseFormatMarkdown",
+          "prompt": "./agents/instructions/common/markdown_output_format.md",
+          "condition": "agents/js/conditions/isResponseToScm.js"
+        },
+        "./agents/instructions/tracker/jira_context.md"
       ],
       "ado": [
         "./agents/instructions/tracker/gfm_markup_table.md",

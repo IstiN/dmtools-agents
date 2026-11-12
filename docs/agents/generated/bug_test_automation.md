@@ -90,6 +90,7 @@ _Post Story Test Automation Results Action_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_bug_test_automation_triggered"`
 - `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_

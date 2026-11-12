@@ -22,6 +22,7 @@ var configLoader = require('./configLoader.js');
 var autoStart = require('./common/autoStart.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var prHelper = require('./common/pullRequest.js');
+var jiraWikiToMarkdown = require('./common/jiraWikiToMarkdown.js').jiraWikiToMarkdown;
 var mergeState = require('./common/mergeState.js');
 const { GIT_CONFIG, LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
@@ -273,7 +274,7 @@ function publishReworkPrArtifacts(scm, pr, ticketKey, testStatus, passed, fixSum
     postThreadReplies(scm, pr.number);
 
     // Post PR comment with fix summary + new test result (GitHub Markdown from pr_body.md)
-    var prBodyContent = readFile('outputs/pr_body.md') || fixSummary;
+    var prBodyContent = jiraWikiToMarkdown(readFile('outputs/pr_body.md') || fixSummary);
     postReworkBodyAndComment(scm, pr, ticketKey, testStatus, passed, prBodyContent);
 }
 

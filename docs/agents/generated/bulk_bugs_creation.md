@@ -73,6 +73,7 @@ _Post Bulk Bugs Creation Action (postJSAction for bulk_bugs_creation agent)_
 
 ## Custom params
 
+- `responseTarget`: `"tracker"`
 - `batchSize`: `50`
 - `openBugsJql`: `"project = {jiraProject} AND issuetype in (Bug) AND status not in ({status.DONE:Done})"`
 - `failedTCsJql`: `"project = {jiraProject} AND issuetype = \"Test Case\" AND {stage.FAILED:Failed} AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC"`

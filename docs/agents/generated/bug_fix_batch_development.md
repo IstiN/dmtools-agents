@@ -79,6 +79,7 @@ _Post-CLI Bug-fix Batch Development Action_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_bug_fix_batch_development_triggered"`
 - `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_

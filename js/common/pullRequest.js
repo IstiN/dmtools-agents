@@ -217,6 +217,7 @@ function isPrBodyFrozen(pr) {
 var MAX_GH_PR_BODY_LENGTH = 60000;
 
 var mergeState = require('./mergeState.js');
+var jiraWikiToMarkdown = require('./jiraWikiToMarkdown.js').jiraWikiToMarkdown;
 
 function isSafeRefName(ref) {
     return ref &&
@@ -752,7 +753,8 @@ function resolveBodyContent(options) {
 
 // The canonical Closes-line body resolution shared by both creation paths.
 function buildPrBodyContent(options) {
-    var bodyContent = resolveBodyContent(options);
+    // PR bodies are GitHub-Flavored Markdown — defensively convert stray Jira wiki markup.
+    var bodyContent = jiraWikiToMarkdown(resolveBodyContent(options));
     // gh-737: guarantee the canonical 'Closes #N' line so the merge bot can
     // link this PR to the ticket by construction (applies to defaultBody too).
     if (options.ticketKey) bodyContent = ensureClosesLine(bodyContent, options.ticketKey);

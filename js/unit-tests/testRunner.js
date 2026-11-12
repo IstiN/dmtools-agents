@@ -235,6 +235,9 @@ function makeRequire(moduleMap) {
         if (base === 'branchSetup.js' || noExt === 'branchSetup') {
             return loadModule('js/common/branchSetup.js');
         }
+        if (noExt === 'jiraWikiToMarkdown') {
+            return loadModule('js/common/jiraWikiToMarkdown.js');
+        }
         throw new Error('makeRequire: module not found: ' + id);
     };
 }

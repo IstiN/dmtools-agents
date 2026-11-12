@@ -488,7 +488,15 @@ suite('buildEncodedConfig payload', function() {
         ];
         configs.forEach(function(cfgFile) {
             var jiraPrompts = decode(builder.buildEncodedConfig('PROJ-1', { configFile: cfgFile }, { tracker: { provider: 'jira' } })).params.cliPrompts;
-            assert.ok(jiraPrompts.indexOf('./agents/instructions/tracker/jira_comment_format.md') !== -1, cfgFile + ' jira: has jira_comment_format.md');
+            // PR/SCM workflows: Jira wiki markup only behind the tracker-target
+            // condition; GFM output format behind the SCM-target condition.
+            var conditionOf = function(path) {
+                var hit = jiraPrompts.filter(function(e) { return e && typeof e === 'object' && e.prompt === path; })[0];
+                return hit ? hit.condition : null;
+            };
+            assert.equal(jiraPrompts.indexOf('./agents/instructions/tracker/jira_comment_format.md'), -1, cfgFile + ' jira: jira_comment_format.md is never unconditional');
+            assert.equal(conditionOf('./agents/instructions/tracker/jira_comment_format.md'), 'agents/js/conditions/isResponseToTracker.js', cfgFile + ' jira: jira wiki gated on tracker target');
+            assert.equal(conditionOf('./agents/instructions/common/markdown_output_format.md'), 'agents/js/conditions/isResponseToScm.js', cfgFile + ' jira: GFM gated on scm target');
             assert.equal(jiraPrompts.indexOf('./agents/instructions/tracker/ado_comment_format.md'), -1, cfgFile + ' jira: excludes ado_comment_format.md');
             assert.equal(jiraPrompts.indexOf('./agents/instructions/common/github_comment_format.md'), -1, cfgFile + ' jira: excludes github_comment_format.md');
             var jiraText = assemblePrompt(jiraPrompts);
@@ -533,7 +541,7 @@ suite('buildEncodedConfig payload', function() {
         contentConfigs.forEach(function(item) {
             // Default jira_field target on jira tracker -> jira prompt, NO confluence_comments.md
             var jiraFieldPrompts = decode(builder.buildEncodedConfig('PROJ-1', { configFile: item.file }, { tracker: { provider: 'jira' } })).params.cliPrompts;
-            assert.ok(jiraFieldPrompts.indexOf(item.jiraPrompt) !== -1, item.name + ' jira_field: has ' + item.jiraPrompt);
+            assert.ok(jiraFieldPrompts.some(function(e) { return (typeof e === 'string' ? e : e.prompt) === item.jiraPrompt; }), item.name + ' jira_field: has ' + item.jiraPrompt);
             assert.equal(jiraFieldPrompts.indexOf('./agents/instructions/common/confluence_comments.md'), -1, item.name + ' jira_field: excludes confluence_comments.md');
             var jiraText = assemblePrompt(jiraFieldPrompts);
             assert.equal(jiraText.indexOf('# Confluence output'), -1, item.name + ' jira_field assembled prompt: no # Confluence output section');

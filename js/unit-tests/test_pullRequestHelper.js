@@ -21,6 +21,14 @@ function loadPullRequestHelper(mocks) {
 
 suite('pullRequest helper', function() {
 
+    test('buildPrBodyContent converts stray Jira wiki markup to GFM', function() {
+        var pr = loadPullRequestHelper();
+        var body = pr.buildPrBodyContent({ bodyContent: 'h3. Summary\nRun {{npm test}}' });
+        assert.contains(body, '### Summary', 'heading converted');
+        assert.contains(body, '`npm test`', 'inline code converted');
+        assert.notContains(body, '{{', 'no wiki inline code left');
+    });
+
     test('sanitizes shell metacharacters in PR titles', function() {
         var pr = loadPullRequestHelper();
         var title = pr.sanitizeTitle('DMC-1 Fix A -> B <bad> | $x; `cmd`');

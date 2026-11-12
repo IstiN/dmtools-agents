@@ -86,6 +86,7 @@ _Create Intake Tickets Post-Action_
 
 ## Custom params
 
+- `responseTarget`: `"tracker"`
 - `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
 - `dryRun` _(used by JS action)_

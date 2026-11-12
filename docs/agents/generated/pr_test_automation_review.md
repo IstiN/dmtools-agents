@@ -76,6 +76,7 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_test_review_triggered"`
 - `allowApproveWithSuggestions` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
