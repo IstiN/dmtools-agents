@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-12T09:44:53.952Z",
+  "ticketKey": "gh-1437",
+  "headSha": "f5a002f1b1ea485fa73dd8b5f9a746398f9e63e3",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:d4e8b220f48b35c6",
+      "size": 52744
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:2815e0d38a05324e",
+      "size": 4792841
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:4af75a0001f37ddd",
+      "size": 2277
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:a2cfaad69430b058",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:3fd1ed2f4a47b951",
+      "size": 15482
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:259f7f7b57a283aa",
+      "size": 3115
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:ce728d41d85f8fb3",
+      "size": 2930
+    },
+    "request.md": {
+      "hash": "fnv1a64:bdbff5a879948dac",
+      "size": 6514
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:349512ac1497ce62",
+      "size": 1907
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:4f16e1506d2b44c6",
+      "size": 716
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:32ffe5c4c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:c6d9bf6d9929cb4c",
+      "size": 6634
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:bdbff5a879948dac",
+      "size": 6514
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs62jYv1",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/developmentModeAdaptive.js:397",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CRAP ratchet failure (red CI) — `removeStaleAppendix` measured CRAP 10 > threshold 8**\n\nThe rework hunks that fixed the `file_delete` contract (commit `3881e5ec6`) pushed this function over the repo's CRAP ratchet. Both failed `crap` checks on this head report the same measurement (ci_failures.md, `crap` job — runs 43191214482/43191091107):\n\n```\nCRAP Ratchet\n============\nNEW > 8  js/common/developmentModeAdaptive.js::removeStaleAppendix: 10\n0 regression(s), 1 new over threshold, 0 improvement(s), 0 removed\n##[error]Process completed with exit code 2.\n```\n\nThe unit suite itself is green (9799 passed, 0 failed in the same job) — the break is pure complexity growth: the existence probe + two try/catch blocks + the compound `if (existed && !(result && result.deleted === true))` all landed in one function (CC 10 at 100% coverage ⇒ CRAP 10).\n\n**Fix — decompose into helpers, the exact discipline this PR's sibling module already documents** (`js/common/developmentModePlan.js` `appendixOverridePath`: split so every function stays under the CRAP threshold; the same file's `thresholdSetting`/`resolveThresholds` follow it). Keep the probe BEFORE the delete (reading after deletion would always report \"missing\"):\n\n```javascript\n/** Readability probe: true when the appendix file exists (unreadable ⇒ assume stale). */\nfunction staleAppendixExists(io) {\n    var read = (io && io.file_read) || file_read;\n    try {\n        return typeof read({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH }) === 'string';\n    } catch (e) {\n        return true;\n    }\n}\n\n/** Delete the appendix, contained — the platform returns {deleted:bool} and never throws. */\nfunction deleteStaleAppendix(io) {\n    var remove = (io && io.file_delete) || file_delete;\n    try {\n        return remove({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH });\n    } catch (e) {\n        return null; // defensive only — the platform does not throw\n    }\n}\n\nfunction removeStaleAppendix(io) {\n    var existed = staleAppendixExists(io);\n    var result = deleteStaleAppendix(io);\n    if (existed && !(result && result.deleted === true)) {\n        console.warn('Could not remove the stale plan-mode appendix at \"' +\n            developmentModePlan.PLAN_APPENDIX_FILE_PATH + '\": ' +\n            developmentMode.describeRawValue(result));\n    }\n}\n```\n\nBehavior, tests and the documented warning contract stay byte-identical — only the CRAP number crosses back under the ratchet (the existing three failure-shape tests pin all three helpers' paths).\n\n*This does not re-open the resolved `file_delete` thread — the fix itself is correct and stays; only its complexity is over the measured gate.*"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-12:1f5f4db2",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-12",
+      "updatedAt": "2026-11-12",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `removeStaleAppendix` never detects a failed delete — dmtools `file_delete` signals failure via the return object, not by throwing**\n\nVerified empirically against the installed dmtools runtime (probe script via `dmtools run`):\n\n```json\n{\"nonexistent\":{\"deleted\":false},\"real\":{\"deleted\":true}}\n```\n\n`file_delete` **never throws** — it returns `{deleted: false}` for a missing path and `{deleted: true}` on success. This code (and the test at `test_developmentModeAdaptive.js:565`, which simulates failure by throwing) assume the opposite contract, so the `catch` below is dead code and the documented \"one honest warning on a deletion failure\" (`js/common/developmentModeAdaptive.js:388-390`) can never fire:\n\n```javascript\ntry {\n    remove({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH });\n} catch (e) {\n    console.warn('Could not remove the stale plan-mode appendix at \"' + ... + '\":', e);\n}\n```\n\n**Why it matters:** on a reused workspace where a previous leg materialized the appendix, a routed-to-**default** adaptive leg relies entirely on this cleanup (the condition script `isDevelopmentModePlan.js` then probes the file — a surviving stale file means the plan-protocol appendix rides a routed-default prompt). That directly violates this PR's own invariant (`docs/development-mode.md` §2.3: \"a routed-to-default leg and any shadow leg remove stale appendix state, so their prompts stay byte-identical to `default`\") and AC4. Shadow legs are safe (the condition script's zero-read guard is the second line of defense there), but routed-default legs have no backstop.\n\n**Suggested fix** — consult the return object, and only warn when a file actually existed (a plain `{deleted:false}` is the normal clean-workspace response and must stay quiet):\n\n```javascript\nfunction removeStaleAppendix(io) {\n    var remove = (io && io.file_delete) || file_delete;\n    var existed = typeof read({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH }) === 'string';\n    var result = null;\n    try {\n        result = remove({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH });\n    } catch (e) {\n        result = null; // defensive only — the platform does not throw\n    }\n    if (existed && !(result && result.deleted === true)) {\n        console.warn('Could not remove the stale plan-mode appendix at \"' +\n            developmentModePlan.PLAN_APPENDIX_FILE_PATH + '\":', result);\n    }\n}\n```\n\nand update `fsRecorder`'s failure test (`test_developmentModeAdaptive.js:565`) to simulate the real failure shape (`file_delete` returning `{deleted:false}` after an existence probe) instead of a throw."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-12:8b0def18",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-12",
+      "updatedAt": "2026-11-12",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Thread: `removeStaleAppendix` never detects a failed delete (`js/common/developmentModeAdaptive.js:393`)\n\nFixed in commit `3881e5ec6` — exactly per the suggested shape, with two small adaptations to this module's established conventions:\n\n## What changed (`js/common/developmentModeAdaptive.js` `removeStaleAppendix`)\n\n- The delete **result is now consulted**: the warning fires only when a file **actually existed** (readability probe, the same `typeof content === 'string'` pattern `developmentModePlan.resolveAppendixSource` and `isDevelopmentModePlan.appendixFileReadable` already use) **and** the delete did not report `deleted === true`. This restores the documented \"one honest warning on a deletion failure\" and the §2.3 routed-default prompt-identity invariant (a surviving stale appendix on a routed-default leg can no longer slip through silently).\n- A plain `{deleted:false}` on a clean workspace stays **quiet** — pinned by a dedicated silence test.\n- The `catch` stays as **defensive containment only** (the platform does not throw — agreed), so the step remains \"never fatal\" even if a future runtime changes that contract; a throw-containment test pins it.\n- Adaptation 1: the existence probe goes through `(io && io.file_read) || file_read` (this module's io-injection pattern, same as `file_delete`) rather than the bare global `read(...)` — so the fs-recorder test harness keeps controlling all IO.\n- Adaptation 2: the warning is one **self-contained line** — `': ' + developmentMode.describeRawValue(result)` — instead of a second `console.warn` argument, matching the module's single-string warning style (its config warnings are built the same way) so run-log grep keeps working.\n\n## Tests (`js/unit-tests/test_developmentModeAdaptive.js`, TDD: RED→GREEN)\n\n- `fsRecorder.file_delete` now returns `{deleted: true}` — the real platform shape per the probe evidence.\n- The failure test no longer simulates a **throw**: it pre-materializes an appendix (probe returns content) and makes `file_delete` return `{deleted: false}` → asserts exactly one warning naming the path and the delete result. This test failed against the old code (`expected 1 but got 0` — the dead-code proof) and passes after the fix.\n- New: clean workspace + `{deleted:false}` → zero warnings (the normal clean-workspace response must stay silent).\n- Kept (re-pinned): a `file_delete` **throw** still yields one contained warning and `ok:true` — the defensive catch must hold even though the platform never throws.\n\nFull unit suite green on the branch head; CI showed no failures at rework start and no merge conflicts."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-12:c025e2f3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-12",
+      "updatedAt": "2026-11-12",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CRAP ratchet failure (red CI) — `removeStaleAppendix` measured CRAP 10 > threshold 8**\n\nThe rework hunks that fixed the `file_delete` contract (commit `3881e5ec6`) pushed this function over the repo's CRAP ratchet. Both failed `crap` checks on this head report the same measurement (ci_failures.md, `crap` job — runs 43191214482/43191091107):\n\n```\nCRAP Ratchet\n============\nNEW > 8  js/common/developmentModeAdaptive.js::removeStaleAppendix: 10\n0 regression(s), 1 new over threshold, 0 improvement(s), 0 removed\n##[error]Process completed with exit code 2.\n```\n\nThe unit suite itself is green (9799 passed, 0 failed in the same job) — the break is pure complexity growth: the existence probe + two try/catch blocks + the compound `if (existed && !(result && result.deleted === true))` all landed in one function (CC 10 at 100% coverage ⇒ CRAP 10).\n\n**Fix — decompose into helpers, the exact discipline this PR's sibling module already documents** (`js/common/developmentModePlan.js` `appendixOverridePath`: split so every function stays under the CRAP threshold; the same file's `thresholdSetting`/`resolveThresholds` follow it). Keep the probe BEFORE the delete (reading after deletion would always report \"missing\"):\n\n```javascript\n/** Readability probe: true when the appendix file exists (unreadable ⇒ assume stale). */\nfunction staleAppendixExists(io) {\n    var read = (io && io.file_read) || file_read;\n    try {\n        return typeof read({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH }) === 'string';\n    } catch (e) {\n        return true;\n    }\n}\n\n/** Delete the appendix, contained — the platform returns {deleted:bool} and never throws. */\nfunction deleteStaleAppendix(io) {\n    var remove = (io && io.file_delete) || file_delete;\n    try {\n        return remove({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH });\n    } catch (e) {\n        return null; // defensive only — the platform does not throw\n    }\n}\n\nfunction removeStaleAppendix(io) {\n    var existed = staleAppendixExists(io);\n    var result = deleteStaleAppendix(io);\n    if (existed && !(result && result.deleted === true)) {\n        console.warn('Could not remove the stale plan-mode appendix at \"' +\n            developmentModePlan.PLAN_APPENDIX_FILE_PATH + '\": ' +\n            developmentMode.describeRawValue(result));\n    }\n}\n```\n\nBehavior, tests and the documented warning contract stay byte-identical — only the CRAP number crosses back under the ratchet (the existing three failure-shape tests pin all three helpers' paths).\n\n*This does not re-open the resolved `file_delete` thread — the fix itself is correct and stays; only its complexity is over the measured gate.*"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-12:325a3b18",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-12",
+      "updatedAt": "2026-11-12",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: One ⚠️ IMPORTANT finding: the adaptive stale-appendix cleanup (`js/common/developmentModeAdaptive.js:393`) treats a throw as the only delete-failure signal, but dmtools `file_delete` never throws — it returns `{deleted:false}` (verified by probe) — so the warning is dead code and a failed cleanup can silently leak a stale plan appendix into a routed-default prompt. Unit suite verified green locally (9779 passed, 0 failed) and all CI gates pass; the adaptive routing, threshold/boundary tests, calibration harness and docs otherwise faithfully implement the gh-1437 contract (AC1/AC2/AC5 fully covered).\n\n**Key Issues**:\n- ⚠️ [comment1.md](pr_review_comments/comment1.md) — `removeStaleAppendix` failure detection is dead code; routed-default prompt-identity invariant rests on an unchecked cleanup.\n\n**Ranked digest** (no threads — below thread threshold):\n1. `js/unit-tests/test_preCliDevelopmentSetup.js:72-73` — duplicate `'./common/developmentModeAdaptive.js'` key in the require map (harmless, same value; the exact copy-paste artifact this PR removed from test_workingDir.js).\n2. `js/adaptiveCalibrationHarness.js:327` — `renderRow` injects issue keys/labels into the markdown table unescaped; a `|` in a key corrupts the table.\n3. `js/preCliDevelopmentSetup.js:1250` — missing the sibling call sites' `|| { key: ticketKey, fields: {} }` ticket fallback (behaviorally identical: empty signals route default).\n4. `js/common/developmentModeAdaptive.js:78` — a bare non-heading label (\"**Notes:**\") does not close an AC section, so later bullets still count as acceptance items (deterministic heuristic; acceptable for v1 since the harness replays the same extractor).\n5. `input/gh-1437/ticket.md:35` — AC3 names an E2E leg; shipped coverage is UT/IT/REG (repo has no E2E infra for dev legs) — consistent with gh-1435/1436 precedent, worth an owner ack.\n\n**Next Steps**:\n1. Fix `removeStaleAppendix` to consult the `{deleted}` return value (warn only when the file existed pre-delete) and re-pin the failure test on the real `{deleted:false}` shape.\n2. Address digest items opportunistically — none block merge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-12:9ed32ab0",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-12",
+      "updatedAt": "2026-11-12",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: Red CI blocks merge — the rework's `removeStaleAppendix` now measures CRAP 10 over the repo's ratchet threshold 8 (`NEW > 8 …::removeStaleAppendix: 10`, both `crap` checks failed, exit 2), while the unit suite stays green (9799 passed, 0 failed). The previous ⚠️ `file_delete` finding is verified fixed (F1 → fixed, commit `3881e5ec6`): the delete result is consulted with an existence probe, silence pinned for clean workspaces, and the real `{deleted:false}` platform shape tested.\n\n**Key Issues**:\n- 🚨 [comment1.md](pr_review_comments/comment1.md) — CRAP ratchet failure on the rework hunks; decompose the function into probe/delete helpers (same discipline this PR's sibling module documents).\n\n**Ranked digest** (frozen-line carryovers from round 1 — advisory, no threads):\n1. `js/unit-tests/test_preCliDevelopmentSetup.js:72-73` — duplicate `'./common/developmentModeAdaptive.js'` key in the require map (harmless, same value; the copy-paste artifact this PR removed from test_workingDir.js).\n2. `js/adaptiveCalibrationHarness.js:327` — `renderRow` injects issue keys/labels into the markdown table unescaped; a `|` in a key corrupts the table.\n3. `js/preCliDevelopmentSetup.js:1250` — missing the sibling call sites' `|| { key: ticketKey, fields: {} }` ticket fallback (behaviorally identical: empty signals route default).\n4. `js/common/developmentModeAdaptive.js:78` — a bare non-heading label (\"**Notes:**\") does not close an AC section, so later bullets still count as acceptance items (deterministic heuristic; the harness replays the same extractor, so calibration stays faithful).\n5. `input/gh-1437/ticket.md:35` — AC3 names an E2E leg; shipped coverage is UT/IT/REG (repo has no E2E infra for dev legs) — consistent with gh-1435/1436 precedent, worth an owner ack.\n\n**Next Steps**:\n1. Split `removeStaleAppendix` into `staleAppendixExists` + `deleteStaleAppendix` helpers so the ratchet goes green (behavior/tests unchanged) — CI re-runs automatically after the push."
+    }
+  ]
+}
