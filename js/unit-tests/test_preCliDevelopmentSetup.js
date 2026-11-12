@@ -2501,7 +2501,7 @@ suite('preCliDevelopmentSetup.action — leg-start ok signal (gh-1364)', functio
 
     test('AC1/AC3: setup crossed → exactly one leg-start/ok status on the pre-flight head SHA', function () {
         var bag = makeGh1364Bag();
-        var mod = loadForGh1364(bag, { extraGlobals: { process: undefined } });
+        var mod = loadForGh1364(bag, { extraGlobals: { process: undefined, java: undefined } });
 
         var threw = runGh1364Action(mod);
 
