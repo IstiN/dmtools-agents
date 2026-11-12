@@ -209,6 +209,65 @@ suite('gh-1436 UT — appendix text resolution (AC5 override, fail-fast errors)'
     });
 });
 
+// ── UT: appendixOverridePath config table (full-branch coverage) ─────────────
+// The crap4js quality gate ratchets per-function CRAP: a NEW function over
+// threshold 8 fails the `crap` check (gh-1436 CI, appendixOverridePath: 9).
+// These direct pins exercise EVERY branch of the config-resolution table so
+// the function stays fully covered — the permissive-resolution contract is
+// spelled out here, not just reachable incidentally through readAppendixText.
+
+suite('gh-1436 UT — appendixOverridePath config-resolution table', function () {
+    test('null / non-object customParams → no override, no warnings', function () {
+        [null, undefined, 42, 'plan', ['x']].forEach(function (cp) {
+            var r = developmentModePlan.appendixOverridePath(cp);
+            assert.equal(r.path, null, 'no override for ' + JSON.stringify(cp));
+            assert.equal(r.warnings.length, 0, 'silent for ' + JSON.stringify(cp));
+        });
+    });
+
+    test('developmentModeConfig non-object / .plan absent / .plan non-object → no override, silent', function () {
+        [
+            { developmentModeConfig: 'not-an-object' },
+            { developmentModeConfig: 42 },
+            { developmentModeConfig: {} },
+            { developmentModeConfig: { plan: 'not-an-object' } },
+            { developmentModeConfig: { plan: 42 } },
+            { developmentModeConfig: { plan: {} } },
+            { developmentModeConfig: { other: 'key' } }
+        ].forEach(function (cp) {
+            var r = developmentModePlan.appendixOverridePath(cp);
+            assert.equal(r.path, null, 'no override for ' + JSON.stringify(cp));
+            assert.equal(r.warnings.length, 0, 'absent/garbled config block reads as absent (permissive), silent');
+        });
+    });
+
+    test('appendixFile explicitly null / undefined / empty string → no override, no warnings', function () {
+        [null, undefined, ''].forEach(function (v) {
+            var cp = { developmentModeConfig: { plan: { appendixFile: v } } };
+            var r = developmentModePlan.appendixOverridePath(cp);
+            assert.equal(r.path, null, 'value ' + JSON.stringify(v) + ' reads as absent');
+            assert.equal(r.warnings.length, 0, 'silent for ' + JSON.stringify(v));
+        });
+    });
+
+    test('wrong-typed appendixFile → exactly one warning naming the key, no override', function () {
+        [42, { path: 'x' }, ['x'], true].forEach(function (v) {
+            var cp = { developmentModeConfig: { plan: { appendixFile: v } } };
+            var r = developmentModePlan.appendixOverridePath(cp);
+            assert.equal(r.path, null, 'no override for ' + JSON.stringify(v));
+            assert.equal(r.warnings.length, 1, 'one warning for ' + JSON.stringify(v));
+            assert.contains(r.warnings[0], 'appendixFile', 'warning names the config key');
+        });
+    });
+
+    test('non-empty string appendixFile → the path, no warnings', function () {
+        var r = developmentModePlan.appendixOverridePath(
+            { developmentModeConfig: { plan: { appendixFile: 'workflows/plan_appendix.md' } } });
+        assert.equal(r.path, 'workflows/plan_appendix.md', 'the path passes through verbatim');
+        assert.equal(r.warnings.length, 0, 'no warnings for a valid path');
+    });
+});
+
 // ── UT: materialization write-through ────────────────────────────────────────
 
 suite('gh-1436 UT — materialization (preCli write-through)', function () {

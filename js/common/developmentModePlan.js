@@ -130,22 +130,48 @@ function planAppendixCliEntry() {
 }
 
 /**
+ * The developmentModeConfig.plan block when present and well-shaped, else
+ * null — absent/garbled config reads as "no block" (permissive resolution,
+ * same philosophy as validateDevelopmentModeConfig; never a throw).
+ *
+ * @returns {Object|null}
+ */
+function planConfigBlock(customParams) {
+    return isPlainObject(customParams) && isPlainObject(customParams.developmentModeConfig)
+        ? customParams.developmentModeConfig.plan
+        : null;
+}
+
+/**
+ * The appendixFile setting from a plan config block: the raw value when the
+ * block is an object carrying the key, else null (absent). The value itself
+ * may still be null/undefined/'' (reads as absent) or wrong-typed (the
+ * caller warns).
+ *
+ * @returns {*}
+ */
+function appendixFileSetting(block) {
+    return isPlainObject(block) && Object.prototype.hasOwnProperty.call(block, 'appendixFile')
+        ? block.appendixFile
+        : null;
+}
+
+/**
  * Resolve developmentModeConfig.plan.appendixFile permissively (same
  * philosophy as validateDevelopmentModeConfig): a non-empty string is the
  * override path (relative to the leg working directory, like every cliPrompts
  * path); empty/null/absent reads as "no override"; a wrong-typed value yields
  * ONE warning and no override — never a throw.
  *
+ * Split into planConfigBlock/appendixFileSetting so every function in the
+ * resolution chain stays under the crap4js CRAP threshold (gh-1436: the
+ * monolith measured CRAP 9 > threshold 8 at 100% coverage — complexity, not
+ * coverage, was the violation).
+ *
  * @returns {{path: string|null, warnings: string[]}}
  */
 function appendixOverridePath(customParams) {
-    var block = isPlainObject(customParams) && isPlainObject(customParams.developmentModeConfig)
-        ? customParams.developmentModeConfig.plan
-        : null;
-    if (!isPlainObject(block) || !Object.prototype.hasOwnProperty.call(block, 'appendixFile')) {
-        return { path: null, warnings: [] };
-    }
-    var raw = block.appendixFile;
+    var raw = appendixFileSetting(planConfigBlock(customParams));
     if (raw === null || raw === undefined || raw === '') return { path: null, warnings: [] };
     if (typeof raw !== 'string') {
         return {
