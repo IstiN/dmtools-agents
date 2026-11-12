@@ -397,6 +397,14 @@ suite('pullRequest helper > Closes line (gh-737)', function() {
             'Fixes/Part-of (bot-side awf#19 patterns) never substitute for the canonical Closes');
     });
 
+    test('ensureClosesLine also covers GitLab router keys (gl-N)', function() {
+        var pr = loadPullRequestHelper();
+        var result = pr.ensureClosesLine('### What changed\n- Scaffolded app.\n', 'gl-1');
+
+        assert.equal(result.indexOf('Closes #1'), 0,
+            'GitLab MR descriptions need the same canonical line — the factory verifies issue↔MR linkage after the dev leg');
+    });
+
     test('ensureClosesLine leaves the body unchanged for non-GitHub tracker keys', function() {
         var pr = loadPullRequestHelper();
         var body = '### What changed\n- Fixed parser.\n';
