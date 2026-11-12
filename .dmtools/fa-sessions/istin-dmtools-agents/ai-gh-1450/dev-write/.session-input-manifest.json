@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-12T13:02:52.288Z",
+  "ticketKey": "gh-1450",
+  "headSha": "f21b7ce93781cd0a497b49217ab97e1cdf9336ca",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:f49557935844b06f",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:7f11b87f18040adc",
+      "size": 13043
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:c21bf0990faac8b5",
+      "size": 6036
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:8ba3bf4b0810fb57",
+      "size": 5004
+    },
+    "request.md": {
+      "hash": "fnv1a64:fb00668237fce4d0",
+      "size": 2742
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:349512ac1497ce62",
+      "size": 1907
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:219545216384423f",
+      "size": 882
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:3d02e5bdc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:016f9f6320079e86",
+      "size": 2827
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:fb00668237fce4d0",
+      "size": 2742
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs62oBVC",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "scripts/gh-auth-refresh.sh:42",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: sourced library flips `set -u` on `bash -e` hosts — contract change on the exact graceful path this PR fixes**\n\n`gh-auth-refresh.sh` is a SOURCED library, but it executes `set -u` at file scope (`scripts/gh-auth-refresh.sh:42`). Every host script that sources it inherits nounset for the remainder of its execution. Verified live: a host running GitHub's default `bash -e` (flags `eB`) runs as `ehuB` after sourcing this helper.\n\nFour of the six wired hosts document exactly this contract and rely on it:\n\n- `scripts/apply-review-verdict.sh:5-6` — \"Invoke with `bash -e` (the GH runner default shell for inline `run:`)\" (same header in `close-review-cycle.sh`, `close-rework-cycle.sh`, `hand-issue-to-reviewer.sh`)\n\nAfter the wiring block, any bare unset-variable reference that previously expanded to empty now kills the step with `unbound variable` before it can do its job — e.g. `apply-review-verdict.sh:61` `basename \"${CONFIG}\"`, `:72` `MAX_ROUNDS=\"${MAX_ROUNDS}\"`, `:75` `RUN_OUTPUT=\"${RUN_OUTPUT}\"`, `:18` `repo=\"${GITHUB_REPOSITORY}\"`, `hand-issue-to-reviewer.sh` `$NUMBER`. These are workflow-env-provided, so today's env blocks happen to define them — but any invocation context that omits one (a new leg shape, a manual re-run, the awf flip forgetting an env entry) converts a tolerated-empty into a hard step death on the post-agent glue: precisely the silent-stall class gh-1450 exists to eliminate.\n\nNote the library's own functions are fully `${VAR:-}`-guarded (I checked all six) — they are safe under or without `-u`. The flag only earns its keep for direct `--self-test` execution.\n\nFix: move `set -u` into the direct-execution branch at the bottom of the file:\n\n```bash\nif [ \"${BASH_SOURCE[0]:-}\" != \"${0:-}\" ]; then\n    return 0 2>/dev/null || true\nfi\nset -u   # direct execution only — never leak shell options into sourcing hosts\nif [ \"${1:-}\" = \"--self-test\" ]; then\n```\n\nAll self-test scenarios are unaffected (they assert behavior, not shell flags)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs62oBXw",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "setup/gh-token-keeper.sh:62",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: refresh-interval default `270` is 4.5 minutes, not the documented 45 minutes**\n\n`GH_TOKEN_KEEPER_INTERVAL_DEFAULT=270` — the header (`setup/gh-token-keeper.sh:15`), `usage()` (`:307`), the PR description and the ticket all state the same contract: re-mint **every ~45 min** (\"safely inside the 60-minute TTL\"). 45 minutes = **2700** seconds; 270 s = **4.5** minutes. As shipped, the keeper re-mints the App installation token every 4.5 minutes.\n\nConsequences at the shipped default over one 6h leg (`GH_TOKEN_KEEPER_MAX_LIFETIME_SEC=21600`):\n\n- ~80 `POST /app/installations/.../access_tokens` mints per leg instead of ~8 — 10x API amplification on the token-creation endpoint, multiplied by every concurrent factory leg.\n- The consumer helper's stale-window rationale breaks its own derivation: `gh_auth_keeper_read` defaults `GH_TOKEN_KEEPER_MAX_AGE_SEC=300` with the comment \"the keeper's interval is 45 min, so a file this stale means the keeper DIED\" — a 50-min threshold against a 4.5-min interval accepts files ~11 intervals stale, so a keeper that died mid-leg goes undetected for up to 50 minutes.\n\nTicket contract citation (input/gh-1450/ticket.md, Fix directions 1): \"re-mints the app token every ~45 min\". No self-test pins the default (scenario 10 overrides `GH_TOKEN_KEEPER_INTERVAL_SEC=1`), which is why the suite stays green with the wrong value.\n\nFix: one digit — `GH_TOKEN_KEEPER_INTERVAL_DEFAULT=2700`. Everything downstream (stale window, lifetime cap math, docs) is then self-consistent."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs62oBaj",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "scripts/gh-auth-refresh.sh:45",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `RUNER_TEMP` typo — the job-scoped temp dir is dead code, credentials land in `/tmp`**\n\nGitHub exports the runner temp directory as RUNNER_TEMP (double N: RUN‑NER). This check reads `RUNER_TEMP` (single N), a variable that never exists in any environment, so the `else` branch is the only path ever taken in production: `gh_auth_keeper_dir()` always returns `/tmp`.\n\nThe rest of the repo uses the correct double-N spelling — `scripts/report-leg-failure.sh:9` (`bash -e \"${RUNNER_TEMP}/factory-setup/scripts/report-leg-failure.sh\"`), `setup/copilot-session.sh:143` (`${RUNNER_TEMP:-${TMPDIR:-/tmp}}` — the identical fallback idiom, correctly spelled), and the PR's own description (`bash \"${RUNNER_TEMP}/factory-setup/setup/gh-token-keeper.sh start\"` for the awf flip).\n\nPractical impact beyond dead code:\n\n- The keeper's state file is a **plaintext credential** (App installation token or the machine PAT) written with mode 060 under `/tmp`. On self-hosted/shared runners `/tmp` persists across jobs; state files are keyed by `${GITHUB_RUN_ID:-local}`, so they are never overwritten and never garbage-collected — finished runs leave credential files on the disk indefinitely instead of riding the job-scoped RUNNER_TEMP cleanup.\n- The typo is mirrored in both self-tests (`-u RUNER_TEMP` scrub lines at `gh-auth-refresh.sh:163` and `gh-token-keeper.sh:393`), so the suites can never catch it.\n\nFix: make it RUNNER_TEMP (double N) at `scripts/gh-auth-refresh.sh:45` — and align the two self-test scrub lines so a future regression stays visible."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-12:cb9c9ad9",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-12",
+      "updatedAt": "2026-11-12",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: sourced library flips `set -u` on `bash -e` hosts — contract change on the exact graceful path this PR fixes**\n\n`gh-auth-refresh.sh` is a SOURCED library, but it executes `set -u` at file scope (`scripts/gh-auth-refresh.sh:42`). Every host script that sources it inherits nounset for the remainder of its execution. Verified live: a host running GitHub's default `bash -e` (flags `eB`) runs as `ehuB` after sourcing this helper.\n\nFour of the six wired hosts document exactly this contract and rely on it:\n\n- `scripts/apply-review-verdict.sh:5-6` — \"Invoke with `bash -e` (the GH runner default shell for inline `run:`)\" (same header in `close-review-cycle.sh`, `close-rework-cycle.sh`, `hand-issue-to-reviewer.sh`)\n\nAfter the wiring block, any bare unset-variable reference that previously expanded to empty now kills the step with `unbound variable` before it can do its job — e.g. `apply-review-verdict.sh:61` `basename \"${CONFIG}\"`, `:72` `MAX_ROUNDS=\"${MAX_ROUNDS}\"`, `:75` `RUN_OUTPUT=\"${RUN_OUTPUT}\"`, `:18` `repo=\"${GITHUB_REPOSITORY}\"`, `hand-issue-to-reviewer.sh` `$NUMBER`. These are workflow-env-provided, so today's env blocks happen to define them — but any invocation context that omits one (a new leg shape, a manual re-run, the awf flip forgetting an env entry) converts a tolerated-empty into a hard step death on the post-agent glue: precisely the silent-stall class gh-1450 exists to eliminate.\n\nNote the library's own functions are fully `${VAR:-}`-guarded (I checked all six) — they are safe under or without `-u`. The flag only earns its keep for direct `--self-test` execution.\n\nFix: move `set -u` into the direct-execution branch at the bottom of the file:\n\n```bash\nif [ \"${BASH_SOURCE[0]:-}\" != \"${0:-}\" ]; then\n    return 0 2>/dev/null || true\nfi\nset -u   # direct execution only — never leak shell options into sourcing hosts\nif [ \"${1:-}\" = \"--self-test\" ]; then\n```\n\nAll self-test scenarios are unaffected (they assert behavior, not shell flags)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-12:ab223a7e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-12",
+      "updatedAt": "2026-11-12",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: refresh-interval default `270` is 4.5 minutes, not the documented 45 minutes**\n\n`GH_TOKEN_KEEPER_INTERVAL_DEFAULT=270` — the header (`setup/gh-token-keeper.sh:15`), `usage()` (`:307`), the PR description and the ticket all state the same contract: re-mint **every ~45 min** (\"safely inside the 60-minute TTL\"). 45 minutes = **2700** seconds; 270 s = **4.5** minutes. As shipped, the keeper re-mints the App installation token every 4.5 minutes.\n\nConsequences at the shipped default over one 6h leg (`GH_TOKEN_KEEPER_MAX_LIFETIME_SEC=21600`):\n\n- ~80 `POST /app/installations/.../access_tokens` mints per leg instead of ~8 — 10x API amplification on the token-creation endpoint, multiplied by every concurrent factory leg.\n- The consumer helper's stale-window rationale breaks its own derivation: `gh_auth_keeper_read` defaults `GH_TOKEN_KEEPER_MAX_AGE_SEC=300` with the comment \"the keeper's interval is 45 min, so a file this stale means the keeper DIED\" — a 50-min threshold against a 4.5-min interval accepts files ~11 intervals stale, so a keeper that died mid-leg goes undetected for up to 50 minutes.\n\nTicket contract citation (input/gh-1450/ticket.md, Fix directions 1): \"re-mints the app token every ~45 min\". No self-test pins the default (scenario 10 overrides `GH_TOKEN_KEEPER_INTERVAL_SEC=1`), which is why the suite stays green with the wrong value.\n\nFix: one digit — `GH_TOKEN_KEEPER_INTERVAL_DEFAULT=2700`. Everything downstream (stale window, lifetime cap math, docs) is then self-consistent."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-12:d6d9f3c0",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-12",
+      "updatedAt": "2026-11-12",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: `RUNER_TEMP` typo — the job-scoped temp dir is dead code, credentials land in `/tmp`**\n\nGitHub exports the runner temp directory as RUNNER_TEMP (double N: RUN‑NER). This check reads `RUNER_TEMP` (single N), a variable that never exists in any environment, so the `else` branch is the only path ever taken in production: `gh_auth_keeper_dir()` always returns `/tmp`.\n\nThe rest of the repo uses the correct double-N spelling — `scripts/report-leg-failure.sh:9` (`bash -e \"${RUNNER_TEMP}/factory-setup/scripts/report-leg-failure.sh\"`), `setup/copilot-session.sh:143` (`${RUNNER_TEMP:-${TMPDIR:-/tmp}}` — the identical fallback idiom, correctly spelled), and the PR's own description (`bash \"${RUNNER_TEMP}/factory-setup/setup/gh-token-keeper.sh start\"` for the awf flip).\n\nPractical impact beyond dead code:\n\n- The keeper's state file is a **plaintext credential** (App installation token or the machine PAT) written with mode 060 under `/tmp`. On self-hosted/shared runners `/tmp` persists across jobs; state files are keyed by `${GITHUB_RUN_ID:-local}`, so they are never overwritten and never garbage-collected — finished runs leave credential files on the disk indefinitely instead of riding the job-scoped RUNNER_TEMP cleanup.\n- The typo is mirrored in both self-tests (`-u RUNER_TEMP` scrub lines at `gh-auth-refresh.sh:163` and `gh-token-keeper.sh:393`), so the suites can never catch it.\n\nFix: make it RUNNER_TEMP (double N) at `scripts/gh-auth-refresh.sh:45` — and align the two self-test scrub lines so a future regression stays visible."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-12:9f475104",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-12",
+      "updatedAt": "2026-11-12",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: gh-1450's two-layer fix (keeper + probe-and-swap glue) is solid and all advertised verification passes (both self-tests, JS suite 16/16, full suite 10654/10654), but three ⚠️ issues need a quick pass before merge: a sourced library flips `set -u` onto `bash -e` hosts, the refresh-interval default is 4.5 min instead of the documented 45 min, and a `RUNER_TEMP` typo sends plaintext credentials to `/tmp`.\n\n**Key Issues**:\n1. `gh-auth-refresh.sh:42` — `set -u` at sourced-library scope mutates host shell options; four hosts document `bash -e` (no `-u`); a bare unset var now hard-kills the step on the graceful path (fix: scope the flag to direct execution).\n2. `gh-token-keeper.sh:62` — `GH_TOKEN_KEEPER_INTERVAL_DEFAULT=270` (4.5 min) contradicts the documented/ticketed ~45-min cadence (2700 s); 10x API amplification + broken stale-window rationale (`GH_TOKEN_KEEPER_MAX_AGE_SEC=300`).\n3. `gh-auth-refresh.sh:45` — `RUNER_TEMP` typo (GitHub exports RUNNER_TEMP): job-scoped placement is dead code; plaintext credential state files persist in `/tmp` on shared runners.\n\n**Digest** (no thread needed):\n- `setup/gh-token-keeper.sh:141` — `_gh_keeper_masked_tail` duplicates `_gh_auth_masked_tail` verbatim although the keeper already sources the helper (state-path derivation is single-sourced; this one is copy-paste).\n- `scripts/gh-auth-refresh.sh:129` — probe-and-swap silently changes leg identity App→PAT mid-leg (sanctioned per PR; the notice already names the swap).\n\n**Next Steps**:\n1. Scope `set -u` in `gh-auth-refresh.sh` to the direct-execution branch (one-line move, self-tests unaffected).\n2. `GH_TOKEN_KEEPER_INTERVAL_DEFAULT=270` → `2700` (one digit).\n3. Fix `RUNER_TEMP` → RUNNER_TEMP at `gh-auth-refresh.sh:45` (+ the two self-test scrub lines).\n4. Note for the awf flip (from the PR's own concerns): nothing in this repo starts the keeper yet — layer-2 probe-and-swap is the only active layer until `factory-teammate.yml` gains the start/stop steps."
+    }
+  ]
+}
