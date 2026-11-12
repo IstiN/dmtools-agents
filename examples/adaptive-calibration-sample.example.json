@@ -1,0 +1,35 @@
+{
+  "_comment": "Example labeled sample for the adaptive calibration harness (docs/development-mode.md section 4). Labels are the expert verdict per issue: exactly 'plan' or 'default'. Build your real sample from your repository's own issue history (title + body + an expert plan/default verdict), then run: node js/adaptiveCalibrationHarness.js <sample.json>",
+  "issues": [
+    {
+      "key": "example-1",
+      "title": "Fix typo in README",
+      "body": "Change 'recieve' to 'receive' in the installation section.",
+      "label": "default"
+    },
+    {
+      "key": "example-2",
+      "title": "Add export pipeline",
+      "body": "## Scope\nDeliver three modules:\n1. CSV exporter with streaming writes\n2. PDF renderer with embedded fonts\n3. Email digest builder\nEach module ships with unit tests.",
+      "label": "plan"
+    },
+    {
+      "key": "example-3",
+      "title": "Settings page rework",
+      "body": "Rework the settings page.\n\n## Acceptance criteria (testable)\n- User can change the display name\n- User can upload an avatar\n- Avatar is cropped to a circle\n- Changes persist after reload\n- Validation errors show inline\n- Loading state blocks double submits",
+      "label": "plan"
+    },
+    {
+      "key": "example-4",
+      "title": "Clarify validation error wording",
+      "body": "The email validation message is confusing. Reword it to state the accepted format explicitly and keep the existing behavior otherwise.",
+      "label": "default"
+    },
+    {
+      "key": "example-5",
+      "title": "Improve onboarding copy",
+      "body": "Rewrite the onboarding flow copy for clarity.\n\n## Acceptance criteria\n- Welcome screen states the product value in one sentence\n- Each step explains what the user is agreeing to\n- Error states suggest the next action\n- Tone matches the existing style guide",
+      "label": "plan"
+    }
+  ]
+}

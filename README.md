@@ -577,7 +577,8 @@ Any dev leg whose action runs `developTicketAndCreatePR.js` — the story (`stor
 
 - Values: `default` | `plan` | `adaptive` — **case-sensitive, lowercase only** (`"PLAN"` is invalid and is never silently normalized).
 - Missing key = `default` = today's behavior. Missing/invalid values never fail the leg: anything invalid resolves to `default` with exactly one warning on the run log.
-- The knob is currently **inert**: the resolved mode is logged (`developmentMode=<resolved>`) for observability only; behavior behind `plan`/`adaptive` is wired by later issues.
+- `plan` legs always carry the plan-protocol prompt appendix (materialized at `.dmtools/development-mode-plan-appendix.md` by the preCli setup; overridable via `developmentModeConfig.plan.appendixFile`).
+- `adaptive` legs route plan-vs-default from measurable ticket signals — `plan if modules >= 2 OR acceptanceBullets >= 5 OR bodyTokens >= 800, else default` — with all thresholds configurable via `developmentModeConfig.adaptive` and a `shadowMode: true` safe mode that logs the would-decision without acting. Signals are a pure function of title+body; the offline calibration harness (`node js/adaptiveCalibrationHarness.js <sample.json>`) replays the rule over an expert-labeled sample and emits the decision table the owner reviews. See `docs/development-mode.md` for the full contract.
 - `developmentModeConfig` is parsed permissively: unknown keys are ignored (forward compatibility), wrong-typed slice values are logged-and-ignored.
 - Resolution lives in `js/common/developmentMode.js` (one place, next to the `customParams.feedbackLoop` layer) — every dev leg adopting the knob shares the logic instead of duplicating it, and future legs can adopt it the same way.
 

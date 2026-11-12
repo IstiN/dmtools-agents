@@ -58,6 +58,9 @@ function loadHarnessWith(mockFs) {
         }));
 }
 
+// Shared instance for the pure-core suites (fs is irrelevant there).
+var harness = loadHarnessWith(makeMockFs({}).fs);
+
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
 var SAMPLE_JSON = JSON.stringify({
