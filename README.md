@@ -1297,3 +1297,15 @@ pass `--exclude dart` to skip the ~1 GB SDK.
 
 Dart-repo runners wire it via `customParams.setupCommands`:
 `["bash agents/setup/dart.sh"]` (see `docs/machine-factory-integration.md` §3.3).
+
+### Pre-commit Quality Gate
+
+Activate the tracked `.githooks/pre-commit` hook once per clone (applies to all git worktrees automatically):
+
+```bash
+git config core.hooksPath .githooks
+# or: bash scripts/install-hooks.sh
+```
+
+For staged `js/**/*.js` files, `.githooks/pre-commit` enforces runtime-artifact checks, `nyc instrument --exit-on-error` (duplicate declarations), `crap4js module-size` (<= 500 lines against `ci/module-size-baseline.json`), `crap4js nesting` (<= 4), and targeted unit-test coverage with `crap4js --threshold 8 --require-coverage`. Never bypass with `--no-verify`.
+
