@@ -23,6 +23,18 @@ const NON_AGENT_ROOT_JSON = {
     '.crap-baseline.json': true
 };
 
+/** Prompt path of a cliPromptsByTracker entry (plain string or conditional section). */
+function trackerEntryPrompt(entry) {
+    return typeof entry === 'string' ? entry : String((entry && entry.prompt) || '');
+}
+
+/** Snapshot heading suffix for a conditional cliPromptsByTracker section. */
+function trackerEntryCondSuffix(entry) {
+    return entry && typeof entry === 'object' && entry.condition
+        ? ` _(conditional: \`${entry.condition}\`)_`
+        : '';
+}
+
 function resolvePromptEntry(entry) {
     const trimmed = entry.trim();
     if (trimmed.endsWith('.md')) {
@@ -110,10 +122,11 @@ function generateSnapshot(agentJsonPath) {
         trackerKeys.forEach((trackerType) => {
             lines.push(`### Tracker: \`${trackerType}\``);
             lines.push('');
-            trackerPrompts[trackerType].forEach((entry, idx) => {
+            trackerPrompts[trackerType].forEach((rawEntry, idx) => {
+                const entry = trackerEntryPrompt(rawEntry);
                 const resolved = resolvePromptEntry(entry);
                 if (entry.endsWith('.md')) {
-                    lines.push(`#### [${idx + 1}] \`${entry}\``);
+                    lines.push(`#### [${idx + 1}] \`${entry}\`${trackerEntryCondSuffix(rawEntry)}`);
                     lines.push('');
                     lines.push(resolved);
                 } else {
