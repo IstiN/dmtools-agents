@@ -70,7 +70,9 @@ function fsRecorder(files) {
     };
     var del = function (opts) {
         calls.deletes.push(String(opts && opts.path));
-        return true;
+        // gh-1437 rework: the real dmtools platform contract — file_delete
+        // NEVER throws, it returns {deleted:true|false} (verified by probe).
+        return { deleted: true };
     };
     return { calls: calls, file_read: read, file_write: write, file_delete: del };
 }
@@ -560,9 +562,36 @@ suite('gh-1437 UT — materializeAdaptiveAppendix (fs recorder)', function () {
             ['adaptive: would default (signals: modules=0, acceptanceBullets=0, bodyTokens=19) but shadow mode']);
     });
 
-    test('stale-appendix delete failure is non-fatal (warned, leg continues)', function () {
+    test('failed delete of an EXISTING stale appendix → one honest warning (real platform shape: {deleted:false}, never throws)', function () {
+        var fs = fsRecorder({});
+        fs.file_delete = function () { return { deleted: false }; };
+        // a previous leg materialized the appendix — cleanup is the routed-default
+        // leg's only defense against a stale plan appendix (docs §2.3 / AC4)
+        fs.file_read = function (opts) { return 'STALE appendix from a previous plan leg'; };
+        var captured = captureConsole(function () {
+            var r = developmentModeAdaptive.materializeAdaptiveAppendix({ developmentMode: 'adaptive' }, SMALL_TICKET_TEXT, fs);
+            assert.equal(r.ok, true, 'cleanup failure does not fail the step');
+            assert.notOk(r.error);
+        });
+        assert.equal(captured.warns.length, 1, 'one honest warning on a FAILED delete of an existing file');
+        assert.contains(captured.warns[0], APPENDIX_PATH, 'warning names the path');
+        assert.contains(captured.warns[0], 'deleted', 'warning carries the delete result, not a throw');
+    });
+
+    test('clean workspace + {deleted:false} → silent (nothing to clean is the normal response)', function () {
+        var fs = fsRecorder({});
+        fs.file_delete = function () { return { deleted: false }; };
+        var captured = captureConsole(function () {
+            var r = developmentModeAdaptive.materializeAdaptiveAppendix({ developmentMode: 'adaptive' }, SMALL_TICKET_TEXT, fs);
+            assert.equal(r.ok, true);
+        });
+        assert.equal(captured.warns.length, 0, 'a missing file is NOT a failure — no warning');
+    });
+
+    test('delete throw is still contained defensively (platform does not throw, but the guard must hold)', function () {
         var fs = fsRecorder({});
         fs.file_delete = function () { throw new Error('readonly fs'); };
+        fs.file_read = function (opts) { return 'STALE appendix from a previous plan leg'; };
         var captured = captureConsole(function () {
             var r = developmentModeAdaptive.materializeAdaptiveAppendix({ developmentMode: 'adaptive' }, SMALL_TICKET_TEXT, fs);
             assert.equal(r.ok, true, 'cleanup failure does not fail the step');

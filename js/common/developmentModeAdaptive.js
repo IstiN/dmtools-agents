@@ -386,14 +386,33 @@ function resolvedDevelopmentMode(customParams) {
  * keeps routed-default and shadow legs byte-identical to default-mode legs
  * even on a reused workspace. Silent on success, one honest warning on a
  * deletion failure (never fatal).
+ *
+ * Failure contract (gh-1437 review): dmtools file_delete NEVER throws — it
+ * returns {deleted:true|false} (verified by runtime probe). So the delete
+ * result is consulted, and the warning fires only when a file ACTUALLY
+ * existed and survived the call: a plain {deleted:false} on an empty
+ * workspace is the normal clean response and stays quiet. The catch is
+ * defensive only (the platform does not throw), keeping "never fatal".
  */
 function removeStaleAppendix(io) {
+    var read = (io && io.file_read) || file_read;
     var remove = (io && io.file_delete) || file_delete;
+    var path = developmentModePlan.PLAN_APPENDIX_FILE_PATH;
+    var existed = true; // unreadable probe ⇒ assume stale so a failed delete still warns
     try {
-        remove({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH });
+        existed = typeof read({ path: path }) === 'string';
     } catch (e) {
+        existed = true;
+    }
+    var result = null;
+    try {
+        result = remove({ path: path });
+    } catch (e) {
+        result = null; // defensive only — the platform does not throw
+    }
+    if (existed && !(result && result.deleted === true)) {
         console.warn('Could not remove the stale plan-mode appendix at "' +
-            developmentModePlan.PLAN_APPENDIX_FILE_PATH + '":', e);
+            path + '":', result);
     }
 }
 
