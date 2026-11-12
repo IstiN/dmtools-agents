@@ -49,6 +49,16 @@ var FIX_VALUES = ['mandatory', 'opportunistic', 'never'];
 // passes — the enum stays two-valued until that trial data exists.
 var VERIFICATION_VALUES = ['none', 'filter'];
 
+// gh-1406 §2/§3: the reviewer-pool tuning keys. A `reviewPolicy.reviewers.<name>`
+// entry (and a same-name repo skill file — reviewPool enforces the same set)
+// may TUNE exactly these fields; the reviewer's contract fields (name, lens,
+// roleLine, mayRaise, filterWeight, isFiltered, isRequired) are factory
+// invariants and can never be re-defined by repo configuration.
+var POOL_TUNABLE_FIELDS = ['isEnabled', 'rounds', 'triggerPaths', 'options', 'model'];
+
+// gh-1406 §6: the rounds flags. `["all"]` is exclusive — it cannot combine.
+var POOL_ROUND_FLAGS = ['first', 'hunks', 'all'];
+
 // The known presets (epic §4.2).
 var PRESETS = ['default', 'fix-everything', 'relaxed', 'investigation'];
 
@@ -235,13 +245,136 @@ function validateSeverityEntry(tier, raw) {
 /** Shape gate: the policy must be a plain object with known keys only. */
 function validatePolicyShape(raw) {
     if (!isPlainObject(raw)) {
-        throw policyError('reviewPolicy must be an object { preset, severities, bounds, identity, verification }, got: ' + JSON.stringify(raw));
+        throw policyError('reviewPolicy must be an object { preset, severities, bounds, identity, verification, reviewers, promptAppend }, got: ' + JSON.stringify(raw));
     }
-    var unknown = unknownKeysOf(raw, { preset: 1, severities: 1, bounds: 1, identity: 1, verification: 1 });
+    var unknown = unknownKeysOf(raw, { preset: 1, severities: 1, bounds: 1, identity: 1, verification: 1, reviewers: 1, promptAppend: 1 });
     if (unknown.length > 0) {
         throw policyError('reviewPolicy has unknown key(s): ' + unknown.join(', ') +
-            ' — known keys: preset, severities, bounds, identity, verification');
+            ' — known keys: preset, severities, bounds, identity, verification, reviewers, promptAppend');
     }
+}
+
+// ── gh-1406: the reviewer-pool keys (reviewers, promptAppend) ────────────────
+
+/**
+ * One rounds value: an array of valid flags; `["all"]` is exclusive (§6/§8 —
+ * "all" cannot combine with first/hunks). An empty array is a hard error —
+ * "never runs" must be stated as isEnabled:false, never as a silent empty
+ * rounds list.
+ */
+function validateRounds(value, where) {
+    if (!Array.isArray(value)) {
+        throw policyError(where + ' must be an array of round flags (' + POOL_ROUND_FLAGS.join('|') + '), got: ' + JSON.stringify(value));
+    }
+    if (value.length === 0) {
+        throw policyError(where + ' must not be empty — disable the reviewer with isEnabled:false instead');
+    }
+    for (var i = 0; i < value.length; i++) {
+        var flag = value[i];
+        if (typeof flag !== 'string' || POOL_ROUND_FLAGS.indexOf(flag) === -1) {
+            throw policyError(where + ' has an invalid round flag: ' + JSON.stringify(flag) +
+                ' — expected one of ' + POOL_ROUND_FLAGS.join(' | '));
+        }
+    }
+    if (value.indexOf('all') !== -1 && value.length > 1) {
+        throw policyError(where + ' combines "all" with other flags — "all" is exclusive');
+    }
+    return value.slice();
+}
+
+/**
+ * One tuning entry (reviewPolicy.reviewers.<name>): only the tunable fields,
+ * each with its type gate. Unknown keys are a hard error — typo protection
+ * (gh-1406 §3 "strictness preserved").
+ */
+function validateReviewerTuning(name, raw) {
+    if (!isPlainObject(raw)) {
+        throw policyError('reviewPolicy.reviewers.' + name + ' must be an object of tunable fields (' + POOL_TUNABLE_FIELDS.join(', ') + ')');
+    }
+    var unknown = unknownKeysOf(raw, arrayToKeySet(POOL_TUNABLE_FIELDS));
+    if (unknown.length > 0) {
+        throw policyError('reviewPolicy.reviewers.' + name + ' has unknown key(s): ' + unknown.join(', ') +
+            ' — only ' + POOL_TUNABLE_FIELDS.join(', ') + ' are tunable; contract fields (lens, mayRaise, filterWeight, isFiltered, isRequired, roleLine) are factory invariants');
+    }
+    var out = {};
+    for (var key in raw) {
+        if (!hasKey(raw, key)) continue;
+        var v = raw[key];
+        if (key === 'isEnabled') {
+            if (typeof v !== 'boolean') throw policyError('reviewPolicy.reviewers.' + name + '.isEnabled must be a boolean, got: ' + JSON.stringify(v));
+            out[key] = v;
+        } else if (key === 'rounds') {
+            out[key] = validateRounds(v, 'reviewPolicy.reviewers.' + name + '.rounds');
+        } else if (key === 'triggerPaths') {
+            out[key] = validateStringArray(v, 'reviewPolicy.reviewers.' + name + '.triggerPaths');
+        } else if (key === 'options') {
+            if (!isPlainObject(v)) throw policyError('reviewPolicy.reviewers.' + name + '.options must be an object');
+            out[key] = v;
+        } else if (key === 'model') {
+            if (v !== null && typeof v !== 'string') throw policyError('reviewPolicy.reviewers.' + name + '.model must be a string or null');
+            out[key] = v;
+        }
+    }
+    return out;
+}
+
+/**
+ * The reviewers tuning block (gh-1406 §3): a map keyed by reviewer name.
+ * Empty/null → {} (absence = factory defaults).
+ */
+function validateReviewersTuning(raw) {
+    if (raw === undefined || raw === null) return {};
+    if (!isPlainObject(raw)) {
+        throw policyError('reviewPolicy.reviewers must be an object keyed by reviewer name');
+    }
+    var out = {};
+    for (var name in raw) {
+        if (!hasKey(raw, name)) continue;
+        if (!name || typeof name !== 'string') {
+            throw policyError('reviewPolicy.reviewers keys must be non-empty reviewer names');
+        }
+        out[name] = validateReviewerTuning(name, raw[name]);
+    }
+    return out;
+}
+
+/**
+ * The promptAppend block (gh-1406 §3): a map keyed by reviewer name or
+ * 'base' — each value an array of instruction-file paths APPENDED after the
+ * lens (ADDITIVE ONLY; factory lens/contract files are never replaceable).
+ */
+function validatePromptAppend(raw) {
+    if (raw === undefined || raw === null) return {};
+    if (!isPlainObject(raw)) {
+        throw policyError('reviewPolicy.promptAppend must be an object keyed by reviewer name (or "base")');
+    }
+    var out = {};
+    for (var key in raw) {
+        if (!hasKey(raw, key)) continue;
+        if (!key || typeof key !== 'string') {
+            throw policyError('reviewPolicy.promptAppend keys must be non-empty reviewer names');
+        }
+        out[key] = validateStringArray(raw[key], 'reviewPolicy.promptAppend.' + key);
+    }
+    return out;
+}
+
+function arrayToKeySet(list) {
+    var set = {};
+    for (var i = 0; i < list.length; i++) set[list[i]] = 1;
+    return set;
+}
+
+function validateStringArray(value, where) {
+    if (!Array.isArray(value)) {
+        throw policyError(where + ' must be an array of strings, got: ' + JSON.stringify(value));
+    }
+    for (var i = 0; i < value.length; i++) {
+        if (typeof value[i] !== 'string' || !value[i].trim()) {
+            throw policyError(where + '[' + i + '] must be a non-empty string, got: ' + JSON.stringify(value[i]));
+        }
+    }
+    return value.slice();
 }
 
 /**
@@ -335,7 +468,9 @@ function validateReviewPolicy(raw, source) {
         verification: resolveVerification(raw),
         severities: severityTableFor(preset, raw.severities),
         bounds: boundsOrDefault(raw),
-        identity: raw.identity || {}
+        identity: raw.identity || {},
+        reviewers: validateReviewersTuning(raw.reviewers),
+        promptAppend: validatePromptAppend(raw.promptAppend)
     };
 }
 
@@ -635,6 +770,8 @@ if (typeof module !== 'undefined' && module.exports) {
         ROUND_VALUES: ROUND_VALUES,
         FIX_VALUES: FIX_VALUES,
         VERIFICATION_VALUES: VERIFICATION_VALUES,
+        POOL_TUNABLE_FIELDS: POOL_TUNABLE_FIELDS,
+        POOL_ROUND_FLAGS: POOL_ROUND_FLAGS,
         PRESETS: PRESETS,
         DEFAULT_BOUNDS: DEFAULT_BOUNDS,
         PRESET_TABLES: PRESET_TABLES,
@@ -644,6 +781,10 @@ if (typeof module !== 'undefined' && module.exports) {
         validateReviewPolicy: validateReviewPolicy,
         resolveVerification: resolveVerification,
         verificationPhrase: verificationPhrase,
+        validateRounds: validateRounds,
+        validateReviewerTuning: validateReviewerTuning,
+        validateReviewersTuning: validateReviewersTuning,
+        validatePromptAppend: validatePromptAppend,
         defaultPolicy: defaultPolicy,
         presetPolicy: presetPolicy,
         gatingCensusCount: gatingCensusCount,
