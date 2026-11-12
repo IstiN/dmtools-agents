@@ -24,3 +24,5 @@ attachments and links do not exist there and are skipped.
   entry exists, so after a partial failure the agent is simply run again.
 - Requirement: no runtime ships a sub-issue tool yet, so sub-issues are read and attached through the
   REST API with the GitHub CLI — the runner needs `gh` installed and authenticated (`GH_TOKEN`).
+
+- `responseTarget`: `"tracker"` — `outputs/response.md` is posted to the tracker, so on Jira the output-format prompt is Jira wiki markup (condition `isResponseToTracker.js`).

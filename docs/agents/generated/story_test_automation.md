@@ -11,6 +11,8 @@ Bulk-automates all Test Cases linked to a Story in `Ready For Testing` on branch
 - `autoStartReview` / `autoStartReviewConfigFile` — chains the story test review agent after PR creation.
 - `maxReworkRounds` — consecutive attributed-red rounds a TC may accumulate before an earned bounce escalates to the owner instead of re-bouncing the bug (default 2; applies on bug runs of this action).
 
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/story_test_automation.md`](agents/docs/agents/story_test_automation.md)_
 
 ## Attributes

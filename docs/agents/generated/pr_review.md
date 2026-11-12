@@ -38,6 +38,8 @@ Set in the project `.dmtools/config.js` (e.g. `reviewPolicy: { verification: 'fi
 
 **Trial opt-in** (gh-1403): this repository opts in via `.dmtools/config.js` in #1408 — post-merge, once a pack release cut from post-gh-1403 main is out (the knob ships blockless until then: a `reviewPolicy` block, even with `'none'`, crashes released pre-gh-1403 packs at leg setup). The trial bar is fewer rework laps per PR AND higher precision AND ≈ 0 wrongly-dropped findings. Revert to `none` if the trial fails.
 
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/pr_review.md`](agents/docs/agents/pr_review.md)_
 
 ## Attributes

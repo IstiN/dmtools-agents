@@ -9,6 +9,8 @@ Addresses reviewer threads on a bulk Bug regression test PR (`test/{BUG_KEY}`), 
 - `testFilesGlob` — glob filter for staged test files.
 - `autoStartReview` / `autoStartReviewConfigFile` — launches `pr_bug_test_automation_review` after pushing.
 
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/bug_test_automation_rework.md`](agents/docs/agents/bug_test_automation_rework.md)_
 
 ## Attributes

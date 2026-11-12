@@ -14,3 +14,5 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 - `providerTransientBackoffSec` — backoff seconds before the one bounded resume of the persisted fa session when the leg died in a whole-provider-chain outage (HTTP 5xx/429 "Provider chain exhausted"; default `90`). The outage resume fires even with the feedback loop disabled globally; `feedbackLoop.missingResponse.enabled: false` opts out. When the resume fails, the reset comment names the failing models and codes instead of guessing a rate limit.
 - `targetRepository` — repository override block (`owner`, `repo`, `baseBranch`, `workingDir`) — run the work against this repository instead of the project default.
+
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).

@@ -10,6 +10,8 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `openBugsJql` — JQL selecting the open bugs to include.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
+- `responseTarget`: `"tracker"` — `outputs/response.md` is posted to the tracker, so on Jira the output-format prompt is Jira wiki markup (condition `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/bug_creation.md`](agents/docs/agents/bug_creation.md)_
 
 ## Attributes

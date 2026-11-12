@@ -10,6 +10,8 @@ Reviews the bulk test automation PR for a Bug (`test/{BUG_KEY}`), checking that 
 - `autoStartRework` / `autoStartReworkConfigFile` — dispatches `bug_test_automation_rework` on `REQUEST_CHANGES`.
 - `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
 
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/pr_bug_test_automation_review.md`](agents/docs/agents/pr_bug_test_automation_review.md)_
 
 ## Attributes

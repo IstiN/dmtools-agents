@@ -19,6 +19,8 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `scmProvider` — SCM provider override (`github`, `gitlab`, …) for this run.
 - `targetRepository` — repository override block (`owner`, `repo`, `baseBranch`, `workingDir`) — run the work against this repository instead of the project default.
 
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/pr_rework.md`](agents/docs/agents/pr_rework.md)_
 
 ## Attributes

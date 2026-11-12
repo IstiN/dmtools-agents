@@ -9,3 +9,5 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 - `openBugsJql` — JQL selecting the open bugs to include.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
+
+- `responseTarget`: `"tracker"` — `outputs/response.md` is posted to the tracker, so on Jira the output-format prompt is Jira wiki markup (condition `isResponseToTracker.js`).
