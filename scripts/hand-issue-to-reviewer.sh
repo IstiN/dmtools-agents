@@ -18,6 +18,14 @@
 # gate below is checked AFTER the status:In Review / ai_developed guards
 # (gh-1301): a ticket that demonstrably reached review is handed off
 # regardless of the stale label.
+
+# gh-1450: a >1h leg outlives GitHub's fixed 1-hour App-token TTL — apply the
+# freshest credential before the first gh call (no-op when the helper is
+# absent; see scripts/gh-auth-refresh.sh).
+if [ -f "$(dirname "$0")/gh-auth-refresh.sh" ]; then
+  . "$(dirname "$0")/gh-auth-refresh.sh"
+  gh_auth_refresh_apply
+fi
 has_q="$(gh issue view "$NUMBER" --repo "${GITHUB_REPOSITORY}" --json labels -q '([.labels[].name] | index("ai_questions_asked")) != null' 2>/dev/null || echo false)"
 gh issue edit "$NUMBER" --repo "${GITHUB_REPOSITORY}" \
     --remove-label "agent:rework" || true
