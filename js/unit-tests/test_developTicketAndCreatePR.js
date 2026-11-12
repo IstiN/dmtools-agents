@@ -3768,4 +3768,37 @@ suite('developTicketAndCreatePR > WIP auto-save squash (gh-1308)', function () {
         assert.contains(logs[0], 'transition to In Review rejected — marked with label stage_in_review');
         assert.contains(logs[1], 'Moved 2010283 to In Review (no code changes needed)');
     });
+
+    test('ticketDescriptorOf resolves summary and description for ADO-shaped tickets so PR title and commit message keep the summary (gh-1442)', function () {
+        var mod = loadWithRealPrHelper({});
+        var adoTicket = {
+            key: '2071862',
+            title: '[DEV] AI Factory: agents skip local Eclipse (ecj) check',
+            description: 'Task description on ADO',
+            fields: {
+                'System.Title': '[DEV] AI Factory: agents skip local Eclipse (ecj) check',
+                'System.Description': 'Task description on ADO'
+            }
+        };
+        var desc = mod.ticketDescriptorOf({
+            ticket: adoTicket,
+            response: 'done',
+            metadata: { contextId: 'story_development' }
+        }, {});
+        assert.equal(desc.ticketKey, '2071862');
+        assert.equal(desc.ticketSummary, '[DEV] AI Factory: agents skip local Eclipse (ecj) check');
+        assert.equal(desc.ticketDescription, 'Task description on ADO');
+
+        var prTitle = configLoaderModule.formatTemplate('AB#{ticketKey}: {ticketSummary}', {
+            ticketKey: desc.ticketKey,
+            ticketSummary: desc.ticketSummary
+        });
+        var commitMsg = mod.openPrDevCommitMessage({
+            ticketKey: desc.ticketKey,
+            ticketSummary: desc.ticketSummary,
+            config: { formats: { commitMessage: { development: 'AB#{ticketKey}: {ticketSummary}' } } }
+        });
+        assert.equal(prTitle, 'AB#2071862: [DEV] AI Factory: agents skip local Eclipse (ecj) check');
+        assert.equal(commitMsg, 'AB#2071862: [DEV] AI Factory: agents skip local Eclipse (ecj) check');
+    });
 });

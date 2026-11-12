@@ -1299,11 +1299,12 @@ function resolveInitiator(params, actualParams) {
 }
 
 function ticketDescriptorOf(actualParams, params) {
+    var t = actualParams.ticket;
     return {
-        ticket: actualParams.ticket,
-        ticketKey: actualParams.ticket.key,
-        ticketSummary: actualParams.ticket.fields.summary,
-        ticketDescription: actualParams.ticket.fields.description || '',
+        ticket: t,
+        ticketKey: t.key,
+        ticketSummary: trackerSlot.ticketSummaryOf(t),
+        ticketDescription: trackerSlot.ticketDescriptionOf(t),
         developmentSummary: actualParams.response || '',
         // Teammate's authoritative CLI-outcome signal — see isFatalCliEnvironmentError().
         cliHasFatalError: actualParams.currentCliHasFatalError === true,
@@ -2196,6 +2197,6 @@ if (typeof module !== 'undefined' && module.exports) {
         readConcernsMd, appendConcernsToCompletionComment, mirrorConcernsIntoResponseBody,
         // gh-1435: config-context seam — exported so the developmentMode IT
         // suites drive the leg's real config-reading path directly.
-        initDevelopmentContext
+        initDevelopmentContext, ticketDescriptorOf, openPrDevCommitMessage
     };
 }
