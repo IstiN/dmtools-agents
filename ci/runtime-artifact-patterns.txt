@@ -18,3 +18,6 @@
 .dmtools-target-workingdir
 .fah/
 .dmtools/codegraph-usage.log
+# gh-1436: plan-mode appendix materialization - engine-written prompt input,
+# never leg work (the durable plan artifact is .dmtools/plan-snapshot.md)
+.dmtools/development-mode-plan-appendix.md

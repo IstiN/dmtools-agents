@@ -23,6 +23,8 @@ var ALL_ARTIFACTS = [
     '.dmtools/run-output.txt',
     '.dmtools/stall-capture.log',
     '.dmtools/fa-sessions',
+    // gh-1436: plan-mode appendix materialization — engine-written prompt input.
+    '.dmtools/development-mode-plan-appendix.md',
     '.dmtools-session-output.log',
     '.claude-session-id'
 ];

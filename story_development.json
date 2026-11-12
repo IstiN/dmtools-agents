@@ -47,6 +47,11 @@
         "id": "codegraph",
         "prompt": "./agents/prompts/codegraph_tools.md",
         "condition": "agents/js/conditions/isCodeGraphAvailable.js"
+      },
+      {
+        "id": "developmentModePlan",
+        "prompt": "./.dmtools/development-mode-plan-appendix.md",
+        "condition": "agents/js/conditions/isDevelopmentModePlan.js"
       }
     ],
     "cliPromptsByTracker": {

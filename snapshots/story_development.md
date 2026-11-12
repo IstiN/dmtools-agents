@@ -447,6 +447,13 @@ flowchart TD
 
 ---
 
+### [19] `./.dmtools/development-mode-plan-appendix.md` _(conditional: `agents/js/conditions/isDevelopmentModePlan.js`)_
+
+<!-- MISSING FILE: ./.dmtools/development-mode-plan-appendix.md (tried ./.dmtools/development-mode-plan-appendix.md) -->
+
+
+---
+
 ## cliPromptsByTracker
 
 ### Tracker: `jira`

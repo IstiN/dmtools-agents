@@ -23,6 +23,10 @@ var trackersModule = require('./common/trackers.js');
 var commentMarkup = require('./common/commentMarkup.js');
 var legFailureReport = require('./common/legFailureReport.js');
 var legStartSignal = require('./common/legStartSignal.js');
+// gh-1436: plan-mode execution path — the plan-protocol prompt appendix is
+// materialized here (preCli, before the agent launches) at the runtime path
+// the dev leg configs' conditional cliPrompts entry points at.
+var developmentModePlan = require('./common/developmentModePlan.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
@@ -1032,6 +1036,60 @@ function runFetchLinkedTestsStep(actualParams) {
     }
 }
 
+// ── gh-1436: plan-mode appendix materialization ─────────────────────────────
+// When the resolved developmentMode is "plan", the dev leg configs carry a
+// conditional cliPrompts entry whose prompt is the RUNTIME path
+// .dmtools/development-mode-plan-appendix.md. The appendix must exist at that
+// path BEFORE prompt assembly reads it (conditions and prompt files are
+// evaluated after this setup, before the agent launches). The step resolves
+// the text — engine default, or the workflow's
+// developmentModeConfig.plan.appendixFile used verbatim — writes it, and seeds
+// the path into .git/info/exclude so the agent's `git add -A` never stages the
+// materialization (the durable artifact is the agent-committed
+// .dmtools/plan-snapshot.md). Inactive (default) mode performs zero IO and
+// zero log output — invariant P1 (default legs byte-identical). A failed
+// resolution (unreadable override, unwritable path) is a CONFIG error: the
+// leg fails fast before the agent launch with the offending path named.
+
+/**
+ * Materialize the plan-mode appendix when the leg runs in plan mode.
+ * @returns the materialization result ({ ok, active, ... }) — null never.
+ * @throws when plan mode is active but the appendix cannot be materialized.
+ */
+function runPlanModeAppendixStep(customParams) {
+    var result = developmentModePlan.materializePlanAppendix(customParams);
+    (result.warnings || []).forEach(function (w) { console.warn(w); });
+    if (!result.active) return result;
+    if (!result.ok) {
+        throw new Error(result.error);
+    }
+    branchSetup.ensureGitInfoExclude(
+        developmentModePlan.PLAN_APPENDIX_FILE_PATH,
+        developmentModePlan.PLAN_APPENDIX_EXCLUDE_COMMENT,
+        'Could not exclude the plan-mode appendix from git:'
+    );
+    console.log('📝 developmentMode=plan: ' + (result.overridden ? 'override' : 'engine default') +
+        ' appendix materialized → ' + result.path);
+    return result;
+}
+
+/**
+ * The reporting wrapper (same shape as runSetupCommandsStep): a failed plan
+ * setup posts the setup-error comment (Plan Mode Setup) and rethrows — the
+ * prompt would otherwise assemble with the runtime path as a dangling entry.
+ */
+function runPlanModeAppendixStepOrReport(customParams, config, ticketKey) {
+    try {
+        runPlanModeAppendixStep(customParams);
+    } catch (e) {
+        var planError = decideErrorMessage(e);
+        console.error('Plan-mode appendix setup failed:', planError);
+        postSetupErrorComment(config, customParams, ticketKey, 'Plan Mode Setup', planError);
+        emitLegStartFailed(config, customParams, planError);
+        throw new Error('Plan-mode setup failed: ' + planError);
+    }
+}
+
 /** Fetch [BA]/[SA]/[VD] parent context (step 5) — non-fatal extra context. */
 function runFetchParentContextStep(actualParams) {
     try {
@@ -1107,6 +1165,11 @@ function action(params) {
         baseBranchMarker.writeBaseBranchMarker(config.git.baseBranch);
 
         writeDevBaseHead(folder);
+        // gh-1436: materialize the plan-mode appendix on plan legs (after
+        // checkout: .git/info/exclude seeding needs the repo; before the agent
+        // launches: the prompt assembly reads it post-setup). Config errors
+        // fail the leg fast, with the offending path named.
+        runPlanModeAppendixStepOrReport(customParams, config, ticketKey);
         // 2.5. Surface existing remote dev-branch work into the input folder (gh-1164):
         // a resumed leg must see previous rounds' commits instead of mistaking the
         // base branch tip for its own work. Cheap: one ls-remote (+ one log/diff when
@@ -1171,6 +1234,9 @@ if (typeof module !== 'undefined' && module.exports) {
         runSetupCommandsStep,
         runFetchLinkedTestsStep,
         runFetchParentContextStep,
+        // gh-1436: plan-mode appendix materialization — exported for unit tests.
+        runPlanModeAppendixStep,
+        runPlanModeAppendixStepOrReport,
         // gh-1363: leg-failure report wiring — exported for direct unit testing.
         collectPreflightStateStep,
         currentPreflightLine,
