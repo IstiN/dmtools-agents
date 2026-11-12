@@ -185,41 +185,38 @@ var assert = {
  */
 var _moduleFactoryCache_ = {};
 
+// Compiled factories are cached per (path, mock-name set): re-evaluating the whole
+// module source on every loadModule call kept every parsed Source alive in GraalJS
+// (tens of thousands of compilations, multi-GB heap). Mock values are passed in per
+// call, so every call still gets fresh module state.
+function compiledModuleFactory_(modulePath, code, keys) {
+    var sig = modulePath + '|' + keys.join(',');
+    var cached = _moduleFactoryCache_[sig];
+    if (cached && cached.code === code) return cached.factory;
+    var preamble = '';
+    for (var i = 0; i < keys.length; i++) {
+        preamble += 'var ' + keys[i] + ' = _testMocks_["' + keys[i] + '"];\n';
+    }
+    var factory = eval('(function(module, exports, require, _testMocks_) {\n' + preamble + code + '\n})');
+    _moduleFactoryCache_[sig] = { code: code, factory: factory };
+    return factory;
+}
+
 function loadModule(path, requireFn, mocks) {
     var code = file_read({ path: path });
     if (!code || !code.trim()) {
         throw new Error('loadModule: cannot read file: ' + path);
     }
 
-    // Compiled factories are cached per (path, mock-name set): re-evaluating the
-    // whole module source on every call kept every parsed Source alive in GraalJS
-    // (tens of thousands of compilations, multi-GB heap). Mock values are passed
-    // in per call, so each call still gets fresh module state.
     var _testMocks_ = mocks || {};
-    var keys = [];
-    for (var k in _testMocks_) {
-        if (_testMocks_.hasOwnProperty(k)) keys.push(k);
-    }
-    var sig = path + '|' + keys.join(',');
-    var cached = _moduleFactoryCache_[sig];
-    if (!cached || cached.code !== code) {
-        var preamble = '';
-        for (var i = 0; i < keys.length; i++) {
-            preamble += 'var ' + keys[i] + ' = _testMocks_["' + keys[i] + '"];\n';
-        }
-        cached = {
-            code: code,
-            factory: eval('(function(module, exports, require, _testMocks_) {\n' + preamble + code + '\n})')
-        };
-        _moduleFactoryCache_[sig] = cached;
-    }
+    var factory = compiledModuleFactory_(path, code, Object.keys(_testMocks_));
 
     var _testModule_ = { exports: {} };
     var _testRequire_ = requireFn || function(id) {
         throw new Error('loadModule: require("' + id + '") not provided for ' + path);
     };
 
-    cached.factory(_testModule_, _testModule_.exports, _testRequire_, _testMocks_);
+    factory(_testModule_, _testModule_.exports, _testRequire_, _testMocks_);
 
     return _testModule_.exports;
 }
