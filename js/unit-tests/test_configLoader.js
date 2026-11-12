@@ -1687,7 +1687,8 @@ suite('configLoader — stage placeholders, per-tracker queries and quoting (age
 suite('smAgent builds every rule query through selectRuleQuery (agents#855)', function() {
     test('both rule processors pick the per-tracker query and pass the provider to interpolateJql', function() {
         var src = file_read({ path: 'js/smAgent.js' });
-        var uses = src.split('configLoader.selectRuleQuery(rule, ruleTrackerProvider)').length - 1;
+        // Whitespace-insensitive: the coverage job reads an nyc-instrumented copy.
+        var uses = src.replace(/\s+/g, '').split('configLoader.selectRuleQuery(rule,ruleTrackerProvider)').length - 1;
         assert.equal(uses, 2, 'expected the local and the dispatch rule processor to use selectRuleQuery');
         assert.equal(src.indexOf('configLoader.interpolateJql(rule.jql, effectiveConfig)'), -1,
             'a rule processor still interpolates rule.jql directly and would ignore jqlByTracker/{stage.*}');

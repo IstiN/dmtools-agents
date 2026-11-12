@@ -1,0 +1,171 @@
+{
+  "version": 1,
+  "maxLines": 800,
+  "maxFunctions": 40,
+  "modules": {
+    "js/adaptiveCalibrationHarness.js": {
+      "lines": 456,
+      "functions": 45
+    },
+    "js/agentDocGenerator.js": {
+      "lines": 826,
+      "functions": 47
+    },
+    "js/aiTeammateTokenUsageReporter.js": {
+      "lines": 1924,
+      "functions": 158
+    },
+    "js/common/contentOutput.js": {
+      "lines": 598,
+      "functions": 42
+    },
+    "js/common/failureAnalyzer.js": {
+      "lines": 738,
+      "functions": 45
+    },
+    "js/common/feedbackLoop.js": {
+      "lines": 674,
+      "functions": 54
+    },
+    "js/common/findingRegistry.js": {
+      "lines": 1020,
+      "functions": 70
+    },
+    "js/common/githubHelpers.js": {
+      "lines": 1173,
+      "functions": 69
+    },
+    "js/common/guestTransplant.js": {
+      "lines": 1137,
+      "functions": 77
+    },
+    "js/common/mergeBackstop.js": {
+      "lines": 1269,
+      "functions": 75
+    },
+    "js/common/pullRequest.js": {
+      "lines": 957,
+      "functions": 59
+    },
+    "js/common/reviewFilter.js": {
+      "lines": 734,
+      "functions": 42
+    },
+    "js/common/reviewVerdicts.js": {
+      "lines": 883,
+      "functions": 43
+    },
+    "js/common/scm.js": {
+      "lines": 1706,
+      "functions": 113
+    },
+    "js/common/sessionDelta.js": {
+      "lines": 759,
+      "functions": 68
+    },
+    "js/common/smProvider.js": {
+      "lines": 1636,
+      "functions": 106
+    },
+    "js/common/trackers.js": {
+      "lines": 1670,
+      "functions": 40
+    },
+    "js/configLoader.js": {
+      "lines": 1445,
+      "functions": 82
+    },
+    "js/createIntakeTickets.js": {
+      "lines": 838,
+      "functions": 41
+    },
+    "js/createPlannedStoriesFromOutput.js": {
+      "lines": 696,
+      "functions": 71
+    },
+    "js/developBugAndCreatePR.js": {
+      "lines": 928,
+      "functions": 46
+    },
+    "js/developTicketAndCreatePR.js": {
+      "lines": 2202,
+      "functions": 112
+    },
+    "js/dfManager.js": {
+      "lines": 774,
+      "functions": 64
+    },
+    "js/factory/review_verdict.js": {
+      "lines": 936,
+      "functions": 53
+    },
+    "js/factory/token_usage.js": {
+      "lines": 661,
+      "functions": 42
+    },
+    "js/factoryState.js": {
+      "lines": 1691,
+      "functions": 101
+    },
+    "js/fetchParentContextToInput.js": {
+      "lines": 965,
+      "functions": 76
+    },
+    "js/machineSmAgent.js": {
+      "lines": 1281,
+      "functions": 61
+    },
+    "js/postBulkBugsCreation.js": {
+      "lines": 721,
+      "functions": 60
+    },
+    "js/postMobileTestAutomationResults.js": {
+      "lines": 790,
+      "functions": 43
+    },
+    "js/postPRReviewComments.js": {
+      "lines": 3120,
+      "functions": 264
+    },
+    "js/postStoryTestAutomationResults.js": {
+      "lines": 1400,
+      "functions": 89
+    },
+    "js/postTestReworkResults.js": {
+      "lines": 963,
+      "functions": 56
+    },
+    "js/preCliDevelopmentSetup.js": {
+      "lines": 1359,
+      "functions": 74
+    },
+    "js/preCliReworkSetup.js": {
+      "lines": 1027,
+      "functions": 44
+    },
+    "js/prepareTestPRForReview.js": {
+      "lines": 602,
+      "functions": 41
+    },
+    "js/pushReworkChanges.js": {
+      "lines": 3098,
+      "functions": 174
+    },
+    "js/sm/mergeBot.js": {
+      "lines": 1013,
+      "functions": 55
+    },
+    "js/sm/sources/githubSource.js": {
+      "lines": 1508,
+      "functions": 115
+    },
+    "js/smAgent.js": {
+      "lines": 10007,
+      "functions": 193
+    },
+    "js/tcDifferentialDispatcher.js": {
+      "lines": 780,
+      "functions": 48
+    }
+  }
+}

@@ -62,17 +62,6 @@ function buildReleaseName(ticketKey, nameTemplate) {
 }
 
 /**
- * Resolve {ticketKey} template token in a folder path.
- * @param {string} template   e.g. ".copilot/session-state/{ticketKey}"
- * @param {string} ticketKey  e.g. "PROJ-123"
- * @returns {string}
- */
-function resolveTemplate(template, ticketKey) {
-    if (!template) return template;
-    return template.replace(/\{ticketKey\}/g, ticketKey);
-}
-
-/**
  * Zip a folder to a temp file.
  * @param {string} folderPath   Source folder (may contain template tokens already resolved)
  * @param {string} assetName    Used as the zip filename (e.g. "copilot-session")

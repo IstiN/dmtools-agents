@@ -46,6 +46,7 @@ function cleanCommandOutput(output) {
  * branch from origin when needed). Assumes the working tree is already clean —
  * callers (checkoutPRBranch) are responsible for stashing local state first.
  */
+// ignore:nesting — pre-existing deep nesting, grandfathered when the nesting gate was enabled; split instead of extending.
 function _switchToBranch(branchName, cmd) {
     var localBranchExists = function() {
         return cleanCommandOutput(cmd('git branch --list "' + branchName + '"') || '').trim() !== '';
