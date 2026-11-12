@@ -194,40 +194,46 @@ suite('release workflow wiring', function () {
             'the sync must stay gated OFF workflow_dispatch');
     });
 
-    test('R2 guard 1: main-already-carries-it skips the push entirely', function () {
+    test('R2 guard 1: main-already-carries-it skips the ledger PR entirely', function () {
         var guardDiff = wf.indexOf('git diff --quiet HEAD origin/main -- versions.json');
         assert.ok(guardDiff !== -1, 'the nothing-changed guard must exist');
-        var push = wf.indexOf('git push origin HEAD:main');
-        assert.ok(push !== -1 && guardDiff < push,
-            'the guard must run BEFORE the push (skip, not push an empty/duplicate ledger)');
+        var create = wf.indexOf('gh pr create');
+        assert.ok(create !== -1 && guardDiff < create,
+            'the guard must run BEFORE the PR is opened (skip, not open an empty/duplicate ledger PR)');
         assert.ok(wf.indexOf('::notice::main already carries the target agent versions') !== -1,
             'the skip must be visible in the run log');
     });
 
-    test('R2 guard 2: the ledger is rebased onto fresh main right before the direct push', function () {
+    test('R2 guard 2: rebased onto fresh main, re-checked after the checks, empty diff closes the PR', function () {
         var firstGuard = wf.indexOf('git diff --quiet HEAD origin/main -- versions.json');
         var rebase = wf.indexOf('git rebase origin/main');
-        var push = wf.indexOf('git push origin HEAD:main');
-        assert.ok(rebase !== -1 && rebase > firstGuard,
-            'main may move while the run builds — rebase after the guard');
-        assert.ok(push > rebase,
-            'rebase must precede the push so a concurrent merge is never a non-fast-forward');
+        var create = wf.indexOf('gh pr create');
+        var checks = wf.indexOf('gh pr checks');
+        var secondGuard = wf.indexOf('git diff --quiet HEAD origin/main -- versions.json', checks);
+        var merge = wf.indexOf('gh pr merge');
+        assert.ok(rebase > firstGuard && create > rebase,
+            'the ledger branch is cut from the freshest main (strict up-to-date checks)');
+        assert.ok(checks > create && secondGuard > checks && merge > secondGuard,
+            'wait for checks, re-run the guard, THEN merge (the #689 window)');
+        assert.ok(wf.indexOf('gh pr close') !== -1, 'an emptied ledger PR is closed, not merged');
     });
 
-    test('R2: a rejected direct push degrades to a warning and never fails the release', function () {
-        var push = wf.indexOf('git push origin HEAD:main');
-        var tail = wf.slice(push);
-        assert.ok(/if ! git push origin HEAD:main/.test(wf),
-            'the push must be guarded so a rejection cannot fail the run after publishing');
-        assert.ok(tail.indexOf('::warning::direct ledger push rejected') !== -1,
-            'the rejected push must still surface as a warning — the next release recomputes from main');
+    test('R2: no direct push to main and no ruleset bypass — PR merged by the SM merge app', function () {
+        assert.ok(wf.indexOf('git push origin HEAD:main') === -1,
+            'main accepts updates only through PRs merged by dmtools-factory-bot (ruleset main-merge-only-sm)');
+        assert.ok(wf.indexOf('actions/create-github-app-token') !== -1 &&
+            wf.indexOf('secrets.APP_PRIVATE_KEY') !== -1,
+            'the ledger PR is opened and merged with the merge-bot app token');
+        assert.ok(wf.indexOf('GH_TOKEN: ${{ steps.app-token.outputs.token }}') !== -1,
+            'the ledger step must use the app token, not GITHUB_TOKEN / PAT');
     });
 
-    test('R2: the ledger lands by direct push — no PR round-trip (#724)', function () {
-        assert.ok(wf.indexOf('gh pr create') === -1,
-            'the version ledger must not open a chore PR (queue through conveyor gates)');
-        assert.ok(wf.indexOf('gh pr merge') === -1,
-            'no PR means no merge step to bypass the empty-diff guard');
+    test('R2: red checks never fail the release after publishing', function () {
+        assert.ok(wf.indexOf('left open for the machine loop') !== -1,
+            'a red ledger PR is left for the machine loop with a warning');
+        var merge = wf.indexOf('gh pr merge');
+        assert.ok(merge !== -1 && wf.indexOf('|| echo "::warning::version PR', merge) !== -1,
+            'a refused merge degrades to a warning');
     });
 
     test('R2: --auto merge is gone — it merges server-side, bypassing the guard', function () {
