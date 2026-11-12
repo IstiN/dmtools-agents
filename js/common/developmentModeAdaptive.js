@@ -412,7 +412,7 @@ function removeStaleAppendix(io) {
     }
     if (existed && !(result && result.deleted === true)) {
         console.warn('Could not remove the stale plan-mode appendix at "' +
-            path + '":', result);
+            path + '": ' + developmentMode.describeRawValue(result));
     }
 }
 
