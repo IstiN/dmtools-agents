@@ -233,6 +233,10 @@ var REAL_COMMON_MODULES = {
     // suites shim mergeGate's siblings but need the real marker module. The
     // chain is pure end-to-end: reviewPoolMarkers → reviewVerdicts → machineAuthor.
     reviewPoolMarkers: 'js/common/reviewPoolMarkers.js',
+    // gh-1406 CRAP-split: the pool schema (tiers/rounds/tuning/skill files)
+    // lives in reviewPoolSchema.js; reviewPolicy.js and reviewPool.js load it
+    // internally, so suites shim them but still need the real schema module.
+    reviewPoolSchema: 'js/common/reviewPoolSchema.js',
     reviewVerdicts: 'js/common/reviewVerdicts.js',
     machineAuthor: 'js/common/machineAuthor.js'
 };

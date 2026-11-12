@@ -382,35 +382,71 @@ function stampEscalationLabel(io, owner, name, input, out) {
  * keeps failing retries every merge tick until the valve fires
  * (needs-human — never silent merge, never silent approval, gh-957).
  */
+function requiredReviewerEscalates(state, inp) {
+    return !!state.hold && escalationDue(state.hold, inp.nowIso, inp.humanHoldHours);
+}
+
+/**
+ * The per-head dedup decision for the pool hold stamp: an already-stamped
+ * hold of the SAME kind is never re-posted (one marker per head; the
+ * escalation valve is the only transition). Returns the outcome field to
+ * set, or null when a fresh stamp is due.
+ */
+function requiredHoldDedupOf(state, escalate) {
+    if (escalate && state.hold && state.hold.escalated) return 'escalationDeduped';
+    if (!escalate && state.hold) return 'holdDeduped';
+    return null;
+}
+
+/**
+ * The marker post (observability — never the decision): a missing
+ * createComment primitive skips the stamp while the hold stands; a BROKEN
+ * post throws through to the caller's soft catch.
+ */
+function postRequiredReviewerHoldMarker(io, owner, name, inp, out, state, escalate) {
+    if (!io || typeof io.createComment !== 'function') {
+        out.markerSkipped = true; // hold stands — the marker is observability
+        return;
+    }
+    io.createComment({
+        workspace: owner, repository: name, number: inp.prNumber,
+        body: reviewPoolMarkers.buildRequiredReviewerHoldMarker(
+            out.poolMissing, out.head, inp.nowIso, escalate, escalate ? state.hold.at : null)
+    });
+    if (escalate) {
+        out.escalationPosted = true;
+        stampEscalationLabel(io, owner, name, inp, out);
+    } else {
+        out.holdPosted = true;
+    }
+}
+
 function stampRequiredReviewerHold(io, owner, name, inp, out, state) {
     try {
-        var escalate = !!state.hold && escalationDue(state.hold, inp.nowIso, inp.humanHoldHours);
-        if (escalate && state.hold.escalated) {
-            out.escalationDeduped = true;
+        var escalate = requiredReviewerEscalates(state, inp);
+        var deduped = requiredHoldDedupOf(state, escalate);
+        if (deduped) {
+            out[deduped] = true;
             return;
         }
-        if (!escalate && state.hold) {
-            out.holdDeduped = true;
-            return;
-        }
-        if (!io || typeof io.createComment !== 'function') {
-            out.markerSkipped = true; // hold stands — the marker is observability
-            return;
-        }
-        io.createComment({
-            workspace: owner, repository: name, number: inp.prNumber,
-            body: reviewPoolMarkers.buildRequiredReviewerHoldMarker(
-                out.poolMissing, out.head, inp.nowIso, escalate, escalate ? state.hold.at : null)
-        });
-        if (escalate) {
-            out.escalationPosted = true;
-            stampEscalationLabel(io, owner, name, inp, out);
-        } else {
-            out.holdPosted = true;
-        }
+        postRequiredReviewerHoldMarker(io, owner, name, inp, out, state, escalate);
     } catch (ePost) {
         out.holdPostFailed = true; // soft — the merge stays withheld regardless
     }
+}
+
+/**
+ * The comment list for the pool clause (ONE read per gate run): the
+ * caller's already-read list wins; the direct-call shape reads its own.
+ * A missing getComments primitive is a capability-miss skip (null).
+ */
+function poolCommentListOf(io, owner, name, inp, out, comments) {
+    if (comments !== undefined) return comments;
+    if (!io || typeof io.getComments !== 'function') {
+        out.poolSkipped = true; // capability miss — the skip shape
+        return null;
+    }
+    return mergeVerdictGate.prCommentList(io.getComments, owner, name, inp.prNumber);
 }
 
 /**
@@ -422,30 +458,22 @@ function stampRequiredReviewerHold(io, owner, name, inp, out, state) {
  * per gate run — shared with the open-threads dedup); when it arrives
  * undefined the phase reads its own (direct-call shape). Fail-open exactly:
  * no pool outcome on this head (legacy single-leg PRs, validation-only
- * flows) → proceed; no head sha → proceed; no getComments primitive →
- * capability-miss skip; a BROKEN read throws through (fail-closed, like
- * every census in this gate). Returns true when the gate HELD on this
- * clause (the caller skips the thread work — the hold stands).
+ * flows) → proceed — a missing head sha proceeds the same way, since an
+ * outcome only ever matches a real head (sameHead's falsy guard); no
+ * getComments primitive → capability-miss skip; a BROKEN read throws
+ * through (fail-closed, like every census in this gate). Returns true when
+ * the gate HELD on this clause (the caller skips the thread work — the
+ * hold stands).
  */
 function poolPhase(io, owner, name, inp, out, comments) {
-    var list = comments;
-    if (list === undefined) {
-        if (!io || typeof io.getComments !== 'function') {
-            out.poolSkipped = true; // capability miss — the skip shape
-            return false;
-        }
-        list = mergeVerdictGate.prCommentList(io.getComments, owner, name, inp.prNumber);
-    }
+    var list = poolCommentListOf(io, owner, name, inp, out, comments);
+    if (list === null) return false;
     var state = reviewPoolMarkers.requiredReviewerHoldState(list, inp.logins || [], out.head, inp.nowIso);
     if (!state.applicable) return false;
     out.poolMissing = state.missing;
     if (state.missing.length === 0) return false;
     out.held = true;
     out.holdReason = reviewPoolMarkers.HOLD_REASON;
-    if (!out.head) {
-        out.markerSkipped = true; // hold stands — no dedup key, no marker
-        return true;
-    }
     stampRequiredReviewerHold(io, owner, name, inp, out, state);
     return true;
 }

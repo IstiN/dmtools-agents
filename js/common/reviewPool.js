@@ -13,9 +13,15 @@
  * reviewPolicy.reviewers / reviewPolicy.promptAppend — shape-validated by
  * reviewPolicy.js, resolved here against the skill files).
  *
+ * SCHEMA lives in reviewPoolSchema.js (the §2 field table, §3 tuning keys,
+ * §6 rounds — both modules re-export their half of the API; the public
+ * surfaces of reviewPool.js and reviewPolicy.js are unchanged). This
+ * module is the pool RESOLUTION layer: factory/repo dir loading, same-name
+ * tuning merge, policy tuning, promptAppend resolution, rounds gating.
+ *
  * The invariants this module enforces mechanically (§ "The invariants"):
  *   - extend, never replace: a same-name repo file / policy tuning block may
- *     only carry the tunable fields (POOL_TUNABLE_FIELDS);
+ *     only carry the tunable fields (reviewPoolSchema POL_TUNABLE_FIELDS);
  *   - defaults are the safe general behavior (§2 table): a minimal file
  *     {"name","lens"} defines a FULL reviewer — mayRaise all tiers,
  *     filterWeight normal, isFiltered true, isRequired false, rounds ["all"],
@@ -29,14 +35,10 @@
  *     same-head PASS marker hold the merge (never silent merge, never
  *     silent approval — gh-957 doctrine).
  *
- * Marker family (the `dmtools:` head-carried shapes):
- *   <!-- dmtools:review-pass {"reviewer":"security","head":"<sha>","at":"..."} -->
- *   <!-- dmtools:review-pool {"head":"<sha>","round":"first",
- *        "reviewers":[{"name":"base","required":true,"completed":true}],"at":"..."} -->
- * Both are trusted only from machine identities (the machineAuthor
- * allowlist — an unconfigured/empty allowlist trusts NOTHING, so a forged
- * PASS marker can never satisfy the gate; the same rule as the verdict
- * records).
+ * Marker family (the `dmtools:` head-carried shapes) — see
+ * reviewPoolMarkers.js; both are trusted only from machine identities
+ * (the machineAuthor allowlist — an unconfigured/empty allowlist trusts
+ * NOTHING, so a forged PASS marker can never satisfy the gate).
  *
  * Pure module — no dmtools globals (file io injected). Requires hoisted
  * (gh-823 pack-require rule). Keep it GraalJS-clean (var + plain functions,
@@ -45,6 +47,12 @@
 'use strict';
 
 var reviewPolicy = require('./reviewPolicy.js');
+var poolSchema = require('./reviewPoolSchema.js');
+
+// The skill-file error factory rides the schema module (one shared
+// ReviewSkillValidationError family for the whole pool).
+var skillError = poolSchema.skillError;
+var hasKey = poolSchema.hasKey;
 
 // The skill-file directories (§2).
 var FACTORY_DIR = 'instructions/review';
@@ -55,7 +63,8 @@ var REPO_DIR = '.dmtools/review';
 // reviewer's prompt assembly).
 var BASE_APPEND_KEY = 'base';
 
-// The marker family (§7).
+// The marker family (§7) — parsed/stamped by reviewPoolMarkers.js; the
+// prefixes stay recorded here as the pool's marker-grammar anchor.
 var PASS_MARKER_PREFIX = '<!-- dmtools:review-pass ';
 var POOL_MARKER_PREFIX = '<!-- dmtools:review-pool ';
 var MARKER_SUFFIX = ' -->';
@@ -64,11 +73,6 @@ var MARKER_SUFFIX = ' -->';
 // (one marker grammar; the reason field separates the dedup budgets).
 var HOLD_REASON = 'required-reviewer';
 
-// §2 defaults — the safe general behavior. `roleLine` is derived, not
-// defaulted (see deriveRoleLine).
-var DEFAULT_FILTER_WEIGHT = 'normal';
-var DEFAULT_ROUNDS = ['all'];
-
 // §8 check 3: the citation-discipline hint a lens must contain when the
 // skill file EXPLICITLY declares BLOCKING in mayRaise (the check warns —
 // the validator script surfaces it; the loader collects it as a warning).
@@ -76,221 +80,7 @@ var DEFAULT_ROUNDS = ['all'];
 // the noun ("the citation discipline").
 var CITATION_HINT_FRAGMENTS = ['cite', 'citation'];
 
-var ERROR_NAME = 'ReviewSkillValidationError';
-
-function skillError(message) {
-    var e = new Error(message);
-    e.name = ERROR_NAME;
-    return e;
-}
-
-function isReviewSkillError(e) {
-    return !!e && e.name === ERROR_NAME;
-}
-
-function isPlainObject(value) {
-    return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isNonEmptyString(v) {
-    return typeof v === 'string' && v.trim() !== '';
-}
-
-function hasKey(obj, key) {
-    return Object.prototype.hasOwnProperty.call(obj, key);
-}
-
-function unknownKeysOf(raw, knownSet) {
-    var unknown = [];
-    for (var k in raw) {
-        if (hasKey(raw, k) && !hasKey(knownSet, k)) unknown.push(k);
-    }
-    return unknown;
-}
-
-function keySetOf(list) {
-    var set = {};
-    for (var i = 0; i < list.length; i++) set[list[i]] = 1;
-    return set;
-}
-
-// §2: the derived persona line — placed first in the assembled prompt.
-function deriveRoleLine(name) {
-    return 'Specialized Code Reviewer \u2014 ' + String(name || '');
-}
-
-// The universal skill-file field set (§2 table). `options` is the
-// pass-through bucket — unknown per-reviewer knobs belong there, unknown
-// TOP-LEVEL fields are typo protection (warned, never silently dropped).
-var KNOWN_FIELDS = ['name', 'lens', 'roleLine', 'mayRaise', 'filterWeight',
-    'isFiltered', 'isRequired', 'rounds', 'triggerPaths', 'options',
-    'model', 'isEnabled'];
-var KNOWN_FIELD_SET = keySetOf(KNOWN_FIELDS);
-
-// ── skill-file validation (§2, §8 checks 1–3) ───────────────────────────────
-
-function validateMayRaise(raw, source) {
-    if (!Array.isArray(raw) || raw.length === 0) {
-        throw skillError(source + ': mayRaise must be a non-empty array of tiers (' +
-            reviewPolicy.TIERS.join(', ') + ')');
-    }
-    for (var i = 0; i < raw.length; i++) {
-        var tier = String(raw[i] || '').trim().toUpperCase();
-        if (reviewPolicy.TIERS.indexOf(tier) === -1) {
-            throw skillError(source + ': mayRaise has an unknown tier ' + JSON.stringify(raw[i]) +
-                ' — known tiers: ' + reviewPolicy.TIERS.join(', '));
-        }
-    }
-    return raw.map(function(t) { return String(t).trim().toUpperCase(); });
-}
-
-function validateBoolField(value, field, source) {
-    if (typeof value !== 'boolean') {
-        throw skillError(source + ': ' + field + ' must be a boolean, got: ' + JSON.stringify(value) +
-            ' (booleans take the is prefix)');
-    }
-    return value;
-}
-
-/**
- * Validates + normalizes ONE full skill definition (a factory file, or a
- * repo file defining a NEW reviewer). Required: name + lens; everything
- * else defaults (§2). Unknown top-level fields are WARNED (typo
- * protection), never silently dropped. Returns { skill, warnings }.
- */
-function validateSkillDefinition(raw, source) {
-    if (!isPlainObject(raw)) {
-        throw skillError(source + ' must be a JSON object');
-    }
-    var warnings = [];
-    var unknown = unknownKeysOf(raw, KNOWN_FIELD_SET);
-    if (unknown.length > 0) {
-        warnings.push(source + ': unknown field(s) ' + unknown.join(', ') +
-            ' — known fields: ' + KNOWN_FIELDS.join(', ') +
-            ' (options is the per-reviewer pass-through bucket)');
-    }
-    if (!isNonEmptyString(raw.name)) {
-        throw skillError(source + ': "name" is required (non-empty string)');
-    }
-    if (!isNonEmptyString(raw.lens)) {
-        throw skillError(source + ': "lens" is required (the instruction markdown path)');
-    }
-    if (raw.roleLine !== undefined && raw.roleLine !== null && !isNonEmptyString(raw.roleLine)) {
-        throw skillError(source + ': roleLine must be a non-empty string');
-    }
-    var rounds = raw.rounds === undefined || raw.rounds === null
-        ? DEFAULT_ROUNDS.slice()
-        : reviewPolicy.validateRounds(raw.rounds, source + ': rounds');
-    var skill = {
-        name: raw.name,
-        lens: raw.lens,
-        roleLine: raw.roleLine || deriveRoleLine(raw.name),
-        mayRaise: (raw.mayRaise === undefined || raw.mayRaise === null)
-            ? reviewPolicy.TIERS.slice()
-            : validateMayRaise(raw.mayRaise, source),
-        filterWeight: raw.filterWeight === undefined || raw.filterWeight === null
-            ? DEFAULT_FILTER_WEIGHT : validateFilterWeight(raw.filterWeight, source),
-        isFiltered: (raw.isFiltered === undefined || raw.isFiltered === null)
-            ? true : validateBoolField(raw.isFiltered, 'isFiltered', source),
-        isRequired: (raw.isRequired === undefined || raw.isRequired === null)
-            ? false : validateBoolField(raw.isRequired, 'isRequired', source),
-        rounds: rounds,
-        triggerPaths: (raw.triggerPaths === undefined || raw.triggerPaths === null)
-            ? [] : validateStringArray(raw.triggerPaths, source + ': triggerPaths'),
-        options: (raw.options === undefined || raw.options === null)
-            ? {} : validateOptions(raw.options, source),
-        model: (raw.model === undefined || raw.model === null) ? null : raw.model,
-        isEnabled: (raw.isEnabled === undefined || raw.isEnabled === null)
-            ? true : validateBoolField(raw.isEnabled, 'isEnabled', source)
-    };
-    if (typeof skill.model !== 'string' && skill.model !== null) {
-        throw skillError(source + ': model must be a string or null');
-    }
-    return { skill: skill, warnings: warnings };
-}
-
-function validateFilterWeight(value, source) {
-    if (value !== 'low' && value !== 'normal' && value !== 'high') {
-        throw skillError(source + ': filterWeight must be low | normal | high, got: ' + JSON.stringify(value));
-    }
-    return value;
-}
-
-function validateOptions(value, source) {
-    if (!isPlainObject(value)) {
-        throw skillError(source + ': options must be an object (the per-reviewer pass-through bucket)');
-    }
-    return value;
-}
-
-function validateStringArray(value, where) {
-    if (!Array.isArray(value)) {
-        throw skillError(where + ' must be an array of strings, got: ' + JSON.stringify(value));
-    }
-    for (var i = 0; i < value.length; i++) {
-        if (typeof value[i] !== 'string' || !value[i].trim()) {
-            throw skillError(where + '[' + i + '] must be a non-empty string');
-        }
-    }
-    return value.slice();
-}
-
-/**
- * A same-name REPO skill file: only the tunable fields (plus a matching
- * `name`) — anything else re-defines a factory reviewer's contract and is
- * a hard error (§2 invariant "extend, never replace"; §8 check 5).
- * Returns { tuning, warnings } — tuning carries ONLY the present tunable
- * fields, merged over the factory skill by the caller.
- */
-function validateRepoTuning(raw, factorySkill, source) {
-    if (!isPlainObject(raw)) {
-        throw skillError(source + ' must be a JSON object (tuning for the factory reviewer ' +
-            factorySkill.name + ')');
-    }
-    var warnings = [];
-    var allowed = keySetOf(reviewPolicy.POOL_TUNABLE_FIELDS.concat(['name']));
-    var unknown = unknownKeysOf(raw, allowed);
-    if (unknown.length > 0) {
-        throw skillError(source + ': a same-name file for the factory reviewer ' + factorySkill.name +
-            ' may only TUNE ' + reviewPolicy.POOL_TUNABLE_FIELDS.join(', ') +
-            ' — re-defining ' + unknown.join(', ') + ' is rejected (extend, never replace: ' +
-            'contract fields are factory invariants)');
-    }
-    if (raw.name !== undefined && String(raw.name) !== String(factorySkill.name)) {
-        throw skillError(source + ': name ' + JSON.stringify(raw.name) +
-            ' does not match the factory reviewer it tunes (' + factorySkill.name + ')');
-    }
-    var tuning = {};
-    for (var i = 0; i < reviewPolicy.POOL_TUNABLE_FIELDS.length; i++) {
-        var field = reviewPolicy.POOL_TUNABLE_FIELDS[i];
-        if (!hasKey(raw, field) || raw[field] === undefined || raw[field] === null) continue;
-        if (field === 'isEnabled') tuning[field] = validateBoolField(raw[field], field, source);
-        else if (field === 'rounds') tuning[field] = reviewPolicy.validateRounds(raw[field], source + ': rounds');
-        else if (field === 'triggerPaths') tuning[field] = validateStringArray(raw[field], source + ': triggerPaths');
-        else if (field === 'options') tuning[field] = validateOptions(raw[field], source);
-        else if (field === 'model') {
-            if (raw[field] !== null && typeof raw[field] !== 'string') {
-                throw skillError(source + ': model must be a string or null');
-            }
-            tuning[field] = raw[field];
-        }
-    }
-    return { tuning: tuning, warnings: warnings };
-}
-
-/** Merges one tuning object over a resolved skill (tunable fields only). */
-function applyTuning(skill, tuning) {
-    var out = {};
-    for (var k in skill) {
-        if (hasKey(skill, k)) out[k] = skill[k];
-    }
-    for (var f in tuning) {
-        if (hasKey(tuning, f)) out[f] = tuning[f];
-    }
-    return out;
-}
-
-// ── pool resolution (§2 loading + §3 tuning) ─────────────────────────────────
+// ── io primitives (failure-soft; every call is the caller's discretion) ──────
 
 /**
  * The io bag: { readFile(path) -> text|null, listFiles(dir) -> entries|null }.
@@ -304,40 +94,53 @@ function entryNameOf(entry) {
     return String(entry.name || entry.path || '');
 }
 
+function hasJsonSuffix(name) {
+    return !!name && name.indexOf('.json', name.length - 5) !== -1;
+}
+
+function jsonFileNamesOf(entries) {
+    var files = [];
+    for (var i = 0; i < entries.length; i++) {
+        var name = entryNameOf(entries[i]);
+        if (hasJsonSuffix(name)) files.push(name);
+    }
+    return files.sort();
+}
+
 function listJsonFiles(io, dir) {
     if (!io || typeof io.listFiles !== 'function') return [];
     var entries;
     try {
         entries = io.listFiles(dir);
-    } catch (e) {
+    } catch (eList) {
         return [];
     }
-    if (!Array.isArray(entries)) return [];
-    var files = [];
-    for (var i = 0; i < entries.length; i++) {
-        var name = entryNameOf(entries[i]);
-        if (name && name.indexOf('.json', name.length - 5) !== -1) files.push(name);
-    }
-    return files.sort();
+    return Array.isArray(entries) ? jsonFileNamesOf(entries) : [];
 }
 
-function readJson(io, path, warnings, soft) {
-    var text = null;
+function readTextSoft(io, path) {
     try {
-        text = io.readFile(path);
-    } catch (e) {
-        text = null;
-    }
-    if (text === null || text === undefined || !String(text).trim()) {
-        if (soft && warnings) warnings.push(path + ': unreadable or empty — skipped');
+        return io.readFile(path);
+    } catch (eRead) {
         return null;
     }
+}
+
+function isEmptyText(text) {
+    return text === null || text === undefined || !String(text).trim();
+}
+
+function readJson(io, path) {
+    var text = readTextSoft(io, path);
+    if (isEmptyText(text)) return null;
     try {
         return JSON.parse(text);
-    } catch (e) {
-        throw skillError(path + ' is not valid JSON: ' + String(e.message || e));
+    } catch (eParse) {
+        throw skillError(path + ' is not valid JSON: ' + String(eParse.message || eParse));
     }
 }
+
+// ── the factory dir (§2: full skill definitions; duplicates are errors) ──────
 
 /** The skills of ONE factory dir, keyed by name; duplicates are a hard error. */
 function loadFactoryDir(io, dir, warnings) {
@@ -345,9 +148,9 @@ function loadFactoryDir(io, dir, warnings) {
     var files = listJsonFiles(io, dir);
     for (var i = 0; i < files.length; i++) {
         var path = dir + '/' + files[i];
-        var raw = readJson(io, path, warnings, false);
+        var raw = readJson(io, path);
         if (!raw) continue;
-        var parsed = validateSkillDefinition(raw, path);
+        var parsed = poolSchema.validateSkillDefinition(raw, path);
         for (var w = 0; w < parsed.warnings.length; w++) warnings.push(parsed.warnings[w]);
         if (hasKey(skills, parsed.skill.name)) {
             throw skillError('duplicate reviewer name "' + parsed.skill.name + '" in the factory pool (' + dir + ')');
@@ -358,35 +161,79 @@ function loadFactoryDir(io, dir, warnings) {
 }
 
 /**
+ * All factory dirs, keyed by name, in definition order. Across dirs the
+ * FIRST definition of a name wins (one pool, no silent double entries).
+ */
+function loadFactoryDirs(io, factoryDirs, warnings) {
+    var skills = {};
+    var names = [];
+    for (var d = 0; d < factoryDirs.length; d++) {
+        var dirSkills = loadFactoryDir(io, factoryDirs[d], warnings);
+        for (var name in dirSkills) {
+            if (!hasKey(dirSkills, name)) continue;
+            if (hasKey(skills, name)) continue;
+            skills[name] = dirSkills[name];
+            names.push(name);
+        }
+    }
+    return { skills: skills, names: names };
+}
+
+// ── the repo dir (§2: same-name TUNES a factory reviewer; new names define) ──
+
+function repoEntryNameOf(raw) {
+    return poolSchema.isPlainObject(raw) && poolSchema.isNonEmptyString(raw.name) ? raw.name : '';
+}
+
+/**
+ * A same-name repo file tuning a factory reviewer. A name that is ALREADY
+ * repo-defined is a duplicate (a repo reviewer is defined once) — §8
+ * check 4.
+ */
+function tuneFactoryEntry(raw, name, path, factorySkills, warnings, repoDefined) {
+    if (repoDefined && repoDefined.indexOf(name) !== -1) {
+        throw skillError('duplicate reviewer name "' + name + '" (' + path + ') — a repo reviewer is defined once; ' +
+            'same-name files may only TUNE factory reviewers');
+    }
+    var tuning = poolSchema.validateRepoTuning(raw, factorySkills[name], path);
+    for (var w = 0; w < tuning.warnings.length; w++) warnings.push(tuning.warnings[w]);
+    factorySkills[name] = poolSchema.applyTuning(factorySkills[name], tuning.tuning);
+}
+
+/** A repo file defining a NEW reviewer (full skill definition, §2). */
+function defineRepoEntry(raw, path, factorySkills, warnings, repoDefined) {
+    var defined = poolSchema.validateSkillDefinition(raw, path);
+    for (var w2 = 0; w2 < defined.warnings.length; w2++) warnings.push(defined.warnings[w2]);
+    if (hasKey(factorySkills, defined.skill.name)) {
+        throw skillError('duplicate reviewer name "' + defined.skill.name + '" (' + path + ')');
+    }
+    factorySkills[defined.skill.name] = defined.skill;
+    if (repoDefined) repoDefined.push(defined.skill.name);
+}
+
+function loadRepoEntry(io, path, factorySkills, warnings, repoDefined) {
+    var raw = readJson(io, path);
+    if (!raw) return;
+    var name = repoEntryNameOf(raw);
+    if (name && hasKey(factorySkills, name)) {
+        tuneFactoryEntry(raw, name, path, factorySkills, warnings, repoDefined);
+        return;
+    }
+    defineRepoEntry(raw, path, factorySkills, warnings, repoDefined);
+}
+
+/**
  * The repo dir: same-name files TUNE factory reviewers (tunable fields
  * only), new names define repo reviewers (full skill definition).
  */
 function loadRepoDir(io, dir, factorySkills, warnings, repoDefined) {
     var files = listJsonFiles(io, dir);
     for (var i = 0; i < files.length; i++) {
-        var path = dir + '/' + files[i];
-        var raw = readJson(io, path, warnings, false);
-        if (!raw) continue;
-        var name = isPlainObject(raw) && isNonEmptyString(raw.name) ? raw.name : '';
-        if (name && hasKey(factorySkills, name)) {
-            if (repoDefined && repoDefined.indexOf(name) !== -1) {
-                throw skillError('duplicate reviewer name "' + name + '" (' + path + ') — a repo reviewer is defined once; ' +
-                    'same-name files may only TUNE factory reviewers');
-            }
-            var tuning = validateRepoTuning(raw, factorySkills[name], path);
-            for (var w = 0; w < tuning.warnings.length; w++) warnings.push(tuning.warnings[w]);
-            factorySkills[name] = applyTuning(factorySkills[name], tuning.tuning);
-        } else {
-            var defined = validateSkillDefinition(raw, path);
-            for (var w2 = 0; w2 < defined.warnings.length; w2++) warnings.push(defined.warnings[w2]);
-            if (hasKey(factorySkills, defined.skill.name)) {
-                throw skillError('duplicate reviewer name "' + defined.skill.name + '" (' + path + ')');
-            }
-            factorySkills[defined.skill.name] = defined.skill;
-            if (repoDefined) repoDefined.push(defined.skill.name);
-        }
+        loadRepoEntry(io, dir + '/' + files[i], factorySkills, warnings, repoDefined);
     }
 }
+
+// ── lens warnings (§8 check 3 parity) ────────────────────────────────────────
 
 /** The §8 check 3 lens-citation warning for skills that explicitly allow 🚨. */
 function citationHintWarning(skill, lensText) {
@@ -406,13 +253,8 @@ function citationHintWarning(skill, lensText) {
  * the explicit-BLOCKING citation hint rides the same read.
  */
 function lensWarnings(io, skill, warnings) {
-    var text = null;
-    try {
-        text = io.readFile(skill.lens);
-    } catch (eLens) {
-        text = null;
-    }
-    if (text === null || text === undefined || !String(text).trim()) {
+    var text = readTextSoft(io, skill.lens);
+    if (isEmptyText(text)) {
         warnings.push(skill.name + ': lens file missing or empty: ' + skill.lens);
         return;
     }
@@ -420,50 +262,52 @@ function lensWarnings(io, skill, warnings) {
     if (citation) warnings.push(citation);
 }
 
-/**
- * The pool resolution (§2 + §3): factory skills → repo dir (tune/new) →
- * reviewPolicy.reviewers tuning → promptAppend resolution. config/jobParams
- * resolve the policy exactly like the review legs do
- * (reviewPolicy.resolveReviewPolicy). A policy key naming an unknown
- * reviewer is a hard error at resolution time (§8 check 7 parity — the
- * misconfiguration must fail the leg at start, never silently no-op).
- *
- * Returns { policy, reviewers (resolved array in definition order),
- * appends ({name|base: [paths]}), warnings, factoryNames, repoNames }.
- */
-function resolvePool(io, config, jobParams, opts) {
-    var options = opts || {};
-    var factoryDirs = options.factoryDirs || [FACTORY_DIR];
-    var repoDir = options.repoDir || REPO_DIR;
-    var warnings = [];
-    var factoryNames = [];
-    var repoNames = [];
-    var skills = {};
-    for (var d = 0; d < factoryDirs.length; d++) {
-        var dirSkills = loadFactoryDir(io, factoryDirs[d], warnings);
-        for (var name in dirSkills) {
-            if (!hasKey(dirSkills, name)) continue;
-            if (!hasKey(skills, name)) {
-                skills[name] = dirSkills[name];
-                factoryNames.push(name);
-            }
-        }
+function poolLensWarnings(io, skills, order, warnings) {
+    for (var r = 0; r < order.length; r++) {
+        lensWarnings(io, skills[order[r]], warnings);
     }
-    loadRepoDir(io, repoDir, skills, warnings, repoNames);
+}
 
-    var policy = reviewPolicy.resolveReviewPolicy(config, jobParams);
-    // The policy tuning: every key must resolve to a defined reviewer (§8
-    // check 7); every value is already shape-validated by reviewPolicy.js.
+// ── policy tuning (§3: reviewPolicy.reviewers + promptAppend) ────────────────
+
+/**
+ * The reviewPolicy.reviewers tuning: every key must resolve to a defined
+ * reviewer (§8 check 7); every value is already shape-validated by
+ * reviewPolicy.js. A policy key naming an unknown reviewer is a hard error
+ * at resolution time (the misconfiguration must fail the leg at start,
+ * never silently no-op).
+ */
+function applyPolicyTuning(policy, skills) {
     for (var tuneName in policy.reviewers) {
         if (!hasKey(policy.reviewers, tuneName)) continue;
         if (!hasKey(skills, tuneName)) {
             throw skillError('reviewPolicy.reviewers names the unknown reviewer "' + tuneName +
                 '" — defined reviewers: ' + Object.keys(skills).join(', '));
         }
-        skills[tuneName] = applyTuning(skills[tuneName], policy.reviewers[tuneName]);
+        skills[tuneName] = poolSchema.applyTuning(skills[tuneName], policy.reviewers[tuneName]);
     }
-    // promptAppend: targets resolve to reviewers or 'base'; files must exist
-    // (missing → warning — legs fail open; the validator script gates hard).
+}
+
+function appendFileReadable(io, path) {
+    var text = readTextSoft(io, path);
+    return text !== null && text !== undefined && !!String(text).trim();
+}
+
+/** One promptAppend target: readable files resolve, missing ones warn (§3). */
+function resolveAppendPaths(io, target, paths, warnings) {
+    var resolved = [];
+    for (var p = 0; p < paths.length; p++) {
+        if (appendFileReadable(io, paths[p])) resolved.push(paths[p]);
+        else warnings.push('promptAppend[' + target + ']: file missing or empty: ' + paths[p]);
+    }
+    return resolved;
+}
+
+/**
+ * promptAppend: targets resolve to reviewers or 'base'; files must exist
+ * (missing → warning — legs fail open; the validator script gates hard).
+ */
+function resolvedAppendsOf(io, policy, skills, warnings) {
     var appends = {};
     for (var target in policy.promptAppend) {
         if (!hasKey(policy.promptAppend, target)) continue;
@@ -471,28 +315,34 @@ function resolvePool(io, config, jobParams, opts) {
             throw skillError('reviewPolicy.promptAppend names the unknown reviewer "' + target +
                 '" — defined reviewers: ' + Object.keys(skills).join(', ') + ' (or "' + BASE_APPEND_KEY + '")');
         }
-        var paths = policy.promptAppend[target];
-        var resolved = [];
-        for (var p = 0; p < paths.length; p++) {
-            var text = null;
-            try {
-                text = io.readFile(paths[p]);
-            } catch (eAppend) {
-                text = null;
-            }
-            if (text === null || text === undefined || !String(text).trim()) {
-                warnings.push('promptAppend[' + target + ']: file missing or empty: ' + paths[p]);
-                continue;
-            }
-            resolved.push(paths[p]);
-        }
-        appends[target] = resolved;
+        appends[target] = resolveAppendPaths(io, target, policy.promptAppend[target], warnings);
     }
-    // Lens warnings per defined reviewer (§8 check 3 parity).
-    var order = factoryNames.concat(repoNames);
-    for (var r = 0; r < order.length; r++) {
-        lensWarnings(io, skills[order[r]], warnings);
-    }
+    return appends;
+}
+
+// ── the pool resolution (§2 + §3) ────────────────────────────────────────────
+
+/**
+ * The pool resolution (§2 + §3): factory skills → repo dir (tune/new) →
+ * reviewPolicy.reviewers tuning → promptAppend resolution. config/jobParams
+ * resolve the policy exactly like the review legs do
+ * (reviewPolicy.resolveReviewPolicy).
+ *
+ * Returns { policy, reviewers (resolved array in definition order),
+ * appends ({name|base: [paths]}), warnings, factoryNames, repoNames }.
+ */
+function resolvePool(io, config, jobParams, opts) {
+    var options = opts || {};
+    var warnings = [];
+    var factory = loadFactoryDirs(io, options.factoryDirs || [FACTORY_DIR], warnings);
+    var skills = factory.skills;
+    var repoNames = [];
+    loadRepoDir(io, options.repoDir || REPO_DIR, skills, warnings, repoNames);
+    var policy = reviewPolicy.resolveReviewPolicy(config, jobParams);
+    applyPolicyTuning(policy, skills);
+    var appends = resolvedAppendsOf(io, policy, skills, warnings);
+    var order = factory.names.concat(repoNames);
+    poolLensWarnings(io, skills, order, warnings);
     var reviewers = [];
     for (var f = 0; f < order.length; f++) reviewers.push(skills[order[f]]);
     return {
@@ -500,10 +350,12 @@ function resolvePool(io, config, jobParams, opts) {
         reviewers: reviewers,
         appends: appends,
         warnings: warnings,
-        factoryNames: factoryNames,
+        factoryNames: factory.names,
         repoNames: repoNames
     };
 }
+
+// ── pool views (§2 isEnabled, §7 required) ───────────────────────────────────
 
 /** The enabled reviewers of a resolved pool (§2 isEnabled). */
 function enabledReviewers(pool) {
@@ -548,6 +400,14 @@ function triggerPathsHit(triggerPaths, hunkPaths) {
     return false;
 }
 
+/** Does ONE rounds flag fire for the round the state describes? */
+function roundFlagFires(flag, s) {
+    if (flag === 'all') return true;
+    if (flag === 'first') return !s.firstDone;
+    if (flag === 'hunks') return !!s.hasNewHunks && !!s.hunksHitTrigger;
+    return false;
+}
+
 /**
  * The §6 rounds decision for one reviewer this round. state:
  *   firstDone     — the reviewer's FIRST full pass already completed (a
@@ -559,10 +419,7 @@ function roundsDecide(rounds, state) {
     var list = Array.isArray(rounds) ? rounds : [];
     var s = state || {};
     for (var i = 0; i < list.length; i++) {
-        var flag = list[i];
-        if (flag === 'all') return true;
-        if (flag === 'first' && !s.firstDone) return true;
-        if (flag === 'hunks' && s.hasNewHunks && s.hunksHitTrigger) return true;
+        if (roundFlagFires(list[i], s)) return true;
     }
     return false;
 }
@@ -602,11 +459,11 @@ if (typeof module !== 'undefined' && module.exports) {
         FACTORY_DIR: FACTORY_DIR,
         REPO_DIR: REPO_DIR,
         BASE_APPEND_KEY: BASE_APPEND_KEY,
-        KNOWN_FIELDS: KNOWN_FIELDS,
-        deriveRoleLine: deriveRoleLine,
-        validateSkillDefinition: validateSkillDefinition,
-        validateRepoTuning: validateRepoTuning,
-        applyTuning: applyTuning,
+        KNOWN_FIELDS: poolSchema.KNOWN_FIELDS,
+        deriveRoleLine: poolSchema.deriveRoleLine,
+        validateSkillDefinition: poolSchema.validateSkillDefinition,
+        validateRepoTuning: poolSchema.validateRepoTuning,
+        applyTuning: poolSchema.applyTuning,
         resolvePool: resolvePool,
         enabledReviewers: enabledReviewers,
         findSkill: findSkill,
@@ -615,6 +472,6 @@ if (typeof module !== 'undefined' && module.exports) {
         roundsDecide: roundsDecide,
         reviewerShouldRun: reviewerShouldRun,
         poolSummaryLine: poolSummaryLine,
-        isReviewSkillError: isReviewSkillError
+        isReviewSkillError: poolSchema.isReviewSkillError
     };
 }
