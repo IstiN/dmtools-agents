@@ -342,9 +342,16 @@ suite('factoryMarkJobDone — entry action (mark_job_done_publish.js)', function
   });
 
   test('resolveParams: no input at all degrades to empty strings (no throw)', function () {
-    var p = entryModule.resolveParams(undefined, undefined);
-    assert.equal(p.number, '');
-    assert.equal(p.repo, '');
+    // Isolate from the host env: CI runners expose GITHUB_REPOSITORY through java.lang.System.getenv
+    var originalGetenv = java.lang.System.getenv;
+    java.lang.System.getenv = function () { return null; };
+    try {
+      var p = entryModule.resolveParams(undefined, undefined);
+      assert.equal(p.number, '');
+      assert.equal(p.repo, '');
+    } finally {
+      java.lang.System.getenv = originalGetenv;
+    }
   });
 
   test('action wires cli_execute_command/file_write capturers end-to-end', function () {
@@ -470,8 +477,17 @@ suite('factoryMarkJobDone — entry action edge branches (gh-1225)', function ()
     './publishParams.js': publishParamsReal(),
       './mark_job_done.js': mjdModule
     }), {});
-    assert.equal(entryModule.envValue('NUMBER'), '');
-    assert.equal(entryModule.envValue('GITHUB_REPOSITORY'), '');
+    // Hide the runtime's java env bridge (both dmtools runtimes install a
+    // java.lang.System.getenv shim by default) for the duration, then restore.
+    var hadJava = Object.prototype.hasOwnProperty.call(globalThis, 'java');
+    var savedJava = globalThis.java;
+    globalThis.java = undefined;
+    try {
+      assert.equal(entryModule.envValue('NUMBER'), '');
+      assert.equal(entryModule.envValue('GITHUB_REPOSITORY'), '');
+    } finally {
+      if (hadJava) globalThis.java = savedJava; else delete globalThis.java;
+    }
   });
 
   test('action resolves the dmtools globals when deps is omitted (default deps = {})', function () {
