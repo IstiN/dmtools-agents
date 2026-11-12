@@ -701,7 +701,7 @@ function loadDevSetup(fs, extraMocks) {
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function () { } },
             './common/trackers.js': trackersModuleReal,
             './common/developmentMode.js': developmentMode,
-            './common/developmentModePlan.js': developmentModePlan,
+            './common/developmentModePlan.js': planReal,
             './common/developmentModeAdaptive.js': adaptiveReal
         }),
         mocks
@@ -831,8 +831,10 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
             file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete,
             cli_execute_command: function () { return ''; }
         };
+        var planReal = loadModule('js/common/developmentModePlan.js',
+            makeRequire({ './developmentMode.js': developmentMode }), mocks);
         var adaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
-            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks);
+            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': planReal }), mocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
@@ -852,7 +854,7 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () { } },
                 './common/trackers.js': trackersStub,
                 './common/developmentMode.js': developmentMode,
-                './common/developmentModePlan.js': developmentModePlan,
+                './common/developmentModePlan.js': planReal,
                 './common/developmentModeAdaptive.js': adaptiveReal
             }),
             mocks
@@ -886,8 +888,10 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
             file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete,
             cli_execute_command: function () { return ''; }
         };
+        var planReal = loadModule('js/common/developmentModePlan.js',
+            makeRequire({ './developmentMode.js': developmentMode }), mocks);
         var adaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
-            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks);
+            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': planReal }), mocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
@@ -907,7 +911,7 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () { } },
                 './common/trackers.js': trackersStub,
                 './common/developmentMode.js': developmentMode,
-                './common/developmentModePlan.js': developmentModePlan,
+                './common/developmentModePlan.js': planReal,
                 './common/developmentModeAdaptive.js': adaptiveReal
             }),
             mocks
