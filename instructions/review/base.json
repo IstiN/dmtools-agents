@@ -1,0 +1,14 @@
+{
+  "name": "base",
+  "lens": "instructions/pr_review/generalist/lens.md",
+  "roleLine": "Senior Code Reviewer",
+  "mayRaise": ["BLOCKING", "IMPORTANT", "SUGGESTION", "NIT"],
+  "filterWeight": "normal",
+  "isFiltered": true,
+  "isRequired": true,
+  "rounds": ["all"],
+  "triggerPaths": [],
+  "options": {},
+  "model": null,
+  "isEnabled": true
+}

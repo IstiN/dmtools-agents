@@ -6,7 +6,7 @@
 
 ### [1] Role / Plain Text
 
-Senior Code Reviewer & Security Expert
+Senior Code Reviewer
 
 ---
 
@@ -31,26 +31,12 @@ flowchart TD
 
 ---
 
-### [4] `./agents/instructions/pr_review/general_guidelines.md`
+### [4] `./agents/instructions/pr_review/base/input_context.md`
 
-# PR Review General Guidelines
+# PR Review Input Context — reading order (base contract, gh-1406)
 
-## Review flow
-
-```mermaid
-flowchart TD
-    START([PR ready for review]) --> READ["1. Read input context:<br/>instruction.md, ticket.md, review_policy.md, pr_info.md,<br/>pr_diff.txt, pr_files.txt, ci_failures.md,<br/>ci_failures_full.log, pr_discussions.md,<br/>pr_discussions_raw.json"]
-    READ --> DIFF["2. Run diff checklist on pr_diff.txt"]
-    DIFF --> FILES["3. Deep read:<br/>first round — every changed file;<br/>re-review (pr_new_hunks.txt present) —<br/>new hunks + interaction neighborhood<br/>(unchanged lines frozen)"]
-    FILES --> CODEGRAPH["4. Use CodeGraph:<br/>callers/callees of changed symbols,<br/>search for sensitive patterns,<br/>impact analysis"]
-    CODEGRAPH --> DIMS["5. Evaluate review dimensions:<br/>Security · Architecture/OOP · Code quality<br/>Test coverage · Duplication · Backward compatibility"]
-    DIMS --> SEVERITY["6. Classify each finding:<br/>BLOCKING / IMPORTANT / SUGGESTION / NIT<br/>(severity census gates approval per review_policy.md)"]
-    SEVERITY --> EXHAUST["7. Necessity pass:<br/>threads only for findings that defend<br/>correctness / security / data loss / CI / ticket contract —<br/>everything else → ranked digest"]
-    EXHAUST --> OUTPUT["8. Write outputs:<br/>pr_review.json · pr_review_general.md · pr_review_comments/*.md"]
-    OUTPUT --> END([End])
-```
-
-## 1. Input context — MANDATORY reading order
+Reviewer-agnostic: EVERY reviewer leg reads the same PR context. Read files
+that exist in `input/` locally — do NOT re-fetch via dmtools.
 
 ```mermaid
 flowchart TD
@@ -83,7 +69,183 @@ flowchart TD
     PR_CONTEXT --> TICKET_CONTEXT --> RULE
 ```
 
-Read PR files to understand WHAT changed. Read ticket files to understand WHY it changed and verify against requirements.
+Read PR files to understand WHAT changed. Read ticket files to understand WHY
+it changed and verify against requirements.
+
+
+---
+
+### [5] `./agents/instructions/pr_review/base/output_rules.md`
+
+# PR Review Output Rules — the machine contract (base, gh-1406)
+
+Reviewer-agnostic: every reviewer leg writes the same structured review
+artifacts; the machine parses them (gh-1350/1351). The lens may add
+reviewer-specific files but never changes this contract.
+
+```mermaid
+flowchart TD
+    O1["Write outputs/pr_review.json — structured data for the PR review"]
+    O2["Write outputs/pr_review_general.md — brief general PR comment (1-2 paragraphs max)"]
+    O3["Write outputs/pr_review_comments/*.md — detailed inline comment files"]
+    O4["Always reference inline comment files via the 'comment' field — do NOT use inline 'body'"]
+    O5["Inline comments MUST use a line number that exists in the PR diff"]
+    O6["If a finding is on unchanged code outside the diff, put it in outputs/pr_review_general.md instead"]
+    O1 --> O2 --> O3 --> O4 --> O5 --> O6
+```
+
+## The contract
+
+- `outputs/pr_review.json` — valid JSON with `recommendation`
+  (APPROVE | REQUEST_CHANGES | BLOCK), `summary`, `generalComment`,
+  `inlineComments`, `issueCounts`.
+- `outputs/pr_review_general.md` — the general PR comment body; max 1-2
+  paragraphs, factual, no essays.
+- `outputs/pr_review_comments/<name>.md` — one file per detailed inline
+  comment; the `comment` field carries the file PATH, never the text itself.
+- Each inline comment: `path`, `line`, `startLine`, `side`, `comment`,
+  `severity` (BLOCKING | IMPORTANT | SUGGESTION | NIT).
+- Inline comments MUST target a line that appears in the PR diff (use line
+  numbers from the right-hand side of diff hunks; if `pr_diff.txt` is
+  truncated, run `git diff origin/{baseBranch}...HEAD` to locate the exact
+  line). A finding on unchanged code outside the diff goes to
+  `pr_review_general.md` — never an inline thread.
+- If `ci_failures.md` is present → include each failure as 🚨 BLOCKING
+  (full logs in `ci_failures_full.log`).
+- Keep `summary` under 2 sentences — details live in the inline comment
+  files, not the general text.
+- Ticket context: verify the PR changes satisfy the ticket ACs — note gaps
+  in the review.
+- The verdict is a MACHINE decision recomputed from `issueCounts` + the
+  resolved `reviewPolicy` — the census is the machine's source of truth;
+  keep it accurate.
+
+
+---
+
+### [6] `./agents/instructions/pr_review/base/registry_protocol.md`
+
+# Finding-identity registry protocol (base contract, gh-1406)
+
+Reviewer-agnostic: every reviewer leg answers the same previously-raised
+findings registry (gh-1332) before raising anything new. This protocol is a
+factory invariant — the machine parses the dispositions.
+
+## 9. Previously raised findings — the finding-identity registry
+
+When `input/TICKET/pr_findings.md` is present, earlier review rounds on this PR already raised findings **F1–Fn** (each with its claim, file and status). The registry dedup is what keeps repeated rounds from minting duplicate threads for the same defect.
+
+Answer the registry **before** raising anything new:
+
+- **verify fixed** — the fixing hunk you can cite closes the finding: disposition `"fixed"` with the hunk reference. Never mark `fixed` without a citable hunk.
+- **withdraw (reason required)** — the claim is wrong or no longer applies: disposition `"withdrawn"` with the reason. A withdrawal without a reason is rejected by the machine, and BLOCKING withdrawals surface to the owner.
+- **mark re-introduced** — the defect is still there (e.g. the fix was reverted): leave the finding open and let your re-raise match it; do not re-litigate the claim from scratch.
+
+New claims always need new evidence, and they pass the same §7 necessity test before they earn a thread. A finding on the registry list is answered, not re-raised as if it were news.
+
+**Candidates pending confirmation** (also listed in `pr_findings.md`): when a new finding you raised is *possibly same as F<n>*, the machine asks one word per candidate — confirm with `"same as F<n>"` or call it `"new"`. Unconfirmed candidates become new identities; nothing merges without your confirmation. This is a dedup request, not a push-back: confirming merges the threads, it does not weaken the finding (merges can only escalate severity, never de-escalate).
+
+Add a `findingReview` block to `outputs/pr_review.json` (alongside `inlineComments`):
+
+```json
+{"findingReview": {
+  "dispositions": [
+    {"n": 1, "status": "fixed", "hunk": "src/auth.ts:40-48 — try/catch added"},
+    {"n": 2, "status": "withdrawn", "reason": "validation exists at src/auth.ts:50 — claim was wrong"},
+    {"n": 3, "status": "re-introduced"}
+  ],
+  "confirmations": [
+    {"proposedFor": 1, "same": true}
+  ]
+}}
+```
+
+When `pr_findings.md` is absent, this section does not apply — review exactly as before.
+
+
+---
+
+### [7] `./agents/instructions/pr_review/base/formatting_rules.md`
+
+```mermaid
+flowchart TD
+    F1["outputs/pr_review_general.md — brief Markdown summary, under 20 lines, bullet-focused"]
+    F2["Required sections: Summary, Key Issues, Next Steps"]
+    F3["outputs/pr_review.json — valid JSON with recommendation, summary, inlineComments, issueCounts"]
+    F4["Each inline comment: path, line, startLine, side, comment, severity (BLOCKING|IMPORTANT|SUGGESTION|NIT)"]
+    F5["comment must be a path to a file under outputs/pr_review_comments/<name>.md"]
+    F6["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
+    F7["If ci_failures.md present → include each failure as 🚨 BLOCKING (full logs in ci_failures_full.log)"]
+    F8["Keep summary under 2 sentences — put details in inline comment files, not in general text"]
+    F9["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional clarity · NIT = style only"]
+    F10["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
+    F11["Inline comments MUST target a line that appears in the PR diff<br/>If the line is not in the diff, the comment becomes a general PR comment instead of a review thread"]
+    F12["Use line numbers from the right-hand side of diff hunks<br/>If pr_diff.txt is truncated, run git diff origin/{base}...HEAD to see the full diff"]
+```
+
+
+---
+
+### [8] `./agents/instructions/pr_review/base/few_shots_format.md`
+
+# pr_review.json shape — format contract (base, gh-1406)
+
+Reviewer-agnostic: the structured answer of every reviewer leg carries the
+same shape. The worked examples live in each reviewer's few-shots file; this
+file is the shape + severity-boundary contract.
+
+### outputs/pr_review.json
+```json
+{
+  "recommendation": "BLOCK",
+  "summary": "SQL injection in UserService.js must be fixed before merge.",
+  "generalComment": "outputs/pr_review_general.md",
+  "inlineComments": [
+    {"path":"src/auth/UserService.js","line":45,"comment":"outputs/pr_review_comments/comment1.md","severity":"BLOCKING"},
+    {"path":"src/auth/LoginController.js","line":78,"comment":"outputs/pr_review_comments/comment2.md","severity":"IMPORTANT"},
+    {"path":"src/utils/validation.js","line":23,"comment":"outputs/pr_review_comments/comment3.md","severity":"SUGGESTION"},
+    {"path":"src/auth/LoginController.js","line":20,"comment":"outputs/pr_review_comments/comment4.md","severity":"NIT"}
+  ],
+  "issueCounts": {"blocking":1,"important":1,"suggestions":1,"nits":1}
+}
+```
+
+**Severity boundary (4 tiers)**: a 🪶 NIT changes nothing behavioral and
+nothing documented (style, naming, formatting, micro-symmetry); a 💡 SUGGESTION
+changes clarity of the documented/behavioral surface (missing docs, unclear
+contract, better API shape). Anything that changes behavior or breaks a
+documented contract is ⚠️ IMPORTANT or 🚨 BLOCKING.
+
+The 4-tier census (`issueCounts`) counts posted threads + digest lines and
+drives the machine verdict — keep it consistent with the inlineComments
+severities.
+
+
+---
+
+### [9] `./agents/instructions/pr_review/generalist/lens.md`
+
+# Generalist Review Lens (gh-1406 reviewer pool — the base reviewer)
+
+The generalist lens: full-diff review across every dimension. The reviewer-agnostic
+contract (input reading order, output rules, verdict rules, registry protocol,
+formatting) lives in `instructions/pr_review/base/` and is assembled around this lens —
+this file is WHAT the base reviewer hunts, not how it answers.
+
+## Review flow
+
+```mermaid
+flowchart TD
+    START([PR ready for review]) --> READ["1. Read input context:<br/>instruction.md, ticket.md, review_policy.md, pr_info.md,<br/>pr_diff.txt, pr_files.txt, ci_failures.md,<br/>ci_failures_full.log, pr_discussions.md,<br/>pr_discussions_raw.json"]
+    READ --> DIFF["2. Run diff checklist on pr_diff.txt"]
+    DIFF --> FILES["3. Deep read:<br/>first round — every changed file;<br/>re-review (pr_new_hunks.txt present) —<br/>new hunks + interaction neighborhood<br/>(unchanged lines frozen)"]
+    FILES --> CODEGRAPH["4. Use CodeGraph:<br/>callers/callees of changed symbols,<br/>search for sensitive patterns,<br/>impact analysis"]
+    CODEGRAPH --> DIMS["5. Evaluate review dimensions:<br/>Security · Architecture/OOP · Code quality<br/>Test coverage · Duplication · Backward compatibility"]
+    DIMS --> SEVERITY["6. Classify each finding:<br/>BLOCKING / IMPORTANT / SUGGESTION / NIT<br/>(severity census gates approval per review_policy.md)"]
+    SEVERITY --> EXHAUST["7. Necessity pass:<br/>threads only for findings that defend<br/>correctness / security / data loss / CI / ticket contract —<br/>everything else → ranked digest"]
+    EXHAUST --> OUTPUT["8. Write outputs:<br/>pr_review.json · pr_review_general.md · pr_review_comments/*.md"]
+    OUTPUT --> END([End])
+```
 
 ## 2. Diff checklist — apply to `pr_diff.txt`
 
@@ -219,78 +381,10 @@ Write the standard review artifacts:
 
 Do NOT write `outputs/response.md`; the review is posted to GitHub only.
 
-## 9. Previously raised findings — the finding-identity registry
-
-When `input/TICKET/pr_findings.md` is present, earlier review rounds on this PR already raised findings **F1–Fn** (each with its claim, file and status). The registry dedup is what keeps repeated rounds from minting duplicate threads for the same defect.
-
-Answer the registry **before** raising anything new:
-
-- **verify fixed** — the fixing hunk you can cite closes the finding: disposition `"fixed"` with the hunk reference. Never mark `fixed` without a citable hunk.
-- **withdraw (reason required)** — the claim is wrong or no longer applies: disposition `"withdrawn"` with the reason. A withdrawal without a reason is rejected by the machine, and BLOCKING withdrawals surface to the owner.
-- **mark re-introduced** — the defect is still there (e.g. the fix was reverted): leave the finding open and let your re-raise match it; do not re-litigate the claim from scratch.
-
-New claims always need new evidence, and they pass the same §7 necessity test before they earn a thread. A finding on the registry list is answered, not re-raised as if it were news.
-
-**Candidates pending confirmation** (also listed in `pr_findings.md`): when a new finding you raised is *possibly same as F<n>*, the machine asks one word per candidate — confirm with `"same as F<n>"` or call it `"new"`. Unconfirmed candidates become new identities; nothing merges without your confirmation. This is a dedup request, not a push-back: confirming merges the threads, it does not weaken the finding (merges can only escalate severity, never de-escalate).
-
-Add a `findingReview` block to `outputs/pr_review.json` (alongside `inlineComments`):
-
-```json
-{"findingReview": {
-  "dispositions": [
-    {"n": 1, "status": "fixed", "hunk": "src/auth.ts:40-48 — try/catch added"},
-    {"n": 2, "status": "withdrawn", "reason": "validation exists at src/auth.ts:50 — claim was wrong"},
-    {"n": 3, "status": "re-introduced"}
-  ],
-  "confirmations": [
-    {"proposedFor": 1, "same": true}
-  ]
-}}
-```
-
-When `pr_findings.md` is absent, this section does not apply — review exactly as before.
-
 
 ---
 
-### [5] `./agents/instructions/pr_review/output_rules.md`
-
-```mermaid
-flowchart TD
-    O1["Write outputs/pr_review.json — structured data for GitHub PR review"]
-    O2["Write outputs/pr_review_general.md — brief general PR comment (1-2 paragraphs max)"]
-    O3["Write outputs/pr_review_comments/*.md — detailed inline comment files"]
-    O4["Always reference inline comment files via the 'comment' field — do NOT use inline 'body'"]
-    O5["Inline comments MUST use a line number that exists in the PR diff"]
-    O6["If a finding is on unchanged code outside the diff, put it in outputs/pr_review_general.md instead"]
-    O1 --> O2 --> O3 --> O4 --> O5 --> O6
-```
-
-
----
-
-### [6] `./agents/instructions/pr_review/formatting_rules.md`
-
-```mermaid
-flowchart TD
-    F1["outputs/pr_review_general.md — brief Markdown summary, under 20 lines, bullet-focused"]
-    F2["Required sections: Summary, Key Issues, Next Steps"]
-    F3["outputs/pr_review.json — valid JSON with recommendation, summary, inlineComments, issueCounts"]
-    F4["Each inline comment: path, line, startLine, side, comment, severity (BLOCKING|IMPORTANT|SUGGESTION|NIT)"]
-    F5["comment must be a path to a file under outputs/pr_review_comments/<name>.md"]
-    F6["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
-    F7["If ci_failures.md present → include each failure as 🚨 BLOCKING (full logs in ci_failures_full.log)"]
-    F8["Keep summary under 2 sentences — put details in inline comment files, not in general text"]
-    F9["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional clarity · NIT = style only"]
-    F10["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
-    F11["Inline comments MUST target a line that appears in the PR diff<br/>If the line is not in the diff, the comment becomes a general PR comment instead of a review thread"]
-    F12["Use line numbers from the right-hand side of diff hunks<br/>If pr_diff.txt is truncated, run git diff origin/{base}...HEAD to see the full diff"]
-```
-
-
----
-
-### [7] `./agents/instructions/pr_review/few_shots.md`
+### [10] `./agents/instructions/pr_review/generalist/few_shots.md`
 
 Example PR review outputs — keep concise:
 
@@ -349,7 +443,7 @@ await db.query(query, [email]);
 
 ---
 
-### [8] `./agents/instructions/pr_review/review_verdict_rules.md`
+### [11] `./agents/instructions/pr_review/base/review_verdict_rules.md`
 
 # Review verdict rules — machine protocol (binding)
 
@@ -438,7 +532,7 @@ the lane independently). Reviews must therefore:
 
 ---
 
-### [9] `./agents/instructions/common/dmtools_cli.md`
+### [12] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -476,7 +570,7 @@ flowchart TD
 
 ---
 
-### [10] `./agents/prompts/bash_tools.md`
+### [13] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -521,7 +615,7 @@ flowchart TD
 
 ---
 
-### [11] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
+### [14] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
 
 **HARD GATE — read before any tool call:**
 

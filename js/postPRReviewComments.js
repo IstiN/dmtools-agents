@@ -230,7 +230,7 @@ function readMarkdownFile(filePath, ticketKey, workingDir) {
 }
 
 /**
- * Defense-in-depth guard: the agent is instructed (instructions/pr_review/output_rules.md,
+ * Defense-in-depth guard: the agent is instructed (instructions/pr_review/base/output_rules.md,
  * few_shots.md) to reference comment text via the `comment` field (a path to a
  * .md file under outputs/), never inline in `body`. If a
  * prompt/schema inconsistency ever causes the model to duplicate that path

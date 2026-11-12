@@ -34,7 +34,8 @@
  *     rewritten once — the census moves once per physical comment.
  *
  * This module is the machine-side half of that discipline (the prompt-side
- * rule lives in instructions/pr_review/general_guidelines.md). postPRReview
+ * rule lives in instructions/pr_review/base/few_shots_format.md and the
+ * generalist lens). postPRReview
  * Comments sanitizes the agent's pr_review.json through sanitizeReviewData
  * BEFORE any verdict, census, or comment body is derived from it, so an
  * uncited spec claim can no longer arm rework or hold a green PR hostage.
@@ -470,7 +471,7 @@ function verifiedOrDemotedVerdict(text, opts) {
  * gh-1334 verification). severity — the structured severity field
  * ('BLOCKING'/'IMPORTANT'/...), may be absent: the 🚨 marker / BLOCKING word
  * in the body carries blocking force on its own (that is what the machine
- * cross-checks per instructions/pr_review/review_verdict_rules.md).
+ * cross-checks per instructions/pr_review/base/review_verdict_rules.md).
  * opts.ticketText / opts.ticketFile — the ticket text the review run has
  * (input/TICKET/); when present, an uncited claim is verified against it
  * BEFORE the demotion.

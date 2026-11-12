@@ -1,0 +1,16 @@
+{
+  "name": "security",
+  "lens": "instructions/pr_review/security/lens.md",
+  "roleLine": "Specialized Code Reviewer \u2014 security",
+  "mayRaise": ["BLOCKING", "IMPORTANT", "SUGGESTION", "NIT"],
+  "filterWeight": "normal",
+  "isFiltered": true,
+  "isRequired": true,
+  "rounds": ["first", "hunks"],
+  "triggerPaths": [],
+  "options": {
+    "referencePack": "instructions/pr_review/security/references.md"
+  },
+  "model": null,
+  "isEnabled": true
+}
