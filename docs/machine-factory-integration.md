@@ -558,11 +558,13 @@ rules) — the same engine drives both, so a mixed fleet is fine.
 `main` is changed **only** by PRs merged by the SM merge app
 **dmtools-factory-bot** (GitHub App id `5357829`, token minted from
 `secrets.APP_ID` / `secrets.APP_PRIVATE_KEY` in `machine-merge.yml` /
-`machine-sm.yml`) after review and the quality gates. Two rulesets enforce it:
+`machine-sm.yml`) after review and the quality gates — the single exception is the
+agent-pack release's `versions.json` ledger, which the same bot pushes
+directly. Two rulesets enforce it:
 
 | Ruleset | Rules | Bypass |
 |---|---|---|
-| `main-protection` | `pull_request` (0 approvals), `required_status_checks` strict: `crap`, `gate`, `docs-freshness`, `docs-coverage-tests`; `non_fast_forward`; `deletion` | **none** — the bot must pass every check too |
+| `main-protection` | `pull_request` (0 approvals), `required_status_checks` strict: `crap`, `gate`, `docs-freshness`, `docs-coverage-tests`; `non_fast_forward`; `deletion` | dmtools-factory-bot (Integration `5357829`, `always`) — used only for the direct ledger push; content PRs still run every check before the bot merges |
 | `main-merge-only-sm` | `update` (restrict updates) | dmtools-factory-bot (Integration `5357829`, `always`) |
 
 Consequences:
@@ -572,6 +574,8 @@ Consequences:
   `ai_validating`) and let the merge bot conclude it.
 - The required checks must report on **every** PR: `quality.yml` and
   `agent-docs.yml` have no `pull_request` path filters — never add one.
-- The agent-pack release lands its `versions.json` ledger through a PR
-  opened and squash-merged with the dmtools-factory-bot token
-  (`agent-pack-release.yml`), not a direct push.
+- The agent-pack release pushes its `versions.json` ledger **directly** to
+  `main` with the dmtools-factory-bot token (`agent-pack-release.yml`):
+  commit `chore(release): bump agent versions [skip ci]`, nothing-changed
+  guards before the push and on every retry, fetch + rebase onto fresh
+  `origin/main` and up to 3 retries on a non-fast-forward rejection. No PR.
