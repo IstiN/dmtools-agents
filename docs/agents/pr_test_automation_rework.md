@@ -7,3 +7,5 @@ Applies PR review feedback and CI fixes for a single-Test-Case automation pull r
 - `removeLabel` — clears `sm_test_rework_triggered` after pushing rework commits.
 - `checkOpenPR` — requires an open test PR before running rework.
 - `autoStartReview` / `autoStartReviewConfigFile` — re-runs the test PR review workflow after rework is pushed.
+
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).

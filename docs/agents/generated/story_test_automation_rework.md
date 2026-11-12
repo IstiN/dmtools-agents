@@ -9,6 +9,8 @@ Resolves open PR review threads (`outputs/review_replies.json`) and fixes test c
 - `testFilesGlob` — restricts reworked commits to matching paths under `testing/`.
 - `autoStartReview` / `autoStartReviewConfigFile` — re-triggers `pr_story_test_automation_review` once fixes land.
 
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/story_test_automation_rework.md`](agents/docs/agents/story_test_automation_rework.md)_
 
 ## Attributes
@@ -91,6 +93,7 @@ _Story Test Automation Rework Action_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_story_test_rework_triggered"`
 - `checkOpenPR`: `true`
 - `branchCreateFnPath` _(used by JS action)_

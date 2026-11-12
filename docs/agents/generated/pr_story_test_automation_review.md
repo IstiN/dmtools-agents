@@ -10,6 +10,8 @@ Reviews a Story bulk test automation PR (`test/{STORY_KEY}`) against the Story's
 - `autoStartRework` / `autoStartReworkConfigFile` — triggers `story_test_automation_rework` when changes are requested.
 - `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
 
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/pr_story_test_automation_review.md`](agents/docs/agents/pr_story_test_automation_review.md)_
 
 ## Attributes
@@ -92,6 +94,7 @@ _Post Story Test Automation Review Comments Action_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_story_test_review_triggered"`
 - `checkOpenPR`: `true`
 - `branchCreateFnPath` _(used by JS action)_

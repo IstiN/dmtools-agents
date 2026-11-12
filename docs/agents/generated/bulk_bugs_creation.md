@@ -14,6 +14,8 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 - `smTriggerLabel` — label that marks the ticket as triggered by the SM rule.
 
+- `responseTarget`: `"tracker"` — `outputs/response.md` is posted to the tracker, so on Jira the output-format prompt is Jira wiki markup (condition `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/bulk_bugs_creation.md`](agents/docs/agents/bulk_bugs_creation.md)_
 
 ## Attributes
@@ -73,6 +75,7 @@ _Post Bulk Bugs Creation Action (postJSAction for bulk_bugs_creation agent)_
 
 ## Custom params
 
+- `responseTarget`: `"tracker"`
 - `batchSize`: `50`
 - `openBugsJql`: `"project = {jiraProject} AND issuetype in (Bug) AND status not in ({status.DONE:Done})"`
 - `failedTCsJql`: `"project = {jiraProject} AND issuetype = \"Test Case\" AND {stage.FAILED:Failed} AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC"`

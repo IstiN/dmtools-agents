@@ -17,6 +17,7 @@
     "preJSAction": "agents/js/prepareTestPRForReview.js",
     "postJSAction": "agents/js/postTestReviewComments.js",
     "customParams": {
+      "responseTarget": "scm",
       "removeLabel": "sm_test_review_triggered"
     },
     "inputJql": "key = JD-111",
@@ -40,7 +41,17 @@
     ],
     "cliPromptsByTracker": {
       "jira": [
-        "./agents/instructions/tracker/jira_comment_format.md"
+        {
+          "id": "responseFormatJiraWiki",
+          "prompt": "./agents/instructions/tracker/jira_comment_format.md",
+          "condition": "agents/js/conditions/isResponseToTracker.js"
+        },
+        {
+          "id": "responseFormatMarkdown",
+          "prompt": "./agents/instructions/common/markdown_output_format.md",
+          "condition": "agents/js/conditions/isResponseToScm.js"
+        },
+        "./agents/instructions/tracker/jira_context.md"
       ],
       "ado": [
         "./agents/instructions/tracker/ado_comment_format.md"

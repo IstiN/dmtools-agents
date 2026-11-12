@@ -22,6 +22,7 @@
     "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
     "postJSAction": "agents/js/developTicketAndCreatePR.js",
     "customParams": {
+      "responseTarget": "scm",
       "removeLabel": "sm_story_development_triggered"
     },
     "inputJql": "key in (JD-82)",
@@ -56,7 +57,17 @@
     ],
     "cliPromptsByTracker": {
       "jira": [
-        "./agents/instructions/tracker/jira_comment_format.md"
+        {
+          "id": "responseFormatJiraWiki",
+          "prompt": "./agents/instructions/tracker/jira_comment_format.md",
+          "condition": "agents/js/conditions/isResponseToTracker.js"
+        },
+        {
+          "id": "responseFormatMarkdown",
+          "prompt": "./agents/instructions/common/markdown_output_format.md",
+          "condition": "agents/js/conditions/isResponseToScm.js"
+        },
+        "./agents/instructions/tracker/jira_context.md"
       ],
       "ado": [
         "./agents/instructions/tracker/ado_comment_format.md"

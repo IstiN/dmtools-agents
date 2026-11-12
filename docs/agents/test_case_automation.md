@@ -8,3 +8,5 @@ Automates a single standalone `Test Case` ticket inside `testing/tests/{TICKET-K
 - `checkOpenPR` — skips tickets that already have an active test PR.
 - `testFilesGlob` — file glob restricting which paths under `testing/` may be committed.
 - `autoStartReview` / `autoStartReviewConfigFile` — triggers `pr_test_automation_review` after the PR is created.
+
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).

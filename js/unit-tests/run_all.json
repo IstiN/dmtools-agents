@@ -168,6 +168,7 @@
         "js/unit-tests/test_publishDiscoveryToConfluence.js",
         "js/unit-tests/test_publishParams.js",
         "js/unit-tests/test_pullRequestHelper.js",
+        "js/unit-tests/test_jiraWikiToMarkdown.js",
         "js/unit-tests/test_pushKnowledgeUpdate.js",
         "js/unit-tests/test_pushReworkChanges.js",
         "js/unit-tests/test_qualityGateConfig.js",

@@ -11,6 +11,8 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/pr_test_automation_review.md`](agents/docs/agents/pr_test_automation_review.md)_
 
 ## Attributes
@@ -76,6 +78,7 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_test_review_triggered"`
 - `allowApproveWithSuggestions` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_

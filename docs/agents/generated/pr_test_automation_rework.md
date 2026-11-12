@@ -8,6 +8,8 @@ Applies PR review feedback and CI fixes for a single-Test-Case automation pull r
 - `checkOpenPR` — requires an open test PR before running rework.
 - `autoStartReview` / `autoStartReviewConfigFile` — re-runs the test PR review workflow after rework is pushed.
 
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/pr_test_automation_rework.md`](agents/docs/agents/pr_test_automation_rework.md)_
 
 ## Attributes
@@ -92,6 +94,7 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_test_rework_triggered"`
 - `checkOpenPR`: `true`
 - `branchCreateFnPath` _(used by JS action)_

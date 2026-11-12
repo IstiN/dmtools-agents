@@ -5,3 +5,5 @@ Writes an enhanced Story `Description` from `input/` context and answered `exist
 ## Parameters
 
 - `contentOutput` — destination configuration (`target`: `jira_field` | `confluence` | `both`, `field`: `Description`, `operationType`: `replace`, `assignForReview`: `true`, plus Confluence page settings `space`, `parentPageId`, `pageTitleSuffix`, `includeInlineComments`, `updateTrackerField`).
+
+- `responseTarget`: `"tracker"` — `outputs/response.md` is posted to the tracker, so on Jira the output-format prompt is Jira wiki markup (condition `isResponseToTracker.js`).

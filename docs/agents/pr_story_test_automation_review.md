@@ -9,3 +9,5 @@ Reviews a Story bulk test automation PR (`test/{STORY_KEY}`) against the Story's
 - `autoStartMerge` / `autoStartMergeConfigFile` — triggers `story_test_automation_merge` when approved.
 - `autoStartRework` / `autoStartReworkConfigFile` — triggers `story_test_automation_rework` when changes are requested.
 - `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
+
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).

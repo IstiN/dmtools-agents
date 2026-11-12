@@ -17,6 +17,7 @@
     "preCliJSAction": "agents/js/prepareBulkBugsCreationContext.js",
     "postJSAction": "agents/js/postBulkBugsCreation.js",
     "customParams": {
+      "responseTarget": "tracker",
       "batchSize": 50,
       "openBugsJql": "project = {jiraProject} AND issuetype in (Bug) AND status not in ({status.DONE:Done})",
       "failedTCsJql": "project = {jiraProject} AND issuetype = \"Test Case\" AND {stage.FAILED:Failed} AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC",
@@ -49,7 +50,17 @@
     ],
     "cliPromptsByTracker": {
       "jira": [
-        "./agents/instructions/tracker/jira_comment_format.md"
+        {
+          "id": "responseFormatJiraWiki",
+          "prompt": "./agents/instructions/tracker/jira_comment_format.md",
+          "condition": "agents/js/conditions/isResponseToTracker.js"
+        },
+        {
+          "id": "responseFormatMarkdown",
+          "prompt": "./agents/instructions/common/markdown_output_format.md",
+          "condition": "agents/js/conditions/isResponseToScm.js"
+        },
+        "./agents/instructions/tracker/jira_context.md"
       ],
       "ado": [
         "./agents/instructions/tracker/ado_comment_format.md"

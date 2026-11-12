@@ -360,7 +360,7 @@ flowchart TD
 
 ### Tracker: `jira`
 
-#### [1] `./agents/instructions/tracker/jira_comment_format.md`
+#### [1] `./agents/instructions/tracker/jira_comment_format.md` _(conditional: `agents/js/conditions/isResponseToTracker.js`)_
 
 # Jira tracker comment
 
@@ -376,8 +376,30 @@ Use Jira wiki markup in `outputs/response.md`.
 
 Do not use Markdown headings, fenced code blocks, or backtick inline code.
 
-**IMPORTANT** When answering a clarification question about a user story, get the parent story for full context using: `dmtools jira_get_ticket PARENT-KEY` (the parent key is visible in the ticket's parent field).
 
+---
+
+#### [2] `./agents/instructions/common/markdown_output_format.md` _(conditional: `agents/js/conditions/isResponseToScm.js`)_
+
+# Pull request output format
+
+`outputs/response.md` in this workflow is posted to the pull request (GitHub / GitLab / Azure DevOps), so write it in GitHub-Flavored Markdown:
+
+- Headings: `##`, `###`
+- Inline code: backticks; code blocks: fenced with three backticks
+- Tables: `| a | b |` followed by a `| --- | --- |` separator row
+- Links: `[title](url)`
+
+Never use Jira wiki markup (`h3.`, `{{code}}`, `{code}`, `{noformat}`, `|| header ||`, `[title|url]`), even when the ticket lives in Jira.
+
+
+---
+
+#### [3] `./agents/instructions/tracker/jira_context.md`
+
+# Jira tracker context
+
+**IMPORTANT** When the ticket is a sub-task or answers a clarification question, get the parent story for full context using: `dmtools jira_get_ticket PARENT-KEY` (the parent key is visible in the ticket's parent field).
 
 
 ---

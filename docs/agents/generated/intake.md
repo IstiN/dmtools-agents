@@ -25,6 +25,8 @@ attachments and links do not exist there and are skipped.
 - Requirement: no runtime ships a sub-issue tool yet, so sub-issues are read and attached through the
   REST API with the GitHub CLI — the runner needs `gh` installed and authenticated (`GH_TOKEN`).
 
+- `responseTarget`: `"tracker"` — `outputs/response.md` is posted to the tracker, so on Jira the output-format prompt is Jira wiki markup (condition `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/intake.md`](agents/docs/agents/intake.md)_
 
 ## Attributes
@@ -86,6 +88,7 @@ _Create Intake Tickets Post-Action_
 
 ## Custom params
 
+- `responseTarget`: `"tracker"`
 - `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
 - `dryRun` _(used by JS action)_

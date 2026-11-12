@@ -12,6 +12,8 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `jql` — JQL override for selecting context tickets.
 - `parentContextFetch` — enables and configures fetching the parent ticket context ([BA]/[SA]/[VD] sibling tickets).
 
+- `responseTarget`: `"tracker"` — `outputs/response.md` is posted to the tracker, so on Jira the output-format prompt is Jira wiki markup (condition `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/po_refinement.md`](agents/docs/agents/po_refinement.md)_
 
 ## Attributes
@@ -66,6 +68,7 @@ _Close Question Ticket Post-Action_
 
 ## Custom params
 
+- `responseTarget`: `"tracker"`
 - `parentContextFetch`:
 
   ```json

@@ -9,6 +9,8 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
+- `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
+
 _Human doc: [`agents/docs/agents/bug_fix_batch_development.md`](agents/docs/agents/bug_fix_batch_development.md)_
 
 ## Attributes
@@ -79,6 +81,7 @@ _Post-CLI Bug-fix Batch Development Action_
 
 ## Custom params
 
+- `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_bug_fix_batch_development_triggered"`
 - `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
