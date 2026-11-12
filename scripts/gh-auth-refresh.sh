@@ -39,10 +39,9 @@
 #   - GH_TOKEN_KEEPER_DISABLE=1 turns the whole library into a no-op.
 #   - The keeper path derivation below is the ONE canonical definition —
 #     setup/gh-token-keeper.sh sources this file rather than repeating it.
-set -u
 
 GH_AUTH_REFRESH_DIR_DEFAULT() {
-    if [ -n "${RUNER_TEMP:-}" ]; then printf '%s' "${RUNER_TEMP}"; else printf '/tmp'; fi
+    if [ -n "${RUNNER_TEMP:-}" ]; then printf '%s' "${RUNNER_TEMP}"; else printf '/tmp'; fi
 }
 
 # The keeper's state directory (GH_TOKEN_KEEPER_DIR override for tests).
@@ -160,7 +159,7 @@ STUB_EOF
     # never the tagged result line).
     apply_in() {
         ( cd "$tmp" && env -u GH_TOKEN -u SOURCE_GITHUB_TOKEN -u GITHUB_RUN_ID \
-            -u RUNER_TEMP -u GH_TOKEN_KEEPER_DIR -u GH_TOKEN_KEEPER_DISABLE \
+            -u RUNNER_TEMP -u GH_TOKEN_KEEPER_DIR -u GH_TOKEN_KEEPER_DISABLE \
             -u GH_TOKEN_KEEPER_MAX_AGE_SEC \
             PATH="$stubs:$PATH" GH_TOKEN_KEEPER_DIR="$tmp" \
             "$@" bash -c '
@@ -251,22 +250,22 @@ STUB_EOF
     assert_equals "sourcing the helper exits 0" "$rc" "0"
     assert_not_contains "sourcing does not flip set -u onto the host" "$host_flags" "u"
 
-    # 11 — the state dir honors RUNER_TEMP (GitHub's double-N export):
+    # 11 — the state dir honors RUNNER_TEMP (GitHub's double-N export):
     #     without GH_TOKEN_KEEPER_DIR the state file rides the job-scoped
     #     temp dir, never /tmp — plaintext credentials must not persist on
     #     shared runners past the job's RUNNER_TEMP cleanup.
     runner_dir="$tmp/jobtemp"
     mkdir -p "$runner_dir"
     state_path="$( ( cd "$tmp" && env -u GH_TOKEN -u SOURCE_GITHUB_TOKEN -u GITHUB_RUN_ID \
-        -u RUNER_TEMP -u GH_TOKEN_KEEPER_DIR -u GH_TOKEN_KEEPER_DISABLE \
+        -u RUNNER_TEMP -u GH_TOKEN_KEEPER_DIR -u GH_TOKEN_KEEPER_DISABLE \
         -u GH_TOKEN_KEEPER_MAX_AGE_SEC \
-        PATH="$stubs:$PATH" RUNER_TEMP="$runner_dir" \
+        PATH="$stubs:$PATH" RUNNER_TEMP="$runner_dir" \
         bash -c '
             . "'"$tmp"'/helper.sh"
             gh_auth_keeper_state_file
         ' ) )"; rc=$?
     assert_equals "state-file path resolution exits 0" "$rc" "0"
-    assert_equals "state file rides RUNER_TEMP (job-scoped, not /tmp)" \
+    assert_equals "state file rides RUNNER_TEMP (job-scoped, not /tmp)" \
         "$state_path" "$runner_dir/gh-token-keeper-local.env"
 
     rm -rf "$tmp"
@@ -282,6 +281,7 @@ STUB_EOF
 if [ "${BASH_SOURCE[0]:-}" != "${0:-}" ]; then
     return 0 2>/dev/null || true
 fi
+set -u   # direct execution only — never leak shell options into sourcing hosts
 if [ "${1:-}" = "--self-test" ]; then
     self_test
     exit $?

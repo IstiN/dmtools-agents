@@ -12,7 +12,7 @@
 # The keeper is fix direction 1 (token refresh inside the job) + direction
 # 3 (the PAT-based long-leg credential): run it as a background process at
 # leg setup and it re-publishes a fresh credential every
-# GH_TOKEN_KEEPER_INTERVAL_SEC (default 270s = 45 min — safely inside the
+# GH_TOKEN_KEEPER_INTERVAL_SEC (default 2700s = 45 min — safely inside the
 # 60-minute TTL) into:
 #
 #   1. the state file (gh_auth_keeper_state_file, scripts/gh-auth-refresh.sh)
@@ -59,7 +59,7 @@ KEEPER_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../scripts/gh-auth-refresh.sh
 . "${KEEPER_SELF_DIR}/../scripts/gh-auth-refresh.sh"
 
-GH_TOKEN_KEEPER_INTERVAL_DEFAULT=270
+GH_TOKEN_KEEPER_INTERVAL_DEFAULT=2700
 GH_TOKEN_KEEPER_LIFETIME_DEFAULT=21600
 GH_TOKEN_KEEPER_POLL_DEFAULT=5
 
@@ -304,7 +304,7 @@ Usage: gh-token-keeper.sh refresh|start|stop|--self-test
 
   refresh     one refresh cycle (resolve → publish state file + GITHUB_ENV)
   start       refresh now, then loop every GH_TOKEN_KEEPER_INTERVAL_SEC
-              (default 270s) until the stop file or the lifetime cap
+              (default 2700s) until the stop file or the lifetime cap
               (GH_TOKEN_KEEPER_MAX_LIFETIME_SEC, default 6h)
   stop        write the stop file — `start` exits within a poll tick
   --self-test end-to-end contract check with stubbed curl (openssl/jq real)
@@ -390,7 +390,7 @@ STUB_EOF
             appargs=( "APP_ID=1234" "APP_PRIVATE_KEY=$(cat "$tmp/key.pem")" "GH_STUB_APP_ID=1234" )
         fi
         ( cd "$tmp" && env -u GH_TOKEN -u SOURCE_GITHUB_TOKEN -u GITHUB_RUN_ID \
-            -u RUNER_TEMP -u GH_TOKEN_KEEPER_DIR -u GH_TOKEN_KEEPER_MODE \
+            -u RUNNER_TEMP -u GH_TOKEN_KEEPER_DIR -u GH_TOKEN_KEEPER_MODE \
             -u GH_TOKEN_KEEPER_INTERVAL_SEC -u GH_TOKEN_KEEPER_MAX_LIFETIME_SEC \
             -u GH_TOKEN_KEEPER_POLL_SEC -u APP_ID -u APP_PRIVATE_KEY \
             -u GITHUB_ENV -u GITHUB_REPOSITORY \
