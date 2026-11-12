@@ -179,6 +179,12 @@ function loadModule(modulePath, requireFn, mocks) {
     return _testModule_.exports;
 }
 
+// Pure common modules loaded for real when a test's mock map omits them.
+var REAL_COMMON_MODULES = {
+    branchSetup: 'js/common/branchSetup.js',
+    jiraWikiToMarkdown: 'js/common/jiraWikiToMarkdown.js'
+};
+
 function makeRequire(moduleMap) {
     return function(id) {
         if (moduleMap[id]) return withModuleCompat(moduleMap[id]);
@@ -192,12 +198,7 @@ function makeRequire(moduleMap) {
         if (moduleMap[noExt]) return withModuleCompat(moduleMap[noExt]);
         if (moduleMap['./' + base]) return withModuleCompat(moduleMap['./' + base]);
 
-        if (base === 'branchSetup.js' || noExt === 'branchSetup') {
-            return loadModule('js/common/branchSetup.js');
-        }
-        if (noExt === 'jiraWikiToMarkdown') {
-            return loadModule('js/common/jiraWikiToMarkdown.js');
-        }
+        if (REAL_COMMON_MODULES[noExt]) return loadModule(REAL_COMMON_MODULES[noExt]);
         throw new Error('makeRequire: module not found: ' + id);
     };
 }
