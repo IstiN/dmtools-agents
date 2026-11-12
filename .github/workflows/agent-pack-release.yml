@@ -214,6 +214,11 @@ jobs:
           set -euo pipefail
           git config user.name "dmtools-factory-bot[bot]"
           git config user.email "dmtools-factory-bot[bot]@users.noreply.github.com"
+          # actions/checkout persists GITHUB_TOKEN as an http extraheader that
+          # OVERRIDES the URL credentials — the push would then run as
+          # github-actions[bot] (no bypass) and be declined. Drop it so the
+          # push authenticates as dmtools-factory-bot.
+          git config --local --unset-all http.https://github.com/.extraheader || true
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           cleanup() { git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"; }
           trap cleanup EXIT
