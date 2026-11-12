@@ -166,11 +166,28 @@ function mergedById(merged, id) {
 }
 
 /**
- * Weighted retention over the filter verdicts (the gh-1403 verdict shape:
- * { id, decision: keep|demote|drop, tier?, reason? }): a drop/demote of a
- * high-weight candidate without a stated reason is REFUSED (fail-open to
- * keep) with a note — silence is never precision for a high-weight source.
- * Returns { verdicts (the retention-checked list), refused, notes }.
+ * §5 weighted retention — the refusal predicate: a drop/demote of a
+ * HIGH-WEIGHT candidate without a stated reason must be refused (the
+ * reviewer cannot silently bury a high-weight finding).
+ */
+function highWeightRefusalOf(v, candidate) {
+    if (!candidate || !candidate.highWeight) return false;
+    if (v.decision !== 'drop' && v.decision !== 'demote') return false;
+    return !v.reason || !String(v.reason).trim();
+}
+
+/** The note recorded for a refused weighted-retention suppression. */
+function weightedRefusalNoteOf(v, candidate) {
+    return 'weighted retention: ' + v.decision + ' refused for high-weight candidate ' + v.id +
+        ' (' + candidate.reviewers.join(', ') + ') — demote/drop needs a stated reason';
+}
+
+/**
+ * §5 weighted retention: the applied verdicts against the merged census.
+ * A drop/demote of a HIGH-WEIGHT candidate without a stated reason is
+ * refused to `keep` with a note — silence is never precision for a
+ * high-weight source. Returns { verdicts (the retention-checked list),
+ * refused, notes }.
  */
 function applyWeightedRetention(merged, verdicts) {
     var out = [];
@@ -180,12 +197,9 @@ function applyWeightedRetention(merged, verdicts) {
     for (var i = 0; i < list.length; i++) {
         var v = list[i] || {};
         var candidate = mergedById(merged, v.id);
-        var suppressive = v && (v.decision === 'drop' || v.decision === 'demote');
-        if (candidate && candidate.highWeight && suppressive &&
-            (!v.reason || !String(v.reason).trim())) {
+        if (highWeightRefusalOf(v, candidate)) {
             refused.push({ id: v.id, reviewer: candidate.reviewers.join(', '), decision: v.decision });
-            notes.push('weighted retention: ' + v.decision + ' refused for high-weight candidate ' + v.id +
-                ' (' + candidate.reviewers.join(', ') + ') — demote/drop needs a stated reason');
+            notes.push(weightedRefusalNoteOf(v, candidate));
             out.push({ id: v.id, decision: 'keep' });
             continue;
         }
@@ -200,22 +214,26 @@ function applyWeightedRetention(merged, verdicts) {
  * these explicitly (§5: "demote/drop requires a stated reason, surfaced in
  * the packet").
  */
+function highWeightOutcomeRowOf(merged, a) {
+    if (a.decision !== 'drop' && a.decision !== 'demote') return null;
+    var candidate = mergedById(merged, a.id);
+    if (!candidate || !candidate.highWeight) return null;
+    return {
+        id: a.id,
+        decision: a.decision,
+        reviewers: candidate.reviewers.slice(),
+        path: candidate.path,
+        line: candidate.line,
+        reason: a.reason || null
+    };
+}
+
 function highWeightOutcomesOf(merged, applied) {
     var out = [];
     var list = Array.isArray(applied) ? applied : [];
     for (var i = 0; i < list.length; i++) {
-        var a = list[i] || {};
-        if (a.decision !== 'drop' && a.decision !== 'demote') continue;
-        var candidate = mergedById(merged, a.id);
-        if (!candidate || !candidate.highWeight) continue;
-        out.push({
-            id: a.id,
-            decision: a.decision,
-            reviewers: candidate.reviewers.slice(),
-            path: candidate.path,
-            line: candidate.line,
-            reason: a.reason || null
-        });
+        var row = highWeightOutcomeRowOf(merged, list[i] || {});
+        if (row) out.push(row);
     }
     return out;
 }
@@ -243,17 +261,82 @@ function availabilityPacketLines(arrived, unavailable, roundName) {
     return lines;
 }
 
+/** The `path[:line]` location fragment of a dropped candidate record. */
+function poolCandidateLocOf(d) {
+    var loc = String(d.path || 'unknown path');
+    if (d.line !== undefined && d.line !== null) loc += ':' + d.line;
+    return loc;
+}
+
+/** The whitespace-collapsed claim fragment (hard-wrapped at 160 chars). */
+function poolCandidateClaimOf(d) {
+    var claim = String(d.claim || '').replace(/\s+/g, ' ').trim();
+    if (claim.length > 160) claim = claim.substring(0, 159) + '…';
+    return claim;
+}
+
 /**
  * One digest line for a dropped pool candidate (reviewer-attributed — §5
  * drop visibility; the gh-1403 digest shape plus the source reviewers).
  */
 function droppedPoolCandidateLine(drop) {
     var d = drop || {};
-    var loc = String(d.path || 'unknown path') + (d.line === undefined || d.line === null ? '' : ':' + d.line);
-    var claim = String(d.claim || '').replace(/\s+/g, ' ').trim();
-    if (claim.length > 160) claim = claim.substring(0, 159) + '…';
-    return '- `' + loc + '` — ' + claim + ' — 🧯 filter drop [' + String((d.reviewers || []).join(', ')) + ']: ' +
+    var reviewers = Array.isArray(d.reviewers) ? d.reviewers : [];
+    return '- `' + poolCandidateLocOf(d) + '` — ' + poolCandidateClaimOf(d) +
+        ' — 🧯 filter drop [' + reviewers.join(', ') + ']: ' +
         String(d.reason || 'no reason given');
+}
+
+/**
+ * The pool census line (sources = the union of candidate reviewers), or
+ * null when the merged census is empty.
+ */
+function poolCensusLineOf(merged) {
+    if (merged.length === 0) return null;
+    var reviewers = {};
+    for (var m = 0; m < merged.length; m++) {
+        var rs = merged[m].reviewers || [];
+        for (var r = 0; r < rs.length; r++) reviewers[rs[r]] = true;
+    }
+    return '👥 Pool census: ' + merged.length + ' candidate(s) after cross-reviewer dedup (sources: ' +
+        Object.keys(reviewers).sort().join(', ') + ').';
+}
+
+/** One ⚖️ weighted-retention packet line for an applied drop/demote. */
+function highWeightPacketLineOf(o) {
+    var loc = String(o.path) + (o.line === undefined || o.line === null ? '' : ':' + o.line);
+    return '⚖️ Weighted retention: ' + o.decision + ' of high-weight candidate #' + o.id +
+        ' from ' + (o.reviewers || []).join(', ') + ' at ' + loc +
+        ' — reason: ' + String(o.reason || '(stated in the filter verdict)');
+}
+
+/** The drop record's path/line pair, enriched from the merged census entry. */
+function droppedPoolLocOf(drop, candidate) {
+    return {
+        path: drop.path || (candidate && candidate.path),
+        line: drop.line !== undefined ? drop.line : (candidate && candidate.line)
+    };
+}
+
+/** One 🧯 drop packet line: the drop record enriched from the merged census. */
+function droppedPoolPacketLineOf(drop, merged) {
+    var candidate = mergedById(merged, drop.id);
+    var loc = droppedPoolLocOf(drop, candidate);
+    return droppedPoolCandidateLine({
+        path: loc.path,
+        line: loc.line,
+        claim: drop.claim || (candidate && candidate.claim),
+        reviewers: candidate ? candidate.reviewers : [],
+        reason: drop.reason
+    });
+}
+
+/** Push mapper(item) for each item of list; null/undefined results skipped. */
+function pushMappedLines(lines, list, mapper) {
+    for (var i = 0; i < list.length; i++) {
+        var line = mapper(list[i]);
+        if (line !== null && line !== undefined) lines.push(line);
+    }
 }
 
 /**
@@ -265,34 +348,12 @@ function buildPoolPacket(ctx) {
     var c = ctx || {};
     var lines = availabilityPacketLines(c.arrived, c.unavailable, c.roundName);
     var merged = Array.isArray(c.merged) ? c.merged : [];
-    if (merged.length > 0) {
-        var reviewers = {};
-        for (var m = 0; m < merged.length; m++) {
-            var rs = merged[m].reviewers || [];
-            for (var r = 0; r < rs.length; r++) reviewers[rs[r]] = true;
-        }
-        lines.push('👥 Pool census: ' + merged.length + ' candidate(s) after cross-reviewer dedup (sources: ' +
-            Object.keys(reviewers).sort().join(', ') + ').');
-    }
+    var census = poolCensusLineOf(merged);
+    if (census) lines.push(census);
     var high = Array.isArray(c.highWeightOutcomes) ? c.highWeightOutcomes : [];
-    for (var h = 0; h < high.length; h++) {
-        var o = high[h];
-        lines.push('⚖️ Weighted retention: ' + o.decision + ' of high-weight candidate #' + o.id +
-            ' from ' + (o.reviewers || []).join(', ') + ' at ' + o.path +
-            (o.line === undefined || o.line === null ? '' : ':' + o.line) +
-            ' — reason: ' + String(o.reason || '(stated in the filter verdict)'));
-    }
+    pushMappedLines(lines, high, highWeightPacketLineOf);
     var dropped = Array.isArray(c.dropped) ? c.dropped : [];
-    for (var d = 0; d < dropped.length; d++) {
-        var candidate = mergedById(merged, dropped[d].id);
-        lines.push(droppedPoolCandidateLine({
-            path: dropped[d].path || (candidate && candidate.path),
-            line: dropped[d].line !== undefined ? dropped[d].line : (candidate && candidate.line),
-            claim: dropped[d].claim || (candidate && candidate.claim),
-            reviewers: candidate ? candidate.reviewers : [],
-            reason: dropped[d].reason
-        }));
-    }
+    pushMappedLines(lines, dropped, function(drop) { return droppedPoolPacketLineOf(drop, merged); });
     return lines;
 }
 
