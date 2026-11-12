@@ -150,6 +150,25 @@ function file_list(args) {
     return JSON.stringify({ entries: fs.readdirSync(dir).map(function(n) { return path.join(dir, n); }).sort() });
 }
 
+var moduleFactoryCache = {};
+
+// Compiled factories are cached per (path, mock-name set): re-evaluating the whole
+// module source on every loadModule call kept every parsed Source alive in GraalJS
+// (tens of thousands of compilations, multi-GB heap). Mock values are passed in per
+// call, so every call still gets fresh module state.
+function compiledModuleFactory_(modulePath, code, keys) {
+    var sig = modulePath + '|' + keys.join(',');
+    var cached = moduleFactoryCache[sig];
+    if (cached && cached.code === code) return cached.factory;
+    var preamble = '';
+    for (var i = 0; i < keys.length; i++) {
+        preamble += 'var ' + keys[i] + ' = _testMocks_["' + keys[i] + '"];\n';
+    }
+    var factory = eval('(function(module, exports, require, _testMocks_) {\n' + preamble + code + '\n})');
+    moduleFactoryCache[sig] = { code: code, factory: factory };
+    return factory;
+}
+
 function loadModule(modulePath, requireFn, mocks) {
     var code = file_read(modulePath);
     if (!code || !code.trim()) {
@@ -157,24 +176,14 @@ function loadModule(modulePath, requireFn, mocks) {
     }
 
     var _testMocks_ = mocks || {};
-    var preamble = '';
-    for (var k in _testMocks_) {
-        if (Object.prototype.hasOwnProperty.call(_testMocks_, k)) {
-            preamble += 'var ' + k + ' = _testMocks_["' + k + '"];\n';
-        }
-    }
+    var factory = compiledModuleFactory_(modulePath, code, Object.keys(_testMocks_));
 
     var _testModule_ = { exports: {} };
     var _testRequire_ = requireFn || function(id) {
         throw new Error('loadModule: require("' + id + '") not provided for ' + modulePath);
     };
 
-    eval(
-        '(function(module, exports, require) {\n' +
-        preamble +
-        code +
-        '\n})(_testModule_, _testModule_.exports, _testRequire_)'
-    );
+    factory(_testModule_, _testModule_.exports, _testRequire_, _testMocks_);
 
     return _testModule_.exports;
 }
