@@ -251,16 +251,19 @@ function applyPoolFileMocks(globalMocks, opts) {
     };
 }
 
-function prLoad(opts) {
-    opts = opts || {};
-    var record = opts.record || prRecorder();
-    var globalMocks = prTrackerGlobals(record, opts.trackerThrows);
-    applyPoolFileMocks(globalMocks, opts);
+/** The gh-1471 pool execution chain, resolved for real (pure modules). */
+function prReviewPoolLegSetupReal() {
+    return loadModule('js/common/reviewPoolLegSetup.js', makeRequire({
+        './branchSetup.js': loadModule('js/common/branchSetup.js'),
+        './reviewPool.js': prReviewPoolReal(),
+        './reviewPoolInJob.js': prReviewPoolInJobReal()
+    }), {});
+}
 
-    // The action's globals (the sandbox): shared by the module AND the real
-    // common modules it loads (outputFiles reads through the file_read global).
-    var actionMocks = Object.assign({}, globalMocks, opts.globals || {});
-    var module = loadModule('js/preparePRForReview.js', makeRequire({
+/** prLoad's require map: the action's collaborators, shims where the suite
+ * asserts on them, the real pure modules everywhere else. */
+function prRequireMapOf(opts, record, globalMocks, actionMocks) {
+    return {
         './configLoader.js': prConfigLoader(opts, record),
         './common/githubHelpers.js': Object.assign(prGhMocks(opts, record), opts.gh || {}),
         './common/gitOps.js': Object.assign(prGitOpsMocks(opts, record), opts.gitOps || {}),
@@ -291,6 +294,7 @@ function prLoad(opts) {
         // these pure modules.
         './common/reviewPool.js': prReviewPoolReal(),
         './common/reviewPoolInJob.js': prReviewPoolInJobReal(),
+        './common/reviewPoolLegSetup.js': prReviewPoolLegSetupReal(),
         './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), actionMocks),
         './common/autoStart.js': Object.assign({
             triggerConfiguredWorkflowForTicket: function(options) {
@@ -299,7 +303,20 @@ function prLoad(opts) {
             },
             triggerSmIfIdle: function() {}
         }, opts.autoStart || {})
-    }), actionMocks);
+    };
+}
+
+function prLoad(opts) {
+    opts = opts || {};
+    var record = opts.record || prRecorder();
+    var globalMocks = prTrackerGlobals(record, opts.trackerThrows);
+    applyPoolFileMocks(globalMocks, opts);
+
+    // The action's globals (the sandbox): shared by the module AND the real
+    // common modules it loads (outputFiles reads through the file_read global).
+    var actionMocks = Object.assign({}, globalMocks, opts.globals || {});
+    var module = loadModule('js/preparePRForReview.js', makeRequire(
+        prRequireMapOf(opts, record, globalMocks, actionMocks)), actionMocks);
 
     return { module: module, record: record };
 }

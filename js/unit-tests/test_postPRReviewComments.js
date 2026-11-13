@@ -5542,3 +5542,65 @@ suite('postPReviewComments — gh-1471 round context (the materialized hunks fil
         assert.equal(loaded.scmInlineComments.length, 2, 'base + security candidate post as before');
     });
 });
+
+suite('postPReviewComments — gh-1471 pool round escalation + partial coverage', function() {
+    test('a matching specialist candidate ESCALATES the base finding inline (provenance + escalation note)', function() {
+        // The security candidate sits on the SAME identity as the base
+        // finding (path+line+claim) with a HIGHER severity — the merge
+        // escalates the base entry in place and the inline body grows the
+        // note (identity = path+line+claim).
+        var base = poolPostingReviewData();
+        base.inlineComments = [{
+            path: 'src/crypto.js', line: 22, severity: 'SUGGESTION',
+            body: 'Hard-coded IV in the AES setup.'
+        }];
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            reviewData: base,
+            generalMd: '# Review summary\n'
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        var escalated = loaded.scmInlineComments.filter(function(c) {
+            return c.path === 'src/crypto.js';
+        })[0];
+        assert.ok(escalated, 'the escalated base finding posts inline');
+        assert.ok(escalated.body.indexOf('severity: IMPORTANT') !== -1,
+            'the merged (higher) severity stamps the thread');
+        assert.ok(escalated.body.indexOf('Pool merge: severity escalated') !== -1,
+            'the escalation note rides the inline body');
+        assert.ok(escalated.body.indexOf('matched by base, security') !== -1,
+            'the escalation names both matching reviewers');
+    });
+
+    test('a truncated specialist rides the packet partial-coverage lines (gh-1471 visibility)', function() {
+        var truncated = JSON.stringify({
+            reviewer: 'security',
+            head: POOL_HEAD,
+            candidates: [{
+                severity: 'IMPORTANT', path: 'src/crypto.js', line: 22,
+                body: 'Hard-coded IV in the AES setup.', claim: 'Hard-coded IV in the AES setup.'
+            }],
+            count: 1, truncated: true, at: '2026-11-13T00:00:00Z'
+        });
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            candidatesFiles: { security: truncated },
+            generalMd: '# Review summary\n'
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        var packetWrite = loaded.fileWrites.filter(function(w) {
+            return w.path === 'outputs/pr_review_general.md';
+        })[0];
+        assert.ok(packetWrite, 'the packet write exists');
+        assert.ok(packetWrite.content.indexOf('partial coverage') !== -1,
+            'the truncated specialist is named in the packet');
+    });
+});

@@ -214,6 +214,7 @@ var REAL_COMMON_MODULES = {
     reviewPoolInJob: 'js/common/reviewPoolInJob.js',
     reviewPoolCandidates: 'js/common/reviewPoolCandidates.js',
     reviewPoolAggregate: 'js/common/reviewPoolAggregate.js',
+    reviewPoolLegSetup: 'js/common/reviewPoolLegSetup.js',
     reviewPoolPost: 'js/common/reviewPoolPost.js',
     gitlabTracker: 'js/common/gitlabTracker.js'
 };

@@ -37,6 +37,7 @@ var reviewPolicyModule = require('./common/reviewPolicy.js');
 // (posting leg) and the specialist identity materializer (specialist leg).
 var reviewPoolModule = require('./common/reviewPool.js');
 var reviewPoolInJob = require('./common/reviewPoolInJob.js');
+var reviewPoolLegSetup = require('./common/reviewPoolLegSetup.js');
 var outputFiles = require('./common/outputFiles.js');
 
 // ── Parsing / context ────────────────────────────────────────────────────────
@@ -511,76 +512,15 @@ function buildSuccessResult(prDetails, branchName, repoInfo) {
  * before (a single-reviewer round is the gh-1406 baseline behavior).
  */
 function reviewerPoolRoundSetup(ctx, prDetails, prComments) {
-    if (ctx.dryRun || branchSetup.isDryRunParams(ctx.params)) return null;
-    // The pool io/hunks helpers stay NESTED (module-size: preparePRForReview
-    // sits at the 40-top-level-function limit; closures add no top-level
-    // count and keep the split's CRAP profile).
-    function roundHunksOf(comments) {
-        var heads = resolveNewHunksContext(ctx, prDetails, comments);
-        var hunks = heads ? gitOps.getDiffBetweenCommits(heads.lastHead, heads.currentHead, ctx.config.workingDir) : null;
-        var hunkPaths = [];
-        if (hunks) {
-            var matches = String(hunks).match(/^\+\+\+ b\/(.+)$/gm) || [];
-            for (var m = 0; m < matches.length; m++) hunkPaths.push(matches[m].substring(6).trim());
-        }
-        return { hasNewHunks: !!hunks, newHunkPaths: hunkPaths };
-    }
-    function poolResolveIoOf() {
-        return {
-            readFile: function(path) { try { return file_read({ path: path }); } catch (e) { return null; } },
-            listFiles: function(dir) {
-                try {
-                    var raw = file_list({ path: dir });
-                    var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                    return Array.isArray(parsed) ? parsed : (parsed && parsed.entries) ? parsed.entries : [];
-                } catch (eList) { return null; }
-            }
-        };
-    }
-    function inJobIoOf() {
-        return {
-            executeCommand: function(command) {
-                // The pre-cli sandbox exposes cli_execute_command (see
-                // preCliTestAutomationSetup); `bash` is whitelisted by the
-                // leg's CLI_ALLOWED_COMMANDS.
-                cli_execute_command({ command: command });
-            },
-            writeFile: function(path, content) {
-                gitOps.writeInputFile(path, content, 'pool specialist prompt');
-                return path;
-            },
-            readFile: function(path) {
-                var file = outputFiles.readOutputFileDetailed(path, {
-                    ticketKey: ctx.ticketKey,
-                    workingDir: ctx.config && ctx.config.workingDir
-                });
-                return file && file.content ? file.content : null;
-            },
-            nowIso: function() { return new Date().toISOString(); }
-        };
-    }
-    try {
-        var jp = ctx.jp || ctx.params.jobParams || {};
-        var pool = reviewPoolModule.resolvePool(poolResolveIoOf(), ctx.config, jp, {});
-        if (!pool || pool.reviewers.length === 0) return null;
-        var comments = prComments === undefined ? prCommentsForContextSteps(ctx.scm, prDetails.number) : prComments;
-        var hunks = roundHunksOf(comments);
-        var roundCtx = {
-            ticketKey: ctx.ticketKey,
-            headSha: prDetails.head && prDetails.head.sha,
-            hasNewHunks: hunks.hasNewHunks,
-            newHunkPaths: hunks.newHunkPaths
-        };
-        var round = reviewPoolInJob.runSpecialists(inJobIoOf(), pool, roundCtx);
-        if (round.completed.length > 0 || round.unavailable.length > 0) {
-            console.log('✅ Reviewer pool in-job round: completed [' + round.completed.join(', ') + ']' +
-                (round.unavailable.length > 0 ? ', unavailable [' + round.unavailable.join(', ') + '] (fail-open)' : ''));
-        }
-        return { round: round, roundCtx: roundCtx };
-    } catch (e) {
-        console.warn('reviewer pool round setup failed (non-fatal, single-reviewer round):', e.message || e);
-        return null;
-    }
+    return reviewPoolLegSetup.reviewerPoolRoundSetup({
+        file_read: file_read,
+        file_list: file_list,
+        gitOps: gitOps,
+        outputFiles: outputFiles,
+        cli_execute_command: cli_execute_command,
+        resolveNewHunksContext: resolveNewHunksContext,
+        prCommentsForContextSteps: prCommentsForContextSteps
+    }, ctx, prDetails, prComments);
 }
 
 // ── Orchestrator ─────────────────────────────────────────────────────────────

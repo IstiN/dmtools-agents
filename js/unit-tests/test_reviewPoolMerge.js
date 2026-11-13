@@ -257,3 +257,34 @@ suite('reviewPoolMerge — the packet (§4 availability + §5 visibility)', func
         assert.ok(line.indexOf('noise') !== -1);
     });
 });
+
+suite('buildPoolPacket — the coverage half (partial + persisted memory)', function() {
+    test('partial coverage lines name the truncated specialists; malformed notes are skipped', function() {
+        var lines = mod.buildPoolPacket({
+            arrived: ['security'], unavailable: [], roundName: 'first',
+            partialCoverage: ['security'],
+            coverageNotes: [
+                { reviewer: 'legal', text: 'no candidates — coverage memory persisted (covered 2, pending 1)' },
+                null,
+                { reviewer: 'flaky' },
+                { reviewer: 'ghost', text: '' }
+            ],
+            merged: [], applied: [], dropped: []
+        });
+        var text = lines.join('\n');
+        assert.ok(text.indexOf('security: partial coverage') !== -1, 'the truncated specialist is named');
+        assert.ok(text.indexOf('legal: no candidates') !== -1, 'well-formed coverage notes render');
+        assert.equal(text.indexOf('flaky'), -1, 'a note without text is skipped');
+        assert.equal(text.indexOf('ghost'), -1, 'an empty note is skipped');
+    });
+
+    test('no coverage payload at all is tolerated (no partial/notes lines, no throw)', function() {
+        var lines = mod.buildPoolPacket({
+            arrived: ['base'], unavailable: [], roundName: 'first',
+            coverageNotes: [], partialCoverage: [],
+            merged: [], applied: [], dropped: []
+        });
+        assert.equal(lines.length, 1, 'only the availability line renders');
+        assert.ok(lines[0].indexOf('base') !== -1);
+    });
+});
