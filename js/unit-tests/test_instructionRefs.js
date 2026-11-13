@@ -512,10 +512,58 @@ suite('instructionRefs — pack reference integrity', function () {
     });
 });
 
+// ── pr-1465 characterization: v1-shim index helpers ──────────────────────────
+
+suite('instructionRefs — v1-shim index helpers (pr-1465 characterization)', function () {
+
+    test('isTrueishExists: both host shapes — boolean true and the {exists} wrapper', function () {
+        assert.equal(isTrueishExists(true), true);
+        assert.equal(isTrueishExists({ exists: true }), true);
+        assert.equal(isTrueishExists({ exists: false }), false);
+        assert.equal(isTrueishExists(false), false);
+        assert.equal(isTrueishExists(null), false);
+        assert.equal(isTrueishExists(undefined), false);
+        assert.equal(isTrueishExists('true'), false, 'wrong primitive type is not an exists shape');
+        assert.equal(isTrueishExists(1), false);
+    });
+
+    test('bannerOf: banner is everything before the first heading; no heading falls back to a 400-char window', function () {
+        assert.equal(bannerOf('<!-- line1 -->\n# Heading\nbody'), '<!-- line1 -->');
+        var noHeading = new Array(99).join('x');
+        assert.equal(bannerOf(noHeading), noHeading, 'no heading — the whole (short) text');
+        var long1000 = new Array(1001).join('y');
+        assert.equal(bannerOf(long1000).length, 400, 'no heading — clamped to 400 chars');
+    });
+
+    test('shimBannerPaths: live paths from a shim banner; [] for non-shims and for banners without targets', function () {
+        var shim = '<!-- \u26A0\uFE0F DEPRECATED v1 shim \u2014 frozen content. -->\n' +
+            '<!-- Live version(s): instructions/pr_review/base/review_verdict_rules.md \u2014 update your pins. -->\n' +
+            '\n# Heading\nbody';
+        assert.deepEqual(shimBannerPaths(shim), ['instructions/pr_review/base/review_verdict_rules.md']);
+        assert.deepEqual(shimBannerPaths('# plain file, no shim marker\n'), []);
+        assert.deepEqual(shimBannerPaths(null), []);
+        assert.deepEqual(shimBannerPaths(undefined), []);
+        assert.deepEqual(shimBannerPaths('<!-- DEPRECATED v1 shim, but no path named. -->\n# H\n'), []);
+        // a live path mentioned BELOW the banner (in the body) is not collected
+        var bodyMention = '<!-- DEPRECATED v1 shim \u2014 see instructions/pr_review/base/x.md. -->\n# H\ninstructions/pr_review/base/y.md\n';
+        assert.deepEqual(shimBannerPaths(bodyMention), ['instructions/pr_review/base/x.md']);
+    });
+
+    test('shimBannerPaths: collects every named target in banner order (multi-line banners)', function () {
+        var shim = '<!-- DEPRECATED v1 shim. -->\n' +
+            '<!-- Split into instructions/pr_review/base/input_context.md and -->\n' +
+            '<!-- instructions/pr_review/base/output_rules.md (both live). -->\n' +
+            '\n# Heading\n';
+        assert.deepEqual(shimBannerPaths(shim), [
+            'instructions/pr_review/base/input_context.md',
+            'instructions/pr_review/base/output_rules.md'
+        ]);
+    });
+});
+
 // ── gh-1230 CRAP characterization: reference-queue helpers ───────────────────
 
 suite('instructionRefs — reference queue helpers (gh-1230 characterization)', function () {
-
     test('queueConfigReferences: only path-shaped .md/.js strings are queued (recursively)', function () {
         var queue = [];
         queueConfigReferences('instructions/common/github_comment_format.md', queue);

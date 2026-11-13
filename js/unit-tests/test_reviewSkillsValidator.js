@@ -52,6 +52,22 @@ suite('validate-review-skills — the gh-1406 §8 CI gate wiring', function() {
         assert.ok(r.output.indexOf('reviewer "legal" (repo)') !== -1, 'repo-defined reviewer listed');
     });
 
+    test('the consuming-repo layout (pack at agents/) validates — factory lens paths resolve against the pack root', function() {
+        // gh-1406 §8 usage contract: "from the consuming repo root, with the
+        // agents pack available". The factory skill files' `lens` values are
+        // PACK-relative ("instructions/pr_review/..."); with the pack at
+        // agents/ the read must resolve against <repoRoot>/agents/ — not
+        // repoRoot — or every factory lens false-fails as "missing or empty"
+        // and the gate exits 1 with no flag combination to fix it.
+        var r = runValidator(FIXTURES + '/consuming');
+        assert.equal(r.exit, 0, 'validator output:\n' + r.output);
+        assert.ok(r.output.indexOf('reviewer "base" (factory)') !== -1);
+        assert.ok(r.output.indexOf('reviewer "security" (factory)') !== -1);
+        assert.ok(r.output.indexOf('lens file missing or empty') === -1,
+            'factory lens files exist under agents/ — no missing-lens error may surface:\n' + r.output);
+        assert.ok(r.output.indexOf('OK') !== -1);
+    });
+
     test('a broken repo fixture fails with exit 1 and names the duplicate-reviewer error', function() {
         var r = runValidator(FIXTURES + '/broken');
         assert.equal(r.exit, 1, 'validator output:\n' + r.output);

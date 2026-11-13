@@ -109,6 +109,35 @@ function report(kind, message) {
 
 // ── the io bag over fs (reviewPool.resolvePool contract) ─────────────────────
 
+// Factory-owned paths (a factory skill file's `lens`, and any other pack
+// reference inside a factory skill file) live inside the AGENTS PACK, not
+// the consuming repo: their `instructions/...` spelling is pack-relative.
+// The pack root is implied by the factory dirs — `agents/instructions/review`
+// puts the pack at <repoRoot>/agents, `instructions/review` (this repo's own
+// checkout, where the pack root and the repo root coincide) at repoRoot.
+// Repo-authored paths (.dmtools/review/...) stay repoRoot-relative.
+var factoryPackRoots = [];
+(function discoverFactoryPackRoots() {
+    var dirs = factoryDirs.length ? factoryDirs : ['instructions/review'];
+    dirs.forEach(function(d) {
+        var first = String(d).split('/')[0];
+        var root = first === 'agents' ? path.join(repoRoot, first) : repoRoot;
+        if (factoryPackRoots.indexOf(root) === -1) factoryPackRoots.push(root);
+    });
+})();
+
+function toIoPath(p) {
+    if (path.isAbsolute(p)) return p;
+    if (String(p).indexOf('instructions/') === 0) {
+        for (var i = 0; i < factoryPackRoots.length; i++) {
+            var cand = path.join(factoryPackRoots[i], p);
+            if (fs.existsSync(cand)) return cand;
+        }
+        return path.join(factoryPackRoots[0], p);
+    }
+    return path.join(repoRoot, p);
+}
+
 function toRepoRelative(p) {
     return path.isAbsolute(p) ? p : path.join(repoRoot, p);
 }
@@ -116,7 +145,7 @@ function toRepoRelative(p) {
 var io = {
     readFile: function(p) {
         try {
-            return fs.readFileSync(toRepoRelative(p), 'utf8');
+            return fs.readFileSync(toIoPath(p), 'utf8');
         } catch (e) {
             return null;
         }
