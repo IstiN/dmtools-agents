@@ -190,6 +190,22 @@ function dirOf(p) { return p.slice(0, p.lastIndexOf('/')); }
 
 function isLegacy(dir) { return LEGACY_DIRS.indexOf(dir) !== -1; }
 
+// R13 helper (pure): the frozen v1 shim covering `livePath`, if any. A shim
+// is an instructions/*.md whose header carries the DEPRECATED v1 banner and
+// names the moved live target(s) in its "Live version(s):" comment lines —
+// the banner is everything before the first markdown heading.
+function v1ShimFor(livePath, instructionFiles) {
+    var names = Object.keys(instructionFiles);
+    for (var i = 0; i < names.length; i++) {
+        var txt = readText(names[i]);
+        if (txt === null || String(txt).indexOf('DEPRECATED v1 shim') === -1) continue;
+        var bodyCut = txt.indexOf('\n# ');
+        var banner = txt.slice(0, bodyCut === -1 ? 400 : bodyCut);
+        if (banner.indexOf(livePath) !== -1) return names[i];
+    }
+    return null;
+}
+
 // ── tests ────────────────────────────────────────────────────────────────────
 
 suite('instructionRefs — pack reference integrity', function () {
@@ -428,6 +444,47 @@ suite('instructionRefs — pack reference integrity', function () {
             assert.ok(!/\bgh-[0-9]+\b/i.test(String(text || '')),
                 'generated review/prompt text must not leak repo-specific gh-NNN references: ' + text);
         });
+    });
+
+    test('R13 (pr-1465): runner pack: refs exist on disk and never pin a moved target while its v1 shim window is open', function () {
+        // Packs are cut from the BASE branch, so a runner pin moved to the
+        // split layout in the SAME PR that moved the file crashes the leg at
+        // setup until a post-merge pack is cut — live: pr-1465 review leg
+        // 2026-11-13, AgentPackException on
+        // pack:instructions/pr_review/base/review_verdict_rules.md against
+        // the released pr_review pack (which still ships the pre-split
+        // paths). The frozen v1 shims exist precisely so the pre-split pin
+        // keeps resolving for the whole deprecation window: runner pins ride
+        // the shim path until the shims are removed (next major), and the
+        // migration flip lands in a follow-up after a pack carries the new
+        // path.
+        var violations = [];
+        var instructionFiles = collectInstructionFiles('instructions');
+        listEntries('.dmtools/runers').forEach(function (e) {
+            var s = String(e).replace(/\\/g, '/');
+            if (s.slice(-5) !== '.json') return;
+            var rel = '.dmtools/runers/' + s.slice(s.lastIndexOf('/') + 1);
+            var raw = readText(rel);
+            if (raw === null) {
+                violations.push(rel + ': unreadable');
+                return;
+            }
+            var refPat = /pack:((?:instructions|prompts)\/[A-Za-z0-9_\-./]+\.(?:md|js))/g;
+            var m;
+            while ((m = refPat.exec(String(raw))) !== null) {
+                var p = m[1];
+                if (!existsOnDisk(p)) {
+                    violations.push(rel + ': pack ref "' + p + '" does not exist on disk (dangling pin — #600 class)');
+                    continue;
+                }
+                var shim = v1ShimFor(p, instructionFiles);
+                if (shim) {
+                    violations.push(rel + ': pins the moved target "' + p +
+                        '" while its frozen v1 shim "' + shim + '" still exists — pin the shim path; flip to the live path only in a follow-up once a pack release carries it (shims removed at the next major)');
+                }
+            }
+        });
+        assert.deepEqual(violations, [], 'runner pack-ref violations:\n' + violations.join('\n'));
     });
 });
 
