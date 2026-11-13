@@ -113,14 +113,13 @@ suite('buildEncodedConfig payload', function() {
         });
         var encoded = builder.buildEncodedConfig('T-1',
             { configFile: 'agents/test.json',
-              paramPatches: { reviewerPoolLeg: { reviewer: 'security', contract: 'candidates', required: true, round: 'first', head: 'abc1234' } } },
+              paramPatches: { reviewRound: { round: 'first', head: 'abc1234' } } },
             {});
         var decoded = decode(encoded);
         assert.equal(decoded.params.customParams.responseTarget, 'scm', 'agent params survive');
         assert.equal(decoded.params.customParams.keep, 'agent');
-        assert.equal(decoded.params.customParams.reviewerPoolLeg.reviewer, 'security');
-        assert.equal(decoded.params.customParams.reviewerPoolLeg.contract, 'candidates');
-        assert.equal(decoded.params.customParams.reviewerPoolLeg.head, 'abc1234');
+        assert.equal(decoded.params.customParams.reviewRound.round, 'first');
+        assert.equal(decoded.params.customParams.reviewRound.head, 'abc1234');
     });
 
     test('rule.paramPatches wins over project config patches', function() {

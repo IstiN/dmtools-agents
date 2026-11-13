@@ -36,10 +36,8 @@ var reviewPolicyModule = require('./common/reviewPolicy.js');
 // pool execution layer — this pre-cli action is the round's leg dispatcher
 // (posting leg) and the specialist identity materializer (specialist leg).
 var reviewPoolModule = require('./common/reviewPool.js');
-var reviewPoolMarkers = require('./common/reviewPoolMarkers.js');
 var reviewPoolInJob = require('./common/reviewPoolInJob.js');
 var outputFiles = require('./common/outputFiles.js');
-var autoStartModule = require('./common/autoStart.js');
 
 // ── Parsing / context ────────────────────────────────────────────────────────
 
