@@ -243,10 +243,16 @@ function v1ShimIndex() {
     function walk(dir) {
         listRelEntries(dir).forEach(function (name) {
             var rel = dir + '/' + name;
-            if (isTrueishExists(file_exists({ path: fsPath(rel) }))) {
-                walk(rel);
-            } else if (/\.md$/.test(rel)) {
+            // Branch order IS the sensor: file_exists is truthy for plain
+            // FILES (both host shapes), so the .md read must come FIRST —
+            // descent-before-read sent every real .md into walk(rel), where
+            // file_list on a file yields no entries and the index silently
+            // degraded to {} with the suite green (R13 dead, pr-1465
+            // review 2026-11-13). .md files are files, never descent targets.
+            if (/\.md$/.test(rel)) {
                 shimBannerPaths(readText(rel)).forEach(function (live) { index[live] = rel; });
+            } else if (isTrueishExists(file_exists({ path: fsPath(rel) }))) {
+                walk(rel);
             }
         });
     }
@@ -587,6 +593,28 @@ suite('instructionRefs — v1-shim index helpers (pr-1465 characterization)', fu
             'instructions/pr_review/base/input_context.md',
             'instructions/pr_review/base/output_rules.md'
         ]);
+    });
+
+    // Composite pin (end-to-end, real tree): the helper pins above cannot
+    // see a broken ASSEMBLY — the pr-1465 CRAP-split reordered walk's
+    // branches (descent before the .md read), and since file_exists is
+    // truthy for plain files, every real .md entered walk() and the index
+    // silently degraded to {} with the suite still green (R13's guard dead
+    // without a single red). This test IS that sensor: the index must map
+    // every live target a shim banner names back to the shim path.
+    test('v1ShimIndex: end-to-end over the real tree — all 7 shims map their live targets (livePath -> shimPath)', function () {
+        var index = v1ShimIndex();
+        var expected = {
+            'instructions/pr_review/generalist/few_shots.md': 'instructions/pr_review/few_shots.md',
+            'instructions/pr_review/base/formatting_rules.md': 'instructions/pr_test_automation_review/formatting_rules.md',
+            'instructions/pr_review/generalist/lens.md': 'instructions/pr_review/general_guidelines.md',
+            'instructions/pr_review/base/input_context.md': 'instructions/pr_review/output_rules.md',
+            'instructions/pr_review/base/registry_protocol.md': 'instructions/pr_review/general_guidelines.md',
+            'instructions/pr_review/base/output_rules.md': 'instructions/pr_test_automation_review/output_rules.md',
+            'instructions/pr_review/base/review_verdict_rules.md': 'instructions/pr_review/review_verdict_rules.md'
+        };
+        assert.deepEqual(index, expected,
+            'v1ShimIndex drifted from the real shim set (a dead index returns {})');
     });
 });
 
