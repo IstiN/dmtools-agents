@@ -96,7 +96,8 @@ flowchart TD
         P7["7️⃣ input/TICKET/pr_findings.md — previously raised findings (when present)"]
         P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol"]
         P9["9️⃣ input/TICKET/pr_new_hunks.txt — the hunks added since the last reviewed head (re-review rounds; when present)"]
-        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8 --> P9
+        P10["🔟 input/TICKET/reviewer_leg.md — THIS run's reviewer-pool identity (specialist legs only; when present)"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8 --> P9 --> P10
     end
 
     subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
@@ -116,6 +117,24 @@ flowchart TD
 
 Read PR files to understand WHAT changed. Read ticket files to understand WHY
 it changed and verify against requirements.
+
+## Specialist legs — `reviewer_leg.md` present
+
+When `input/TICKET/reviewer_leg.md` exists, this run is a SPECIALIST leg of
+the gh-1406 reviewer pool: it is ONE reviewer's focused pass, not the
+posting review. The file names this leg's reviewer, its output contract and
+its round. A specialist:
+
+- hunts ONLY its lens's dimension (the lens file assembled around this
+  contract names it) — the generalist posting pass owns everything else;
+- writes `outputs/pr_review_candidates.json` per the base candidates-only
+  contract (output_rules.md) — NEVER `outputs/pr_review.json`, never
+  `pr_review_general.md`, never `pr_review_comments/*`;
+- posts nothing, labels nothing, changes no status — the machine parses the
+  candidates file and stamps the markers.
+
+A leg WITHOUT `reviewer_leg.md` is the posting leg: the full verdict
+contract below applies unchanged.
 
 <!-- Pack-reachability anchor: the deprecated v1 instruction shims are listed in instructions/pr_review/deprecated-v1.md (frozen; removed in the next major release). -->
 
@@ -166,6 +185,45 @@ flowchart TD
 - The verdict is a MACHINE decision recomputed from `issueCounts` + the
   resolved `reviewPolicy` — the census is the machine's source of truth;
   keep it accurate.
+
+## The candidates-only contract (specialist legs, gh-1471)
+
+A SPECIALIST leg (input/TICKET/reviewer_leg.md present — see
+input_context.md) writes ONE file and nothing else:
+
+`outputs/pr_review_candidates.json`
+
+```json
+{
+  "reviewer": "<the reviewer name from reviewer_leg.md>",
+  "candidates": [
+    {"id": 1, "path": "src/auth/UserService.js", "line": 45,
+     "severity": "BLOCKING", "claim": "one-paragraph statement of the finding"},
+    {"id": 2, "path": "docs/arch.md", "line": null,
+     "severity": "SUGGESTION", "claim": "a digest candidate — no diff line"}
+  ]
+}
+```
+
+- `claim` is the finding's substance: what is wrong, where the evidence
+  is, why it matters. No severity header line, no verdict language — the
+  tier rides the `severity` field (BLOCKING | IMPORTANT | SUGGESTION |
+  NIT) and the machine classifies the posted thread from it.
+- `id` numbers the candidates within the file (1..n). `path` is
+  repo-relative; `line` is the diff line (right-hand side) or `null` for a
+  digest candidate — findings anchored outside the diff are allowed as
+  digest candidates, never as invented line numbers.
+- Write NOTHING else: no `outputs/pr_review.json`, no
+  `pr_review_general.md`, no `pr_review_comments/*`, no `response.md`. Do
+  not post, label, resolve threads, or change statuses — the post action
+  does all machine bookkeeping (candidates marker + completion marker).
+- Severity discipline still applies: raise only what the lens hunt
+  justifies; an empty candidates list is a valid answer (the leg completes
+  with zero findings).
+- The candidates pass the gh-1403 filter like every other finding (fresh
+  verification, weighted retention for high-weight reviewers) and the
+  posting leg merges them into ONE review — a specialist never posts a
+  second review.
 
 
 ---
@@ -266,6 +324,33 @@ documented contract is ⚠️ IMPORTANT or 🚨 BLOCKING.
 The 4-tier census (`issueCounts`) counts posted threads + digest lines and
 drives the machine verdict — keep it consistent with the inlineComments
 severities.
+
+### outputs/pr_review_candidates.json — specialist legs only
+
+A SPECIALIST leg (reviewer_leg.md present) answers with candidates, never a
+verdict — the posting leg mints the verdict; the machine merges, filters
+and posts. The shape is the reviewPoolMerge candidate contract:
+
+```json
+{
+  "reviewer": "security",
+  "candidates": [
+    {"id": 1, "path": "src/auth/UserService.js", "line": 45,
+     "severity": "BLOCKING",
+     "claim": "User query at line 45 concatenates req.body.user straight into the SQL string; parameterize the statement."},
+    {"id": 2, "path": "docs/migration.md", "line": null,
+     "severity": "SUGGESTION",
+     "claim": "The rollback path for the new columns is undocumented — a bad deploy cannot revert cleanly."}
+  ]
+}
+```
+
+Rules: `id` = position in the file; `path` repo-relative; `line` = the
+diff line or `null` for a digest candidate; `claim` = the substance (no
+severity header, no verdict language). Severity boundary identical to the
+verdict tiers above. Nothing else gets written (no pr_review.json, no
+comment files) and nothing gets posted — worked examples of the claim
+voice live in each reviewer's few-shots file.
 
 
 ---
