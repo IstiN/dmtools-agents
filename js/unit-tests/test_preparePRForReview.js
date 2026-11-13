@@ -285,7 +285,7 @@ function prLoad(opts) {
             makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js') }),
             opts.forkEnv ? { get_env_variable: function(k) { return opts.forkEnv[k] || null; } } : {}),
         // gh-1471: the real reviewer-pool execution chain — the leg dispatcher
-        // (reviewerPoolLegSetup) resolves the pool + plans the round through
+        // (the gh-1471 pool wiring) resolves the pool + plans the round through
         // these pure modules.
         './common/reviewPool.js': prReviewPoolReal(),
         './common/reviewPoolInJob.js': prReviewPoolInJobReal(),
