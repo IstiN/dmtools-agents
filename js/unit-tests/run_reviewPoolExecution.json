@@ -5,7 +5,8 @@
     "jobParams": {
       "testFiles": [
         "js/unit-tests/test_reviewPoolCandidates.js",
-        "js/unit-tests/test_reviewPoolDispatch.js"
+        "js/unit-tests/test_reviewPoolDispatch.js",
+        "js/unit-tests/test_reviewPoolAggregate.js"
       ]
     }
   }
