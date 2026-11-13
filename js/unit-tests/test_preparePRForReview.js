@@ -234,26 +234,28 @@ function reviewPolicyContextContent() {
  * Loads js/preparePRForReview.js with injected fakes.
  * See the suites below for the opts each test uses.
  */
+/** gh-1471: the reviewer-pool resolution reads the filesystem — tests that
+ * exercise the dispatcher serve the skill files through this map (absent →
+ * no globals change, the existing suites stay untouched). */
+function applyPoolFileMocks(globalMocks, opts) {
+    if (!opts.poolFileMap) return;
+    globalMocks.file_read = function(args) {
+        var p = args && (args.path || args);
+        if (opts.poolFileMap[p] !== undefined) return opts.poolFileMap[p];
+        return null;
+    };
+    globalMocks.file_list = function(args) {
+        var dir = args && (args.path || args);
+        if (opts.poolListings && opts.poolListings[dir]) return opts.poolListings[dir];
+        return null;
+    };
+}
+
 function prLoad(opts) {
     opts = opts || {};
     var record = opts.record || prRecorder();
     var globalMocks = prTrackerGlobals(record, opts.trackerThrows);
-    // gh-1471: the reviewer-pool resolution reads the filesystem — tests
-    // that exercise the dispatcher serve the skill files through this map
-    // (absent → no globals change, the existing suites stay untouched).
-    if (opts.poolFileMap) {
-        globalMocks.file_read = function(args) {
-            var p = args && (args.path || args);
-            if (opts.poolFileMap[p] !== undefined) return opts.poolFileMap[p];
-            if (p && p.indexOf('.dmtools/config') !== -1) return null;
-            return null;
-        };
-        globalMocks.file_list = function(args) {
-            var dir = args && (args.path || args);
-            if (opts.poolListings && opts.poolListings[dir]) return opts.poolListings[dir];
-            return null;
-        };
-    }
+    applyPoolFileMocks(globalMocks, opts);
 
     // The action's globals (the sandbox): shared by the module AND the real
     // common modules it loads (outputFiles reads through the file_read global).

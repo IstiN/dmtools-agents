@@ -125,48 +125,50 @@ function hasSameHeadHold(comments, io, headSha) {
  * holdDeduped, outcomeStamped, filterApplied } — everything the caller (and
  * the run log) needs about the round.
  */
-function poolRoundStep(reviewData, pool, roundCtx, io) {
-    var headSha = String(roundCtx.headSha || '');
-    var plan = buildInJobPlan(pool, roundCtx);
-    var expectedNames = expectedCandidateNamesOf(plan);
-
-    // The in-job round already ran (the pre-cli action executed the
-    // specialists): the candidates are FILES on this head — no polling, no
-    // marker collection. roundCtx.inJob = { completed, unavailable,
-    // candidates (validated records) } from reviewPoolInJob.runSpecialists.
+/**
+ * The in-job round state from roundCtx.inJob (the pre-cli action already
+ * executed the specialists — the candidates are FILES on this head; no
+ * polling, no marker collection). Returns the collect shape the merge and
+ * the markers need: { lists, arrived, unavailable, records, coverageNotes }.
+ */
+function inJobCollectOf(plan, roundCtx, expectedNames) {
     var inJobRound = roundCtx.inJob || {};
     var coverageNotes = Array.isArray(inJobRound.coverageNotes) ? inJobRound.coverageNotes : [];
     var completed = Array.isArray(inJobRound.completed) ? inJobRound.completed : [];
     var unavailable = Array.isArray(inJobRound.unavailable) ? inJobRound.unavailable : expectedNames.slice();
     var records = Array.isArray(inJobRound.candidates) ? inJobRound.candidates : [];
-    var collect = {
+    return {
         lists: records.map(function(r) { return r; }),
         arrived: completed,
-        unavailable: unavailable.filter(function(name) { return completed.indexOf(name) === -1; })
+        unavailable: unavailable.filter(function(name) { return completed.indexOf(name) === -1; }),
+        records: records,
+        coverageNotes: coverageNotes
     };
+}
 
-    // The specialists' PASS markers — the posting leg stamps them itself
-    // (single writer): one marker per completed specialist on THIS head, so
-    // the gh-1406 merge gate's same-head PASS semantics stay untouched.
+/**
+ * The specialists' PASS markers — the posting leg stamps them itself
+ * (single writer): one marker per completed specialist on THIS head, so
+ * the gh-1406 merge gate's same-head PASS semantics stay untouched.
+ */
+function stampSpecialistPasses(io, headSha, arrived) {
     var stampFailures = [];
-    for (var s = 0; s < collect.arrived.length; s++) {
+    for (var s = 0; s < arrived.length; s++) {
         postQuietly(io.postComment,
-            markers.buildPassMarkerComment(collect.arrived[s], headSha, io.nowIso()),
+            markers.buildPassMarkerComment(arrived[s], headSha, io.nowIso()),
             [], stampFailures);
     }
     if (stampFailures.length > 0) {
         console.warn('reviewer pool: ' + stampFailures.length + ' specialist PASS stamp(s) failed (non-fatal)');
     }
+}
 
-    var roundInput = {
-        lists: weightedListsOf(collect.lists, io.weightsByName),
-        arrived: collect.arrived,
-        unavailable: collect.unavailable,
-        roundName: plan.round
-    };
-    var merged = aggregate.mergePoolCensus(reviewData, roundInput, io.resolveClaim, io.weightsByName);
-    aggregate.applyMergedInline(reviewData, merged.merged);
-
+/**
+ * The gh-1403 filter merge point over the MERGED census (pool duties:
+ * weighted retention first, reviewer-attributed drops, packet visibility).
+ * Returns { applied, dropped, filterApplied, candidatesTotal }.
+ */
+function runPoolFilter(reviewData, merged, io) {
     var applied = [];
     var dropped = [];
     var filterApplied = false;
@@ -185,40 +187,34 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
             }
         }
     }
-    if (typeof io.recomputeCensus === 'function') {
-        // gh-1403 machine semantics hold for the pool round too: the census
-        // recomputes AFTER the round's filtering, from the posted-evidence set.
-        reviewData.issueCounts = io.recomputeCensus(reviewData, dropped.length);
-    }
+    return {
+        applied: applied,
+        dropped: dropped,
+        filterApplied: filterApplied,
+        candidatesTotal: filterCandidatesCount
+    };
+}
 
-    // Partial coverage: completed specialists that flagged truncated=true
-    // (the candidates contract's partial-review signal).
+/** Completed specialists that flagged truncated=true (the candidates
+ * contract's partial-review signal) — deduped, arrival order. */
+function partialCoverageReviewersOf(records, arrived) {
     var partialCoverage = [];
     for (var pc = 0; pc < records.length; pc++) {
         if (records[pc] && records[pc].truncated === true &&
-            collect.arrived.indexOf(records[pc].reviewer) !== -1 &&
+            arrived.indexOf(records[pc].reviewer) !== -1 &&
             partialCoverage.indexOf(records[pc].reviewer) === -1) {
             partialCoverage.push(records[pc].reviewer);
         }
     }
-    var packet = aggregate.poolPacketOf({
-        arrived: collect.arrived,
-        unavailable: collect.unavailable,
-        roundName: plan.round,
-        partialCoverage: partialCoverage,
-        coverageNotes: coverageNotes,
-        merged: merged.merged,
-        applied: applied,
-        dropped: dropped
-    });
-    if (packet.length > 0 && typeof io.appendToGeneralComment === 'function') {
-        io.appendToGeneralComment(packet.join('\n'));
-    }
+    return partialCoverage;
+}
 
-    // ONE pool-outcome marker per round — the attempt record and the
-    // expectation record (entries {name, required, completed}). In-job the
-    // completions are THIS run's own (the specialists ran before this step).
-    var latestComments = io.readComments();
+/**
+ * ONE pool-outcome marker per round — the attempt record and the
+ * expectation record (entries {name, required, completed}). In-job the
+ * completions are THIS run's own (the specialists ran before this step).
+ */
+function stampPoolOutcome(io, headSha, plan, collect) {
     var entries = [];
     for (var w = 0; w < plan.legs.length; w++) {
         entries.push({
@@ -232,14 +228,14 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
     } catch (ePost) {
         console.warn('reviewer pool: the pool-outcome marker post failed (non-fatal):', ePost);
     }
+    return entries;
+}
 
-    // The required-reviewer hold (deduped per head) — it fires only for a
-    // required specialist that NEVER showed up (no candidates marker, no
-    // completion): arrived-but-incomplete legs are mid-flight, and their
-    // crash-window hold is the merge gate's own §7 concern. The posting leg
-    // never holds on itself (its PASS stamp lands moments later); the
-    // hold-age escalation valve stays owned by the merge gate.
-    var existingHold = hasSameHeadHold(latestComments, io, headSha);
+/** The required specialists that NEVER showed up (no candidates marker, no
+ * completion): arrived-but-incomplete legs are mid-flight, and their
+ * crash-window hold is the merge gate's own §7 concern. The posting leg
+ * never holds on itself (its PASS stamp lands moments later). */
+function missingRequiredOf(entries, collect) {
     var arrivedSet = {};
     for (var a = 0; a < collect.arrived.length; a++) arrivedSet[collect.arrived[a]] = true;
     var missingRequired = [];
@@ -248,15 +244,66 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
         if (entries[e].name === POSTING_REVIEWER || arrivedSet[entries[e].name]) continue;
         missingRequired.push(entries[e].name);
     }
-    var heldRequired = null;
-    if (missingRequired.length > 0 && !existingHold) {
-        try {
-            io.postComment(markers.buildRequiredReviewerHoldMarker(missingRequired, headSha, io.nowIso(), false, null));
-            heldRequired = missingRequired;
-        } catch (eHold) {
-            console.warn('reviewer pool: the required-reviewer hold post failed (non-fatal):', eHold);
-        }
+    return missingRequired;
+}
+
+/** The required-reviewer hold (deduped per head via the existing-hold
+ * probe) — never throws (a failed hold post is a warn, the round stays
+ * fail-open). Returns the held names or null. */
+function stampRequiredHold(io, headSha, missingRequired, existingHold) {
+    if (missingRequired.length === 0 || existingHold) return null;
+    try {
+        io.postComment(markers.buildRequiredReviewerHoldMarker(missingRequired, headSha, io.nowIso(), false, null));
+        return missingRequired;
+    } catch (eHold) {
+        console.warn('reviewer pool: the required-reviewer hold post failed (non-fatal):', eHold);
+        return null;
     }
+}
+
+function poolRoundStep(reviewData, pool, roundCtx, io) {
+    var headSha = String(roundCtx.headSha || '');
+    var plan = buildInJobPlan(pool, roundCtx);
+    var expectedNames = expectedCandidateNamesOf(plan);
+    var collect = inJobCollectOf(plan, roundCtx, expectedNames);
+
+    stampSpecialistPasses(io, headSha, collect.arrived);
+
+    var roundInput = {
+        lists: weightedListsOf(collect.lists, io.weightsByName),
+        arrived: collect.arrived,
+        unavailable: collect.unavailable,
+        roundName: plan.round
+    };
+    var merged = aggregate.mergePoolCensus(reviewData, roundInput, io.resolveClaim, io.weightsByName);
+    aggregate.applyMergedInline(reviewData, merged.merged);
+
+    var filter = runPoolFilter(reviewData, merged, io);
+    if (typeof io.recomputeCensus === 'function') {
+        // gh-1403 machine semantics hold for the pool round too: the census
+        // recomputes AFTER the round's filtering, from the posted-evidence set.
+        reviewData.issueCounts = io.recomputeCensus(reviewData, filter.dropped.length);
+    }
+
+    var partialCoverage = partialCoverageReviewersOf(collect.records, collect.arrived);
+    var packet = aggregate.poolPacketOf({
+        arrived: collect.arrived,
+        unavailable: collect.unavailable,
+        roundName: plan.round,
+        partialCoverage: partialCoverage,
+        coverageNotes: collect.coverageNotes,
+        merged: merged.merged,
+        applied: filter.applied,
+        dropped: filter.dropped
+    });
+    if (packet.length > 0 && typeof io.appendToGeneralComment === 'function') {
+        io.appendToGeneralComment(packet.join('\n'));
+    }
+
+    var entries = stampPoolOutcome(io, headSha, plan, collect);
+    var existingHold = hasSameHeadHold(io.readComments(), io, headSha);
+    var missingRequired = missingRequiredOf(entries, collect);
+    var heldRequired = stampRequiredHold(io, headSha, missingRequired, existingHold);
 
     return {
         round: plan.round,
@@ -267,10 +314,10 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
         heldRequired: heldRequired,
         existingHold: existingHold,
         outcomeStamped: true,
-        filterApplied: filterApplied,
-        candidatesTotal: filterCandidatesCount,
-        applied: applied,
-        dropped: dropped,
+        filterApplied: filter.filterApplied,
+        candidatesTotal: filter.candidatesTotal,
+        applied: filter.applied,
+        dropped: filter.dropped,
         expected: expectedNames
     };
 }

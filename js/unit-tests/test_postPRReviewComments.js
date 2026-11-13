@@ -5024,7 +5024,8 @@ function loadPostPRReviewCommentsForPool(opts) {
         var p = args && (args.path || args);
         if (p && p.indexOf('pr_info.md') !== -1) return opts.prInfoContent || null;
         if (inputFileMap[p] !== undefined) return inputFileMap[p];
-        if (p && p.indexOf('.dmtools/config') !== -1) return null;
+        // '.dmtools/config' reads fall through to the same null (an absent
+        // config) — no separate branch needed.
         return null;
     }
     function file_list(args) {
@@ -5058,20 +5059,22 @@ function loadPostPRReviewCommentsForPool(opts) {
     // Name-aware outputFiles: the IN-JOB specialist candidates files
     // (pr_review_candidates-<reviewer>.json), the posting leg's
     // pr_review.json, the general comment md, the filter verdicts.
+    function candidatesFileOf(name, bare) {
+        var reviewer = bare.substring('pr_review_candidates-'.length).replace(/\.json$/, '');
+        var raw = (opts.candidatesFiles || {})[reviewer];
+        if (raw === undefined) raw = defaultSpecialistCandidates(reviewer);
+        return { content: raw, path: 'outputs/' + name };
+    }
+    function postingReviewFileOf(name) {
+        prReviewReads.push(name);
+        if (opts.reviewData === null) throw new Error('no pr_review.json');
+        return { content: JSON.stringify(opts.reviewData || poolPostingReviewData()), path: 'outputs/pr_review.json' };
+    }
     var outputFiles = {
         readOutputFileDetailed: function(name, o2) {
             var bare = String(name || '').replace(/^outputs\//, '');
-            if (bare.indexOf('pr_review_candidates-') === 0) {
-                var reviewer = bare.substring('pr_review_candidates-'.length).replace(/\.json$/, '');
-                var raw = (opts.candidatesFiles || {})[reviewer];
-                if (raw === undefined) raw = defaultSpecialistCandidates(reviewer);
-                return { content: raw, path: 'outputs/' + name };
-            }
-            if (name === 'pr_review.json') {
-                prReviewReads.push(name);
-                if (opts.reviewData === null) throw new Error('no pr_review.json');
-                return { content: JSON.stringify(opts.reviewData || poolPostingReviewData()), path: 'outputs/pr_review.json' };
-            }
+            if (bare.indexOf('pr_review_candidates-') === 0) return candidatesFileOf(name, bare);
+            if (name === 'pr_review.json') return postingReviewFileOf(name);
             if (name === 'pr_review_filter.json' && opts.filterVerdictsJson !== undefined) {
                 return { content: opts.filterVerdictsJson, path: 'outputs/pr_review_filter.json' };
             }

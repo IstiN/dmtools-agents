@@ -519,6 +519,7 @@ module.exports = {
     roundTypeOf: roundTypeOf,
     selectSpecialists: selectSpecialists,
     buildSpecialistPrompt: buildSpecialistPrompt,
+    coverageSection: coverageSection,
     candidatesPathOf: candidatesPathOf,
     buildSpecialistCommand: buildSpecialistCommand,
     runSpecialists: runSpecialists,

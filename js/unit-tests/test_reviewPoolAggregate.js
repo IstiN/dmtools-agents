@@ -286,3 +286,53 @@ suite('reviewPoolAggregate — poolPacketOf (availability + census + drop visibi
         }), [], 'a no-pool round says nothing');
     });
 });
+
+suite('reviewPoolAggregate — escalationBodyOf (the escalation note shapes)', function() {
+    var merged = { severity: 'BLOCKING', reviewers: ['base', 'security'], claim: 'x', path: 'p', line: 1 };
+
+    test('an inline body grows the escalation tail (trailing whitespace trimmed)', function() {
+        var body = mod.escalationBodyOf({ severity: 'IMPORTANT', body: 'Watch this.  ' }, merged);
+        assert.ok(body.indexOf('Watch this.') === 0);
+        assert.ok(body.indexOf('Pool merge: severity escalated') !== -1);
+        assert.ok(body.indexOf('base, security') !== -1, 'the tail names the matching reviewers');
+    });
+
+    test('a body-as-comment-file path is NEVER appended (the exact path shape survives)', function() {
+        var body = mod.escalationBodyOf({ severity: 'IMPORTANT', body: 'outputs/pr_review_comments/sql.md' }, merged);
+        assert.equal(body, 'outputs/pr_review_comments/sql.md');
+    });
+
+    test('an empty body returns just the note (no leading newline)', function() {
+        var body = mod.escalationBodyOf({ severity: 'IMPORTANT', body: '   ' }, merged);
+        assert.ok(body.indexOf('Pool merge') !== -1);
+        assert.equal(body.indexOf('\n'), -1, 'the bare note has no tail separator');
+    });
+});
+
+suite('reviewPoolAggregate — inlineClaimOf (severity-head stripping)', function() {
+    test('the machine severity line strips, prose survives', function() {
+        var claim = mod.inlineClaimOf(
+            { body: '🚨 severity: BLOCKING\nThe SQL is injectable.' }, null);
+        assert.equal(claim, 'The SQL is injectable.');
+    });
+
+    test('the caller resolver wins over the raw body', function() {
+        var claim = mod.inlineClaimOf({ body: 'raw' }, function() { return '🚨 severity: BLOCKING\nresolved'; });
+        assert.equal(claim, 'resolved');
+    });
+
+    test('an unresolvable claim (empty body) returns null', function() {
+        assert.equal(mod.inlineClaimOf({ body: '   ' }, null), null);
+        assert.equal(mod.inlineClaimOf({}, null), null);
+    });
+});
+
+suite('reviewPoolAggregate — inlineEntryFromMerged (synthesized attribution)', function() {
+    test('a specialist-only candidate synthesizes the claim + reviewer attribution', function() {
+        var list = mod.buildInlineFromMerged([{ id: 0, path: 'src/x.js', line: 3,
+            severity: 'BLOCKING', claim: 'Unsafe concat.', reviewers: ['security'] }], []);
+        assert.equal(list.entries[0].body.indexOf('Unsafe concat.'), 0);
+        assert.ok(list.entries[0].body.indexOf('Raised by security') !== -1);
+        assert.equal(list.entries[0].severity, 'BLOCKING');
+    });
+});

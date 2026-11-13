@@ -327,3 +327,92 @@ test('readSpecialistOutcomes: every specialist unavailable on an empty workspace
     assert.strictEqual(out.unavailable.length, 3);
 });
 
+
+suite('readCoverage — the coverage-file shape contract (reject paths are NO memory)', function() {
+    function ioWith(payload) {
+        return inJob.memoryIo(inJob.coveragePathOf('security'), payload);
+    }
+
+    function memoryIo_(file, content) {
+        var files = {};
+        files[file] = content;
+        return { readFile: function(p) { return Object.prototype.hasOwnProperty.call(files, p) ? files[p] : null; } };
+    }
+
+    test('a well-formed coverage file round-trips (head/covered/pending/truncated)', function() {
+        var io = memoryIo_(inJob.coveragePathOf('security'), JSON.stringify({
+            reviewer: 'security', head: 'abc', covered: ['a.js'], pending: ['b.js', 42], truncated: true, at: 't'
+        }));
+        var cov = inJob.readCoverage(io, 'security');
+        assert.equal(cov.head, 'abc');
+        assert.deepStrictEqual(cov.covered, ['a.js']);
+        assert.deepStrictEqual(cov.pending, ['b.js', '42'], 'entries normalize to strings');
+        assert.equal(cov.truncated, true);
+    });
+
+    test('garbage JSON is no memory (fail-open, never a throw)', function() {
+        assert.equal(inJob.readCoverage(memoryIo_(inJob.coveragePathOf('security'), '{nope'), 'security'), null);
+    });
+
+    test('another reviewer\'s file is no memory', function() {
+        var io = memoryIo_(inJob.coveragePathOf('security'), JSON.stringify({
+            reviewer: 'legal', head: 'abc', covered: ['a.js'], pending: []
+        }));
+        assert.equal(inJob.readCoverage(io, 'security'), null);
+    });
+
+    test('missing covered/pending arrays are no memory', function() {
+        var io = memoryIo_(inJob.coveragePathOf('security'), JSON.stringify({ reviewer: 'security', head: 'abc' }));
+        assert.equal(inJob.readCoverage(io, 'security'), null);
+        var io2 = memoryIo_(inJob.coveragePathOf('security'), JSON.stringify({
+            reviewer: 'security', head: 'abc', covered: 'a.js'
+        }));
+        assert.equal(inJob.readCoverage(io2, 'security'), null);
+    });
+
+    test('a non-object payload is no memory; an absent file is no memory; a throwing reader is no memory', function() {
+        assert.equal(inJob.readCoverage(memoryIo_(inJob.coveragePathOf('security'), '"[]"'), 'security'), null);
+        assert.equal(inJob.readCoverage(memoryIo_(inJob.coveragePathOf('security'), ''), 'security'), null);
+        assert.equal(inJob.readCoverage({ readFile: function() { throw new Error('boom'); } }, 'security'), null);
+    });
+});
+
+suite('coverageSection / buildSpecialistPrompt — the rendered contract', function() {
+    test('a first pass renders the plan-first coverage file contract without the previous-pass block', function() {
+        var section = inJob.coverageSection({ headSha: 'abc' }, null);
+        assert.ok(section.indexOf('Coverage file') !== -1);
+        assert.ok(section.indexOf('abc') !== -1);
+        assert.equal(section.indexOf('previous pass'), -1);
+    });
+
+    test('a previous pass with work renders the SKIP/REVIEW rules (the hunks file is the delta)', function() {
+        var section = inJob.coverageSection({ headSha: 'abc' }, {
+            head: 'old', covered: ['a.js'], pending: ['b.js']
+        });
+        assert.ok(section.indexOf('previous pass') !== -1);
+        assert.ok(section.indexOf('SKIP the covered files') !== -1);
+        assert.ok(section.indexOf('`a.js`') !== -1);
+        assert.ok(section.indexOf('oldest debt') !== -1);
+    });
+
+    test('a blank previous pass (no work) stays first-pass shaped', function() {
+        var section = inJob.coverageSection({ headSha: 'abc' }, { head: 'old', covered: [], pending: [] });
+        assert.equal(section.indexOf('previous pass'), -1);
+    });
+
+    test('the specialist prompt names the reference pack only when the skill carries one', function() {
+        var skill = { name: 'security', lens: 'l.md', options: { referencePack: 'pack/x' } };
+        var withPack = inJob.buildSpecialistPrompt(skill, { headSha: 'abc' }, null);
+        assert.ok(withPack.indexOf('Reference pack: `agents/pack/x`') !== -1);
+        var noPack = inJob.buildSpecialistPrompt({ name: 'security', lens: 'l.md' }, { headSha: 'abc' }, null);
+        assert.equal(noPack.indexOf('Reference pack'), -1);
+    });
+
+    test('the prompt scope line flips on the hunks flag', function() {
+        var first = inJob.buildSpecialistPrompt({ name: 'security', lens: 'l.md' }, { headSha: 'abc' }, null);
+        assert.ok(first.indexOf('first full review') !== -1);
+        var hunks = inJob.buildSpecialistPrompt({ name: 'security', lens: 'l.md' },
+            { headSha: 'abc', hasNewHunks: true, newHunkPaths: ['a.js'] }, null);
+        assert.ok(hunks.indexOf('re-review with new hunks') !== -1);
+    });
+});
