@@ -77,6 +77,40 @@ function inJobIoOf(deps, ctx) {
     };
 }
 
+/** The in-job round outcome log — completed/unavailable lists, fail-open noted. */
+function logInJobRoundOutcome(round) {
+    if (round.completed.length === 0 && round.unavailable.length === 0) return;
+    console.log('✅ Reviewer pool in-job round: completed [' + round.completed.join(', ') + ']' +
+        (round.unavailable.length > 0 ? ', unavailable [' + round.unavailable.join(', ') + '] (fail-open)' : ''));
+}
+
+/** The round context: head sha + the hunks flags (the diff-of-diff paths). */
+function roundContextOf(deps, ctx, prDetails, comments) {
+    var hunks = roundHunksOf(deps, ctx, prDetails, comments);
+    return {
+        ticketKey: ctx.ticketKey,
+        headSha: prDetails.head && prDetails.head.sha,
+        hasNewHunks: hunks.hasNewHunks,
+        newHunkPaths: hunks.newHunkPaths
+    };
+}
+
+/** The comment list for the hunks step: the shared already-fetched list
+ * wins; a direct call (the unit tests' shape) fetches its own. */
+function roundCommentsOf(deps, ctx, prDetails, prComments) {
+    return prComments === undefined
+        ? deps.prCommentsForContextSteps(ctx.scm, prDetails.number) : prComments;
+}
+
+/** The pool for this run, or null (no pool config / an empty reviewer list —
+ * the round is skipped and the plain single-reviewer floor applies). */
+function resolvePoolOrNull(deps, ctx) {
+    var jp = ctx.jp || ctx.params.jobParams || {};
+    var pool = reviewPoolModule.resolvePool(poolResolveIoOf(deps), ctx.config, jp, {});
+    if (!pool || pool.reviewers.length === 0) return null;
+    return pool;
+}
+
 /**
  * The dispatcher's gh-1471 step: resolve the pool, materialize the round
  * context (head, hunks) and execute the specialists IN-JOB. Returns
@@ -86,23 +120,12 @@ function inJobIoOf(deps, ctx) {
 function reviewerPoolRoundSetup(deps, ctx, prDetails, prComments) {
     if (ctx.dryRun || branchSetup.isDryRunParams(ctx.params)) return null;
     try {
-        var jp = ctx.jp || ctx.params.jobParams || {};
-        var pool = reviewPoolModule.resolvePool(poolResolveIoOf(deps), ctx.config, jp, {});
-        if (!pool || pool.reviewers.length === 0) return null;
-        var comments = prComments === undefined
-            ? deps.prCommentsForContextSteps(ctx.scm, prDetails.number) : prComments;
-        var hunks = roundHunksOf(deps, ctx, prDetails, comments);
-        var roundCtx = {
-            ticketKey: ctx.ticketKey,
-            headSha: prDetails.head && prDetails.head.sha,
-            hasNewHunks: hunks.hasNewHunks,
-            newHunkPaths: hunks.newHunkPaths
-        };
+        var pool = resolvePoolOrNull(deps, ctx);
+        if (!pool) return null;
+        var comments = roundCommentsOf(deps, ctx, prDetails, prComments);
+        var roundCtx = roundContextOf(deps, ctx, prDetails, comments);
         var round = reviewPoolInJob.runSpecialists(inJobIoOf(deps, ctx), pool, roundCtx);
-        if (round.completed.length > 0 || round.unavailable.length > 0) {
-            console.log('✅ Reviewer pool in-job round: completed [' + round.completed.join(', ') + ']' +
-                (round.unavailable.length > 0 ? ', unavailable [' + round.unavailable.join(', ') + '] (fail-open)' : ''));
-        }
+        logInJobRoundOutcome(round);
         return { round: round, roundCtx: roundCtx };
     } catch (e) {
         console.warn('reviewer pool round setup failed (non-fatal, single-reviewer round):', e.message || e);
@@ -115,6 +138,8 @@ if (typeof module !== 'undefined' && module.exports) {
         reviewerPoolRoundSetup: reviewerPoolRoundSetup,
         poolResolveIoOf: poolResolveIoOf,
         roundHunksOf: roundHunksOf,
-        inJobIoOf: inJobIoOf
+        inJobIoOf: inJobIoOf,
+        roundContextOf: roundContextOf,
+        logInJobRoundOutcome: logInJobRoundOutcome
     };
 }

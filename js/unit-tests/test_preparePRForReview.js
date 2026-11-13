@@ -260,6 +260,25 @@ function prReviewPoolLegSetupReal() {
     }), {});
 }
 
+/** The forkCheckout module: real + the fork env reader when the suite
+ * serves one (opts.forkEnv), real-defaulted otherwise. */
+function forkCheckoutModuleOf(opts) {
+    return loadModule('js/common/forkCheckout.js',
+        makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js') }),
+        opts.forkEnv ? { get_env_variable: function(k) { return opts.forkEnv[k] || null; } } : {});
+}
+
+/** The autoStart module shim: the trigger is recorded, the trigger call succeeds. */
+function autoStartModuleOf(opts, record) {
+    return Object.assign({
+        triggerConfiguredWorkflowForTicket: function(options) {
+            record.autoStartCalls.push(options);
+            return true;
+        },
+        triggerSmIfIdle: function() {}
+    }, opts.autoStart || {});
+}
+
 /** prLoad's require map: the action's collaborators, shims where the suite
  * asserts on them, the real pure modules everywhere else. */
 function prRequireMapOf(opts, record, globalMocks, actionMocks) {
@@ -286,9 +305,7 @@ function prRequireMapOf(opts, record, globalMocks, actionMocks) {
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
                 makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
         }), {}),
-        './common/forkCheckout.js': loadModule('js/common/forkCheckout.js',
-            makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js') }),
-            opts.forkEnv ? { get_env_variable: function(k) { return opts.forkEnv[k] || null; } } : {}),
+        './common/forkCheckout.js': forkCheckoutModuleOf(opts),
         // gh-1471: the real reviewer-pool execution chain — the leg dispatcher
         // (the gh-1471 pool wiring) resolves the pool + plans the round through
         // these pure modules.
@@ -296,13 +313,7 @@ function prRequireMapOf(opts, record, globalMocks, actionMocks) {
         './common/reviewPoolInJob.js': prReviewPoolInJobReal(),
         './common/reviewPoolLegSetup.js': prReviewPoolLegSetupReal(),
         './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), actionMocks),
-        './common/autoStart.js': Object.assign({
-            triggerConfiguredWorkflowForTicket: function(options) {
-                record.autoStartCalls.push(options);
-                return true;
-            },
-            triggerSmIfIdle: function() {}
-        }, opts.autoStart || {})
+        './common/autoStart.js': autoStartModuleOf(opts, record)
     };
 }
 
