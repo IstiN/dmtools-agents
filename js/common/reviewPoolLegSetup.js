@@ -91,7 +91,16 @@ function roundContextOf(deps, ctx, prDetails, comments) {
         ticketKey: ctx.ticketKey,
         headSha: prDetails.head && prDetails.head.sha,
         hasNewHunks: hunks.hasNewHunks,
-        newHunkPaths: hunks.newHunkPaths
+        newHunkPaths: hunks.newHunkPaths,
+        // The diff file the specialist prompt points at MUST exist on every
+        // round (the review finding: the prompt rendered the hunks path
+        // unconditionally, but pr_new_hunks.txt is materialized only on
+        // re-reviews — a first round (no verdict record) never writes it,
+        // leaving the specialist a file that is not there). First rounds
+        // review the standard full PR diff instead.
+        diffFile: hunks.hasNewHunks
+            ? 'input/' + (ctx.ticketKey || '') + '/pr_new_hunks.txt'
+            : 'input/' + (ctx.ticketKey || '') + '/pr_diff.txt'
     };
 }
 

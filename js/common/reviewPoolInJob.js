@@ -38,7 +38,7 @@ var reviewVerdicts = require('./reviewVerdicts.js');
 var RUN_AGENT_REL = 'agents/scripts/run-agent.sh';
 var SAFE_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 var DEFAULT_SPECIALIST_TIMEOUT_SECONDS = 900;
-var DEFAULT_ROUND_BUDGET_SECONDS = 180;
+var DEFAULT_ROUND_BUDGET_SECONDS = 1800; // 30 minutes — the outer batch cap must EXCEED the per-specialist 900s cap (the review finding: 180 made the units bug — 3 minutes killed the batch before any specialist could finish)
 var CANDIDATES_FILE_PREFIX = 'pr_review_candidates-';
 var COVERAGE_FILE_PREFIX = 'pr_review_coverage-';
 
@@ -147,7 +147,10 @@ function specialistContextLines(skill, roundCtx) {
             : '') +
         '- Candidates contract: `agents/instructions/pr_review/base/output_rules.md`',
         '  (the candidates-only output section — your ONLY output)',
-        '- Diff under review: `input/' + (roundCtx.ticketKey || '') + '/pr_new_hunks.txt` —',
+        '- Diff under review: `' + (roundCtx.diffFile ||
+            (roundCtx.hasNewHunks
+                ? 'input/' + (roundCtx.ticketKey || '') + '/pr_new_hunks.txt'
+                : 'input/' + (roundCtx.ticketKey || '') + '/pr_diff.txt')) + '` —',
         '  AUTHORITATIVE and pre-verified by the machine: review its content as',
         '  given (the repo checkout provides the surrounding files)',
         '',
@@ -436,15 +439,19 @@ function readSpecialistOutcomes(io, pool, roundCtx) {
         } else {
             out.unavailable.push(name);
             out.results.push({ reviewer: name, ok: false, reason: outcome.reason });
-        }
-        var cov = readCoverage(io, name);
-        if (cov && (cov.covered.length > 0 || cov.pending.length > 0)) {
-            out.coverageNotes.push({
-                reviewer: name,
-                text: 'no candidates — coverage memory persisted (covered ' +
-                    cov.covered.length + ', pending ' + cov.pending.length +
-                    '); the next pass continues it'
-            });
+            // The continuation note ONLY for a specialist that did NOT
+            // deliver candidates (the review finding: the block previously
+            // ran for every specialist — a completed one would get a lying
+            // "no candidates" note while its candidates were accepted).
+            var cov = readCoverage(io, name);
+            if (cov && (cov.covered.length > 0 || cov.pending.length > 0)) {
+                out.coverageNotes.push({
+                    reviewer: name,
+                    text: 'no candidates — coverage memory persisted (covered ' +
+                        cov.covered.length + ', pending ' + cov.pending.length +
+                        '); the next pass continues it'
+                });
+            }
         }
     }
     return out;

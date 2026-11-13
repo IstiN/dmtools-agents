@@ -286,6 +286,44 @@ test('runSpecialists: a killed specialist with coverage memory notes the continu
         'the note carries the counts');
 });
 
+test('prompt: the diff file follows the round (hunks on re-reviews, the full PR diff on first rounds)', function() {
+    // The review BLOCKING: the prompt rendered pr_new_hunks.txt unconditionally,
+    // but that file is materialized only on re-reviews — a first round never
+    // writes it. The machine now names the file per round.
+    var reReview = inJob.buildSpecialistPrompt(skillOf('security'), ctxOf({ hasNewHunks: true, newHunkPaths: ['js/x.js'] }));
+    assert.ok(reReview.indexOf('pr_new_hunks.txt') !== -1, 'the re-review prompt points at the hunks file');
+    var first = inJob.buildSpecialistPrompt(skillOf('security'), ctxOf({ hasNewHunks: false }));
+    assert.ok(first.indexOf('pr_diff.txt') !== -1, 'the first-round prompt points at the standard full PR diff');
+    assert.ok(first.indexOf('pr_new_hunks.txt') === -1, 'the first-round prompt never names the absent hunks file');
+});
+
+test('the round budget default is 1800s — it MUST exceed the per-specialist 900s cap', function() {
+    // The review IMPORTANT: the shipped 180 default (3 minutes) killed the
+    // batch before any 900s specialist could finish — the pool no-op'd every
+    // round. The units bug is pinned by this test.
+    assert.strictEqual(inJob.DEFAULT_ROUND_BUDGET_SECONDS, 1800,
+        '30 minutes, strictly greater than the per-specialist 900s cap');
+    var cmd = inJob.buildBatchCommand(['input/t/pool_specialist-security.md'], null, null);
+    assert.ok(cmd.indexOf('timeout -k 60 1800') !== -1, 'the defaults apply to the command');
+});
+
+test('readSpecialistOutcomes: no continuation note for a specialist that delivered candidates', function() {
+    // The review IMPORTANT: the coverage note fired for COMPLETED specialists
+    // (a lying "no candidates" note while the candidates were accepted).
+    var dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pool-cov-'));
+    candidatesFile(dir, 'security', HEAD, [{ severity: 'SUGGESTION', path: 'js/y.js', line: 2, body: 'b', claim: 'c' }]);
+    coverageFile(dir, 'security', HEAD, ['js/x.js'], []);
+    var io = {
+        readFile: function(p) {
+            try { return fs.readFileSync(path.join(dir, p), 'utf8'); } catch (e) { return null; }
+        }
+    };
+    var pool = poolOf([skillOf('security')]);
+    var out = inJob.readSpecialistOutcomes(io, pool, ctxOf({ hasNewHunks: true, newHunkPaths: ['js/x.js'] }));
+    assert.deepStrictEqual(out.completed, ['security']);
+    assert.deepStrictEqual(out.coverageNotes, [], 'a completed specialist gets NO continuation note');
+});
+
 test('prompt: the coverage file contract (plan-first) + the previous-pass memory', function() {
     var prompt = inJob.buildSpecialistPrompt(skillOf('security'), ctxOf({ hasNewHunks: true }));
     assert.ok(prompt.indexOf('coverage-security.json') !== -1, 'the coverage file path is present');

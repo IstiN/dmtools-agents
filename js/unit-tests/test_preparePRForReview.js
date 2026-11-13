@@ -1344,7 +1344,6 @@ suite('preparePRForReview — gh-1471 reviewer-pool in-job round', function() {
         var outcome = run.loaded.module.reviewerPoolRoundSetup(dispatcherCtx(), dispatcherPrDetails(), []);
 
         assert.ok(outcome, 'the posting leg ran a round');
-        if (process.env.DBG) console.log('DBG round:', JSON.stringify(outcome.round.results || outcome.round));
         assert.deepEqual(outcome.round.completed, ['security']);
         assert.deepEqual(outcome.round.unavailable, [], 'security completed on the round head');
 
