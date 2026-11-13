@@ -85,11 +85,20 @@ function hasCompletedOnHead(passMarkers, skillName, headSha) {
     return false;
 }
 
-/** The {name, required} normalization of the round's enabled reviewers. */
+/**
+ * The {name, required, completed} normalization of the round's enabled
+ * reviewers. `completed` (gh-1471) is the producer's stamp — informational
+ * in the payload; the GATE still computes missing from PASS markers
+ * (requiredReviewerGaps), never from this flag.
+ */
 function poolOutcomeEntriesOf(entries) {
     var list = Array.isArray(entries) ? entries : [];
     return list.map(function(e) {
-        return { name: String((e && e.name) || ''), required: (e && e.required) === true };
+        return {
+            name: String((e && e.name) || ''),
+            required: (e && e.required) === true,
+            completed: (e && e.completed) === true
+        };
     });
 }
 
@@ -122,14 +131,14 @@ function buildPoolOutcomeMarkerComment(headSha, roundName, entries, nowIso) {
         (names.length ? names.join(', ') : '(no enabled reviewers)') + '.';
 }
 
-/** The {name, required} entries of a parsed pool payload (nameless skipped). */
+/** The {name, required, completed} entries of a parsed pool payload (nameless skipped). */
 function poolEntryListOf(reviewers) {
     var entries = [];
     var list = Array.isArray(reviewers) ? reviewers : [];
     for (var i = 0; i < list.length; i++) {
         var e = list[i] || {};
         if (!isNonEmptyString(e.name)) continue;
-        entries.push({ name: e.name, required: e.required === true });
+        entries.push({ name: e.name, required: e.required === true, completed: e.completed === true });
     }
     return entries;
 }
