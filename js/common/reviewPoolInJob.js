@@ -33,6 +33,7 @@
 var candidatesModule = require('./reviewPoolCandidates.js');
 var poolModule = require('./reviewPool.js');
 var reviewPolicy = require('./reviewPolicy.js');
+var reviewVerdicts = require('./reviewVerdicts.js');
 
 var RUN_AGENT_REL = 'agents/scripts/run-agent.sh';
 var DEFAULT_SPECIALIST_TIMEOUT_SECONDS = 900;
@@ -110,6 +111,18 @@ function buildSpecialistPrompt(skill, roundCtx) {
             ? '- re-review with new hunks; scope your findings to the hunks\' paths'
             : '- first full review of the PR head'),
         '',
+        '## Time-box (hard)',
+        '',
+        '- This session is capped at 15 minutes. A session without the',
+        '  candidates file on disk when the cap hits is discarded as',
+        '  unavailable — the round proceeds without it.',
+        '- The diff file above is the ENTIRE scope: read it once, read the',
+        '  touched repo files as needed, then WRITE the candidates file.',
+        '- Do not audit the surrounding machinery (the pool, the runner, the',
+        '  docs) — your lens applies to the PR\'s code changes only.',
+        '- Write the candidates file EARLY: an empty valid file beats a',
+        '  brilliant analysis that never lands.',
+        '',
         '## Output contract (strict)',
         '',
         'Write EXACTLY ONE file: `' + candidatesPathOf(name) + '` with this JSON shape:',
@@ -183,7 +196,7 @@ function runOneSpecialist(io, skill, roundCtx) {
         var parsed = JSON.parse(raw);
         var record = candidatesModule.candidatesRecordFromPayload(parsed);
         if (!record) return fail(base, 'invalid candidates record (reviewer/head/candidates required)');
-        if (roundCtx.headSha && !sameHead(record.head, roundCtx.headSha)) {
+        if (roundCtx.headSha && !reviewVerdicts.sameHead(record.head, roundCtx.headSha)) {
             return fail(base, 'stale candidates (head ' + record.head + ' != ' + roundCtx.headSha + ')');
         }
         record.reviewer = name;
@@ -203,14 +216,6 @@ function writePromptFile(io, skill, roundCtx) {
 
 function fail(base, reason) {
     return Object.assign({}, base, { ok: false, reason: reason });
-}
-
-/** The reviewVerdicts.sameHead shape (sha prefix match, case-insensitive). */
-function sameHead(a, b) {
-    if (!a || !b) return false;
-    a = String(a).toLowerCase();
-    b = String(b).toLowerCase();
-    return a === b || a.indexOf(b) === 0 || b.indexOf(a) === 0;
 }
 
 /**
@@ -239,7 +244,7 @@ function readSpecialistOutcomes(io, pool, roundCtx) {
                 record = null;
             }
         }
-        var sameHeadOk = record && roundCtx.headSha && sameHead(record.head, roundCtx.headSha);
+        var sameHeadOk = record && roundCtx.headSha && reviewVerdicts.sameHead(record.head, roundCtx.headSha);
         if (record && sameHeadOk) {
             record.reviewer = name;
             out.completed.push(name);
