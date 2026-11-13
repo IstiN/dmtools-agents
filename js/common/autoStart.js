@@ -253,7 +253,7 @@ function triggerConfiguredJobLocally(options) {
     var label = options.label || configFile;
     var encodedCfg = buildEncodedConfigModule.buildEncodedConfig(
         ticketKey,
-        { configFile: configFile, projectKey: projectKey, paramPatches: options.paramPatches },
+        { configFile: configFile, projectKey: projectKey },
         config,
         true
     );
@@ -307,8 +307,7 @@ function resolveTriggerContext(options) {
         config: config,
         configFile: configFile,
         workflowFile: workflowFile,
-        label: options.label || configFile || workflowFile,
-        paramPatches: options.paramPatches
+        label: options.label || configFile || workflowFile
     };
 }
 
@@ -363,7 +362,7 @@ function triggerConfiguredWorkflowForTicket(options) {
     var scm = options.scm || scmModule.createScm(ctx.config);
     var encodedCfg = buildEncodedConfigModule.buildEncodedConfig(
         ctx.ticketKey,
-        { configFile: ctx.configFile, projectKey: projectKey, paramPatches: ctx.paramPatches },
+        { configFile: ctx.configFile, projectKey: projectKey },
         ctx.config
     );
 
