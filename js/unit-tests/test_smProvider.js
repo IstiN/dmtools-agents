@@ -1342,6 +1342,46 @@ suite('smProvider — gh-1009 CRAP characterization (paths touched by the provid
         assert.deepEqual(snap.prStatus, {});
     });
 
+    test('fa #2148: prStatus memo ages from FETCH time — write-back/preseed never refresh the TTL', function () {
+        var mod = loadMod({
+            github_get_pr: function () { return { state: 'open' }; }
+        });
+        var p = mod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'g', repo: 'r' } });
+        var st = p.prStatus(42);
+        assert.equal(typeof st.fetchedAt, 'number', 'fetch time recorded on the status');
+        st.fetchedAt = Date.now() - 120000; // fetched 2 min ago
+        p.memoPrStatus(42, st);              // worker write-back re-put
+        assert.equal(mod._cache.entries['g/r:prStatus:42'].at, st.fetchedAt,
+            'write-back keeps the original fetch time');
+        assert.deepEqual(p.snapshot(['prStatus']).prStatus, {}, 'stale memo expires');
+        var p2 = mod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'g', repo: 'r' }, preseed: { prStatus: { '43': st } } });
+        assert.equal(mod._cache.entries['g/r:prStatus:43'].at, st.fetchedAt,
+            'preseed keeps the original fetch time');
+        assert.notEqual(p2.prStatus(43), st, 'stale preseed re-fetches');
+    });
+
+    test('fa #2148: prStatus memo ages from FETCH time — write-back/preseed never refresh the TTL', function () {
+        var mod = loadMod({
+            github_get_pr: function () { return { state: 'open' }; }
+        });
+        var p = mod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'g', repo: 'r' } });
+        var st = p.prStatus(42);
+        assert.equal(typeof st.fetchedAt, 'number', 'fetch time recorded on the status');
+        st.fetchedAt = Date.now() - 120000; // fetched 2 min ago
+        p.memoPrStatus(42, st);              // worker write-back re-put
+        assert.equal(mod._cache.entries['g/r:prStatus:42'].at, st.fetchedAt,
+            'write-back keeps the original fetch time');
+        assert.deepEqual(p.snapshot(['prStatus']).prStatus, {}, 'stale memo expires');
+        var p2 = mod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'g', repo: 'r' }, preseed: { prStatus: { '43': st } } });
+        assert.equal(mod._cache.entries['g/r:prStatus:43'].at, st.fetchedAt,
+            'preseed keeps the original fetch time');
+        assert.notEqual(p2.prStatus(43), st, 'stale preseed re-fetches');
+    });
+
     test('createSmProvider: the preseed prStatus leg hydrates the memo (no refetch)', function () {
         var mod = loadMod({
             github_get_pr: function () { throw new Error('github_get_pr must not be called on a preseed hit'); }

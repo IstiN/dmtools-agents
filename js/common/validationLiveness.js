@@ -53,6 +53,14 @@ function concludedWithin(run, nowMs, ms) {
     return age >= 0 && age < ms;
 }
 
+// fa #2148: the newest dispatched run on the head concluded GREEN inside the
+// grace — the rollup just has not caught up; a re-dispatch only re-rolls flakes.
+function freshGreen(probe, nowMs) {
+    var n = probe && probe.newest;
+    return !!n && n.conclusion === 'success' &&
+        concludedWithin(n, nowMs, CONCLUDED_REDISPATCH_GRACE_MS);
+}
+
 // Classify probeDispatchedState ({ active, verdict, green, newest }) →
 // 'running' | 'green' | 'red' | 'zombie-cancelled' | 'zombie-no-run'.
 function cancelledState(run) {
@@ -382,6 +390,7 @@ module.exports = {
     ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
     CONCLUDED_REDISPATCH_GRACE_MS: CONCLUDED_REDISPATCH_GRACE_MS,
     concludedWithin: concludedWithin,
+    freshGreen: freshGreen,
     POOL_STALE_NON_RUNNING_MS: POOL_STALE_NON_RUNNING_MS,
     poolBusy: poolBusy,
     POOL_EXCLUDED_WORKFLOW_FILES: POOL_EXCLUDED_WORKFLOW_FILES,
