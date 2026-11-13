@@ -1,0 +1,277 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-13T18:18:56.466Z",
+  "ticketKey": "gh-1471",
+  "headSha": "83e1225627c7b06c233cefb77f839b7ba340300c",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:7dc31fd6651c7e80",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:deb671ddb949245d",
+      "size": 34267
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:470da632fd8841bb",
+      "size": 14674
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:8ee90bfb91565bfb",
+      "size": 3435
+    },
+    "request.md": {
+      "hash": "fnv1a64:3c4d92e86aad0a0f",
+      "size": 6224
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:349512ac1497ce62",
+      "size": 1907
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:2f6d9f8e1c6ffa61",
+      "size": 1279
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:a48e2a38c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:6c00ba2f5426bf35",
+      "size": 6328
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:3c4d92e86aad0a0f",
+      "size": 6224
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs63NZKr",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/reviewPoolInJob.js",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: the specialist prompt points every first-round specialist at a file the machine never writes**\n\n`js/common/reviewPoolInJob.js:150-152` renders the diff pointer unconditionally:\n\n```\n- Diff under review: `input/<ticket>/pr_new_hunks.txt` —\n  AUTHORITATIVE and pre-verified by the machine: review its content as given\n```\n\nBut `pr_new_hunks.txt` is materialized **only on re-review rounds**: `writeNewHunksContext` (`js/preparePRForReview.js:392-402`) writes it only when `resolveNewHunksContext` returns a head pair, which requires `prNewHunks.headsDiffer(lastHead, currentHead)` — and `lastReviewedHead` is `null` on a first review (no trusted verdict record yet, `js/common/prNewHunks.js:33-38`). On a first round **no file exists**, so the prompt's \"pre-verified by the machine\" claim is false and the specialists' entire scope pointer dangles.\n\nThis is the primary scenario, not an edge case: both factory reviewers run on first rounds (`instructions/review/base.json`, `instructions/review/security.json` — `rounds: [\"first\", ...]`, `isEnabled: true`, resolved unconditionally by `resolvePool`), so every PR's first pool review is affected. Nothing covers it in tests — every prompt test in `test_reviewPoolInJob.js` uses `ctxOf({ hasNewHunks: true })`.\n\nFix: branch the pointer on `roundCtx.hasNewHunks` — point first rounds at `input/<ticket>/pr_diff.txt` (the materialized full diff), keep `pr_new_hunks.txt` for hunks rounds — and add a first-round prompt test."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs63NZNd",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/reviewPoolInJob.js:303",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the composite spawn throw discards already-completed candidates, and the shipped default knobs guarantee the throw**\n\n`spawnBatchOf` (`js/common/reviewPoolInJob.js:276-291`) treats ANY `executeCommand` throw as a spawn-level failure: every prepped specialist is failed with `spawn failed: …` and `prepped.length = 0` (line 290) — so the read-back loop never runs and candidates files that were **already written** are never read.\n\nTwo facts make this the production norm rather than a rare degradation:\n\n1. **`cli_execute_command` throws on non-zero exit — including `timeout`'s 124.** `js/integration-tests/test_missing_response_resume_cap.js` proves it (`bash -c \"timeout -k 1 1 sleep 30\"` is caught as a kill). The composite command exits non-zero exactly when the outer round budget fires.\n2. **The defaults guarantee the budget fires first.** `DEFAULT_ROUND_BUDGET_SECONDS = 180` vs `DEFAULT_SPECIALIST_TIMEOUT_SECONDS = 900`, and nothing ever injects `roundCtx.specialistTimeoutSeconds` / `roundCtx.roundBudgetSeconds` (grep: they are only *read* in `reviewPoolInJob.js:277-278`; `roundContextOf` in `reviewPoolLegSetup.js` doesn't set them). Every round where a specialist runs longer than 3 minutes — the expected case for a 15-minute-capped LM session — ends with `timeout -k 60 180` killing the batch shell, exit 124, a throw, and **all** specialists classified `spawn failed`, including ones that finished at minute 1 and wrote valid candidates.\n\nThe module contract says the opposite: \"`wait` settles the batch … The candidates files are the only round state: whoever wrote theirs before dying is in\" (`buildBatchCommand` docstring), and the specialist prompt teaches incremental writes so \"whatever landed on disk before the cap IS the round's result\". Today that only works **accidentally** — the posting leg re-reads the files via `readSpecialistOutcomes`, so the merge is saved, but the pre-cli round result that `logInJobRoundOutcome` prints (\"unavailable [security] (fail-open)\") systematically lies about specialists that completed, and the completed/PASS-classification half of `runSpecialists` is dead code under the default knobs.\n\nFix: in the catch, do **not** clear `prepped` — fall through to the read loop so `readOneOutcome` classifies per-file (valid same-head record → completed; no/invalid file → unavailable). Either align the default budget with the per-specialist cap (or drop the composite wrap's throw sensitivity) and plumb the knobs from config so the defaults are real choices."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs63NZQU",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/reviewPoolInJob.js",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: \"no candidates — coverage memory persisted\" is emitted for specialists that DID deliver candidates**\n\nIn `readSpecialistOutcomes` (`js/common/reviewPoolInJob.js:420-458`) the coverage note is pushed **unconditionally** for every selected specialist whose coverage file has content — including specialists whose candidates record was just validated:\n\n```js\nvar outcome = specialistOutcomeRecord(raw, roundCtx, name);\nif (outcome.record) { out.completed.push(name); … }\n…\nvar cov = readCoverage(io, name);\nif (cov && (cov.covered.length > 0 || cov.pending.length > 0)) {\n    out.coverageNotes.push({ reviewer: name,\n        text: 'no candidates — coverage memory persisted (covered ' + … });\n```\n\nThe coverage contract this same PR introduces (`output_rules.md` \"Write it FIRST — before any review: covered: [], pending: the full list\") guarantees a completed specialist has a non-empty coverage file — so on every normal round the note fires for successful reviewers too.\n\nThe note flows straight into the posted PR: `poolRoundStep` → `inJobCollectOf` → `poolPacketOf` → `coveragePacketLines` (`js/common/reviewPoolMerge.js`) renders `🔁 <reviewer>: no candidates — coverage memory persisted …` in the general comment. Posting \"no candidates\" about a specialist whose candidates are in the merged census mistates the round outcome in machine-stamped PR content — exactly what the packet's visibility duty exists to prevent. (The pre-cli reader `runSpecialists`/`readOneOutcome` gets this right — notes only on failure branches; the posting-side reader, the one that feeds the packet, doesn't. A completed specialist also never gets a stale-candidates note in `readOneOutcome`, so the two readers disagree in both directions.)\n\nFix: only push the coverage note when `outcome.record` is absent (mirror `runSpecialists`), and cover \"completed specialist + coverage file\" in `test_reviewPoolInJob.js` — the current tests never exercise that combination."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs63NZSZ",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_reviewPoolInJob.js:15",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: test_reviewPoolInJob.js is authored for Node and cannot load under the repo's documented test runner**\n\nLine 15 — `var assert = require('assert');` plus `require('path')`, `require('os')`, `require('fs')`, `path.resolve(__dirname, …)` and `fs.readFileSync`-backed io below. This is the **only** file in `js/unit-tests/` written that way; every other suite uses the harness globals (`loadModule`/`makeRequire` + the injected `assert`) per AGENTS.md (\"Tests use `loadModule()` with mock injection — see `js/unit-tests/testRunner.js`\") and the GraalJS constraints.\n\nReproduced under the documented command:\n\n```\n$ dmtools run js/unit-tests/run_reviewPoolExecution.json\n📂 js/unit-tests/test_reviewPoolInJob.js\n  ❌ Error in test file: Failed to require module: assert (JavaScript file not found in resources or filesystem: assert)\n  ❌ FAIL — 41 passed, 1 failed\n```\n\nSo `run_reviewPoolExecution.json` — one of the verify commands in the PR description — is **red** under the runner it names, and the file also reds `dmtools run js/unit-tests/run_all.json` (it is listed there). CI happens to stay green only because `quality.yml` runs the suites through the Node mirror (`node_testRunner.js`, 70/0) — but the repo keeps a dedicated home for plain-Node tests (`js/test/*.test.js`, \"node:test suites run outside the harness\" per quality.yml), and this file isn't in it.\n\nNote the production chain itself is GraalJS-clean: `test_reviewPoolPost.js` already loads `reviewPoolPost.js` → `reviewPoolInJob.js` under the dmtools harness via `REAL_COMMON_MODULES`. Only the test file's idioms need porting.\n\nFix: port to `loadModule`/`makeRequire` with `memoryIo` (which this PR adds for exactly that purpose), or move the file to `js/test/` as a Node test."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs63NZVq",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_preparePRForReview.js",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: leftover debug line uses `process.env` — breaks the suite in the GraalJS runner and falsifies the PR's verify claim**\n\n```js\nif (process.env.DBG) console.log('DBG round:', JSON.stringify(outcome.round.results || outcome.round));\n```\n\n`process` does not exist in dmtools GraalJS. Reproduced:\n\n```\n$ dmtools run js/unit-tests/run_preparePRForReview.json\n❌ preparePRForReview — gh-1471 reviewer-pool in-job round > the in-job round executes the specialists (base never dispatches itself)\n   'process' is not defined\n{\"success\":false,\"passed\":54,\"failed\":4}\n```\n\nThe PR description claims this suite runs \"59 passed, 3 pre-existing main failures\". I verified the pre-existing claim is real (fresh `origin/main` worktree: 50 passed, 3 failed — the same three failure-path tests), which makes this the branch-introduced 4th: the gh-1471 test fails before its assertions run (the round itself executed fine — \"✅ Reviewer pool in-job round: completed [security]\" just above). The Node CI harness greens it (58/0) because `process` exists there — which is presumably how it slipped through.\n\nDelete the debug line (the suite result is asserted one line later; a `DBG` escape hatch can be a harness-safe flag if it's genuinely needed)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs63NZY6",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/reviewPoolLegSetup.js:42",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the pre-cli hunks context re-runs git untrimmed while the posting side parses the trimmed file — the two sides can compute different `newHunkPaths`**\n\n`roundHunksOf` (`js/common/reviewPoolLegSetup.js:37-49`) re-derives the hunks context via `resolveNewHunksContext` + `gitOps.getDiffBetweenCommits` on the **raw** diff, then parses `+++ b/` paths. But `writeNewHunksContext` — called one statement earlier in `preparePRForReview.action` — writes `pr_new_hunks.txt` through `gitOps.trimLargeTextForInput`, which drops the middle of oversized diffs, and the **posting side** (`newHunksContextOf`, `js/postPRReviewComments.js:1466-1482`) parses that materialized, trimmed file.\n\nUnder trim, `selectSpecialists` (pre-cli, untrimmed paths) and `buildInJobPlan` (posting, trimmed paths) can disagree on `triggerPathsHit`: a leg selected pre-cli can be missing from `plan.legs`, so the pool-outcome marker under-reports it and — if the leg is required and failed — `missingRequiredOf` never considers it and the required-reviewer hold is skipped. The merge itself is safe (`inJobCollectOf` merges **all** arrived records regardless of plan legs), but the \"same deterministic selection the pre-cli runner used\" contract claimed in `expectedCandidateNamesOf` breaks exactly here.\n\nThis also costs a redundant full `git diff` per round, and the PR description states the opposite behavior as a key decision (\"derives from the materialized `pr_new_hunks.txt` … instead of re-running git\") — true only for the posting side.\n\nFix: have `roundHunksOf` parse the materialized `pr_new_hunks.txt` (or reuse `writeNewHunksContext`'s computed hunks) so both sides see the same path set."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs63OOEC",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_reviewPoolInJob.js:15",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: test_reviewPoolInJob.js still cannot load under the documented dmtools runner — re-raised (same as the earlier finding F4), reproduced at the current head**\n\nReproduced fresh at `83e1225` with the PR's own verify block:\n\n```\n$ dmtools run js/unit-tests/run_reviewPoolExecution.json\n📂 js/unit-tests/test_reviewPoolInJob.js\n  ❌ Error in test file: Failed to require module: assert (JavaScript file not found in resources or filesystem: assert)\n  ❌ FAIL  —  41 passed, 1 failed\n```\n\nThe file is still Node-authored (`require('assert')` / `path` / `os` / `fs` at lines 15–21, `path.resolve(__dirname, …)`, `fs.mkdtempSync` at :170 and :313) while every other `js/unit-tests/` suite uses the harness globals (`loadModule`/`makeRequire` + the injected `assert`) per AGENTS.md. It is listed in both `run_reviewPoolExecution.json` and `run_all.json`, so `dmtools run js/unit-tests/run_all.json` reds too, and the PR description still names the red command as a verify step (\"dmtools run js/unit-tests/run_reviewPoolExecution.json\"). CI stays green only because `quality.yml` routes the suites through the Node mirror (`node_testRunner.js` — verified 32/0 under node), which is exactly how this keeps slipping.\n\nNote the new hunks make the eventual port cost more, not less: the three new tests add further Node-only surface (`fs.mkdtempSync(path.join(os.tmpdir(), …))`, `fs.readFileSync`-backed io at :308–325). The deferral (\"a separate commit, tracked in this thread\") keeps the finding open — the tracked commit has not landed on this branch.\n\nFix (either one closes it): port the idioms to `loadModule`/`makeRequire` with `memoryIo`/tmp-io injection (the PR adds `memoryIo` for exactly this purpose), or move the file to `js/test/` where the Node-idiom suites live (`quality.yml` runs them outside the harness). Then update the PR description's verify block to match reality."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:6df65478",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the composite spawn throw discards already-completed candidates, and the shipped default knobs guarantee the throw**\n\n`spawnBatchOf` (`js/common/reviewPoolInJob.js:276-291`) treats ANY `executeCommand` throw as a spawn-level failure: every prepped specialist is failed with `spawn failed: …` and `prepped.length = 0` (line 290) — so the read-back loop never runs and candidates files that were **already written** are never read.\n\nTwo facts make this the production norm rather than a rare degradation:\n\n1. **`cli_execute_command` throws on non-zero exit — including `timeout`'s 124.** `js/integration-tests/test_missing_response_resume_cap.js` proves it (`bash -c \"timeout -k 1 1 sleep 30\"` is caught as a kill). The composite command exits non-zero exactly when the outer round budget fires.\n2. **The defaults guarantee the budget fires first.** `DEFAULT_ROUND_BUDGET_SECONDS = 180` vs `DEFAULT_SPECIALIST_TIMEOUT_SECONDS = 900`, and nothing ever injects `roundCtx.specialistTimeoutSeconds` / `roundCtx.roundBudgetSeconds` (grep: they are only *read* in `reviewPoolInJob.js:277-278`; `roundContextOf` in `reviewPoolLegSetup.js` doesn't set them). Every round where a specialist runs longer than 3 minutes — the expected case for a 15-minute-capped LM session — ends with `timeout -k 60 180` killing the batch shell, exit 124, a throw, and **all** specialists classified `spawn failed`, including ones that finished at minute 1 and wrote valid candidates.\n\nThe module contract says the opposite: \"`wait` settles the batch … The candidates files are the only round state: whoever wrote theirs before dying is in\" (`buildBatchCommand` docstring), and the specialist prompt teaches incremental writes so \"whatever landed on disk before the cap IS the round's result\". Today that only works **accidentally** — the posting leg re-reads the files via `readSpecialistOutcomes`, so the merge is saved, but the pre-cli round result that `logInJobRoundOutcome` prints (\"unavailable [security] (fail-open)\") systematically lies about specialists that completed, and the completed/PASS-classification half of `runSpecialists` is dead code under the default knobs.\n\nFix: in the catch, do **not** clear `prepped` — fall through to the read loop so `readOneOutcome` classifies per-file (valid same-head record → completed; no/invalid file → unavailable). Either align the default budget with the per-specialist cap (or drop the composite wrap's throw sensitivity) and plumb the knobs from config so the defaults are real choices."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:8cd6fbda",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: \"no candidates — coverage memory persisted\" is emitted for specialists that DID deliver candidates**\n\nIn `readSpecialistOutcomes` (`js/common/reviewPoolInJob.js:420-458`) the coverage note is pushed **unconditionally** for every selected specialist whose coverage file has content — including specialists whose candidates record was just validated:\n\n```js\nvar outcome = specialistOutcomeRecord(raw, roundCtx, name);\nif (outcome.record) { out.completed.push(name); … }\n…\nvar cov = readCoverage(io, name);\nif (cov && (cov.covered.length > 0 || cov.pending.length > 0)) {\n    out.coverageNotes.push({ reviewer: name,\n        text: 'no candidates — coverage memory persisted (covered ' + … });\n```\n\nThe coverage contract this same PR introduces (`output_rules.md` \"Write it FIRST — before any review: covered: [], pending: the full list\") guarantees a completed specialist has a non-empty coverage file — so on every normal round the note fires for successful reviewers too.\n\nThe note flows straight into the posted PR: `poolRoundStep` → `inJobCollectOf` → `poolPacketOf` → `coveragePacketLines` (`js/common/reviewPoolMerge.js`) renders `🔁 <reviewer>: no candidates — coverage memory persisted …` in the general comment. Posting \"no candidates\" about a specialist whose candidates are in the merged census mistates the round outcome in machine-stamped PR content — exactly what the packet's visibility duty exists to prevent. (The pre-cli reader `runSpecialists`/`readOneOutcome` gets this right — notes only on failure branches; the posting-side reader, the one that feeds the packet, doesn't. A completed specialist also never gets a stale-candidates note in `readOneOutcome`, so the two readers disagree in both directions.)\n\nFix: only push the coverage note when `outcome.record` is absent (mirror `runSpecialists`), and cover \"completed specialist + coverage file\" in `test_reviewPoolInJob.js` — the current tests never exercise that combination."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:70d5148b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: test_reviewPoolInJob.js is authored for Node and cannot load under the repo's documented test runner**\n\nLine 15 — `var assert = require('assert');` plus `require('path')`, `require('os')`, `require('fs')`, `path.resolve(__dirname, …)` and `fs.readFileSync`-backed io below. This is the **only** file in `js/unit-tests/` written that way; every other suite uses the harness globals (`loadModule`/`makeRequire` + the injected `assert`) per AGENTS.md (\"Tests use `loadModule()` with mock injection — see `js/unit-tests/testRunner.js`\") and the GraalJS constraints.\n\nReproduced under the documented command:\n\n```\n$ dmtools run js/unit-tests/run_reviewPoolExecution.json\n📂 js/unit-tests/test_reviewPoolInJob.js\n  ❌ Error in test file: Failed to require module: assert (JavaScript file not found in resources or filesystem: assert)\n  ❌ FAIL — 41 passed, 1 failed\n```\n\nSo `run_reviewPoolExecution.json` — one of the verify commands in the PR description — is **red** under the runner it names, and the file also reds `dmtools run js/unit-tests/run_all.json` (it is listed there). CI happens to stay green only because `quality.yml` runs the suites through the Node mirror (`node_testRunner.js`, 70/0) — but the repo keeps a dedicated home for plain-Node tests (`js/test/*.test.js`, \"node:test suites run outside the harness\" per quality.yml), and this file isn't in it.\n\nNote the production chain itself is GraalJS-clean: `test_reviewPoolPost.js` already loads `reviewPoolPost.js` → `reviewPoolInJob.js` under the dmtools harness via `REAL_COMMON_MODULES`. Only the test file's idioms need porting.\n\nFix: port to `loadModule`/`makeRequire` with `memoryIo` (which this PR adds for exactly that purpose), or move the file to `js/test/` as a Node test."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:e879da61",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: leftover debug line uses `process.env` — breaks the suite in the GraalJS runner and falsifies the PR's verify claim**\n\n```js\nif (process.env.DBG) console.log('DBG round:', JSON.stringify(outcome.round.results || outcome.round));\n```\n\n`process` does not exist in dmtools GraalJS. Reproduced:\n\n```\n$ dmtools run js/unit-tests/run_preparePRForReview.json\n❌ preparePRForReview — gh-1471 reviewer-pool in-job round > the in-job round executes the specialists (base never dispatches itself)\n   'process' is not defined\n{\"success\":false,\"passed\":54,\"failed\":4}\n```\n\nThe PR description claims this suite runs \"59 passed, 3 pre-existing main failures\". I verified the pre-existing claim is real (fresh `origin/main` worktree: 50 passed, 3 failed — the same three failure-path tests), which makes this the branch-introduced 4th: the gh-1471 test fails before its assertions run (the round itself executed fine — \"✅ Reviewer pool in-job round: completed [security]\" just above). The Node CI harness greens it (58/0) because `process` exists there — which is presumably how it slipped through.\n\nDelete the debug line (the suite result is asserted one line later; a `DBG` escape hatch can be a harness-safe flag if it's genuinely needed)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:ea32cb23",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 severity: SUGGESTION —\n💡 **SUGGESTION: the pre-cli hunks context re-runs git untrimmed while the posting side parses the trimmed file — the two sides can compute different `newHunkPaths`**\n\n`roundHunksOf` (`js/common/reviewPoolLegSetup.js:37-49`) re-derives the hunks context via `resolveNewHunksContext` + `gitOps.getDiffBetweenCommits` on the **raw** diff, then parses `+++ b/` paths. But `writeNewHunksContext` — called one statement earlier in `preparePRForReview.action` — writes `pr_new_hunks.txt` through `gitOps.trimLargeTextForInput`, which drops the middle of oversized diffs, and the **posting side** (`newHunksContextOf`, `js/postPRReviewComments.js:1466-1482`) parses that materialized, trimmed file.\n\nUnder trim, `selectSpecialists` (pre-cli, untrimmed paths) and `buildInJobPlan` (posting, trimmed paths) can disagree on `triggerPathsHit`: a leg selected pre-cli can be missing from `plan.legs`, so the pool-outcome marker under-reports it and — if the leg is required and failed — `missingRequiredOf` never considers it and the required-reviewer hold is skipped. The merge itself is safe (`inJobCollectOf` merges **all** arrived records regardless of plan legs), but the \"same deterministic selection the pre-cli runner used\" contract claimed in `expectedCandidateNamesOf` breaks exactly here.\n\nThis also costs a redundant full `git diff` per round, and the PR description states the opposite behavior as a key decision (\"derives from the materialized `pr_new_hunks.txt` … instead of re-running git\") — true only for the posting side.\n\nFix: have `roundHunksOf` parse the materialized `pr_new_hunks.txt` (or reuse `writeNewHunksContext`'s computed hunks) so both sides see the same path set."
+    },
+    {
+      "id": "pr_discussions.md:ajaxspace:2026-11-13:84c29d50",
+      "kind": "comment",
+      "author": "ajaxspace",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Fixed in 327ec99a4/b5eb772e3: the machine names the diff file per round — the hunks delta on re-reviews, the standard full PR diff (pr_diff.txt) on first rounds (roundCtx.diffFile + the prompt fallback). A first round never touches the absent hunks file."
+    },
+    {
+      "id": "pr_discussions.md:ajaxspace:2026-11-13:64b365f7",
+      "kind": "comment",
+      "author": "ajaxspace",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "The knobs half is fixed in b5eb772e3: DEFAULT_ROUND_BUDGET_SECONDS = 1800 (30 min, above the 900s per-specialist cap; pinned by a unit test — 180 was a units bug, 3 minutes killed the batch). The discard-all on a composite throw stays deliberately: execSync is all-or-nothing, a throw means nothing ran."
+    },
+    {
+      "id": "pr_discussions.md:ajaxspace:2026-11-13:c9704795",
+      "kind": "comment",
+      "author": "ajaxspace",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Fixed in b5eb772e3: the continuation note moved inside the unavailable branch — a completed specialist no longer gets the lying \"no candidates\" note. Pinned by a unit test."
+    },
+    {
+      "id": "pr_discussions.md:ajaxspace:2026-11-13:988351c8",
+      "kind": "comment",
+      "author": "ajaxspace",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Fixed in b5eb772e3: the DBG line removed."
+    },
+    {
+      "id": "pr_discussions.md:ajaxspace:2026-11-13:9f9b58f1",
+      "kind": "comment",
+      "author": "ajaxspace",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Deferred consciously: the suite runs green under node_testRunner (32/32); the GralJS-harness port is mechanical but a separate commit — tracked in this thread."
+    },
+    {
+      "id": "pr_discussions.md:ajaxspace:2026-11-13:f18f1776",
+      "kind": "comment",
+      "author": "ajaxspace",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Deferred (minor): the pre-cli hunks context re-derives the paths from the raw diff — a consistency nit with no observed failure; folded into the next docs/pack touch."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:4db17517",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: test_reviewPoolInJob.js still cannot load under the documented dmtools runner — re-raised (same as the earlier finding F4), reproduced at the current head**\n\nReproduced fresh at `83e1225` with the PR's own verify block:\n\n```\n$ dmtools run js/unit-tests/run_reviewPoolExecution.json\n📂 js/unit-tests/test_reviewPoolInJob.js\n  ❌ Error in test file: Failed to require module: assert (JavaScript file not found in resources or filesystem: assert)\n  ❌ FAIL  —  41 passed, 1 failed\n```\n\nThe file is still Node-authored (`require('assert')` / `path` / `os` / `fs` at lines 15–21, `path.resolve(__dirname, …)`, `fs.mkdtempSync` at :170 and :313) while every other `js/unit-tests/` suite uses the harness globals (`loadModule`/`makeRequire` + the injected `assert`) per AGENTS.md. It is listed in both `run_reviewPoolExecution.json` and `run_all.json`, so `dmtools run js/unit-tests/run_all.json` reds too, and the PR description still names the red command as a verify step (\"dmtools run js/unit-tests/run_reviewPoolExecution.json\"). CI stays green only because `quality.yml` routes the suites through the Node mirror (`node_testRunner.js` — verified 32/0 under node), which is exactly how this keeps slipping.\n\nNote the new hunks make the eventual port cost more, not less: the three new tests add further Node-only surface (`fs.mkdtempSync(path.join(os.tmpdir(), …))`, `fs.readFileSync`-backed io at :308–325). The deferral (\"a separate commit, tracked in this thread\") keeps the finding open — the tracked commit has not landed on this branch.\n\nFix (either one closes it): port the idioms to `loadModule`/`makeRequire` with `memoryIo`/tmp-io injection (the PR adds `memoryIo` for exactly this purpose), or move the file to `js/test/` where the Node-idiom suites live (`quality.yml` runs them outside the harness). Then update the PR description's verify block to match reality."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:1b946ed8",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: the specialist prompt points every first-round specialist at a file the machine never writes**\n\n`js/common/reviewPoolInJob.js:150-152` renders the diff pointer unconditionally:\n\n```\n- Diff under review: `input/<ticket>/pr_new_hunks.txt` —\n  AUTHORITATIVE and pre-verified by the machine: review its content as given\n```\n\nBut `pr_new_hunks.txt` is materialized **only on re-review rounds**: `writeNewHunksContext` (`js/preparePRForReview.js:392-402`) writes it only when `resolveNewHunksContext` returns a head pair, which requires `prNewHunks.headsDiffer(lastHead, currentHead)` — and `lastReviewedHead` is `null` on a first review (no trusted verdict record yet, `js/common/prNewHunks.js:33-38`). On a first round **no file exists**, so the prompt's \"pre-verified by the machine\" claim is false and the specialists' entire scope pointer dangles.\n\nThis is the primary scenario, not an edge case: both factory reviewers run on first rounds (`instructions/review/base.json`, `instructions/review/security.json` — `rounds: [\"first\", ...]`, `isEnabled: true`, resolved unconditionally by `resolvePool`), so every PR's first pool review is affected. Nothing covers it in tests — every prompt test in `test_reviewPoolInJob.js` uses `ctxOf({ hasNewHunks: true })`.\n\nFix: branch the pointer on `roundCtx.hasNewHunks` — point first rounds at `input/<ticket>/pr_diff.txt` (the materialized full diff), keep `pr_new_hunks.txt` for hunks rounds — and add a first-round prompt test."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:6e4e2c53",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The gh-1471 in-job pool execution is a solid redesign (validated spawn commands, file-driven fail-open rounds, thorough merge/filter wiring), but the specialist prompt sends every **first-round** specialist after a `pr_new_hunks.txt` the machine never writes on first rounds, and two test files break the documented dmtools runner while the PR's verify block claims they pass. Four more issues (a budget/spawn-failure path that discards completed candidates, a wrong \"no candidates\" packet note, a trimmed/untrimmed hunks divergence) should be fixed in the same lap.\n\n**Key Issues**:\n- 🚨 `js/common/reviewPoolInJob.js:150` — first-round specialists are pointed at a nonexistent \"AUTHORITATIVE\" diff file (pool factory skills run `rounds: [first, hunks]`, so every PR's first pool review is affected)\n- ⚠️ `js/common/reviewPoolInJob.js:290` — a composite throw (guaranteed by the 180s default budget vs 900s specialist cap, knobs never injected) marks completed specialists `spawn failed` and skips reading their candidates\n- ⚠️ `js/common/reviewPoolInJob.js:44` — the \"no candidates — coverage memory persisted\" packet note fires for specialists that delivered candidates and is posted to the PR\n- ⚠️ `js/unit-tests/test_reviewPoolInJob.js:15` + `test_preparePRForReview.js:1347` — Node-only idioms (`require('assert')`, `process.env.DBG`) red the documented `dmtools run` suites (reproduced: pool-exec 41 passed/1 load failure; preparePRForReview 54/4 where main is 50/3 — the PR claims \"3 pre-existing\" only)\n\nDescription-accuracy notes for the author: the \"Specialist early-exit BEFORE `readOrResumeReviewData` … mechanically enforced\" key decision does not exist in this branch (in the in-job shape the invariant holds structurally — children are bare `run-agent.sh` CLI runs — but the claim as written is false), and the `reviewerPoolWaitSeconds`/`reviewerPoolPollSeconds` knobs appear nowhere in `js/`.\n\n**Ranked digest (🪶 — real, no thread warranted)**:\n1. `instructions/pr_review/security/lens.md:96` — names `outputs/pr_review_candidates.json`; the machine reads `pr_review_candidates-<reviewer>.json` (duplicated \"the\" at :99-100)\n2. `js/common/reviewPoolInJob.js:206` — the prompt's JSON template shows `body` and omits `id`, drifting from the candidates contract in `output_rules.md`/`few_shots_format.md` (the merge reads only `claim`)\n3. `js/common/reviewPoolCandidates.js:23` — `CLAIM_MAX` (300) is exported but never enforced; oversized claims post verbatim\n4. `js/common/reviewPoolInJob.js:227` — `buildSpecialistCommand` is exported + tested with no production caller\n5. `js/common/reviewPoolCandidates.js:30,48` — empty section banners left from a refactor\n\n**Next Steps**:\n1. Branch the specialist diff pointer on `hasNewHunks` (`pr_diff.txt` on first rounds) + add a first-round prompt test\n2. Stop discarding `prepped` on a composite throw; align/pipe the budget knobs\n3. Coverage note only on failed outcomes; port both test files to the harness (or `js/test/`)\n4. Update the PR description (early-exit claim, wait knobs, verify numbers)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:991cd7d9",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES (re-review of the fix lap)\n\n**Summary**: The fix lap verifiably lands four of the six registry findings — per-round diff file, 1800s round budget, coverage-note placement, `process.env.DBG` removal — each with a pinning test, and I reproduced the greens locally (`run_postPRReviewComments.json` 213/0; `run_preparePRForReview.json` 55/3 where the 3 are exactly the pre-existing main failure-path tests; `agentDocGenerator.js` clean no-op). One ⚠️ stays open: `test_reviewPoolInJob.js` still reds the documented `dmtools run` verify command (reproduced at HEAD: `Failed to require module: assert`).\n\n**Key Issues**:\n- ⚠️ `js/unit-tests/test_reviewPoolInJob.js:15` — still Node-authored, still listed in `run_reviewPoolExecution.json`/`run_all.json`; the verify block claims a command that fails under the runner it names. Registry: F1/F2/F3/F5 verified fixed with citable hunks + tests; F4 re-raised; F6 still present, author-deferred.\n\n**Ranked digest (💡/🪶 — real, no thread warranted)**:\n1. `js/common/reviewPoolLegSetup.js:100` (💡, F6) — `roundHunksOf` still re-derives hunks paths from the raw diff while the posting side parses the trimmed `pr_new_hunks.txt`; unchanged by this lap\n2. `js/common/reviewPoolInJob.js:143` (🪶) — the diff-file path string lives in two places (`roundContextOf.diffFile` + the `diffFileOf` fallback) and only the fallback is test-pinned\n\n**Next Steps**:\n1. Port `test_reviewPoolInJob.js` to `loadModule`/`makeRequire` + injected io (or move to `js/test/`) so the PR's own verify command goes green\n2. Update the PR description verify block to the real suite numbers\n3. Land the deferred F6 fold-in with the next docs/pack touch"
+    }
+  ]
+}
