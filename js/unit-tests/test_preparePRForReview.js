@@ -1323,7 +1323,7 @@ suite('preparePRForReview — gh-1471 reviewer-pool in-job round', function() {
         assert.equal(run.record.cliCalls.length, 1, 'one specialist session ran');
         var command = run.record.cliCalls[0];
         assert.ok(command.indexOf('timeout -k 60 900') !== -1, 'the invocation is wall-clock bounded');
-        assert.ok(command.indexOf('bash scripts/run-agent.sh') !== -1, 'the session runs through the wrapper');
+        assert.ok(command.indexOf('bash agents/scripts/run-agent.sh') !== -1, 'the session runs through the wrapper (the agents/-mounted pack path)');
         assert.ok(command.indexOf('input/PROJ-1/pool_specialist-security.md') !== -1,
             'the prompt rides a prompt file in the input folder');
 
