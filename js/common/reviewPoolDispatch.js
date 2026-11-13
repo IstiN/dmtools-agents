@@ -32,7 +32,7 @@ var markers = require('./reviewPoolMarkers.js');
 var reviewVerdicts = require('./reviewVerdicts.js');
 
 // The posting leg: the factory generalist. Its name is a factory contract
-// (instructions/review/base.json + the pool-wide `base` promptAppend key).
+// (the factory base skill file plus the pool-wide `base` promptAppend key).
 var POSTING_REVIEWER = 'base';
 var CONTRACT_VERDICT = 'verdict';
 var CONTRACT_CANDIDATES = 'candidates';
@@ -140,6 +140,7 @@ function buildRoundPlan(pool, roundCtx) {
     var headSha = String(ctx.headSha || '');
     var passMarkers = ctx.passMarkers || [];
     var enabled = poolModule.enabledReviewers(pool);
+    var round = roundNameOf(ctx.hasNewHunks === true);
     var legs = [];
     var skipped = [];
     for (var i = 0; i < enabled.length; i++) {
@@ -158,7 +159,8 @@ function buildRoundPlan(pool, roundCtx) {
             required: poolModule.isRequiredReviewer(pool, skill.name),
             contract: outputContractOf(skill),
             weight: skill.filterWeight === 'high' ? 'high' : 'normal',
-            rounds: skill.rounds.slice()
+            rounds: skill.rounds.slice(),
+            round: round
         });
     }
     var postingLeg = null;
@@ -166,7 +168,7 @@ function buildRoundPlan(pool, roundCtx) {
         if (legs[l].contract === CONTRACT_VERDICT) postingLeg = legs[l];
     }
     return {
-        round: roundNameOf(ctx.hasNewHunks === true),
+        round: round,
         head: headSha,
         legs: legs,
         skipped: skipped,
@@ -255,6 +257,11 @@ function retryDecisions(plan, ctx) {
     var legs = (plan && plan.legs) || [];
     for (var i = 0; i < legs.length; i++) {
         var leg = legs[i];
+        // The posting leg IS this run — its completion is stamped by its own
+        // post action, and it can never be re-fired from here. Retry
+        // mechanics (retry/give-up/escalate) are dispatch decisions over the
+        // candidates legs only.
+        if (leg.contract !== CONTRACT_CANDIDATES) continue;
         var attempts = attemptCountOf(c.outcomeRecords, leg.reviewer, c.headSha);
         var decision = {
             reviewer: leg.reviewer,

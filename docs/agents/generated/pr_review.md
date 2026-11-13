@@ -47,6 +47,7 @@ The review leg is a POOL of reviewer legs: the generalist (`base`) plus speciali
 - `rounds: ["first","hunks"]` (specialist default) — full pass up front; later rounds only when new hunks touch `triggerPaths` (`first` counts completed passes, not attempts: a 429-failed leg re-fires until its completion marker exists).
 - `reviewPolicy.required` (factory default `['base', 'security']`) gates the MERGE: every listed reviewer needs a same-head PASS marker, else the gh-1370 lane withholds the merge — retry with backoff, owner escalation past budget, never a silent merge. The list is repo-owned (`required: []` gates nothing — merge rules are repo rules); an explicit entry naming an unknown reviewer is a hard error (a misspelled gate silently gates nothing), while the factory DEFAULT list degrades to a warning for reviewers that did not load. The default list adapts when the io degrades; every reviewer still stamps its PASS marker — it doubles as the `first`-rounds completion counter.
 - Validation: `node scripts/validate-review-skills.js .` — deterministic config check (schema, lens existence, duplicate names, tuning limits, prompt targets); wire it into CI next to the docs-coverage gate. Worked example (repo-defined legal reviewer + appends): the [`example/reviewer-pool`](https://github.com/ajaxspace/dm_tools_worflow_test_example/tree/example/reviewer-pool) branch of the factory test repo.
+- Execution (gh-1471): the pre-cli action dispatches the round's specialist legs fire-and-forget (autoStart, duplicate-run-guarded by the PASS markers; the per-leg identity patch `reviewerPoolLeg` carries `{reviewer, required, contract, round, head}` — candidates legs answer `outputs/pr_review_candidates.json`, the posting leg keeps the verdict contract). The post action is the round's machine half: specialists stamp candidates + PASS markers and never post; the posting leg merges the round's candidates into ONE review (cross-reviewer dedup, severity escalates only, weighted retention for high-weight reviewers), runs the gh-1403 filter over the merged census, stamps the pool-outcome marker + the required-reviewer hold, and stamps its own PASS marker after posting. `reviewerPoolWaitSeconds` (default 0) bounds how long the aggregation waits for late specialists before naming them unavailable (fail-open); `reviewerPoolPollSeconds` (default 30) is the poll interval.
 
 - `responseTarget`: `"scm"` — `outputs/response.md` becomes the PR body/comment, so the output-format prompt is GitHub-Flavored Markdown even on Jira (conditions `isResponseToScm.js` / `isResponseToTracker.js`).
 
@@ -86,24 +87,33 @@ _Prepare PR for Review Action (preCliJSAction for pr_review agent)_
 - Side effects:
   - post ticket comment (via tracker)
 - Parameters (customParams):
+  - `aiRepository`
   - `allowApproveWithSuggestions`
   - `branchCreateFnPath`
   - `childQuestions`
   - `commentMarkup`
+  - `configPath`
+  - `contentOutput`
+  - `contentOutput.target`
   - `contexts`
   - `dryRun`
   - `fields`
   - `importantBlocksApproval`
   - `jql`
+  - `localTeammate`
   - `maxReviewThreadsBeforeForceApprove`
   - `parentContextFetch`
+  - `projectKey`
   - `reviewPolicy`
   - `reviewPolicy.identity`
+  - `reviewerPoolLeg`
+  - `reviewerPoolLeg.contract`
+  - `smFallback`
 
 
 ### postJSAction: `postPRReviewComments.js`
 
-_Post PR Review Comments Action_
+_Post PR Review Comments Action — reads outputs/pr_review.json, posts the_
 
 - Source: `agents/js/postPRReviewComments.js`
 - Side effects:
@@ -133,6 +143,9 @@ _Post PR Review Comments Action_
   - `removeLabel`
   - `reviewPolicy`
   - `reviewPolicy.identity`
+  - `reviewerPoolLeg`
+  - `reviewerPoolPollSeconds`
+  - `reviewerPoolWaitSeconds`
   - `smFallback`
   - `trackerProvider`
 
@@ -155,30 +168,34 @@ _Post PR Review Comments Action_
 - `checkOpenPR`: `true`
 - `branchCreateFnPath` _(used by JS action)_
 - `dryRun` _(used by JS action)_
+- `aiRepository` _(used by JS action)_
 - `allowApproveWithSuggestions` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
+- `configPath` _(used by JS action)_
+- `contentOutput` _(used by JS action)_
+- `contentOutput.target` _(used by JS action)_
 - `contexts` _(used by JS action)_
 - `fields` _(used by JS action)_
 - `importantBlocksApproval` _(used by JS action)_
 - `jql` _(used by JS action)_
+- `localTeammate` _(used by JS action)_
 - `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_
+- `projectKey` _(used by JS action)_
 - `reviewPolicy` _(used by JS action)_
 - `reviewPolicy.identity` _(used by JS action)_
-- `aiRepository` _(used by JS action)_
+- `reviewerPoolLeg` _(used by JS action)_
+- `reviewerPoolLeg.contract` _(used by JS action)_
+- `smFallback` _(used by JS action)_
 - `autoStartRework` _(used by JS action)_
 - `autoStartReworkConfigFile` _(used by JS action)_
-- `configPath` _(used by JS action)_
-- `contentOutput` _(used by JS action)_
-- `contentOutput.target` _(used by JS action)_
 - `customStatuses` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
-- `localTeammate` _(used by JS action)_
 - `maxAutoReworkRounds` _(used by JS action)_
 - `onApproved` _(used by JS action)_
-- `projectKey` _(used by JS action)_
-- `smFallback` _(used by JS action)_
+- `reviewerPoolPollSeconds` _(used by JS action)_
+- `reviewerPoolWaitSeconds` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 
 ---

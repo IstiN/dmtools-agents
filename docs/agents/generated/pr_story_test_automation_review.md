@@ -83,6 +83,9 @@ _Post Story Test Automation Review Comments Action_
   - `removeLabel`
   - `reviewPolicy`
   - `reviewPolicy.identity`
+  - `reviewerPoolLeg`
+  - `reviewerPoolPollSeconds`
+  - `reviewerPoolWaitSeconds`
   - `smFallback`
   - `trackerProvider`
 
@@ -119,6 +122,9 @@ _Post Story Test Automation Review Comments Action_
 - `projectKey` _(used by JS action)_
 - `reviewPolicy` _(used by JS action)_
 - `reviewPolicy.identity` _(used by JS action)_
+- `reviewerPoolLeg` _(used by JS action)_
+- `reviewerPoolPollSeconds` _(used by JS action)_
+- `reviewerPoolWaitSeconds` _(used by JS action)_
 - `smFallback` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 

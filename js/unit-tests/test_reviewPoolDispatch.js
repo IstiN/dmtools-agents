@@ -216,8 +216,7 @@ suite('reviewPoolDispatch — retry mechanics for required legs (the 429 replay)
         early.decisions.forEach(function(d) { byName[d.reviewer] = d; });
         assert.equal(byName.security.action, 'retry', 'under budget — the leg re-fires');
         assert.ok(byName.security.delayMs > 0, 'retries back off (exponential)');
-        assert.equal(byName.base.action, 'retry');
-        assert.ok(byName.security.delayMs !== byName.base.delayMs || true, 'per-reviewer attempts may differ');
+        assert.equal(byName.base, undefined, 'the posting leg rides no dispatch decision');
 
         // Push security past the budget with same-head rounds.
         var outcomes = [];
@@ -231,8 +230,10 @@ suite('reviewPoolDispatch — retry mechanics for required legs (the 429 replay)
         var ex = {};
         exhausted.decisions.forEach(function(d) { ex[d.reviewer] = d; });
         assert.equal(ex.security.action, 'escalate', 'budget spent without a completion — escalate, never silent merge');
-        assert.equal(ex.base.action, 'escalate', 'base is required too — both exhausted required legs escalate');
-        assert.deepEqual(exhausted.escalated, ['base', 'security']);
+        assert.equal(ex.base, undefined,
+            'the posting leg is THIS run — it never gets a dispatch decision');
+        assert.deepEqual(exhausted.escalated, ['security'],
+            'only the dispatchable (candidates) legs escalate');
         assert.equal(ex.security.attempts, mod.DEFAULT_MAX_LEG_ATTEMPTS);
     });
 
@@ -264,8 +265,9 @@ suite('reviewPoolDispatch — retry mechanics for required legs (the 429 replay)
         var byName = {};
         out.decisions.forEach(function(d) { byName[d.reviewer] = d; });
         assert.equal(byName.perf.action, 'give-up', 'non-required exhaustion is fail-open silence-with-audit');
-        assert.deepEqual(out.escalated, ['base', 'security'],
-            'only the REQUIRED legs escalate here — perf never escalates');
+        assert.equal(byName.base, undefined, 'the posting leg never rides the dispatch decisions');
+        assert.deepEqual(out.escalated, ['security'],
+            'only the REQUIRED candidates legs escalate here — perf gives up, base is this run');
     });
 
     test('retry decisions back off exponentially per attempt', function() {
@@ -284,7 +286,8 @@ suite('reviewPoolDispatch — retry mechanics for required legs (the 429 replay)
         var out = mod.retryDecisions(plan, { outcomeRecords: [], passMarkers: [], headSha: HEAD,
             nowIso: '2026-11-14T12:00:00Z' });
         assert.deepEqual(out.escalated, []);
-        assert.equal(out.decisions.length, plan.legs.length);
+        assert.equal(out.decisions.length, 2,
+            'one decision per candidates leg (the posting leg is this run)');
         out.decisions.forEach(function(d) { assert.equal(d.action, 'retry'); assert.equal(d.attempts, 0); });
     });
 });
@@ -330,5 +333,39 @@ suite('reviewPoolMarkers — the outcome entries carry the round completion (add
         var records = markers.parsePoolOutcomeMarkers([{ body: legacy, author: { login: MACHINE_LOGINS[0] } }],
             { authorLogins: MACHINE_LOGINS });
         assert.equal(records[0].reviewers[0].completed, false);
+    });
+});
+
+suite('reviewPoolDispatch — gh-1471 wiring: the round rides the leg', function() {
+
+    test('every planned leg carries the round it was planned for', function() {
+        var pool = poolOf();
+        var first = mod.buildRoundPlan(pool, { headSha: HEAD, passMarkers: [], hasNewHunks: false, newHunkPaths: [] });
+        first.legs.forEach(function(l) {
+            assert.equal(l.round, 'first', 'leg ' + l.reviewer + ' carries the plan round');
+        });
+        var hunks = mod.buildRoundPlan(pool, { headSha: HEAD, passMarkers: [], hasNewHunks: true, newHunkPaths: [] });
+        hunks.legs.forEach(function(l) {
+            assert.equal(l.round, 'hunks', 'leg ' + l.reviewer + ' carries the hunks round');
+        });
+        var patched = mod.legParamPatches(hunks.legs.filter(function(l) { return l.reviewer === 'security'; })[0], HEAD);
+        assert.equal(patched.reviewerPoolLeg.round, 'hunks',
+            'the dispatched identity names the round the leg runs in');
+    });
+
+    test('the posting leg never gets a dispatch decision, even past budget and uncompleted', function() {
+        var pool = poolOf();
+        var plan = mod.buildRoundPlan(pool, { headSha: HEAD, passMarkers: [], hasNewHunks: false, newHunkPaths: [] });
+        var outcomes = [];
+        for (var i = 0; i < mod.DEFAULT_MAX_LEG_ATTEMPTS; i++) {
+            outcomes.push({ body: markers.buildPoolOutcomeMarkerComment(HEAD, 'first', plan.expected,
+                '2026-11-14T1' + i + ':00:00Z'), author: { login: MACHINE_LOGINS[0] } });
+        }
+        var spent = markers.parsePoolOutcomeMarkers(outcomes, { authorLogins: MACHINE_LOGINS });
+        var out = mod.retryDecisions(plan, { outcomeRecords: spent, passMarkers: [], headSha: HEAD,
+            nowIso: '2026-11-14T12:00:00Z' });
+        var names = out.decisions.map(function(d) { return d.reviewer; });
+        assert.equal(names.indexOf('base'), -1, 'no dispatch decision for the posting leg');
+        assert.deepEqual(out.escalated, ['security']);
     });
 });
