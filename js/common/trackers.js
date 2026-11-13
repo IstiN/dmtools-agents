@@ -42,10 +42,10 @@
  * gl-N router convention or the composite namespace/project#N form (nested
  * subgroups supported).
  *
- * Parent → child: createTicketWithParent works on every provider (on GitHub
+ * Parent → child: createTicketWithParent works on Jira, ADO and GitHub (on GitHub
  * the child becomes a SUB-ISSUE of the parent). listChildTickets(parentKey)
  * returns the children in the parent's order and is GitHub-only (sub-issues);
- * jira/ado throw. Both GitHub calls go to the REST API through `gh api`:
+ * jira/ado/gitlab throw. Both GitHub calls go to the REST API through `gh api`:
  * no runtime ships a sub-issue tool yet, so the runner needs the GitHub CLI
  * installed and authenticated (GH_TOKEN). Without it the calls fail with an
  * error that says so, instead of a parse error on the shell's output.
@@ -166,20 +166,7 @@ function _normalizeComment(raw) {
  * Read a ticket assignee out of backend-specific shapes.
  */
 function _assigneeName(fields) {
-    return _firstAssigneeName([fields.assignee, fields.assignments, fields['System.AssignedTo']]);
-}
-
-function _firstAssigneeName(candidates) {
-    for (var i = 0; i < candidates.length; i++) {
-        var name = _assigneeCandidateName(candidates[i]);
-        if (name) return name;
-    }
-    return null;
-}
-
-function _assigneeCandidateName(a) {
-    return !a ? null : typeof a === 'string' ? a :
-        a.displayName || a.login || a.username || a.uniqueName || a.accountId || a.name || null;
+    return gitlabProvider.assigneeName(fields);
 }
 
 /**

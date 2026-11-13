@@ -931,6 +931,23 @@ suite('trackers.js normalizeTicket', function () {
         assert.equal(ticket.key, 'gl-5');
     });
 
+    test('assignee identity precedence and fallback stay consistent across providers', function () {
+        var tracker = loadTrackers({}).createTracker({}, { trackerProvider: 'jira' });
+        var identities = ['displayName', 'login', 'username', 'uniqueName', 'accountId', 'name'];
+        for (var i = 0; i < identities.length; i++) {
+            var assignee = {};
+            for (var j = i; j < identities.length; j++) assignee[identities[j]] = identities[j];
+            assert.equal(tracker.normalizeTicket({ number: 1, assignee: assignee }).assignee, identities[i]);
+        }
+        assert.equal(tracker.normalizeTicket({
+            number: 1, assignee: {}, assignments: 'fallback'
+        }).assignee, 'fallback');
+        assert.equal(tracker.normalizeTicket({
+            id: 1, fields: { 'System.Title': 'T', 'System.AssignedTo': 'ado-user' }
+        }).assignee, 'ado-user');
+        assert.equal(tracker.normalizeTicket({ iid: 1, assignee: { unknown: 'x' } }).assignee, null);
+    });
+
     test('gh-1036 characterization pin — flat view shape per provider (pre-refactor)', function () {
         var trackers = loadTrackers({});
         var jira = trackers.createTracker({}, { trackerProvider: 'jira' });

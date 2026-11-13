@@ -103,26 +103,59 @@ function createGitlabTracker(options) {
     };
 }
 
+function assigneeName(fields) {
+    var candidates = [fields.assignee, fields.assignments, fields['System.AssignedTo']];
+    for (var i = 0; i < candidates.length; i++) {
+        var name = assigneeCandidateName(candidates[i]);
+        if (name) return name;
+    }
+    return null;
+}
+
+function assigneeCandidateName(candidate) {
+    if (!candidate) return null;
+    if (typeof candidate === 'string') return candidate;
+    var names = ['displayName', 'login', 'username', 'uniqueName', 'accountId', 'name'];
+    for (var i = 0; i < names.length; i++) {
+        if (candidate[names[i]]) return candidate[names[i]];
+    }
+    return null;
+}
+
+function issueShape(ticket) {
+    if (ticket.iid !== undefined) {
+        return { number: ticket.iid, prefix: 'gl-', description: 'description', url: 'web_url' };
+    }
+    if (ticket.number !== undefined) {
+        return { number: ticket.number, prefix: '#', description: 'body', url: 'html_url' };
+    }
+    return null;
+}
+
+function issueKey(ticket, options, shape) {
+    if (options.owner && options.repo) {
+        return options.owner + '/' + options.repo + '#' + shape.number;
+    }
+    return ticket.key != null ? String(ticket.key) : shape.prefix + shape.number;
+}
+
 function normalizeOtherProviderTicket(ticket, options) {
-    var gitlab = ticket.iid !== undefined;
-    if (!gitlab && ticket.number === undefined) return null;
-    var number = gitlab ? ticket.iid : ticket.number;
-    var key = options.owner && options.repo
-        ? options.owner + '/' + options.repo + '#' + number
-        : ticket.key != null ? String(ticket.key) : (gitlab ? 'gl-' : '#') + number;
+    var shape = issueShape(ticket);
+    if (!shape) return null;
     return options.flatTicket(
-        key,
+        issueKey(ticket, options, shape),
         ticket.id != null ? String(ticket.id) : null,
         ticket.title || null,
         ticket.state || null,
         options.assigneeName(ticket),
         options.labelNames(ticket.labels),
-        gitlab ? ticket.description || null : ticket.body || null,
-        gitlab ? ticket.web_url || null : ticket.html_url || null
+        ticket[shape.description] || null,
+        ticket[shape.url] || null
     );
 }
 
 module.exports = {
     create: createGitlabTracker,
-    normalizeTicket: normalizeOtherProviderTicket
+    normalizeTicket: normalizeOtherProviderTicket,
+    assigneeName: assigneeName
 };
