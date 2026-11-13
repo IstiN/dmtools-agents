@@ -224,6 +224,7 @@ function poolPacketOf(outcome) {
         arrived: o.arrived,
         unavailable: o.unavailable,
         roundName: o.roundName,
+        partialCoverage: o.partialCoverage,
         merged: o.merged,
         highWeightOutcomes: reviewPoolMerge.highWeightOutcomesOf(o.merged, o.applied),
         dropped: o.dropped

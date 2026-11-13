@@ -105,6 +105,46 @@ test('the CWE-78 guard: a hostile ticket key is refused the same way', function(
     assert.deepStrictEqual(round.unavailable, ['security']);
 });
 
+test('the round budget: past the budget the remaining specialists are not started (fail-open)', function() {
+    // The security-lens CWE-400 hardening: N sequential specialists x 900s
+    // can park the review lane for hours — the round budget stops STARTING
+    // specialists past the cap; they are unavailable (fail-open).
+    var clock = { now: Date.parse('2026-11-13T12:00:00Z') };
+    var spawned = [];
+    var files = {};
+    var HEADV = HEAD;
+    var mkRecord = function(name) {
+        return JSON.stringify({ reviewer: name, head: HEADV, candidates: [], count: 0, truncated: false, at: '2026-11-13T12:00:00Z' });
+    };
+    var io = {
+        nowIso: function() { return new Date(clock.now).toISOString(); },
+        executeCommand: function(cmd) {
+            spawned.push(cmd);
+            clock.now += 70 * 1000; // each session eats 70s of wall clock
+        },
+        writeFile: function(p, c) { files[p] = c; },
+        readFile: function(p) { return Object.prototype.hasOwnProperty.call(files, p) ? files[p] : null; }
+    };
+    // Pre-write the candidates for BOTH specialists (they succeed fast; the
+    // budget is what stops the second START, not the per-specialist cap).
+    files[inJob.candidatesPathOf('alpha')] = mkRecord('alpha');
+    var pool = poolOf([skillOf('alpha'), skillOf('beta')]);
+    var round = inJob.runSpecialists(io, pool, ctxOf({ hasNewHunks: true, newHunkPaths: ['js/x.js'], roundBudgetSeconds: 60 }));
+    assert.deepStrictEqual(round.completed, ['alpha'], 'alpha ran inside the budget');
+    assert.deepStrictEqual(spawned.length, 1, 'beta was NEVER spawned');
+    assert.strictEqual(round.unavailable[0], 'beta');
+    assert.ok(round.results[1].reason.indexOf('round budget exhausted') === 0,
+        'the skip reason names the budget');
+});
+
+test('prompt: the incremental + partial-write discipline (truncated flag)', function() {
+    var prompt = inJob.buildSpecialistPrompt(skillOf('security'), ctxOf({ hasNewHunks: true }));
+    assert.ok(prompt.indexOf('INCREMENTAL WRITES') !== -1, 'the incremental-write instruction is present');
+    assert.ok(prompt.indexOf('"truncated": true') !== -1, 'the partial-coverage flag is taught');
+    assert.ok(prompt.indexOf('a partial honest record is a valid result') !== -1,
+        'partial beats silence is explicit');
+});
+
 test('roundTypeOf: first vs hunks', function() {
     assert.strictEqual(inJob.roundTypeOf(ctxOf({ hasNewHunks: false })), 'first');
     assert.strictEqual(inJob.roundTypeOf(ctxOf({ hasNewHunks: true })), 'hunks');

@@ -352,6 +352,14 @@ function pushMappedLines(lines, list, mapper) {
 function buildPoolPacket(ctx) {
     var c = ctx || {};
     var lines = availabilityPacketLines(c.arrived, c.unavailable, c.roundName);
+    // Partial coverage (the gh-1471 truncated flag): a specialist that
+    // finished under the cap but flagged incomplete review — the merge
+    // consumer deserves to know the coverage was partial, not silent.
+    var partial = Array.isArray(c.partialCoverage) ? c.partialCoverage : [];
+    for (var p = 0; p < partial.length; p++) {
+        lines.push('⚠️ ' + partial[p] + ': partial coverage — the specialist flagged truncated=true ' +
+            '(its findings cover only what it reviewed before the cap)');
+    }
     var merged = Array.isArray(c.merged) ? c.merged : [];
     var census = poolCensusLineOf(merged);
     if (census) lines.push(census);

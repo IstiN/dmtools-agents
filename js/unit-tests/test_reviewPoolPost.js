@@ -249,6 +249,23 @@ test('poolRoundStep: no hold when the required specialist completed', function()
     assert.equal(holds.length, 0, 'no hold: the required specialist completed');
 });
 
+test('poolRoundStep: a completed specialist that flagged truncated=true surfaces in the packet', function() {
+    var pool = poolOf([skillOf('security')]);
+    var reviewData = postingReviewData();
+    var t = makeIo({ weightsByName: { security: 'normal' } });
+    var record = candidateRecord('security', HEAD, []);
+    record.truncated = true;
+    mod.poolRoundStep(reviewData, pool, {
+        headSha: HEAD, hasNewHunks: false, newHunkPaths: [],
+        inJob: { completed: ['security'], unavailable: [], candidates: [record] }
+    }, t.io);
+    // The packet rides the general comment (the markers ride postComment).
+    var packetText = (t.generalSections || []).join('\n');
+    assert.ok(packetText.indexOf('partial coverage') !== -1, 'the packet names the partial coverage');
+    assert.ok(packetText.indexOf('security') !== -1, 'the packet names the specialist');
+    assert.ok(packetText.indexOf('truncated=true') !== -1, 'the flag semantics are spelled out');
+});
+
 test('poolRoundStep: the filter merge point runs over the MERGED census', function() {
     var pool = poolOf([skillOf('security')]);
     var reviewData = postingReviewData();

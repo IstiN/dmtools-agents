@@ -179,10 +179,21 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
         reviewData.issueCounts = io.recomputeCensus(reviewData, dropped.length);
     }
 
+    // Partial coverage: completed specialists that flagged truncated=true
+    // (the candidates contract's partial-review signal).
+    var partialCoverage = [];
+    for (var pc = 0; pc < records.length; pc++) {
+        if (records[pc] && records[pc].truncated === true &&
+            collect.arrived.indexOf(records[pc].reviewer) !== -1 &&
+            partialCoverage.indexOf(records[pc].reviewer) === -1) {
+            partialCoverage.push(records[pc].reviewer);
+        }
+    }
     var packet = aggregate.poolPacketOf({
         arrived: collect.arrived,
         unavailable: collect.unavailable,
         roundName: plan.round,
+        partialCoverage: partialCoverage,
         merged: merged.merged,
         applied: applied,
         dropped: dropped

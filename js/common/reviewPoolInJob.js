@@ -38,6 +38,7 @@ var reviewVerdicts = require('./reviewVerdicts.js');
 var RUN_AGENT_REL = 'agents/scripts/run-agent.sh';
 var SAFE_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 var DEFAULT_SPECIALIST_TIMEOUT_SECONDS = 900;
+var DEFAULT_ROUND_BUDGET_SECONDS = 180;
 var CANDIDATES_FILE_PREFIX = 'pr_review_candidates-';
 
 /** 'first' on a clean review, 'hunks' on a re-review with new hunks. */
@@ -124,6 +125,13 @@ function buildSpecialistPrompt(skill, roundCtx) {
         '  docs) — your lens applies to the PR\'s code changes only.',
         '- Write the candidates file EARLY: an empty valid file beats a',
         '  brilliant analysis that never lands.',
+        '- INCREMENTAL WRITES: as soon as you have your first finding, write',
+        '  the candidates file — then re-write it as you find more. The',
+        '  runner reads the file\'s LAST state after your session ends, so',
+        '  whatever landed on disk before the cap IS the round\'s result.',
+        '- NEAR THE CAP: write immediately what you managed to review and set',
+        '  `"truncated": true` — a partial honest record is a valid result;',
+        '  silence is not. Do not pad to seem complete.',
         '',
         '## Output contract (strict)',
         '',
@@ -170,8 +178,24 @@ function buildSpecialistCommand(promptPath, timeoutSeconds) {
 function runSpecialists(io, pool, roundCtx) {
     var selected = selectSpecialists(pool, roundCtx);
     var out = { completed: [], unavailable: [], candidates: [], results: [] };
+    // The round-level wall-clock budget (the security-lens CWE-400
+    // hardening): N sequential specialists x the per-specialist cap can
+    // otherwise park the review lane for hours on a wide pool. Past the
+    // budget the remaining specialists are not STARTED — they are
+    // unavailable for the round (fail-open, same as a timeout).
+    var budgetMs = (parseInt(roundCtx && roundCtx.roundBudgetSeconds, 10) > 0
+        ? parseInt(roundCtx.roundBudgetSeconds, 10) : DEFAULT_ROUND_BUDGET_SECONDS) * 1000;
+    var roundStart = clockMs(io);
     for (var i = 0; i < selected.length; i++) {
         var skill = selected[i];
+        if (i > 0 && clockMs(io) - roundStart >= budgetMs) {
+            var skipped = { reviewer: skill.name, ok: false,
+                reason: 'round budget exhausted after ' + Math.round((clockMs(io) - roundStart) / 1000) +
+                    's — the specialist was not started (fail-open)' };
+            out.results.push(skipped);
+            out.unavailable.push(skill.name);
+            continue;
+        }
         var record = runOneSpecialist(io, skill, roundCtx);
         out.results.push(record);
         if (record.ok) {
@@ -182,6 +206,12 @@ function runSpecialists(io, pool, roundCtx) {
         }
     }
     return out;
+}
+
+/** The io clock in ms (io.nowIso is the house clock — ISO strings). */
+function clockMs(io) {
+    var t = io && typeof io.nowIso === 'function' ? Date.parse(io.nowIso()) : NaN;
+    return isNaN(t) ? Date.now() : t;
 }
 
 function runOneSpecialist(io, skill, roundCtx) {
@@ -297,6 +327,7 @@ function memoryIo(seedFiles, executor) {
 
 module.exports = {
     SAFE_IDENTIFIER_RE: SAFE_IDENTIFIER_RE,
+    DEFAULT_ROUND_BUDGET_SECONDS: DEFAULT_ROUND_BUDGET_SECONDS,
     roundTypeOf: roundTypeOf,
     selectSpecialists: selectSpecialists,
     buildSpecialistPrompt: buildSpecialistPrompt,
