@@ -2,8 +2,8 @@
  * Tracker-agnostic ticket helpers — the scm.js analog for trackers.
  *
  * Maps generic ticket operations onto CANONICAL tracker tools per
- * configured provider — jira_* (default), ado_*, github_* — exactly like
- * scm.js maps SCM operations onto providers.
+ * configured provider — jira_* (default), ado_*, github_*, gitlab_* — exactly
+ * like scm.js maps SCM operations onto providers.
  *
  * Why canonical tools and not the tracker_* family: on the Java runtime
  * tracker_* exists solely as a CLI alias (resolved via DEFAULT_TRACKER in
@@ -14,7 +14,7 @@
  *   Provider probing order (first non-empty, valid value wins):
  *     1. customParams.trackerProvider   — per-agent override, e.g.
  *        { "customParams": { "trackerProvider": "ado" } }
- *     2. config.tracker.provider        — project config, 'jira' | 'ado' | 'github'
+ *     2. config.tracker.provider        — project config, 'jira' | 'ado' | 'github' | 'gitlab'
  *     3. DEFAULT_TRACKER env var        — the deployment-level signal; it
  *        reflects which tracker integration is actually active in the Java
  *        runtime (jira_* / ado_* / github_* tools). This is what lets the
@@ -36,12 +36,18 @@
  * github_move_issue_to_status) when the runtime exposes them (Java runtime),
  * with graceful degradation where it does not (Dart catalog): moveToStatus
  * falls back to close-on-done + status-as-label over the basic issue tools,
- * while search/assignTo throw a clear error.
+ * while search/assignTo throw a clear error. gitlab covers
+ * tickets/search/comments/status/assign/create and labels through the
+ * canonical gitlab_* issue tools, which require a runtime that provides them.
+ * GitLab search and comment tools must return arrays; other page shapes fail
+ * explicitly until the runtime's response contract is available. Keys follow the
+ * gl-N router convention or the composite namespace/project#N form (nested
+ * subgroups supported).
  *
- * Parent → child: createTicketWithParent works on every provider (on GitHub
+ * Parent → child: createTicketWithParent works on Jira, ADO and GitHub (on GitHub
  * the child becomes a SUB-ISSUE of the parent). listChildTickets(parentKey)
  * returns the children in the parent's order and is GitHub-only (sub-issues);
- * jira/ado throw. Both GitHub calls go to the REST API through `gh api`:
+ * jira/ado/gitlab throw. Both GitHub calls go to the REST API through `gh api`:
  * no runtime ships a sub-issue tool yet, so the runner needs the GitHub CLI
  * installed and authenticated (GH_TOKEN). Without it the calls fail with an
  * error that says so, instead of a parse error on the shell's output.
@@ -52,6 +58,7 @@ const { STATUSES, LABELS, stageLabel: stageLabelOf } = require('../config.js');
 // issue-number parser derives from it, so a key the convention accepts can
 // never die with "cannot parse GitHub issue key".
 const ticketKeyShapes = require('./ticketKeyShapes.js');
+var gitlabProvider = require('./gitlabTracker.js');
 
 var configLoader = null;
 try { configLoader = require('../configLoader.js'); } catch (e) { /* unit tests may omit configLoader */ }
@@ -112,12 +119,12 @@ function _ticketStatusOf(ticket) {
 /**
  * One author candidate → its display name, or null when the candidate carries
  * none: plain strings win as-is; objects are read as Jira (displayName),
- * GitHub (login) or ADO (uniqueName) identities.
+ * GitHub/GitLab (login/username) or ADO (uniqueName) identities.
  */
 function _identityName(a) {
     if (!a) return null;
     if (typeof a === 'string') return a;
-    return a.displayName || a.login || a.uniqueName || null;
+    return a.displayName || a.login || a.username || a.uniqueName || a.name || null;
 }
 
 /**
@@ -161,19 +168,7 @@ function _normalizeComment(raw) {
  * Read a ticket assignee out of backend-specific shapes.
  */
 function _assigneeName(fields) {
-    var candidates = [
-        fields.assignee, fields.assignments,
-        fields['System.AssignedTo']
-    ];
-    for (var i = 0; i < candidates.length; i++) {
-        var a = candidates[i];
-        if (!a) continue;
-        if (typeof a === 'string') return a;
-        if (a.displayName || a.login || a.uniqueName || a.accountId) {
-            return a.displayName || a.login || a.uniqueName || a.accountId;
-        }
-    }
-    return null;
+    return gitlabProvider.assigneeName(fields);
 }
 
 /**
@@ -212,7 +207,7 @@ function _rawProviderCandidate(config, customParams) {
 
 function _resolveProviderName(config, customParams) {
     var low = String(_rawProviderCandidate(config, customParams)).toLowerCase();
-    return ['jira', 'ado', 'github'].indexOf(low) !== -1 ? low : 'jira';
+    return ['jira', 'ado', 'github', 'gitlab'].indexOf(low) !== -1 ? low : 'jira';
 }
 
 function _resolveAdoMarkdown(config, customParams) {
@@ -917,6 +912,18 @@ function createTracker(config, customParams) {
 
     // ── dispatch tables ───────────────────────────────────────────────────
 
+    var gitlabImpl = gitlabProvider.create({
+        owner: owner,
+        repo: repo,
+        ticketKeyShapes: ticketKeyShapes,
+        parseJson: _parseJson,
+        normalizeTicket: normalizeTicket,
+        ticketPage: _ticketPage,
+        commentPage: _commentPage,
+        toIssueView: toIssueView,
+        unsupported: unsupported
+    });
+
     var impls = {
         jira: {
             getTicket: jiraGetTicket,
@@ -991,7 +998,8 @@ function createTracker(config, customParams) {
             createTicketWithParent: githubCreateTicketWithParent,
             createTicketWithFields: function () { unsupported('createTicketWithFields'); },
             listChildTickets: githubListChildTickets
-        }
+        },
+        gitlab: gitlabImpl
     };
     var impl = impls[providerName];
 
@@ -1038,12 +1046,14 @@ function createTracker(config, customParams) {
             return _normalizeAdoTicket(t);
         }
 
-        // GitHub: { number, title, state, ... }
-        if (t.number !== undefined) {
-            return _normalizeGithubTicket(t);
-        }
-
-        return null;
+        // GitHub/GitLab: { number | iid, title, state, ... }
+        return gitlabProvider.normalizeTicket(t, {
+            owner: owner,
+            repo: repo,
+            flatTicket: _flatTicket,
+            assigneeName: _assigneeName,
+            labelNames: _labelNames
+        });
     }
 
     /** Flat / already-normalized payload: field pass-through, body/url fallbacks. */
@@ -1109,20 +1119,6 @@ function createTracker(config, customParams) {
         });
     }
 
-    /** GitHub payload → flat view; the repo-scoped key needs owner/repo context. */
-    function _normalizeGithubTicket(t) {
-        return _flatTicket(
-            _githubKey(t),
-            t.id != null ? String(t.id) : null,
-            t.title || null,
-            t.state || null,
-            _assigneeName(t),
-            _labelNames(t.labels),
-            t.body || null,
-            t.html_url || null
-        );
-    }
-
     /** { name }-shaped Jira sub-objects (status/issuetype) → their name, else null. */
     function _nameOf(obj) {
         return obj && obj.name ? obj.name : null;
@@ -1136,12 +1132,6 @@ function createTracker(config, customParams) {
     /** ADO work item id → string key, else null. */
     function _adoKey(t) {
         return t.id != null ? String(t.id) : null;
-    }
-
-    /** GitHub issue key: 'owner/repo#N' with repository context, else t.key or '#N'. */
-    function _githubKey(t) {
-        if (owner && repo) return owner + '/' + repo + '#' + t.number;
-        return t.key != null ? String(t.key) : '#' + t.number;
     }
 
     function _namesOf(list) {

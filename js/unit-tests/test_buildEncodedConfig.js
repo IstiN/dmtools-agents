@@ -919,6 +919,14 @@ suite('buildEncodedConfig: ticket key format validation', function() {
         });
     });
 
+    test('GitLab keys including nested namespaces are accepted without changes', function() {
+        var builder = loadBuilder({});
+        var cfg = { tracker: { provider: 'gitlab' } };
+        ['gl-12', 'group/subgroup/project#12'].forEach(function(k) {
+            assert.equal(decode(builder.buildEncodedConfig(k, 'agents/story_questions.json', cfg)).params.inputJql, 'key = ' + k);
+        });
+    });
+
     test('a bare numeric ADO work item id is accepted and gets a WIQL id filter on the ado tracker (agents#804)', function() {
         var builder = loadBuilder({});
         var cfg = { tracker: { provider: 'ado' } };

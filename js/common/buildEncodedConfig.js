@@ -483,11 +483,10 @@ function resolveTicketInputJql(ticketKey, effectiveConfig) {
 }
 
 function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
-    // One owner of the key rules (validateInputJql): Jira PROJECT-123, GitHub gh-N / owner/repo#N /
-    // #N / N and a bare numeric Azure DevOps work item id (#804). Injection-shaped keys still fail.
+    // One owner of the key rules (validateInputJql). Injection-shaped keys still fail.
     if (!validateInputJql.isValidTicketKey(ticketKey)) {
         throw new Error('Invalid ticket key: "' + ticketKey +
-            '". Expected a Jira key (PROJECT-123), a GitHub issue key or an Azure DevOps work item id');
+            '". Expected a Jira key (PROJECT-123), a GitHub or GitLab issue key, or an Azure DevOps work item id');
     }
     var p = { inputJql: resolveTicketInputJql(ticketKey, effectiveConfig) };
 

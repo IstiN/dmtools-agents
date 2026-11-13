@@ -48,6 +48,23 @@ var GITHUB_KEY_CAPTURE_SHAPES = [
     /^(\d+)$/
 ];
 
+var GITLAB_KEY_SHAPES = [
+    /^gl-\d+$/i,
+    /^(?:[\w.-]+\/)+[\w.-]+#\d+$/,
+    /^#\d+$/,
+    /^\d+$/
+];
+
+// GitLab twin of the capture list: gl-N is the GitLab router key convention,
+// and the composite form allows nested namespaces (group/subgroup/project#12)
+// because GitLab project paths can be arbitrarily deep.
+var GITLAB_KEY_CAPTURE_SHAPES = [
+    /^gl-(\d+)$/i,              // GitLab router key convention
+    /^(?:[\w.-]+\/)+[\w.-]+#(\d+)$/, // group/subgroup/project#12
+    /^#(\d+)$/,                 // #12
+    /^(\d+)$/                   // 12
+];
+
 /**
  * True when the key matches one of the GitHub issue key shapes.
  * Null/undefined/empty are not shapes.
@@ -78,7 +95,41 @@ function githubIssueNumberIn(key) {
 }
 
 /**
- * Anchor-stripped source fragments of the shape list, in order, for building
+ * True when the key is a GitLab router key (gl-N) — the GitLab twin of the
+ * gh-N convention. Owned here so validators and extractors never drift from
+ * the capture list above.
+ * @param {string} key
+ * @returns {boolean}
+ */
+function isGitLabRouterKey(key) {
+    return /^gl-\d+$/i.test(String(key == null ? '' : key).trim());
+}
+
+function isGitLabKeyShape(key) {
+    var k = String(key == null ? '' : key).trim();
+    for (var i = 0; i < GITLAB_KEY_SHAPES.length; i++) {
+        if (GITLAB_KEY_SHAPES[i].test(k)) return true;
+    }
+    return false;
+}
+
+/**
+ * Parse the numeric GitLab issue IID out of any GitLab-shaped key
+ * (gl-N, group/subgroup/project#N, #N, N).
+ * @param {string} key
+ * @returns {number|null} the issue IID, or null when the key is not a
+ *                        GitLab key shape
+ */
+function gitlabIssueNumberIn(key) {
+    var k = String(key == null ? '' : key).trim();
+    for (var i = 0; i < GITLAB_KEY_CAPTURE_SHAPES.length; i++) {
+        var m = GITLAB_KEY_CAPTURE_SHAPES[i].exec(k);
+        if (m) return parseInt(m[1], 10);
+    }
+    return null;
+}
+
+/**
  * inline alternations — e.g. validateInputJql extracts the ticket key from a
  * JQL string with `new RegExp('key\\s*(?:=|in\\s*\\()\\s*(' +
  * shapeSources().join('|') + ')', 'i')`, keeping the alternation derived
@@ -87,8 +138,9 @@ function githubIssueNumberIn(key) {
  */
 function shapeSources() {
     var out = [];
-    for (var i = 0; i < GITHUB_KEY_SHAPES.length; i++) {
-        out.push(GITHUB_KEY_SHAPES[i].source.replace(/^\^/, '').replace(/\$$/, ''));
+    var shapes = GITLAB_KEY_SHAPES.concat(GITHUB_KEY_SHAPES);
+    for (var i = 0; i < shapes.length; i++) {
+        out.push(shapes[i].source.replace(/^\^/, '').replace(/\$$/, ''));
     }
     return out;
 }
@@ -148,8 +200,12 @@ function inputFolderCandidates(explicitFolder, ticketKey) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         GITHUB_KEY_SHAPES: GITHUB_KEY_SHAPES,
+        GITLAB_KEY_SHAPES: GITLAB_KEY_SHAPES,
         isGitHubKeyShape: isGitHubKeyShape,
+        isGitLabKeyShape: isGitLabKeyShape,
         githubIssueNumberIn: githubIssueNumberIn,
+        gitlabIssueNumberIn: gitlabIssueNumberIn,
+        isGitLabRouterKey: isGitLabRouterKey,
         shapeSources: shapeSources,
         inputFolderNameFor: inputFolderNameFor,
         inputFolderCandidates: inputFolderCandidates

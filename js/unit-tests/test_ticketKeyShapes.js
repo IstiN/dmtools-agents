@@ -66,6 +66,52 @@ suite('ticketKeyShapes: githubIssueNumberIn', function () {
 
 });
 
+// ── gitlabIssueNumberIn ───────────────────────────────────────────────────────
+
+suite('ticketKeyShapes: gitlabIssueNumberIn', function () {
+
+    test('extracts the issue IID from every GitLab key shape', function () {
+        var shapes = loadTicketKeyShapes();
+        assert.equal(shapes.gitlabIssueNumberIn('gl-2'), 2);
+        assert.equal(shapes.gitlabIssueNumberIn('GL-7'), 7);
+        assert.equal(shapes.gitlabIssueNumberIn('acme/widgets#12'), 12);
+        assert.equal(shapes.gitlabIssueNumberIn('group/subgroup/project#12'), 12); // nested namespaces
+        assert.equal(shapes.gitlabIssueNumberIn('#12'), 12);
+        assert.equal(shapes.gitlabIssueNumberIn('12'), 12);
+    });
+
+    test('returns null for non-GitLab keys', function () {
+        var shapes = loadTicketKeyShapes();
+        assert.equal(shapes.gitlabIssueNumberIn('PROJ-123'), null);
+        assert.equal(shapes.gitlabIssueNumberIn('gl-'), null);
+        assert.equal(shapes.gitlabIssueNumberIn(''), null);
+        assert.equal(shapes.gitlabIssueNumberIn(null), null);
+    });
+
+    test('isGitLabRouterKey accepts only the gl-N convention', function () {
+        var shapes = loadTicketKeyShapes();
+        assert.equal(shapes.isGitLabRouterKey('gl-2'), true);
+        assert.equal(shapes.isGitLabRouterKey('GL-2'), true);   // case-insensitive router key
+        assert.equal(shapes.isGitLabRouterKey('gh-2'), false);
+        assert.equal(shapes.isGitLabRouterKey('gl-'), false);
+        assert.equal(shapes.isGitLabRouterKey('12'), false);
+        assert.equal(shapes.isGitLabRouterKey(null), false);
+    });
+
+    test('GitLab shape gate agrees with the issue-number parser', function () {
+        var shapes = loadTicketKeyShapes();
+        ['gl-2', 'GL-7', 'acme/widgets#12', 'group/subgroup/project#12', '#12', '12'].forEach(function (key) {
+            assert.equal(shapes.isGitLabKeyShape(key), true);
+            assert.notEqual(shapes.gitlabIssueNumberIn(key), null);
+        });
+        ['PROJ-123', 'gh-2', 'group//project#12', 'group/sub/project#x', '', null].forEach(function (key) {
+            assert.equal(shapes.isGitLabKeyShape(key), false);
+            assert.equal(shapes.gitlabIssueNumberIn(key), null);
+        });
+    });
+
+});
+
 // ── shapeSources (extraction alternation derivation) ─────────────────────────
 
 suite('ticketKeyShapes: shapeSources', function () {
@@ -73,10 +119,8 @@ suite('ticketKeyShapes: shapeSources', function () {
     test('yields anchored-stripped fragments in list order', function () {
         var shapes = loadTicketKeyShapes();
         var sources = shapes.shapeSources();
-        assert.equal(sources.length, shapes.GITHUB_KEY_SHAPES.length);
-        // gh-N before bare N — extraction must prefer the router key so the
-        // original case survives (extractTicketKeyFromJql contract).
-        assert.equal(sources[0], 'gh-\\d+');
+        assert.equal(sources.length, shapes.GITLAB_KEY_SHAPES.length + shapes.GITHUB_KEY_SHAPES.length);
+        assert.equal(sources[0], 'gl-\\d+');
         assert.equal(sources[sources.length - 1], '\\d+');
         for (var i = 0; i < sources.length; i++) {
             assert.equal(/^\^|\$$/.test(sources[i]), false, 'fragment ' + i + ' still anchored: ' + sources[i]);
@@ -88,6 +132,8 @@ suite('ticketKeyShapes: shapeSources', function () {
         var re = new RegExp('(' + shapes.shapeSources().join('|') + ')', 'i');
         assert.equal(re.exec('key = gh-12')[1], 'gh-12');
         assert.equal(re.exec('key = acme/w#12')[1], 'acme/w#12');
+        assert.equal(re.exec('key = 123/sub/project#12')[1], '123/sub/project#12');
+        assert.equal(re.exec('key = gl-12')[1], 'gl-12');
         assert.equal(re.exec('key = #12')[1], '#12');
         assert.equal(re.exec('key = 12')[1], '12');
         assert.equal(re.exec('key = gh-abc'), null);
