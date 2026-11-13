@@ -37,7 +37,8 @@ var reviewPolicyModule = require('./common/reviewPolicy.js');
 // (posting leg) and the specialist identity materializer (specialist leg).
 var reviewPoolModule = require('./common/reviewPool.js');
 var reviewPoolMarkers = require('./common/reviewPoolMarkers.js');
-var reviewPoolDispatch = require('./common/reviewPoolDispatch.js');
+var reviewPoolInJob = require('./common/reviewPoolInJob.js');
+var outputFiles = require('./common/outputFiles.js');
 var autoStartModule = require('./common/autoStart.js');
 
 // ── Parsing / context ────────────────────────────────────────────────────────
@@ -494,42 +495,27 @@ function buildSuccessResult(prDetails, branchName, repoInfo) {
     };
 }
 
-// ── gh-1471: the reviewer-pool leg dispatcher / identity materializer ────────
+// ── gh-1471: the reviewer-pool round, IN-JOB (the fire-and-forget dispatcher
+//    is gone — one review job runs every specialist itself) ──────────────────
 
 /**
- * The gh-1471 round bookkeeping, from THIS leg's identity:
- *   - SPECIALIST leg (customParams.reviewerPoolLeg.contract ===
- *     'candidates'): materializes `reviewer_leg.md` into the input folder —
- *     the model-facing identity file the base instruction contract points at.
- *   - POSTING leg: resolves the pool, derives the round state (PASS markers
- *     + the diff-of-diff paths), builds the plan and DISPATCHES the round's
- *     specialist legs fire-and-forget (autoStart, duplicate-run-guarded;
- *     per-leg identity rides the encoded config paramPatches). Retry
- *     mechanics gate each dispatch: `none` (completed), `give-up`
- *     (non-required past budget — fail-open) and `escalate` (required past
- *     budget — the merge gate's hold-age valve owns the escalation) never
- *     re-fire.
+ * The gh-1471 round executor. Resolves the pool, derives THIS run's round
+ * context (round type from the diff-of-diff, head sha) and runs every
+ * selected specialist IN-PROCESS: bounded child agent sessions
+ * (`run-agent.sh` under `timeout`, the gh-775 shape) that each write a
+ * candidates file (`outputs/pr_review_candidates-<reviewer>.json`, the
+ * candidatesRecordFromPayload schema). No PR-comment markers, no
+ * cross-run identity patches, no poll/wait — the round state is per-run by
+ * construction. The post action aggregates the files and stamps the
+ * specialists' PASS markers itself (single writer — the gh-1406 merge gate
+ * keeps its same-head semantics untouched).
  * Non-fatal end to end: any failure logs and leaves the leg exactly as
  * before (a single-reviewer round is the gh-1406 baseline behavior).
  */
-function reviewerPoolLegSetup(ctx, prDetails, prComments) {
+function reviewerPoolRoundSetup(ctx, prDetails, prComments) {
     if (ctx.dryRun || branchSetup.isDryRunParams(ctx.params)) return null;
     try {
-        var identity = reviewPoolDispatch.legIdentityOf(ctx.params);
-        if (identity && identity.contract === reviewPoolDispatch.CONTRACT_CANDIDATES) {
-            var lines = ['# Reviewer pool leg — this run\'s identity (gh-1471)', '',
-                'reviewer: `' + identity.reviewer + '`', 'output contract: `' + identity.contract + '`',
-                'round: ' + identity.round, 'head: ' + identity.head, '',
-                'This is a SPECIALIST leg: write `outputs/pr_review_candidates.json` per the',
-                'base candidates-only contract (output_rules.md) and nothing else.'];
-            gitOps.writeInputFile(ctx.inputFolder + '/reviewer_leg.md', lines.join('\n'), 'reviewer_leg.md');
-            console.log('✅ Reviewer pool specialist leg (' + identity.reviewer + ', round ' + identity.round + ')');
-            return { identity: identity };
-        }
-        if (identity) return null; // the posting leg runs with its identity from dispatch; nothing to materialize
-
         var jp = ctx.jp || ctx.params.jobParams || {};
-        var customParams = jp.customParams || ctx.params.customParams || {};
         // gh-1471: file_list returns entry objects/JSON — normalize through the
         // sessionDelta parse (the same shape reviewPool's nameOf accepts).
         var io = {
@@ -544,9 +530,7 @@ function reviewerPoolLegSetup(ctx, prDetails, prComments) {
         };
         var pool = reviewPoolModule.resolvePool(io, ctx.config, jp, {});
         if (!pool || pool.reviewers.length === 0) return null;
-        var logins = machineAuthorLoginsOf(ctx);
         var comments = prComments === undefined ? prCommentsForContextSteps(ctx.scm, prDetails.number) : prComments;
-        var passMarkers = reviewPoolMarkers.parsePassMarkers(comments || [], { authorLogins: logins });
         var heads = resolveNewHunksContext(ctx, prDetails, comments);
         var hunks = heads ? gitOps.getDiffBetweenCommits(heads.lastHead, heads.currentHead, ctx.config.workingDir) : null;
         var hunkPaths = [];
@@ -554,43 +538,46 @@ function reviewerPoolLegSetup(ctx, prDetails, prComments) {
             var matches = String(hunks).match(/^\+\+\+ b\/(.+)$/gm) || [];
             for (var m = 0; m < matches.length; m++) hunkPaths.push(matches[m].substring(6).trim());
         }
-        var plan = reviewPoolDispatch.buildRoundPlan(pool, {
+        var roundCtx = {
+            ticketKey: ctx.ticketKey,
             headSha: prDetails.head && prDetails.head.sha,
-            passMarkers: passMarkers, hasNewHunks: !!hunks, newHunkPaths: hunkPaths
-        });
-        var outcomeRecords = reviewPoolMarkers.parsePoolOutcomeMarkers(comments || [], { authorLogins: logins });
-        var retries = reviewPoolDispatch.retryDecisions(plan, {
-            outcomeRecords: outcomeRecords, passMarkers: passMarkers,
-            headSha: prDetails.head && prDetails.head.sha, nowIso: new Date().toISOString()
-        });
-        var dispatched = [];
-        for (var i = 0; i < retries.decisions.length; i++) {
-            var decision = retries.decisions[i];
-            var leg = plan.legs.filter(function(l) { return l.reviewer === decision.reviewer; })[0];
-            if (!leg || leg.contract !== reviewPoolDispatch.CONTRACT_CANDIDATES) continue;
-            if (decision.action !== 'retry') {
-                console.log('reviewer pool: leg ' + decision.reviewer + ' not dispatched (' +
-                    decision.action + ', attempt ' + decision.attempts + ')');
-                continue;
-            }
-            var ok = autoStartModule.triggerConfiguredWorkflowForTicket({
-                ticketKey: ctx.ticketKey,
-                configFile: customParams.configPath || ctx.params.configPath || 'pr_review',
-                config: ctx.config,
-                customParams: customParams,
-                scm: ctx.scm,
-                label: 'review leg ' + decision.reviewer,
-                paramPatches: reviewPoolDispatch.legParamPatches(leg, prDetails.head && prDetails.head.sha)
-            });
-            if (ok) dispatched.push(decision.reviewer);
+            hasNewHunks: !!hunks,
+            newHunkPaths: hunkPaths
+        };
+        var inJobIo = {
+            executeCommand: function(command) {
+                // The pre-cli sandbox exposes cli_execute_command (see
+                // preCliTestAutomationSetup); `bash` is whitelisted by the
+                // leg's CLI_ALLOWED_COMMANDS.
+                cli_execute_command({ command: command });
+            },
+            // The prompt files live in the ticket's input folder (the child
+            // session reads them by the relative path — run-agent.sh cats the
+            // argument itself). The RETURN value is the child-visible path.
+            writeFile: function(path, content) {
+                gitOps.writeInputFile(path, content, 'pool specialist prompt');
+                return path;
+            },
+            // The candidates files land in outputs/ (the child writes them
+            // itself); the canonical multi-candidate reader resolves them
+            // across the outputs/ and workingDir shapes.
+            readFile: function(path) {
+                var file = outputFiles.readOutputFileDetailed(path, {
+                    ticketKey: ctx.ticketKey,
+                    workingDir: ctx.config && ctx.config.workingDir
+                });
+                return file && file.content ? file.content : null;
+            },
+            nowIso: function() { return new Date().toISOString(); }
+        };
+        var round = reviewPoolInJob.runSpecialists(inJobIo, pool, roundCtx);
+        if (round.completed.length > 0 || round.unavailable.length > 0) {
+            console.log('✅ Reviewer pool in-job round: completed [' + round.completed.join(', ') + ']' +
+                (round.unavailable.length > 0 ? ', unavailable [' + round.unavailable.join(', ') + '] (fail-open)' : ''));
         }
-        if (dispatched.length > 0) {
-            console.log('✅ Reviewer pool round ' + plan.round + ' dispatched: ' + dispatched.join(', ') +
-                (retries.escalated.length > 0 ? ' (escalated: ' + retries.escalated.join(', ') + ')' : ''));
-        }
-        return { plan: plan, dispatched: dispatched, escalated: retries.escalated };
+        return { round: round, roundCtx: roundCtx };
     } catch (e) {
-        console.warn('reviewer pool leg setup failed (non-fatal, single-reviewer round):', e.message || e);
+        console.warn('reviewer pool round setup failed (non-fatal, single-reviewer round):', e.message || e);
         return null;
     }
 }
@@ -663,7 +650,7 @@ function action(params) {
 
         // gh-1471: the reviewer pool — the specialist identity materializer
         // (specialist legs) / the round's leg dispatcher (posting leg).
-        reviewerPoolLegSetup(ctx, prDetails, prComments);
+        reviewerPoolRoundSetup(ctx, prDetails, prComments);
 
         var failedChecks = detectCheckFailures(ctx, prDetails, diff);
 
@@ -709,7 +696,7 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveNewHunksContext: resolveNewHunksContext,
         resolveRegistryComments: resolveRegistryComments,
         prCommentsForContextSteps: prCommentsForContextSteps,
-        reviewerPoolLegSetup: reviewerPoolLegSetup,
+        reviewerPoolRoundSetup: reviewerPoolRoundSetup,
         detectCheckFailures: detectCheckFailures,
         buildFailedChecksPanel: buildFailedChecksPanel,
         buildReviewStartedComment: buildReviewStartedComment,

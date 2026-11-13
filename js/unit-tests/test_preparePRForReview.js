@@ -88,14 +88,18 @@ function prReviewPoolMarkersReal() {
         makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
 }
 
-function prReviewPoolDispatchReal() {
-    return loadModule('js/common/reviewPoolDispatch.js', makeRequire({
-        './reviewPool.js': prReviewPoolReal(),
-        './reviewPoolMarkers.js': prReviewPoolMarkersReal(),
-        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
-            makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+// gh-1471: the IN-JOB round executor (the fire-and-forget dispatcher module
+// is gone — this is the real one, pure modules only).
+function prReviewPoolInJobReal() {
+    return loadModule('js/common/reviewPoolInJob.js', makeRequire({
+        './reviewPoolCandidates.js': loadModule('js/common/reviewPoolCandidates.js', makeRequire({
+            './machineAuthor.js': machineAuthorReal(),
+            './reviewPolicy.js': prPoolPolicyReal()
+        }), {})
     }), {});
 }
+
+
 
 function prGhMocks(opts, record) {
     return {
@@ -251,6 +255,9 @@ function prLoad(opts) {
         };
     }
 
+    // The action's globals (the sandbox): shared by the module AND the real
+    // common modules it loads (outputFiles reads through the file_read global).
+    var actionMocks = Object.assign({}, globalMocks, opts.globals || {});
     var module = loadModule('js/preparePRForReview.js', makeRequire({
         './configLoader.js': prConfigLoader(opts, record),
         './common/githubHelpers.js': Object.assign(prGhMocks(opts, record), opts.gh || {}),
@@ -281,8 +288,8 @@ function prLoad(opts) {
         // (reviewerPoolLegSetup) resolves the pool + plans the round through
         // these pure modules.
         './common/reviewPool.js': prReviewPoolReal(),
-        './common/reviewPoolMarkers.js': prReviewPoolMarkersReal(),
-        './common/reviewPoolDispatch.js': prReviewPoolDispatchReal(),
+        './common/reviewPoolInJob.js': prReviewPoolInJobReal(),
+        './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), actionMocks),
         './common/autoStart.js': Object.assign({
             triggerConfiguredWorkflowForTicket: function(options) {
                 record.autoStartCalls.push(options);
@@ -290,7 +297,7 @@ function prLoad(opts) {
             },
             triggerSmIfIdle: function() {}
         }, opts.autoStart || {})
-    }), globalMocks);
+    }), actionMocks);
 
     return { module: module, record: record };
 }
@@ -1204,22 +1211,15 @@ suite('preparePRForReview — dryRun guard across all flag locations and error/s
     });
 });
 
-// ═══════════════ gh-1471: the reviewer-pool leg dispatcher wiring ═══════════════
+// ═══════════════ gh-1471: the reviewer-pool round, IN-JOB ═══════════════
 
-suite('preparePRForReview — gh-1471 reviewer-pool leg dispatcher', function() {
+suite('preparePRForReview — gh-1471 reviewer-pool in-job round', function() {
 
-    var DISPATCH_HEAD_OLD = 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111';
-    var DISPATCH_HEAD = 'bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222';
+    var ROUND_HEAD = 'bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222';
 
-    function dispatcherSkillFiles() {
-        return {
-            'instructions/review/base.json': JSON.stringify({
-                name: 'base', lens: 'instructions/pr_review/generalist/lens.md',
-                roleLine: 'Senior Code Reviewer',
-                mayRaise: ['BLOCKING', 'IMPORTANT', 'SUGGESTION', 'NIT'],
-                filterWeight: 'normal', isFiltered: true, rounds: ['all'],
-                triggerPaths: [], options: {}, model: null, isEnabled: true
-            }),
+    function dispatcherSkillFiles(opts) {
+        opts = opts || {};
+        var map = {
             'instructions/review/security.json': JSON.stringify({
                 name: 'security', lens: 'instructions/pr_review/security/lens.md',
                 roleLine: 'Specialized Code Reviewer — security',
@@ -1228,9 +1228,20 @@ suite('preparePRForReview — gh-1471 reviewer-pool leg dispatcher', function() 
                 triggerPaths: [], options: {}, model: null, isEnabled: true
             })
         };
+        if (!opts.noBase) {
+            // 'base' is the posting reviewer — the in-job runner never
+            // dispatches it as a specialist.
+            map['instructions/review/base.json'] = JSON.stringify({
+                name: 'base', lens: 'instructions/pr_review/generalist/lens.md',
+                roleLine: 'Senior Code Reviewer',
+                mayRaise: ['BLOCKING', 'IMPORTANT', 'SUGGESTION', 'NIT'],
+                filterWeight: 'normal', isFiltered: true, rounds: ['all'],
+                triggerPaths: [], options: {}, model: null, isEnabled: true
+            });
+        }
+        return map;
     }
 
-    // The ctx reviewerPoolLegSetup consumes (posting leg: no identity).
     function dispatcherCtx(opts) {
         opts = opts || {};
         return {
@@ -1248,167 +1259,117 @@ suite('preparePRForReview — gh-1471 reviewer-pool leg dispatcher', function() 
         };
     }
 
-    function dispatcherPrDetails() {
-        return { number: 42, head: { ref: 'ai/PROJ-1', sha: DISPATCH_HEAD }, base: { ref: 'main' } };
+    function dispatcherPrDetails(opts) {
+        return {
+            number: 42,
+            head: { ref: 'ai/PROJ-1', sha: (opts && opts.head) || ROUND_HEAD },
+            base: { ref: 'main' }
+        };
     }
 
     function dispatcherLoad(opts) {
         opts = opts || {};
         var rec = opts.record || prRecorder();
+        rec.cliCalls = rec.cliCalls || [];
+        var fileMap = Object.assign({}, opts.poolFileMap !== undefined ? opts.poolFileMap : dispatcherSkillFiles(opts));
+        // The specialist candidates files (the child sessions' outputs): the
+        // security file carries a valid same-head record unless the test
+        // suppresses it.
+        if (!opts.noCandidates) {
+            fileMap['outputs/pr_review_candidates-security.json'] = JSON.stringify({
+                reviewer: 'security', head: ROUND_HEAD,
+                candidates: [{ severity: 'IMPORTANT', path: 'src/crypto.js', line: 3,
+                    body: 'Hard-coded IV.', claim: 'Hard-coded IV.' }],
+                count: 1, truncated: false, at: '2026-11-13T07:00:00Z'
+            });
+        }
         var loaded = prLoad({
             record: rec,
             config: opts.config,
             scm: opts.scm,
-            poolFileMap: opts.poolFileMap !== undefined ? opts.poolFileMap : dispatcherSkillFiles(),
-            poolListings: opts.poolListings !== undefined ? opts.poolListings
-                : { 'instructions/review': ['base.json', 'security.json'] }
+            poolFileMap: fileMap,
+            poolListings: { 'instructions/review': Object.keys(fileMap).map(function(p) {
+                return p.substring('instructions/review/'.length); }) },
+            gitOps: {
+                writeInputFile: function(path, content, label) {
+                    rec.gitOps.push({ fn: 'writeInputFile', path: path, label: label });
+                    return path;
+                }
+            },
+            globals: {
+                cli_execute_command: function(args) {
+                    rec.cliCalls.push(args && args.command);
+                    if (opts.cliThrowsFor && opts.cliThrowsFor(rec.cliCalls.length)) {
+                        throw new Error('timeout -k 60 900 …');
+                    }
+                    return 'cli ok';
+                }
+            }
         });
         return { loaded: loaded, record: rec };
     }
 
-    function markerComments(opts) {
-        var markers = prReviewPoolMarkersReal();
-        var comments = [];
-        (opts.passes || []).forEach(function(p) {
-            comments.push({ body: markers.buildPassMarkerComment(p.reviewer, p.head, '2026-11-13T07:00:00Z'),
-                user: { login: 'ai-teammate' } });
+    test('the in-job round executes the specialists (base never dispatches itself)', function() {
+        var run = dispatcherLoad({});
+        var outcome = run.loaded.module.reviewerPoolRoundSetup(dispatcherCtx(), dispatcherPrDetails(), []);
+
+        assert.ok(outcome, 'the posting leg ran a round');
+        if (process.env.DBG) console.log('DBG round:', JSON.stringify(outcome.round.results || outcome.round));
+        assert.deepEqual(outcome.round.completed, ['security']);
+        assert.deepEqual(outcome.round.unavailable, [], 'security completed on the round head');
+
+        // ONE bounded child invocation, for the security lens only: the
+        // posting reviewer never dispatches itself as a specialist.
+        assert.equal(run.record.cliCalls.length, 1, 'one specialist session ran');
+        var command = run.record.cliCalls[0];
+        assert.ok(command.indexOf('timeout -k 60 900') !== -1, 'the invocation is wall-clock bounded');
+        assert.ok(command.indexOf('bash scripts/run-agent.sh') !== -1, 'the session runs through the wrapper');
+        assert.ok(command.indexOf('input/PROJ-1/pool_specialist-security.md') !== -1,
+            'the prompt rides a prompt file in the input folder');
+
+        // The prompt file was materialized through the ticket input folder.
+        var promptWrite = run.record.gitOps.filter(function(g) {
+            return g.fn === 'writeInputFile' && g.path.indexOf('pool_specialist-security.md') !== -1;
+        })[0];
+        assert.ok(promptWrite, 'the specialist prompt file was written');
+    });
+
+    test('a specialist timeout degrades to unavailable (fail-open, non-fatal)', function() {
+        var run = dispatcherLoad({ cliThrowsFor: function() { return true; } });
+        var outcome = run.loaded.module.reviewerPoolRoundSetup(dispatcherCtx(), dispatcherPrDetails(), []);
+
+        assert.ok(outcome, 'the setup still returns a round');
+        assert.deepEqual(outcome.round.completed, []);
+        assert.deepEqual(outcome.round.unavailable, ['security']);
+    });
+
+    test('a stale candidates file is unavailable (stale work never feeds a newer head)', function() {
+        var run = dispatcherLoad({
+            poolFileMap: Object.assign(dispatcherSkillFiles(), {
+                'outputs/pr_review_candidates-security.json': JSON.stringify({
+                    reviewer: 'security', head: 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111',
+                    candidates: [], count: 0, truncated: false, at: '2026-11-13T07:00:00Z'
+                })
+            }),
+            noCandidates: true
         });
-        (opts.outcomes || []).forEach(function(o) {
-            comments.push({
-                body: markers.buildPoolOutcomeMarkerComment(o.head, o.round || 'first',
-                    o.entries || [{ name: 'base', required: true, completed: false },
-                        { name: 'security', required: true, completed: false }],
-                    '2026-11-13T07:00:01Z'),
-                user: { login: 'ai-teammate' }
-            });
-        });
-        (opts.verdicts || []).forEach(function(v) {
-            comments.push({ body: verdictCommentBody(v.head, v.at || '2026-11-13T06:00:00Z'),
-                user: { login: 'ai-teammate' } });
-        });
-        return comments;
-    }
+        var outcome = run.loaded.module.reviewerPoolRoundSetup(dispatcherCtx(), dispatcherPrDetails(), []);
 
-    test('a fresh pool round dispatches the specialist legs with their identity patches', function() {
-        var run = dispatcherLoad({});
-        var ctx = dispatcherCtx();
-        var outcome = run.loaded.module.reviewerPoolLegSetup(ctx, dispatcherPrDetails(), []);
-
-        assert.ok(outcome, 'the posting leg planned a round');
-        assert.deepEqual(outcome.dispatched, ['security'], 'the security leg dispatched');
-        assert.equal(outcome.escalated.length, 0);
-
-        var call = run.record.autoStartCalls[0];
-        assert.equal(call.configFile, 'pr_review');
-        assert.equal(call.ticketKey, 'PROJ-1');
-        assert.equal(call.paramPatches.reviewerPoolLeg.reviewer, 'security');
-        assert.equal(call.paramPatches.reviewerPoolLeg.contract, 'candidates');
-        assert.equal(call.paramPatches.reviewerPoolLeg.required, true);
-        assert.equal(call.paramPatches.reviewerPoolLeg.head, DISPATCH_HEAD);
-        assert.equal(run.record.autoStartCalls.length, 1, 'the posting leg itself is never dispatched');
+        assert.deepEqual(outcome.round.completed, []);
+        assert.deepEqual(outcome.round.unavailable, ['security']);
     });
 
-    test('a same-head PASS marker is duplicate-safe — no re-dispatch', function() {
-        var run = dispatcherLoad({});
-        var comments = markerComments({ passes: [{ reviewer: 'security', head: DISPATCH_HEAD }] });
-        var outcome = run.loaded.module.reviewerPoolLegSetup(dispatcherCtx(), dispatcherPrDetails(), comments);
-        assert.ok(outcome);
-        assert.deepEqual(outcome.dispatched, [], 'the completed leg never re-fires on the same head');
-        assert.equal(run.record.autoStartCalls.length, 0);
+    test('an empty pool leaves the leg unchanged (the gh-1406 baseline)', function() {
+        var run = dispatcherLoad({ poolFileMap: {}, noCandidates: true });
+        var outcome = run.loaded.module.reviewerPoolRoundSetup(dispatcherCtx(), dispatcherPrDetails(), []);
+        assert.equal(outcome, null, 'no pool → no round');
+        assert.equal(run.record.cliCalls.length, 0, 'nothing dispatched without a pool');
     });
 
-    test('a failed leg (no marker) re-fires — 429 replay safety', function() {
+    test('dry runs skip the round entirely', function() {
         var run = dispatcherLoad({});
-        // One prior round EXPECTED security (outcome marker), it never completed.
-        var comments = markerComments({
-            outcomes: [{ head: DISPATCH_HEAD, round: 'first' }],
-            verdicts: [{ head: DISPATCH_HEAD_OLD, at: '2026-11-13T06:00:00Z' }]
-        });
-        var outcome = run.loaded.module.reviewerPoolLegSetup(dispatcherCtx(), dispatcherPrDetails(), comments);
-        assert.ok(outcome);
-        assert.deepEqual(outcome.dispatched, ['security'], 'the failed leg re-fires');
-    });
-
-    test('rounds gating: a hunks-only re-run fires when new hunks hit, and a specialist leg materializes its identity file', function() {
-        var run = dispatcherLoad({});
-        // security completed on the OLD head; a verdict record pins lastReviewedHead
-        // so this round IS a hunks round (new hunks between old and current).
-        var comments = markerComments({
-            passes: [{ reviewer: 'security', head: DISPATCH_HEAD_OLD }],
-            verdicts: [{ head: DISPATCH_HEAD_OLD, at: '2026-11-13T06:00:00Z' }]
-        });
-        var outcome = run.loaded.module.reviewerPoolLegSetup(dispatcherCtx(), dispatcherPrDetails(), comments);
-        assert.ok(outcome);
-        assert.deepEqual(outcome.dispatched, ['security'],
-            'rounds [first,hunks] re-fire on a hunks round (new head, new hunks)');
-        var call = run.record.autoStartCalls[0];
-        assert.equal(call.paramPatches.reviewerPoolLeg.round, 'hunks');
-    });
-
-    test('a required leg past its retry budget escalates — it is NEVER silently re-fired', function() {
-        var run = dispatcherLoad({});
-        var outcomes = [];
-        for (var i = 0; i < 3; i++) {
-            outcomes.push({ head: DISPATCH_HEAD, round: 'first' });
-        }
-        var comments = markerComments({ outcomes: outcomes });
-        var outcome = run.loaded.module.reviewerPoolLegSetup(dispatcherCtx(), dispatcherPrDetails(), comments);
-        assert.ok(outcome);
-        assert.deepEqual(outcome.dispatched, [], 'past budget: no re-dispatch');
-        assert.deepEqual(outcome.escalated, ['security'], 'the required leg escalated');
-        assert.equal(run.record.autoStartCalls.length, 0);
-    });
-
-    test('a non-required leg past its budget gives up fail-open (no dispatch, no escalation)', function() {
-        var run = dispatcherLoad({});
-        var outcomes = [];
-        for (var i = 0; i < 3; i++) {
-            outcomes.push({ head: DISPATCH_HEAD, round: 'first' });
-        }
-        var comments = markerComments({ outcomes: outcomes });
-        var outcome = run.loaded.module.reviewerPoolLegSetup(
-            dispatcherCtx({ config: { reviewPolicy: { required: ['base'] } } }),
-            dispatcherPrDetails(), comments);
-        assert.ok(outcome);
-        assert.deepEqual(outcome.dispatched, []);
-        assert.deepEqual(outcome.escalated, [], 'non-required legs never escalate');
-    });
-
-    test('a specialist leg materializes reviewer_leg.md and dispatches nothing', function() {
-        var run = dispatcherLoad({});
-        var ctx = dispatcherCtx({
-            params: {
-                ticket: { key: 'PROJ-1' },
-                customParams: {
-                    reviewerPoolLeg: {
-                        reviewer: 'security', required: true, contract: 'candidates',
-                        round: 'first', head: DISPATCH_HEAD
-                    }
-                }
-            }
-        });
-        var outcome = run.loaded.module.reviewerPoolLegSetup(ctx, dispatcherPrDetails(), []);
-        assert.ok(outcome && outcome.identity, 'the specialist identity came back');
-        assert.equal(outcome.identity.reviewer, 'security');
-        var write = run.record.gitOps.filter(function(g) { return g.fn === 'writeInputFile'; })[0];
-        assert.ok(write, 'reviewer_leg.md was written');
-        assert.equal(write.path, 'input/PROJ-1/reviewer_leg.md');
-        assert.ok(write.content.indexOf('security') !== -1);
-        assert.ok(write.content.indexOf('candidates') !== -1);
-        assert.equal(run.record.autoStartCalls.length, 0, 'a specialist leg dispatches nothing');
-    });
-
-    test('dryRun never dispatches and never materializes', function() {
-        var run = dispatcherLoad({});
-        var outcome = run.loaded.module.reviewerPoolLegSetup(dispatcherCtx({ dryRun: true }), dispatcherPrDetails(), []);
+        var outcome = run.loaded.module.reviewerPoolRoundSetup(dispatcherCtx({ dryRun: true }), dispatcherPrDetails(), []);
         assert.equal(outcome, null);
-        assert.equal(run.record.autoStartCalls.length, 0);
-    });
-
-    test('no skill files → no pool, plain single-reviewer round (null outcome)', function() {
-        var run = dispatcherLoad({ poolFileMap: {}, poolListings: {} });
-        var outcome = run.loaded.module.reviewerPoolLegSetup(dispatcherCtx(), dispatcherPrDetails(), []);
-        assert.equal(outcome, null);
-        assert.equal(run.record.autoStartCalls.length, 0);
+        assert.equal(run.record.cliCalls.length, 0);
     });
 });

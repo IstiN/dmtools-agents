@@ -33,26 +33,15 @@
 'use strict';
 
 var candidatesModule = require('./reviewPoolCandidates.js');
-var dispatch = require('./reviewPoolDispatch.js');
 var markers = require('./reviewPoolMarkers.js');
 var aggregate = require('./reviewPoolAggregate.js');
 var poolModule = require('./reviewPool.js');
 var reviewVerdicts = require('./reviewVerdicts.js');
+var inJob = require('./reviewPoolInJob.js');
 
-// ── the specialist leg (invariant 1) ─────────────────────────────────────────
-
-/**
- * The specialist identity of a run's params, or null. The posting leg
- * (verdict contract) is NEVER a specialist — a malformed identity (no
- * reviewer, wrong contract) degrades to a plain leg.
- */
-function specialistLegOf(params) {
-    var identity = dispatch.legIdentityOf(params);
-    if (!identity || !identity.reviewer) return null;
-    if (identity.reviewer === dispatch.POSTING_REVIEWER) return null;
-    if (identity.contract !== dispatch.CONTRACT_CANDIDATES) return null;
-    return identity;
-}
+// The posting reviewer's skill name (the base/generalist lens — the leg that
+// posts the merged review and stamps the pool state).
+var POSTING_REVIEWER = 'base';
 
 function postQuietly(postComment, body, steps, failures) {
     try {
@@ -63,83 +52,36 @@ function postQuietly(postComment, body, steps, failures) {
     }
 }
 
-/**
- * The specialist leg's post flow. io = { readCandidatesFile() → raw text,
- * headSha() → sha, nowIso(), logins (unused here — parsing trusts only the
- * READER), postComment(text) }. The candidates marker posts only when the
- * leg filed candidates; the PASS marker posts ALWAYS (a completed pass
- * with zero findings is a completion). Fail-soft end to end: a failed
- * post is reported, never thrown — the leg's work is done either way.
- */
-function runSpecialistPost(identity, io) {
-    var steps = [];
-    var failures = [];
-    var parsed = candidatesModule.parseCandidatesFile(io.readCandidatesFile());
-    var headSha = String(io.headSha() || '');
-    var nowIso = String(io.nowIso() || '');
-    if (parsed.candidates.length > 0) {
-        postQuietly(io.postComment,
-            candidatesModule.buildCandidatesMarkerComment(identity.reviewer, headSha, parsed.candidates, nowIso),
-            steps, failures);
-    }
-    postQuietly(io.postComment, markers.buildPassMarkerComment(identity.reviewer, headSha, nowIso), steps, failures);
-    return {
-        success: true,
-        specialist: true,
-        reviewer: identity.reviewer,
-        required: identity.required === true,
-        candidates: parsed.candidates.length,
-        candidatesValid: parsed.valid,
-        notes: parsed.notes,
-        postFailures: failures.length
-    };
-}
-
 // ── the posting leg's round aggregation ──────────────────────────────────────
 
 function loginsOf(io) {
     return { authorLogins: io.logins || [] };
 }
 
-/** The specialist names the round expects candidates from (ran this round, or completed on this head). */
+/**
+ * The specialist names the round expects candidates from — the IN-JOB
+ * selection (the same deterministic selection the pre-cli runner used, so
+ * the post action recomputes it from policy + the round context alone).
+ */
 function expectedCandidateNamesOf(plan) {
     var names = [];
     var legs = plan.legs || [];
-    var skipped = plan.skipped || [];
-    for (var i = 0; i < legs.length; i++) {
-        if (legs[i].contract === dispatch.CONTRACT_CANDIDATES) names.push(legs[i].reviewer);
-    }
-    for (var s = 0; s < skipped.length; s++) {
-        if (skipped[s].reason.indexOf('already completed') === 0 &&
-                names.indexOf(skipped[s].reviewer) === -1) names.push(skipped[s].reviewer);
-    }
+    for (var i = 0; i < legs.length; i++) names.push(legs[i].reviewer);
     return names;
 }
 
-function collectCandidatesOnce(records, expectedNames, headSha) {
-    return candidatesModule.collectRoundCandidates(records, expectedNames, headSha);
-}
-
-/**
- * The bounded wait: poll the PR's marker comments until every expected
- * specialist arrived or the budget spent. `sleep(seconds)` is the caller's
- * clock (the local auto-chain sleeps via the shell); zero waitSeconds (the
- * default) skips the loop entirely. Fail-open by construction — a
- * timeout just leaves the missing names unavailable.
- */
-function waitForCandidates(io, expectedNames, headSha) {
-    var waitSeconds = typeof io.waitSeconds === 'number' && io.waitSeconds > 0 ? io.waitSeconds : 0;
-    var pollSeconds = typeof io.pollSeconds === 'number' && io.pollSeconds > 0 ? io.pollSeconds : 30;
-    var collect = collectCandidatesOnce(
-        candidatesModule.parseCandidatesMarkers(io.readComments(), loginsOf(io)), expectedNames, headSha);
-    var waited = 0;
-    while (collect.unavailable.length > 0 && waited < waitSeconds) {
-        if (typeof io.sleep === 'function') io.sleep(pollSeconds);
-        waited += pollSeconds;
-        collect = collectCandidatesOnce(
-            candidatesModule.parseCandidatesMarkers(io.readComments(), loginsOf(io)), expectedNames, headSha);
+/** The in-job plan: {round, legs} from the pool + this run's round context. */
+function buildInJobPlan(pool, roundCtx) {
+    var selected = inJob.selectSpecialists(pool, roundCtx);
+    var legs = [];
+    for (var i = 0; i < selected.length; i++) {
+        legs.push({
+            reviewer: selected[i].name,
+            required: poolModule.isRequiredReviewer(pool, selected[i].name),
+            contract: 'candidates'
+        });
     }
-    return collect;
+    return { round: inJob.roundTypeOf(roundCtx), legs: legs };
 }
 
 function weightedListsOf(lists, weightsByName) {
@@ -174,10 +116,35 @@ function hasSameHeadHold(comments, io, headSha) {
  */
 function poolRoundStep(reviewData, pool, roundCtx, io) {
     var headSha = String(roundCtx.headSha || '');
-    var plan = dispatch.buildRoundPlan(pool, roundCtx);
+    var plan = buildInJobPlan(pool, roundCtx);
     var expectedNames = expectedCandidateNamesOf(plan);
 
-    var collect = waitForCandidates(io, expectedNames, headSha);
+    // The in-job round already ran (the pre-cli action executed the
+    // specialists): the candidates are FILES on this head — no polling, no
+    // marker collection. roundCtx.inJob = { completed, unavailable,
+    // candidates (validated records) } from reviewPoolInJob.runSpecialists.
+    var inJobRound = roundCtx.inJob || {};
+    var completed = Array.isArray(inJobRound.completed) ? inJobRound.completed : [];
+    var unavailable = Array.isArray(inJobRound.unavailable) ? inJobRound.unavailable : expectedNames.slice();
+    var records = Array.isArray(inJobRound.candidates) ? inJobRound.candidates : [];
+    var collect = {
+        lists: records.map(function(r) { return r; }),
+        arrived: completed,
+        unavailable: unavailable.filter(function(name) { return completed.indexOf(name) === -1; })
+    };
+
+    // The specialists' PASS markers — the posting leg stamps them itself
+    // (single writer): one marker per completed specialist on THIS head, so
+    // the gh-1406 merge gate's same-head PASS semantics stay untouched.
+    var stampFailures = [];
+    for (var s = 0; s < collect.arrived.length; s++) {
+        postQuietly(io.postComment,
+            markers.buildPassMarkerComment(collect.arrived[s], headSha, io.nowIso()),
+            [], stampFailures);
+    }
+    if (stampFailures.length > 0) {
+        console.warn('reviewer pool: ' + stampFailures.length + ' specialist PASS stamp(s) failed (non-fatal)');
+    }
 
     var roundInput = {
         lists: weightedListsOf(collect.lists, io.weightsByName),
@@ -223,10 +190,17 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
     }
 
     // ONE pool-outcome marker per round — the attempt record and the
-    // expectation record (entries {name, required, completed}).
+    // expectation record (entries {name, required, completed}). In-job the
+    // completions are THIS run's own (the specialists ran before this step).
     var latestComments = io.readComments();
-    var passMarkers = markers.parsePassMarkers(latestComments, loginsOf(io));
-    var entries = dispatch.outcomeEntriesWithCompletions(plan, passMarkers, headSha);
+    var entries = [];
+    for (var w = 0; w < plan.legs.length; w++) {
+        entries.push({
+            name: plan.legs[w].reviewer,
+            required: plan.legs[w].required === true,
+            completed: collect.arrived.indexOf(plan.legs[w].reviewer) !== -1
+        });
+    }
     try {
         io.postComment(markers.buildPoolOutcomeMarkerComment(headSha, plan.round, entries, io.nowIso()));
     } catch (ePost) {
@@ -245,7 +219,7 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
     var missingRequired = [];
     for (var e = 0; e < entries.length; e++) {
         if (!entries[e].required || entries[e].completed) continue;
-        if (entries[e].name === dispatch.POSTING_REVIEWER || arrivedSet[entries[e].name]) continue;
+        if (entries[e].name === POSTING_REVIEWER || arrivedSet[entries[e].name]) continue;
         missingRequired.push(entries[e].name);
     }
     var heldRequired = null;
@@ -282,7 +256,7 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
  */
 function stampPostingLegCompletion(io) {
     try {
-        io.postComment(markers.buildPassMarkerComment(dispatch.POSTING_REVIEWER, String(io.headSha() || ''), io.nowIso()));
+        io.postComment(markers.buildPassMarkerComment(POSTING_REVIEWER, String(io.headSha() || ''), io.nowIso()));
         return { success: true, stamped: true };
     } catch (e) {
         console.warn('reviewer pool: the posting leg PASS marker post failed (non-fatal):', e);
@@ -292,8 +266,8 @@ function stampPostingLegCompletion(io) {
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        specialistLegOf: specialistLegOf,
-        runSpecialistPost: runSpecialistPost,
+        POSTING_REVIEWER: POSTING_REVIEWER,
+        buildInJobPlan: buildInJobPlan,
         poolRoundStep: poolRoundStep,
         stampPostingLegCompletion: stampPostingLegCompletion,
         expectedCandidateNamesOf: expectedCandidateNamesOf

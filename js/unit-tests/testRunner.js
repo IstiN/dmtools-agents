@@ -248,7 +248,7 @@ var REAL_COMMON_MODULES = {
     reviewFilter: 'js/common/reviewFilter.js',
     reviewPool: 'js/common/reviewPool.js',
     reviewPoolMerge: 'js/common/reviewPoolMerge.js',
-    reviewPoolDispatch: 'js/common/reviewPoolDispatch.js',
+    reviewPoolInJob: 'js/common/reviewPoolInJob.js',
     reviewPoolCandidates: 'js/common/reviewPoolCandidates.js',
     reviewPoolAggregate: 'js/common/reviewPoolAggregate.js',
     reviewPoolPost: 'js/common/reviewPoolPost.js'

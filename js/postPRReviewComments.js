@@ -45,12 +45,13 @@ var reviewSpecClaims = require('./common/reviewSpecClaims.js');
 // rework/polish-tier candidate in a fresh context before it posts.
 var reviewFilterModule = require('./common/reviewFilter.js');
 // gh-1471 (hoisted, never lazy — the gh-823 pack-require rule): the
-// reviewer-pool execution layer — the specialist leg's candidates-only post
-// flow (invariant 1) and the posting leg's round aggregation point.
+// reviewer-pool execution layer — the IN-JOB specialist runner (the pre-cli
+// action executes each specialist as a bounded child session) and the
+// posting leg's round aggregation point (candidates FILES, not markers).
 var reviewPoolModule = require('./common/reviewPool.js');
-var reviewPoolMarkersModule = require('./common/reviewPoolMarkers.js');
 var reviewPoolPostModule = require('./common/reviewPoolPost.js');
-var reviewPoolCandidatesModule = require('./common/reviewPoolCandidates.js');
+var reviewPoolInJobModule = require('./common/reviewPoolInJob.js');
+var outputFiles = require('./common/outputFiles.js');
 // The one model-written-path guard — owned by the pure filter module since
 // the round-2 demote fix needs it there too; aliased here so every call
 // site in this file keeps its name.
@@ -1395,24 +1396,20 @@ function filterStampSection(m, filterOutcome) {
     return line + '\n\n';
 }
 
-// ═══════════════ gh-1471 reviewer pool: the post-action execution layer ═══════════════
+// ═══════════════ gh-1471 reviewer pool: the post-action aggregation ═══════════════
 //
-// Two flows share this file's tail, keyed by the leg identity the dispatcher
-// stamped into customParams.reviewerPoolLeg (the reviewPoolDispatch module):
-//
-// SPECIALIST leg (candidates contract) — invariant 1, the machine half: it
-// NEVER posts a review, a label or a status. Its post action stamps the
-// candidates marker (the leg→aggregation transport) + its own PASS marker
-// (the completion receipt) and the run ends (finishSpecialistLeg).
-//
-// POSTING leg — the round's aggregation point (runPoolRound): the round's
-// specialist candidates merge into the review (one census), the gh-1403
-// filter pass runs over the MERGED census with the pool duties (weighted
-// retention first, reviewer-attributed drops), the census recomputes AFTER
-// the round, and the round stamps ONE pool-outcome marker + the required
-// reviewer hold. The gh-1351 verdict machinery then reads the merged census
-// unchanged — reviewers never post, label or vote (lifecycle labels stay a
-// property of the machine loop, set once per round from the merged census).
+// One review leg again: the pre-cli action executed the round's specialists
+// IN-JOB (bounded child sessions writing candidates files), and THIS post
+// action is the round's aggregation point (runPoolRound): the candidates
+// files merge into the review (one census), the gh-1403 filter pass runs
+// over the MERGED census with the pool duties (weighted retention first,
+// reviewer-attributed drops), the census recomputes AFTER the round, and
+// the round stamps the specialists' PASS markers (single writer — the
+// gh-1406 merge gate keeps its same-head semantics), ONE pool-outcome
+// marker + the required reviewer hold. The gh-1351 verdict machinery then
+// reads the merged census unchanged — reviewers never post, label or vote
+// (lifecycle labels stay a property of the machine loop, set once per
+// round from the merged census).
 
 /**
  * The pool resolution io bag (file_read/file_list, failure-soft — the same
@@ -1462,74 +1459,6 @@ function resolvePostingPoolOrNull(ctx) {
     }
 }
 
-/** The leg's reviewed head: the dispatch-stamped head, else a PR object probe. */
-function specialistHeadShaOf(identity, repoInfo, prNumber) {
-    if (identity && identity.head) return identity.head;
-    var prObj = repoInfo ? probePrObject(repoInfo, prNumber) : null;
-    return prObj ? (headShaOfObject(prObj) || '') : '';
-}
-
-/**
- * gh-1471 invariant 1 — the machine half: a SPECIALIST reviewer-pool leg
- * never reaches the posting pipeline. Returns the specialist's run result,
- * or null for posting/plain legs (the normal flow continues).
- */
-function finishSpecialistLeg(ctx, params) {
-    var identity = reviewPoolPostModule.specialistLegOf(params);
-    if (!identity) return null;
-    console.log('=== gh-1471 reviewer-pool specialist leg (' + identity.reviewer +
-        ', round ' + identity.round + ') — candidates-only post ===');
-    try {
-        var discovered = discoverPullRequest(params, ctx);
-        var pr = discovered.pr;
-        var headSha = specialistHeadShaOf(identity, discovered.repoInfo, pr.number);
-        var legOutcome = reviewPoolPostModule.runSpecialistPost(identity, {
-            readCandidatesFile: function() {
-                try {
-                    var file = outputFiles.readOutputFileDetailed(
-                        reviewPoolCandidatesModule.CANDIDATES_OUTPUT_FILE,
-                        { ticketKey: ctx.ticketKey, workingDir: ctx.workingDir });
-                    return file && file.content ? file.content : null;
-                } catch (eRead) {
-                    console.warn('reviewer pool: candidates file unreadable (completion without candidates):',
-                        eRead.message || eRead);
-                    return null;
-                }
-            },
-            headSha: function() { return headSha; },
-            nowIso: function() { return new Date().toISOString(); },
-            postComment: function(text) {
-                if (!pr.number) throw new Error('no PR number — the markers cannot be stamped');
-                ctx.scm.addComment(pr.number, text);
-            }
-        });
-        console.log('✅ Reviewer pool specialist leg ' + identity.reviewer + ' complete: ' +
-            legOutcome.candidates + ' candidate(s), ' + legOutcome.postFailures + ' failed marker post(s)');
-        return {
-            success: true,
-            action: 'reviewer_pool_specialist_leg',
-            reviewer: legOutcome.reviewer,
-            required: legOutcome.required,
-            candidates: legOutcome.candidates,
-            candidatesValid: legOutcome.candidatesValid,
-            notes: legOutcome.notes,
-            postFailures: legOutcome.postFailures,
-            headResolved: !!headSha,
-            prNumber: pr.number || null
-        };
-    } catch (e) {
-        console.warn('reviewer pool specialist leg post failed (fail-soft):', e.message || e);
-        return {
-            success: true,
-            action: 'reviewer_pool_specialist_leg',
-            reviewer: identity.reviewer,
-            required: identity.required === true,
-            candidates: 0,
-            postFailures: 1,
-            error: String((e && e.message) || e)
-        };
-    }
-}
 
 // The input-folder candidate chain shared by the filter diff and the new
 // hunks context (the runtime-passed folder, the Java-derived name, the
@@ -1555,26 +1484,6 @@ function newHunksContextOf(params, ticketKey) {
     var paths = [];
     for (var m = 0; m < matches.length; m++) paths.push(matches[m].substring(6).trim());
     return { hasNewHunks: true, paths: paths };
-}
-
-/** The bounded-wait budget (seconds) the aggregation gives late specialists. */
-function poolWaitSecondsOf(customParams) {
-    var v = customParams && customParams.reviewerPoolWaitSeconds;
-    return typeof v === 'number' && v > 0 ? v : 0;
-}
-
-function poolPollSecondsOf(customParams) {
-    var v = customParams && customParams.reviewerPoolPollSeconds;
-    return typeof v === 'number' && v > 0 ? v : 30;
-}
-
-/** The aggregation wait's clock: a shell sleep (the local auto-chain shape). */
-function poolSleep(seconds) {
-    try {
-        cli_execute_command({ command: 'sleep ' + seconds });
-    } catch (e) {
-        console.warn('reviewer pool: wait sleep failed (continuing):', e.message || e);
-    }
 }
 
 /**
@@ -1604,11 +1513,33 @@ function runPoolRound(reviewData, ctx, params, pr, repoInfo, pool, filterDiffPat
         var hunks = newHunksContextOf(params, ctx.ticketKey);
         var filterOn = verificationEnabledOf(ctx.reviewPolicy);
         var filterRecord = { candidates: 0, applied: [] };
-        var round = reviewPoolPostModule.poolRoundStep(reviewData, pool, {
+        // The in-job round state: the pre-cli action already executed the
+        // specialists — the post action recomputes their outcomes from the
+        // candidates FILES (deterministic, same selection both sides).
+        var inJobRound = reviewPoolInJobModule.readSpecialistOutcomes({
+            readFile: function(path) {
+                var file = outputFiles.readOutputFileDetailed(path, {
+                    ticketKey: ctx.ticketKey,
+                    workingDir: ctx.workingDir
+                });
+                return file && file.content ? file.content : null;
+            }
+        }, pool, {
             headSha: headSha,
-            passMarkers: reviewPoolMarkersModule.parsePassMarkers(comments, { authorLogins: logins }),
             hasNewHunks: hunks.hasNewHunks,
             newHunkPaths: hunks.paths
+        });
+        if (inJobRound.unavailable.length > 0) {
+            console.warn('reviewer pool: unavailable specialists (fail-open): ' +
+                inJobRound.unavailable.join(', ') + ' — ' + inJobRound.results.filter(function(r) {
+                    return !r.ok;
+                }).map(function(r) { return r.reviewer + ': ' + r.reason; }).join('; '));
+        }
+        var round = reviewPoolPostModule.poolRoundStep(reviewData, pool, {
+            headSha: headSha,
+            hasNewHunks: hunks.hasNewHunks,
+            newHunkPaths: hunks.paths,
+            inJob: inJobRound
         }, {
             readComments: function() { return prCommentsForRegistry(ctx.scm, pr.number) || []; },
             logins: logins,
@@ -1631,10 +1562,7 @@ function runPoolRound(reviewData, ctx, params, pr, repoInfo, pool, filterDiffPat
             },
             appendToGeneralComment: function(section) {
                 appendDroppedSection(reviewData, section, ctx);
-            },
-            waitSeconds: poolWaitSecondsOf(ctx.customParams),
-            pollSeconds: poolPollSecondsOf(ctx.customParams),
-            sleep: poolSleep
+            }
         });
         console.log('✅ Reviewer pool round ' + round.round + ': arrived [' +
             round.arrived.join(', ') + '], unavailable [' + round.unavailable.join(', ') +
@@ -3190,13 +3118,6 @@ function action(params) {
         ctx.customParams = resolveCustomParams(params, ctx.config);
         ctx.tracker = trackersModule.createTracker(ctx.config, ctx.customParams);
         tracker = ctx.tracker;
-
-        // gh-1471 invariant 1 — the machine half: a SPECIALIST reviewer-pool
-        // leg never reaches the posting pipeline. It stamps its candidates +
-        // completion markers and the run ends here (no review, no labels,
-        // no status — a specialist cannot mint a verdict).
-        var specialistOutcome = finishSpecialistLeg(ctx, params);
-        if (specialistOutcome) return specialistOutcome;
 
         // Step 1: Read structured review data
         var reviewData = readOrResumeReviewData(ctx.ticketKey, ctx.workingDir);

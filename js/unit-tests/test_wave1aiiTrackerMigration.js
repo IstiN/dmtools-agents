@@ -80,27 +80,13 @@ function w2LoadPR(rec) {
             return loadModule('js/common/reviewPool.js',
                 makeRequire({ './reviewPolicy.js': reviewPolicy, './reviewPoolSchema.js': loadModule('js/common/reviewPoolSchema.js', makeRequire({}), {}) }), {});
         })(),
+        './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), Object.assign({ config: {} }, rec.mocks)),
         './common/reviewPoolMarkers.js': (function() {
             var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
             var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
                 makeRequire({ './machineAuthor.js': machineAuthor }), {});
             return loadModule('js/common/reviewPoolMarkers.js',
                 makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
-        })(),
-        './common/reviewPoolDispatch.js': (function() {
-            var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
-            var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
-                makeRequire({ './machineAuthor.js': machineAuthor }), {});
-            return loadModule('js/common/reviewPoolDispatch.js', makeRequire({
-                './reviewPool.js': loadModule('js/common/reviewPool.js', makeRequire({
-                    './reviewPolicy.js': loadModule('js/common/reviewPolicy.js',
-                        makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {}),
-                    './reviewPoolSchema.js': loadModule('js/common/reviewPoolSchema.js', makeRequire({}), {})
-                }), {}),
-                './reviewPoolMarkers.js': loadModule('js/common/reviewPoolMarkers.js',
-                    makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {}),
-                './reviewVerdicts.js': reviewVerdicts
-            }), {});
         })(),
         './common/autoStart.js': {
             triggerConfiguredWorkflowForTicket: function() { return true; },

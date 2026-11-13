@@ -222,6 +222,7 @@ if (typeof module !== 'undefined' && module.exports) {
         MARKER_SUFFIX: MARKER_SUFFIX,
         CLAIM_MAX: CLAIM_MAX,
         CANDIDATE_LIMIT: CANDIDATE_LIMIT,
+        candidatesRecordFromPayload: candidatesRecordFromPayload,
         parseCandidatesFile: parseCandidatesFile,
         buildCandidatesMarkerComment: buildCandidatesMarkerComment,
         parseCandidatesMarkers: parseCandidatesMarkers,
