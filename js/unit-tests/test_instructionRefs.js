@@ -227,12 +227,22 @@ function shimBannerPaths(txt) {
 }
 
 // file_list shape normalization + the dotfile skip: repo-relative entry
-// names in host order, hidden entries dropped.
-function listRelEntries(dir) {
-    var out = file_list(fsPath(dir));
+// names in host order, hidden entries dropped. NOT a directory → null:
+// file_list THROWS on a file in the dmtools host (FileSystemException
+// "Not a directory" — pr-1465 canonical suite crashed R13 descending into
+// instructions/review/base.json) but returns null in the node coverage
+// harness — both spellings must read as "not a directory".
+function dirEntriesOf(dir) {
+    var out;
+    try {
+        out = file_list(fsPath(dir));
+    } catch (eList) {
+        return null;
+    }
+    if (out === null || out === undefined) return null;
     if (typeof out === 'string') out = JSON.parse(out);
-    var entries = (out && out.entries) || [];
-    return entries.map(function (e) {
+    if (!out || !out.entries) return null;
+    return out.entries.map(function (e) {
         var s = String(e).replace(/\\/g, '/');
         return s.slice(s.lastIndexOf('/') + 1);
     }).filter(function (n) { return n[0] !== '.'; });
@@ -241,7 +251,9 @@ function listRelEntries(dir) {
 function v1ShimIndex() {
     var index = {};
     function walk(dir) {
-        listRelEntries(dir).forEach(function (name) {
+        var names = dirEntriesOf(dir);
+        if (!names) return;
+        names.forEach(function (name) {
             var rel = dir + '/' + name;
             // Branch order IS the sensor: file_exists is truthy for plain
             // FILES (both host shapes), so the .md read must come FIRST —
@@ -593,6 +605,19 @@ suite('instructionRefs — v1-shim index helpers (pr-1465 characterization)', fu
             'instructions/pr_review/base/input_context.md',
             'instructions/pr_review/base/output_rules.md'
         ]);
+    });
+
+    // Host-shape pin for the walk's descent guard: file_list on a FILE
+    // throws in the dmtools host and returns null in the node harness —
+    // dirEntriesOf must map BOTH spellings to null ("not a directory"),
+    // so the walk never crashes on a file inside instructions/ (pr-1465
+    // canonical dmtools suite: R13 crashed on instructions/review/base.json).
+    test('dirEntriesOf: a file path reads as "not a directory" (null); a real directory lists entries', function () {
+        assert.equal(dirEntriesOf('js/unit-tests/test_instructionRefs.js'), null,
+            'a file path must normalize to null, not entries and not a throw');
+        var dirEntries = dirEntriesOf('instructions');
+        assert.ok(Array.isArray(dirEntries) && dirEntries.length > 0,
+            'a real directory still lists its (dotfile-skipped) entries');
     });
 
     // Composite pin (end-to-end, real tree): the helper pins above cannot
