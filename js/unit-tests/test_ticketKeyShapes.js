@@ -66,6 +66,40 @@ suite('ticketKeyShapes: githubIssueNumberIn', function () {
 
 });
 
+// ── gitlabIssueNumberIn ───────────────────────────────────────────────────────
+
+suite('ticketKeyShapes: gitlabIssueNumberIn', function () {
+
+    test('extracts the issue IID from every GitLab key shape', function () {
+        var shapes = loadTicketKeyShapes();
+        assert.equal(shapes.gitlabIssueNumberIn('gl-2'), 2);
+        assert.equal(shapes.gitlabIssueNumberIn('GL-7'), 7);
+        assert.equal(shapes.gitlabIssueNumberIn('acme/widgets#12'), 12);
+        assert.equal(shapes.gitlabIssueNumberIn('group/subgroup/project#12'), 12); // nested namespaces
+        assert.equal(shapes.gitlabIssueNumberIn('#12'), 12);
+        assert.equal(shapes.gitlabIssueNumberIn('12'), 12);
+    });
+
+    test('returns null for non-GitLab keys', function () {
+        var shapes = loadTicketKeyShapes();
+        assert.equal(shapes.gitlabIssueNumberIn('PROJ-123'), null);
+        assert.equal(shapes.gitlabIssueNumberIn('gl-'), null);
+        assert.equal(shapes.gitlabIssueNumberIn(''), null);
+        assert.equal(shapes.gitlabIssueNumberIn(null), null);
+    });
+
+    test('isGitLabRouterKey accepts only the gl-N convention', function () {
+        var shapes = loadTicketKeyShapes();
+        assert.equal(shapes.isGitLabRouterKey('gl-2'), true);
+        assert.equal(shapes.isGitLabRouterKey('GL-2'), true);   // case-insensitive router key
+        assert.equal(shapes.isGitLabRouterKey('gh-2'), false);
+        assert.equal(shapes.isGitLabRouterKey('gl-'), false);
+        assert.equal(shapes.isGitLabRouterKey('12'), false);
+        assert.equal(shapes.isGitLabRouterKey(null), false);
+    });
+
+});
+
 // ── shapeSources (extraction alternation derivation) ─────────────────────────
 
 suite('ticketKeyShapes: shapeSources', function () {

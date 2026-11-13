@@ -101,6 +101,23 @@ suite('validateInputJql: extractTicketKeyFromJql — GitHub key shapes (gh-770)'
 
 });
 
+suite('validateInputJql: extractTicketKeyFromJql — GitLab router keys', function() {
+
+    test('extracts the gl-N router key as written (case preserved, no GL-N minting)', function() {
+        var v = makeValidator();
+        assert.equal(v.extractTicketKeyFromJql('key = gl-2'), 'gl-2');
+        assert.equal(v.extractTicketKeyFromJql('key in (gl-7)'), 'gl-7');
+    });
+
+    test('validateTicketKeyFormat accepts gl-N keys', function() {
+        var v = makeValidator();
+        v.validateTicketKeyFormat('gl-2');
+        assert.equal(v.isValidTicketKey('gl-2'), true);
+        assert.equal(v.isValidTicketKey('gl-'), false);
+    });
+
+});
+
 suite('validateInputJql: validateTicketKeyFormat — GitHub key shapes (gh-770)', function() {
 
     test('accepts the gh-N router key', function() {

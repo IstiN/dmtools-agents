@@ -2,8 +2,8 @@
  * Tracker-agnostic ticket helpers — the scm.js analog for trackers.
  *
  * Maps generic ticket operations onto CANONICAL tracker tools per
- * configured provider — jira_* (default), ado_*, github_* — exactly like
- * scm.js maps SCM operations onto providers.
+ * configured provider — jira_* (default), ado_*, github_*, gitlab_* — exactly
+ * like scm.js maps SCM operations onto providers.
  *
  * Why canonical tools and not the tracker_* family: on the Java runtime
  * tracker_* exists solely as a CLI alias (resolved via DEFAULT_TRACKER in
@@ -14,7 +14,7 @@
  *   Provider probing order (first non-empty, valid value wins):
  *     1. customParams.trackerProvider   — per-agent override, e.g.
  *        { "customParams": { "trackerProvider": "ado" } }
- *     2. config.tracker.provider        — project config, 'jira' | 'ado' | 'github'
+ *     2. config.tracker.provider        — project config, 'jira' | 'ado' | 'github' | 'gitlab'
  *     3. DEFAULT_TRACKER env var        — the deployment-level signal; it
  *        reflects which tracker integration is actually active in the Java
  *        runtime (jira_* / ado_* / github_* tools). This is what lets the
@@ -36,7 +36,11 @@
  * github_move_issue_to_status) when the runtime exposes them (Java runtime),
  * with graceful degradation where it does not (Dart catalog): moveToStatus
  * falls back to close-on-done + status-as-label over the basic issue tools,
- * while search/assignTo throw a clear error.
+ * while search/assignTo throw a clear error. gitlab covers
+ * tickets/search/comments/status/assign/create and labels through the
+ * canonical gitlab_* issue tools (Java runtime); keys follow the
+ * gl-N router convention or the composite namespace/project#N form (nested
+ * subgroups supported).
  *
  * Parent → child: createTicketWithParent works on every provider (on GitHub
  * the child becomes a SUB-ISSUE of the parent). listChildTickets(parentKey)
@@ -117,7 +121,7 @@ function _ticketStatusOf(ticket) {
 function _identityName(a) {
     if (!a) return null;
     if (typeof a === 'string') return a;
-    return a.displayName || a.login || a.uniqueName || null;
+    return a.displayName || a.login || a.username || a.uniqueName || a.name || null;
 }
 
 /**
@@ -169,8 +173,8 @@ function _assigneeName(fields) {
         var a = candidates[i];
         if (!a) continue;
         if (typeof a === 'string') return a;
-        if (a.displayName || a.login || a.uniqueName || a.accountId) {
-            return a.displayName || a.login || a.uniqueName || a.accountId;
+        if (a.displayName || a.login || a.username || a.uniqueName || a.accountId || a.name) {
+            return a.displayName || a.login || a.username || a.uniqueName || a.accountId || a.name;
         }
     }
     return null;
@@ -212,7 +216,7 @@ function _rawProviderCandidate(config, customParams) {
 
 function _resolveProviderName(config, customParams) {
     var low = String(_rawProviderCandidate(config, customParams)).toLowerCase();
-    return ['jira', 'ado', 'github'].indexOf(low) !== -1 ? low : 'jira';
+    return ['jira', 'ado', 'github', 'gitlab'].indexOf(low) !== -1 ? low : 'jira';
 }
 
 function _resolveAdoMarkdown(config, customParams) {
@@ -915,6 +919,103 @@ function createTracker(config, customParams) {
         return out;
     }
 
+    // ── gitlab provider (canonical gitlab_* issue tools) ──────────────────
+    //
+    // The GitLab factory keys tickets with the gl-N router convention
+    // (machine loop) or composite group/subgroup/project#N keys. Every call
+    // carries BOTH the parsed issue IID and the configured workspace/repository
+    // context; the Java tools fall back to GITLAB_WORKSPACE/GITLAB_REPOSITORY
+    // when the context is not configured here.
+
+    function gitlabIssueNumber(key) {
+        var k = String(key == null ? '' : key).trim();
+        var n = ticketKeyShapes.gitlabIssueNumberIn(k);
+        if (n === null) {
+            throw new Error('trackers: cannot parse GitLab issue key: ' + key);
+        }
+        return n;
+    }
+
+    /**
+     * Argument bag for the gitlab_* issue tools. Composite keys are
+     * authoritative for the project path (their workspace/repository parts
+     * are parsed FROM THE KEY); gl-N and bare-number keys use the configured
+     * repository context when present, else the runtime's defaults.
+     */
+    function gitlabIssueArgs(key) {
+        var k = String(key == null ? '' : key).trim();
+        var m = /^((?:[\w.-]+\/)*[\w.-]+)\/([\w.-]+)#(\d+)$/.exec(k);
+        if (m) {
+            return { workspace: m[1], repository: m[2], issueNumber: m[3] };
+        }
+        var args = { issueNumber: String(gitlabIssueNumber(k)) };
+        if (owner) args.workspace = owner;
+        if (repo) args.repository = repo;
+        return args;
+    }
+
+    function gitlabGetTicket(key) {
+        return normalizeTicket(gitlab_get_issue(gitlabIssueArgs(key)));
+    }
+
+    function gitlabSearch(query) {
+        return _ticketPage(gitlab_search_issues({
+            query: query,
+            workspace: owner || undefined,
+            repository: repo || undefined
+        }));
+    }
+
+    function gitlabPostComment(key, comment) {
+        return gitlab_create_issue_comment(
+            Object.assign({ body: comment }, gitlabIssueArgs(key))
+        );
+    }
+
+    function gitlabGetComments(key) {
+        return _commentPage(gitlab_get_issue_comments(gitlabIssueArgs(key)));
+    }
+
+    function gitlabAddLabel(key, label) {
+        return gitlab_add_issue_label(
+            Object.assign({ label: label }, gitlabIssueArgs(key))
+        );
+    }
+
+    function gitlabRemoveLabel(key, label) {
+        return gitlab_remove_issue_label(
+            Object.assign({ label: label }, gitlabIssueArgs(key))
+        );
+    }
+
+    function gitlabMoveToStatus(key, status) {
+        var s = String(status || '').trim();
+        if (!s) {
+            throw new Error('trackers: cannot map GitLab status: ' + status);
+        }
+        return gitlab_move_issue_to_status(
+            Object.assign({ statusName: s }, gitlabIssueArgs(key))
+        );
+    }
+
+    function gitlabAssignTo(key, user) {
+        return gitlab_assign_issue(
+            Object.assign({ user: user }, gitlabIssueArgs(key))
+        );
+    }
+
+    function gitlabCreateTicket(project, type, title, description) {
+        // project/type are Jira/ADO concepts — GitLab issues only have a
+        // title and a markdown description.
+        var t = normalizeTicket(gitlab_create_issue({
+            workspace: owner || undefined,
+            repository: repo || undefined,
+            title: title,
+            body: description
+        }));
+        return t ? t.key : null;
+    }
+
     // ── dispatch tables ───────────────────────────────────────────────────
 
     var impls = {
@@ -991,6 +1092,32 @@ function createTracker(config, customParams) {
             createTicketWithParent: githubCreateTicketWithParent,
             createTicketWithFields: function () { unsupported('createTicketWithFields'); },
             listChildTickets: githubListChildTickets
+        },
+        gitlab: {
+            getTicket: gitlabGetTicket,
+            search: gitlabSearch,
+            postComment: gitlabPostComment,
+            getComments: gitlabGetComments,
+            addLabel: gitlabAddLabel,
+            removeLabel: gitlabRemoveLabel,
+            moveToStatus: gitlabMoveToStatus,
+            assignTo: gitlabAssignTo,
+            createTicket: gitlabCreateTicket,
+            getIssue: function (key) { return toIssueView(gitlabGetTicket(key)); },
+            searchIssues: function (query) {
+                return gitlabSearch(query).map(function (n) { return toIssueView(n); });
+            },
+            // Not expressible through the gitlab_* issue tools — fail with a
+            // clear, provider-named error.
+            linkIssues: function () { unsupported('linkIssues'); },
+            updateField: function () { unsupported('updateField'); },
+            updateDescription: function () { unsupported('updateDescription'); },
+            setPriority: function () { unsupported('setPriority'); },
+            attachFile: function () { unsupported('attachFile'); },
+            fieldCode: function () { return null; },
+            createTicketWithParent: function () { unsupported('createTicketWithParent'); },
+            createTicketWithFields: function () { unsupported('createTicketWithFields'); },
+            listChildTickets: function () { unsupported('listChildTickets'); }
         }
     };
     var impl = impls[providerName];
@@ -1036,6 +1163,11 @@ function createTracker(config, customParams) {
         // ADO: { id, fields: { 'System.Title', 'System.State', ... } }
         if (_isAdoFields(t.fields)) {
             return _normalizeAdoTicket(t);
+        }
+
+        // GitLab: { iid, title, state, ... }
+        if (t.iid !== undefined) {
+            return _normalizeGitlabTicket(t);
         }
 
         // GitHub: { number, title, state, ... }
@@ -1123,6 +1255,20 @@ function createTracker(config, customParams) {
         );
     }
 
+    /** GitLab payload → flat view; the repo-scoped key needs owner/repo context. */
+    function _normalizeGitlabTicket(t) {
+        return _flatTicket(
+            _gitlabKey(t),
+            t.id != null ? String(t.id) : null,
+            t.title || null,
+            t.state || null,
+            _assigneeName(t),
+            _labelNames(t.labels),
+            t.description || null,
+            t.web_url || null
+        );
+    }
+
     /** { name }-shaped Jira sub-objects (status/issuetype) → their name, else null. */
     function _nameOf(obj) {
         return obj && obj.name ? obj.name : null;
@@ -1142,6 +1288,12 @@ function createTracker(config, customParams) {
     function _githubKey(t) {
         if (owner && repo) return owner + '/' + repo + '#' + t.number;
         return t.key != null ? String(t.key) : '#' + t.number;
+    }
+
+    /** GitLab issue key: 'namespace/project#N' with repository context, else t.key or the gl-N router key. */
+    function _gitlabKey(t) {
+        if (owner && repo) return owner + '/' + repo + '#' + t.iid;
+        return t.key != null ? String(t.key) : 'gl-' + t.iid;
     }
 
     function _namesOf(list) {

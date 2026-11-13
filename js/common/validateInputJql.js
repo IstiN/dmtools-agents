@@ -57,10 +57,12 @@ function extractTicketKeyFromJql(jql) {
     if (wiql) return wiql[1];
     var m = jql.match(KEY_EXTRACTION_RE);
     if (!m || !m[1]) return null;
-    // The Jira branch is case-insensitive, so it can also match a gh-N key —
-    // the shape check therefore decides: GitHub keys return as written (no
-    // 'GH-12' minting), everything else is a Jira key and uppercases.
-    return ticketKeyShapes.isGitHubKeyShape(m[1]) ? m[1] : m[1].toUpperCase();
+    // The Jira branch is case-insensitive, so it can also match a gh-N/gl-N
+    // key — the shape checks therefore decide: GitHub and GitLab router keys
+    // return as written (no 'GH-12'/'GL-12' minting), everything else is a
+    // Jira key and uppercases.
+    return ticketKeyShapes.isGitHubKeyShape(m[1]) || ticketKeyShapes.isGitLabRouterKey(m[1])
+        ? m[1] : m[1].toUpperCase();
 }
 
 /**
@@ -71,19 +73,22 @@ function extractTicketKeyFromJql(jql) {
 function validateTicketKeyFormat(key) {
     if (!isValidTicketKey(key)) {
         throw new Error('Invalid or missing ticket key: "' + key +
-            '". Expected a Jira key (PROJECT-123), a GitHub issue key (gh-123, owner/repo#123, #123, 123) ' +
+            '". Expected a Jira key (PROJECT-123), a GitHub issue key (gh-123, owner/repo#123, #123, 123), ' +
+            'a GitLab router key (gl-123) ' +
             'or an Azure DevOps work item id (123)');
     }
 }
 
 /**
- * True when key is a Jira key, a GitHub issue key shape or a bare numeric ADO work item id.
+ * True when key is a Jira key, a GitHub issue key shape, a GitLab router key
+ * (gl-N) or a bare numeric ADO work item id.
  * The single owner of "what is a ticket key" — buildEncodedConfig uses it too (#804).
  * @param {string|null} key
  * @returns {boolean}
  */
 function isValidTicketKey(key) {
-    return !!key && (TICKET_KEY_RE.test(key) || ticketKeyShapes.isGitHubKeyShape(key));
+    return !!key && (TICKET_KEY_RE.test(key) || ticketKeyShapes.isGitHubKeyShape(key)
+        || ticketKeyShapes.isGitLabRouterKey(key));
 }
 
 /**

@@ -105,6 +105,17 @@ var ADO_TICKET = {
     }
 };
 
+var GITLAB_TICKET = {
+    iid: 2,
+    id: 900002,
+    title: 'Fix the login flow',
+    state: 'opened',
+    assignee: { username: 'jane-doe', name: 'Jane Doe' },
+    labels: ['bug', 'wip'],
+    description: 'Login breaks on expired sessions',
+    web_url: 'https://gitlab.example/acme-group/widgets/-/issues/2'
+};
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 suite('trackers.js factory', function () {
@@ -722,6 +733,153 @@ suite('trackers.js github provider — gh-N router keys (gh-770)', function () {
     });
 });
 
+suite('trackers.js gitlab provider', function () {
+    var GL_CONFIG = {
+        tracker: { provider: 'gitlab' },
+        repository: { owner: 'acme-group', repo: 'widgets' }
+    };
+
+    test('factory resolves the gitlab provider instead of silently falling back to jira', function () {
+        var trackers = loadTrackers({});
+        assert.equal(trackers.createTracker({ tracker: { provider: 'gitlab' } }).provider(), 'gitlab');
+        assert.equal(trackers.createTracker({}, { trackerProvider: 'gitlab' }).provider(), 'gitlab');
+    });
+
+    test('addLabel parses the gl-N router key into gitlab_add_issue_label args', function () {
+        var glAdd = recorder('gitlab_add_issue_label', '{}');
+        var trackers = loadTrackers({ gitlab_add_issue_label: glAdd });
+        trackers.createTracker(GL_CONFIG).addLabel('gl-2', 'ai_questions_asked');
+        assert.deepEqual(glAdd.calls[0], {
+            label: 'ai_questions_asked',
+            issueNumber: '2',
+            workspace: 'acme-group',
+            repository: 'widgets'
+        });
+    });
+
+    test('removeLabel routes to gitlab_remove_issue_label', function () {
+        var glRemove = recorder('gitlab_remove_issue_label', '{}');
+        var trackers = loadTrackers({ gitlab_remove_issue_label: glRemove });
+        trackers.createTracker(GL_CONFIG).removeLabel('gl-2', 'ai_questions_asked');
+        assert.equal(glRemove.calls[0].label, 'ai_questions_asked');
+        assert.equal(glRemove.calls[0].issueNumber, '2');
+    });
+
+    test('getTicket fetches via gitlab_get_issue and normalizes the payload', function () {
+        var glGet = recorder('gitlab_get_issue', GITLAB_TICKET);
+        var trackers = loadTrackers({ gitlab_get_issue: glGet });
+        var ticket = trackers.createTracker(GL_CONFIG).getTicket('gl-2');
+        assert.deepEqual(glGet.calls[0], {
+            issueNumber: '2',
+            workspace: 'acme-group',
+            repository: 'widgets'
+        });
+        assert.equal(ticket.key, 'acme-group/widgets#2');
+        assert.equal(ticket.title, 'Fix the login flow');
+        assert.equal(ticket.status, 'opened');
+        assert.deepEqual(ticket.labels, ['bug', 'wip']);
+    });
+
+    test('moveToStatus routes to gitlab_move_issue_to_status with the status name', function () {
+        var glMove = recorder('gitlab_move_issue_to_status', '{}');
+        var trackers = loadTrackers({ gitlab_move_issue_to_status: glMove });
+        trackers.createTracker(GL_CONFIG).moveToStatus('gl-2', 'In Development');
+        assert.equal(glMove.calls[0].statusName, 'In Development');
+        assert.equal(glMove.calls[0].issueNumber, '2');
+    });
+
+    test('empty status fails without an HTTP call', function () {
+        var glMove = recorder('gitlab_move_issue_to_status', '{}');
+        var trackers = loadTrackers({ gitlab_move_issue_to_status: glMove });
+        var t = trackers.createTracker(GL_CONFIG);
+        assert.throws(function () { t.moveToStatus('gl-2', ''); });
+        assert.equal(glMove.calls.length, 0);
+    });
+
+    test('postComment routes to gitlab_create_issue_comment with the body', function () {
+        var glPost = recorder('gitlab_create_issue_comment', '{}');
+        var trackers = loadTrackers({ gitlab_create_issue_comment: glPost });
+        trackers.createTracker(GL_CONFIG).postComment('gl-2', 'Question posted');
+        assert.deepEqual(glPost.calls[0], {
+            body: 'Question posted',
+            issueNumber: '2',
+            workspace: 'acme-group',
+            repository: 'widgets'
+        });
+    });
+
+    test('getComments normalizes GitLab notes (author.username, created_at)', function () {
+        var glComments = recorder('gitlab_get_issue_comments', JSON.stringify([
+            { id: 1, body: 'first', author: { username: 'jane' }, created_at: '2026-11-13T07:00:00Z' }
+        ]));
+        var trackers = loadTrackers({ gitlab_get_issue_comments: glComments });
+        var comments = trackers.createTracker(GL_CONFIG).getComments('gl-2');
+        assert.equal(comments.length, 1);
+        assert.equal(comments[0].author, 'jane');
+        assert.equal(comments[0].body, 'first');
+        assert.equal(comments[0].created, '2026-11-13T07:00:00Z');
+    });
+
+    test('composite nested-namespace keys carry their own project path', function () {
+        var glAdd = recorder('gitlab_add_issue_label', '{}');
+        var trackers = loadTrackers({ gitlab_add_issue_label: glAdd });
+        trackers.createTracker(GL_CONFIG).addLabel('group/subgroup/project#7', 'wip');
+        assert.deepEqual(glAdd.calls[0], {
+            label: 'wip',
+            workspace: 'group/subgroup',
+            repository: 'project',
+            issueNumber: '7'
+        });
+    });
+
+    test('bare-number keys resolve against the configured repository', function () {
+        var glPost = recorder('gitlab_create_issue_comment', '{}');
+        var trackers = loadTrackers({ gitlab_create_issue_comment: glPost });
+        trackers.createTracker(GL_CONFIG).postComment('7', 'a');
+        assert.equal(glPost.calls[0].issueNumber, '7');
+        assert.equal(glPost.calls[0].workspace, 'acme-group');
+    });
+
+    test('search routes to gitlab_search_issues and normalizes the page', function () {
+        var glSearch = recorder('gitlab_search_issues', JSON.stringify([GITLAB_TICKET]));
+        var trackers = loadTrackers({ gitlab_search_issues: glSearch });
+        var tickets = trackers.createTracker(GL_CONFIG).search('login');
+        assert.equal(glSearch.calls[0].query, 'login');
+        assert.equal(glSearch.calls[0].workspace, 'acme-group');
+        assert.equal(tickets.length, 1);
+        assert.equal(tickets[0].key, 'acme-group/widgets#2');
+    });
+
+    test('assignTo routes to gitlab_assign_issue with the username', function () {
+        var glAssign = recorder('gitlab_assign_issue', '{}');
+        var trackers = loadTrackers({ gitlab_assign_issue: glAssign });
+        trackers.createTracker(GL_CONFIG).assignTo('gl-2', 'jsmith');
+        assert.equal(glAssign.calls[0].user, 'jsmith');
+        assert.equal(glAssign.calls[0].issueNumber, '2');
+    });
+
+    test('createTicket routes to gitlab_create_issue and returns the created key', function () {
+        var glCreate = recorder('gitlab_create_issue', JSON.stringify(GITLAB_TICKET));
+        var trackers = loadTrackers({ gitlab_create_issue: glCreate });
+        var key = trackers.createTracker(GL_CONFIG).createTicket('PROJ', 'Task', 'New bug', 'It broke');
+        assert.equal(glCreate.calls[0].title, 'New bug');
+        assert.equal(glCreate.calls[0].body, 'It broke');
+        assert.equal(key, 'acme-group/widgets#2');
+    });
+
+    test('unsupported operations throw a provider-named error', function () {
+        var t = loadTrackers({}).createTracker(GL_CONFIG);
+        assert.throws(function () { t.linkIssues('gl-1', 'gl-2', 'relates'); }, 'gitlab');
+        assert.throws(function () { t.updateDescription('gl-1', 'd'); }, 'gitlab');
+        assert.throws(function () { t.createTicketWithParent('P', 'T', 't', 'd', 'gl-1'); }, 'gitlab');
+    });
+
+    test('unparseable keys fail with a clear error instead of hitting Jira', function () {
+        var t = loadTrackers({}).createTracker(GL_CONFIG);
+        assert.throws(function () { t.addLabel('EPMCSRCSRD-113', 'x'); }, 'cannot parse GitLab issue key');
+    });
+});
+
 suite('trackers.js normalizeTicket', function () {
     test('returns null for falsy input', function () {
         var trackers = loadTrackers({});
@@ -748,6 +906,28 @@ suite('trackers.js normalizeTicket', function () {
         assert.equal(ticket.title, 'Fix the login flow');
         assert.deepEqual(ticket.labels, ['bug', 'wip']);
         assert.equal(ticket.raw, null, 'raw payload should not leak into the normalized view');
+    });
+
+    test('normalizes GitLab-shaped payloads with repository context', function () {
+        var trackers = loadTrackers({});
+        var ticket = trackers.createTracker({
+            repository: { owner: 'acme-group', repo: 'widgets' }
+        }).normalizeTicket(GITLAB_TICKET);
+        assert.equal(ticket.key, 'acme-group/widgets#2');
+        assert.equal(ticket.title, 'Fix the login flow');
+        assert.equal(ticket.status, 'opened');
+        assert.equal(ticket.assignee, 'jane-doe');
+        assert.deepEqual(ticket.labels, ['bug', 'wip']);
+        assert.equal(ticket.description, 'Login breaks on expired sessions');
+        assert.equal(ticket.url, 'https://gitlab.example/acme-group/widgets/-/issues/2');
+        assert.equal(ticket.raw, null, 'raw payload should not leak into the normalized view');
+    });
+
+    test('GitLab payloads without repository context keep the gl-N router key', function () {
+        var trackers = loadTrackers({});
+        var ticket = trackers.createTracker({}, { trackerProvider: 'gitlab' })
+            .normalizeTicket({ iid: 5, title: 'T', state: 'opened' });
+        assert.equal(ticket.key, 'gl-5');
     });
 
     test('gh-1036 characterization pin — flat view shape per provider (pre-refactor)', function () {
