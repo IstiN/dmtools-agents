@@ -95,16 +95,17 @@ function filterWeightOf(list) {
  * candidate; the filter input never sees it.
  */
 function mergedCandidateOf(c, id, reviewer, highWeight) {
+    var src = c || {};
     var entry = {
         id: id,
-        path: String((c && c.path) || ''),
-        line: c ? c.line : undefined,
-        severity: String((c && c.severity) || '').toUpperCase(),
-        claim: String((c && c.claim) || ''),
+        path: String(src.path || ''),
+        line: src.line,
+        severity: String(src.severity || '').toUpperCase(),
+        claim: String(src.claim || ''),
         reviewers: [reviewer],
         highWeight: highWeight === true
     };
-    if (c && c._baseIndex !== undefined) entry._baseIndex = c._baseIndex;
+    if (src._baseIndex !== undefined) entry._baseIndex = src._baseIndex;
     return entry;
 }
 
@@ -349,12 +350,14 @@ function pushMappedLines(lines, list, mapper) {
  * the merged-candidate census line. Empty array when there is nothing to
  * say (a single-reviewer round with everything kept says nothing).
  */
-function buildPoolPacket(ctx) {
-    var c = ctx || {};
-    var lines = availabilityPacketLines(c.arrived, c.unavailable, c.roundName);
-    // Partial coverage (the gh-1471 truncated flag): a specialist that
-    // finished under the cap but flagged incomplete review — the merge
-    // consumer deserves to know the coverage was partial, not silent.
+/**
+ * The coverage half of the packet: the truncated flag lines (a specialist
+ * that finished under the cap but flagged incomplete review) and the
+ * persisted coverage-memory notes (a killed session leaves the file behind
+ * — the next pass continues it).
+ */
+function coveragePacketLines(c) {
+    var lines = [];
     var partial = Array.isArray(c.partialCoverage) ? c.partialCoverage : [];
     for (var p = 0; p < partial.length; p++) {
         lines.push('⚠️ ' + partial[p] + ': partial coverage — the specialist flagged truncated=true ' +
@@ -366,6 +369,17 @@ function buildPoolPacket(ctx) {
             lines.push('🔁 ' + notes[n].reviewer + ': ' + notes[n].text);
         }
     }
+    return lines;
+}
+
+function buildPoolPacket(ctx) {
+    var c = ctx || {};
+    var lines = availabilityPacketLines(c.arrived, c.unavailable, c.roundName);
+    // Partial coverage (the gh-1471 truncated flag): a specialist that
+    // finished under the cap but flagged incomplete review — the merge
+    // consumer deserves to know the coverage was partial, not silent.
+    var coverage = coveragePacketLines(c);
+    for (var i = 0; i < coverage.length; i++) lines.push(coverage[i]);
     var merged = Array.isArray(c.merged) ? c.merged : [];
     var census = poolCensusLineOf(merged);
     if (census) lines.push(census);

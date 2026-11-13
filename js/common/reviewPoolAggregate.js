@@ -43,22 +43,41 @@ var reviewVerdicts = require('./reviewVerdicts.js');
  * nothing to the merge (an empty fingerprint would falsely match at the
  * same path+line) — the entry itself rides the rebuilt list untouched.
  */
+/**
+ * One inline entry's claim: the caller's resolver when provided, the raw
+ * body otherwise — then BOTH severity-head forms strip (the machine line +
+ * the prose header); the claim is the substance, the tier rides the field.
+ */
+function inlineClaimOf(entry, resolveClaim) {
+    var raw = resolveClaim ? resolveClaim(entry) : (typeof entry.body === 'string' ? entry.body : '');
+    var claim = reviewFilter.stripProseSeverityHead(reviewVerdicts.stripLeadingSeverityLine(String(raw || '')));
+    return claim && claim.trim() ? claim.trim() : null;
+}
+
+/**
+ * One inline entry as a merge candidate (null when the claim is
+ * unresolvable — an empty fingerprint would falsely match at the same
+ * path+line; the entry itself rides the rebuilt list untouched).
+ */
+function inlineCandidateOf(entry, i, resolveClaim) {
+    var claim = inlineClaimOf(entry, resolveClaim);
+    if (!claim) return null;
+    return {
+        id: i,
+        path: entry.path || entry.file || '',
+        line: entry.line,
+        severity: String(entry.severity || '').toUpperCase(),
+        claim: claim,
+        _baseIndex: i
+    };
+}
+
 function baseCandidatesFromReview(reviewData, resolveClaim) {
     var inline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
     var candidates = [];
     for (var i = 0; i < inline.length; i++) {
-        var entry = inline[i] || {};
-        var claim = resolveClaim ? resolveClaim(entry) : (typeof entry.body === 'string' ? entry.body : '');
-        claim = reviewFilter.stripProseSeverityHead(reviewVerdicts.stripLeadingSeverityLine(String(claim || '')));
-        if (!claim || !claim.trim()) continue;
-        candidates.push({
-            id: i,
-            path: entry.path || entry.file || '',
-            line: entry.line,
-            severity: String(entry.severity || '').toUpperCase(),
-            claim: claim.trim(),
-            _baseIndex: i
-        });
+        var candidate = inlineCandidateOf(inline[i] || {}, i, resolveClaim);
+        if (candidate) candidates.push(candidate);
     }
     return { reviewer: 'base', candidates: candidates };
 }
@@ -112,14 +131,7 @@ function escalationBodyOf(entry, merged) {
 function inlineEntryFromMerged(merged, baseInline) {
     var baseIdx = merged._baseIndex;
     if (baseIdx !== undefined && baseInline[baseIdx]) {
-        var entry = Object.assign({}, baseInline[baseIdx]);
-        if (String(entry.severity || '').toUpperCase() !== merged.severity) {
-            entry.__poolEscalated = { from: entry.severity, to: merged.severity };
-            entry.severity = merged.severity;
-            if (typeof entry.body === 'string') entry.body = escalationBodyOf(entry, merged);
-        }
-        entry.__poolReviewers = (merged.reviewers || []).slice();
-        return entry;
+        return baseProvenancedEntry(merged, baseInline[baseIdx]);
     }
     var attribution = (merged.reviewers || []).join(', ');
     return {
@@ -128,6 +140,25 @@ function inlineEntryFromMerged(merged, baseInline) {
         severity: merged.severity,
         body: merged.claim + '\n\uD83D\uDC65 Raised by ' + attribution + '.'
     };
+}
+
+/**
+ * A base-provenanced entry REUSES the ORIGINAL entry object (comment-file
+ * reference, startLine, side survive) with the merged severity: an
+ * escalation is flagged on the entry, and the body grows the escalation
+ * note for inline bodies only — file-referenced bodies keep their exact
+ * path shape (the severity header carries the escalation; appending would
+ * corrupt the reference).
+ */
+function baseProvenancedEntry(merged, original) {
+    var entry = Object.assign({}, original);
+    if (String(entry.severity || '').toUpperCase() !== merged.severity) {
+        entry.__poolEscalated = { from: entry.severity, to: merged.severity };
+        entry.severity = merged.severity;
+        if (typeof entry.body === 'string') entry.body = escalationBodyOf(entry, merged);
+    }
+    entry.__poolReviewers = (merged.reviewers || []).slice();
+    return entry;
 }
 
 /**
@@ -240,6 +271,8 @@ if (typeof module !== 'undefined' && module.exports) {
         filterCandidatesFromMerged: filterCandidatesFromMerged,
         applyPoolVerdicts: applyPoolVerdicts,
         applyMergedInline: applyMergedInline,
-        poolPacketOf: poolPacketOf
+        poolPacketOf: poolPacketOf,
+        escalationBodyOf: escalationBodyOf,
+        inlineClaimOf: inlineClaimOf
     };
 }

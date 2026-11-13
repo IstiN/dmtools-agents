@@ -52,29 +52,30 @@ function roundTypeOf(roundCtx) {
  * (skill.rounds), and — when the skill declares triggerPaths — only if the
  * diff touches at least one of them (empty triggerPaths = always).
  */
+/**
+ * The §6 gating for ONE skill on this round: the posting reviewer never
+ * runs as a specialist (its census is the aggregation target), disabled
+ * reviewers are skipped, and the canonical reviewerShouldRun predicate
+ * decides. In-job the state is per-run: this run IS the first pass at this
+ * head (no cross-run memory), the hunks flags come from the round context.
+ */
+function specialistRunsOnRound(skill, roundCtx) {
+    if (!skill || skill.isEnabled === false) return false;
+    if (skill.name === 'base') return false;
+    var state = {
+        firstDone: false,
+        hasNewHunks: !!(roundCtx && roundCtx.hasNewHunks),
+        hunksHitTrigger: poolModule.triggerPathsHit(skill.triggerPaths,
+            (roundCtx && roundCtx.newHunkPaths) || [])
+    };
+    return poolModule.reviewerShouldRun(skill, state);
+}
+
 function selectSpecialists(pool, roundCtx) {
-    var round = roundTypeOf(roundCtx);
-    var paths = (roundCtx && roundCtx.newHunkPaths) || [];
     var reviewers = (pool && pool.reviewers) || [];
     var selected = [];
     for (var i = 0; i < reviewers.length; i++) {
-        var skill = reviewers[i];
-        if (!skill || skill.isEnabled === false) continue;
-        // The posting reviewer IS the main review session — it never runs as
-        // a specialist (its census is the aggregation target, not a candidate).
-        if (skill.name === 'base') continue;
-        // The canonical §6 gating (reviewPool.js reviewerShouldRun) — one
-        // semantics for every engine that evaluates a pool config. In-job the
-        // state is per-run: this run IS the first pass at this head (no
-        // cross-run memory), the hunks flags come from the round context.
-        var state = {
-            firstDone: false,
-            hasNewHunks: !!(roundCtx && roundCtx.hasNewHunks),
-            hunksHitTrigger: poolModule.triggerPathsHit(skill.triggerPaths,
-                (roundCtx && roundCtx.newHunkPaths) || [])
-        };
-        if (!poolModule.reviewerShouldRun(skill, state)) continue;
-        selected.push(skill);
+        if (specialistRunsOnRound(reviewers[i], roundCtx)) selected.push(reviewers[i]);
     }
     return selected;
 }
@@ -87,6 +88,26 @@ function selectSpecialists(pool, roundCtx) {
  * permanent silent gap). The SKIP rule is machine-verified: a covered file
  * absent from the current hunks is unchanged since the previous pass.
  */
+/**
+ * The previous-pass memory block (rendered only when the coverage file
+ * carried actual work): what was covered, what never finished, and the
+ * SKIP/REVIEW rules that make the hunks file the machine-verified delta.
+ */
+function prevCoverageSection(prev) {
+    return [
+        '',
+        '### Your previous pass (head ' + (prev.head || '?') + ')',
+        '',
+        '- Covered then: ' + (prev.covered.length > 0 ? prev.covered.map(function(p) { return '`' + p + '`'; }).join(', ') : '(none)'),
+        '- Pending then (never finished): ' + (prev.pending.length > 0 ? prev.pending.map(function(p) { return '`' + p + '`'; }).join(', ') : '(none)'),
+        '- SKIP the covered files that are NOT in the current hunks — they are',
+        '  unchanged since your pass (machine-verified; the hunks file is the delta',
+        '  since the last reviewed head).',
+        '- REVIEW: every current-hunks path PLUS every still-pending file —',
+        '  start with the pending ones, they are the oldest debt.'
+    ];
+}
+
 function coverageSection(roundCtx, prev) {
     var head = String((roundCtx && roundCtx.headSha) || '');
     var lines = [
@@ -103,18 +124,7 @@ function coverageSection(roundCtx, prev) {
         '- NEAR THE CAP: set `"truncated": true` — unfinished files stay `pending`.'
     ];
     if (prev && (prev.covered.length > 0 || prev.pending.length > 0)) {
-        lines = lines.concat([
-            '',
-            '### Your previous pass (head ' + (prev.head || '?') + ')',
-            '',
-            '- Covered then: ' + (prev.covered.length > 0 ? prev.covered.map(function(p) { return '`' + p + '`'; }).join(', ') : '(none)'),
-            '- Pending then (never finished): ' + (prev.pending.length > 0 ? prev.pending.map(function(p) { return '`' + p + '`'; }).join(', ') : '(none)'),
-            '- SKIP the covered files that are NOT in the current hunks — they are',
-            '  unchanged since your pass (machine-verified; the hunks file is the delta',
-            '  since the last reviewed head).',
-            '- REVIEW: every current-hunks path PLUS every still-pending file —',
-            '  start with the pending ones, they are the oldest debt.'
-        ]);
+        lines = lines.concat(prevCoverageSection(prev));
     }
     return lines.join('\n');
 }
@@ -125,18 +135,12 @@ function coverageSection(roundCtx, prev) {
  * contract paths are passed as REPO PATHS (the child reads them itself —
  * the content stays single-sourced in the pack).
  */
-function buildSpecialistPrompt(skill, roundCtx, prevCoverage) {
-    var name = skill.name;
-    var lines = [
-        '# Reviewer pool specialist — ' + name + ' (in-job round)',
-        '',
-        'Role: ' + (skill.roleLine || ('Specialized reviewer — ' + name)) + '.',
-        'You are ONE lens of a multi-reviewer pool. A separate aggregation step',
-        'merges your candidates with the other reviewers\' — you write NOTHING to',
-        'the pull request itself: no comments, no reviews, no labels.',
-        '',
-        '## Read first',
-        '',
+/**
+ * The read-first + round-context block: the reference-pack line renders
+ * only when the skill carries one, and the scope line flips on new hunks.
+ */
+function specialistContextLines(skill, roundCtx) {
+    return [
         '- Lens: `agents/' + (skill.lens || '') + '`',
         (skill.options && skill.options.referencePack
             ? '- Reference pack: `agents/' + skill.options.referencePack + '`\n'
@@ -153,7 +157,23 @@ function buildSpecialistPrompt(skill, roundCtx, prevCoverage) {
         '- head sha (mandatory in the output): `' + (roundCtx.headSha || '') + '`',
         (roundCtx.hasNewHunks
             ? '- re-review with new hunks; scope your findings to the hunks\' paths'
-            : '- first full review of the PR head'),
+            : '- first full review of the PR head')
+    ];
+}
+
+function buildSpecialistPrompt(skill, roundCtx, prevCoverage) {
+    var name = skill.name;
+    var lines = [
+        '# Reviewer pool specialist — ' + name + ' (in-job round)',
+        '',
+        'Role: ' + (skill.roleLine || ('Specialized reviewer — ' + name)) + '.',
+        'You are ONE lens of a multi-reviewer pool. A separate aggregation step',
+        'merges your candidates with the other reviewers\' — you write NOTHING to',
+        'the pull request itself: no comments, no reviews, no labels.',
+        '',
+        '## Read first',
+        ''
+    ].concat(specialistContextLines(skill, roundCtx), [
         '',
         '## Time-box (hard)',
         '',
@@ -195,7 +215,7 @@ function buildSpecialistPrompt(skill, roundCtx, prevCoverage) {
             JSON.stringify(skill.mayRaise || []) + ').',
         '- Empty `candidates` is a valid result (say nothing rather than pad).',
         '- When done, STOP. No summary prose, no side effects.'
-    ];
+    ]);
     return lines.join('\n');
 }
 
@@ -244,6 +264,33 @@ function buildBatchCommand(promptPaths, timeoutSeconds, budgetSeconds) {
  * reasons. Returns { completed, unavailable, candidates, results, command,
  * coverageNotes }.
  */
+/**
+ * The batch spawn + the killed-batch fail-open: a spawn-level failure
+ * (the sandbox refused the invocation, the wrapper exploded) marks EVERY
+ * spawned specialist unavailable — the coverage files still get read (a
+ * killed batch may have left memory behind) and the prepped set empties.
+ */
+function spawnBatchOf(prepped, io, out, roundCtx) {
+    if (prepped.length === 0) return;
+    out.command = buildBatchCommand(
+        prepped.map(function(p) { return p.base.promptPath; }),
+        roundCtx && roundCtx.specialistTimeoutSeconds,
+        roundCtx && roundCtx.roundBudgetSeconds);
+    try {
+        io.executeCommand(out.command);
+        return;
+    } catch (eSpawn) {
+        for (var s = 0; s < prepped.length; s++) {
+            var failed = fail(prepped[s].base, 'spawn failed: ' + (eSpawn.message || String(eSpawn)));
+            out.results.push(failed);
+            out.unavailable.push(prepped[s].skill.name);
+            var note = coverageNoteOf(io, prepped[s].skill.name, failed);
+            if (note) out.coverageNotes.push(note);
+        }
+        prepped.length = 0;
+    }
+}
+
 function runSpecialists(io, pool, roundCtx) {
     var selected = selectSpecialists(pool, roundCtx);
     var out = { completed: [], unavailable: [], candidates: [], results: [],
@@ -259,28 +306,7 @@ function runSpecialists(io, pool, roundCtx) {
         }
         prepped.push(prep);
     }
-    if (prepped.length > 0) {
-        out.command = buildBatchCommand(
-            prepped.map(function(p) { return p.base.promptPath; }),
-            roundCtx && roundCtx.specialistTimeoutSeconds,
-            roundCtx && roundCtx.roundBudgetSeconds);
-        try {
-            io.executeCommand(out.command);
-        } catch (eSpawn) {
-            // The composite itself failed (spawn-level: the sandbox refused
-            // the invocation, the wrapper exploded) — fail-open: every
-            // spawned specialist is unavailable, the coverage files still
-            // get read (a killed batch may have left memory behind).
-            for (var s = 0; s < prepped.length; s++) {
-                var failed = fail(prepped[s].base, 'spawn failed: ' + (eSpawn.message || String(eSpawn)));
-                out.results.push(failed);
-                out.unavailable.push(prepped[s].skill.name);
-                var note = coverageNoteOf(io, prepped[s].skill.name, failed);
-                if (note) out.coverageNotes.push(note);
-            }
-            prepped.length = 0;
-        }
-    }
+    spawnBatchOf(prepped, io, out, roundCtx);
     for (var j = 0; j < prepped.length; j++) {
         var outcome = readOneOutcome(io, prepped[j].skill, roundCtx, prepped[j].base);
         out.results.push(outcome.base);
@@ -366,6 +392,31 @@ function fail(base, reason) {
     return Object.assign({}, base, { ok: false, reason: reason });
 }
 
+/**
+ * One specialist's file-driven outcome classification: the candidates
+ * payload parse, the record validation and the same-head check — with the
+ * human-readable reason for every unavailable shape.
+ */
+function specialistOutcomeRecord(raw, roundCtx, name) {
+    if (!raw) return { reason: 'no candidates file' };
+    var record = null;
+    try {
+        record = candidatesModule.candidatesRecordFromPayload(JSON.parse(raw));
+    } catch (eParse) {
+        record = null;
+    }
+    if (!record) return { reason: 'invalid candidates record (reviewer/head/candidates required)' };
+    // The original truth table: a missing round head is NOT a same-head
+    // match either — the record classifies stale (the outcome consumer
+    // always resolves the head first; the guard stays defensive).
+    var sameHeadOk = record && roundCtx.headSha && reviewVerdicts.sameHead(record.head, roundCtx.headSha);
+    if (!sameHeadOk) {
+        return { reason: 'stale candidates (head ' + record.head + ')' };
+    }
+    record.reviewer = name;
+    return { record: record };
+}
+
 function readSpecialistOutcomes(io, pool, roundCtx) {
     var selected = selectSpecialists(pool, roundCtx);
     var out = { completed: [], unavailable: [], candidates: [], results: [], coverageNotes: [] };
@@ -377,29 +428,14 @@ function readSpecialistOutcomes(io, pool, roundCtx) {
         } catch (eRead) {
             raw = null;
         }
-        var record = null;
-        if (raw) {
-            try {
-                record = candidatesModule.candidatesRecordFromPayload(JSON.parse(raw));
-            } catch (eParse) {
-                record = null;
-            }
-        }
-        var sameHeadOk = record && roundCtx.headSha && reviewVerdicts.sameHead(record.head, roundCtx.headSha);
-        if (record && sameHeadOk) {
-            record.reviewer = name;
+        var outcome = specialistOutcomeRecord(raw, roundCtx, name);
+        if (outcome.record) {
             out.completed.push(name);
-            out.candidates.push(record);
+            out.candidates.push(outcome.record);
             out.results.push({ reviewer: name, ok: true });
         } else {
             out.unavailable.push(name);
-            out.results.push({
-                reviewer: name,
-                ok: false,
-                reason: !raw ? 'no candidates file'
-                    : !record ? 'invalid candidates record'
-                        : 'stale candidates (head ' + (record && record.head) + ')'
-            });
+            out.results.push({ reviewer: name, ok: false, reason: outcome.reason });
         }
         var cov = readCoverage(io, name);
         if (cov && (cov.covered.length > 0 || cov.pending.length > 0)) {
@@ -447,6 +483,15 @@ function coveragePathOf(reviewer) {
  * pending[], truncated, at}. Anything malformed (or another reviewer's file)
  * is NO memory — the pass starts blind (fail-open, same as the candidates).
  */
+/** Shape validation for one parsed coverage payload: the reviewer must
+ * match and both tracked lists must be arrays; anything else is NO memory. */
+function coverageShapeOk(parsed, reviewer) {
+    if (!parsed || typeof parsed !== 'object') return false;
+    if (String(parsed.reviewer || '') !== reviewer) return false;
+    if (!Array.isArray(parsed.covered) || !Array.isArray(parsed.pending)) return false;
+    return true;
+}
+
 function readCoverage(io, reviewer) {
     var raw;
     try {
@@ -455,9 +500,7 @@ function readCoverage(io, reviewer) {
     if (!raw) return null;
     var parsed;
     try { parsed = JSON.parse(raw); } catch (eParse) { return null; }
-    if (!parsed || typeof parsed !== 'object') return null;
-    if (String(parsed.reviewer || '') !== reviewer) return null;
-    if (!Array.isArray(parsed.covered) || !Array.isArray(parsed.pending)) return null;
+    if (!coverageShapeOk(parsed, reviewer)) return null;
     return {
         reviewer: reviewer,
         head: String(parsed.head || ''),
