@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-13T05:04:40.579Z",
+  "ticketKey": "gh-1406",
+  "headSha": "274de967284f27e446d4053e1ebe689e99651599",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:9807d9e7ce210aa9",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:87d369449727abdd",
+      "size": 22320
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:9ddb8d2ec010e760",
+      "size": 6750
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:6f2f5db230402f89",
+      "size": 3530
+    },
+    "request.md": {
+      "hash": "fnv1a64:c47ed04c224cd02b",
+      "size": 14509
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:349512ac1497ce62",
+      "size": 1907
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:a7d9099bbd4ddd0f",
+      "size": 914
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:2f5bcf18c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:e18c852794a8478d",
+      "size": 14765
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:c47ed04c224cd02b",
+      "size": 14509
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs628xQ4",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_instructionRefs.js:243",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — CRAP ratchet fails on `walk` (quality job exit 2)**\n\nThe `crap` check fails on head `980ac31a` (ci_failures.md):\n\n```\nNEW > 8  js/unit-tests/test_instructionRefs.js::walk: 15\n0 regression(s), 1 new over threshold, 0 improvement(s), 0 removed\n##[error]Process completed with exit code 2.\n```\n\nThe new `v1ShimIndex()` helper (test_instructionRefs.js:200) inlines one `walk` closure carrying all of the branch work: the `file_list` shape normalization, dotfile skip, the `file_exists` dual-shape dir test (`ex === true || (ex && typeof ex === 'object' && ex.exists === true)`), the `.md`/dir fork, the banner cut ternary, the missing-banner `continue`, and the `livePat` exec loop — CC lands the function over the CRAP 8 threshold at its measured coverage.\n\nFix per the repo's CRAP-split convention: extract small pure helpers — e.g. `isDirEntry(ex)`, `shimBannerPaths(txt)` (returns the live paths named by a banner), and a per-entry step — and pin each with direct unit tests, or extend R13's fixtures so `walk`'s branches run under the coverage harness. Either way the ratchet must go green; everything else in this PR is already green (unit suite 10807 passed, 0 failed)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs628xSH",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "scripts/validate-review-skills.js:152",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: validator resolves skill-file `lens` paths against the wrong root — false-fails on the documented consuming-repo layout**\n\n`scripts/validate-review-skills.js` resolves **every** path through `toRepoRelative` (`path.join(repoRoot, p)`, lines 112–131), but the factory skill files' `lens` field carries a **pack-relative** path (`\"instructions/pr_review/generalist/lens.md\"`). In this checkout the two roots coincide, so the CI step passes — but the script's own documented usage is the consuming repo (\"from the consuming repo root, with the agents pack available\", header; `factoryDirs` even defaults to `agents/instructions/review`, line 90). With the pack at `agents/`, `readFile` looks for `<repoRoot>/instructions/pr_review/generalist/lens.md` while the file lives at `<repoRoot>/agents/instructions/...` — the read misses, and the check-3 split (lines 162–169) promotes \"lens file missing or empty\" from warning to **hard error → exit 1**.\n\nReproduced against a product-repo layout (`agents/` → this pack + a `.dmtools/config.js` carrying `reviewPolicy.required`):\n\n```\n✅ reviewer \"base\" (factory) — lens instructions/pr_review/generalist/lens.md | required:true | ...\n❌ base: lens file missing or empty: instructions/pr_review/generalist/lens.md\n❌ security: lens file missing or empty: instructions/pr_review/security/lens.md\nreviewer pool: 2 reviewer(s) validated · 2 error(s), 0 warning(s)\n❌ validate-review-skills: FAILED        # exit 1 — lenses exist; unfixable via --factory/--repo flags\n```\n\nSuggested fix: resolve factory-owned paths (lens, and any skill file path) against the discovered `packRoot` (fall back repoRoot-relative for repo-authored `.dmtools/review` paths — those are genuinely repo-root-relative, e.g. the valid fixture's `.dmtools/review/legal.lens.md`). A repo-vs-pack discriminator at the `io` bag keeps the pure `resolvePool` contract unchanged and lets a downstream repo actually use its §8 gate."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs629V2f",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_instructionRefs.js:246",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: the rework that CRAP-split `walk` broke `v1ShimIndex` — R13's moved-target guard is now dead code (always green, never fires)**\n\nThe CRAP-split hunk (this rework) flipped the branch order inside `walk` (test_instructionRefs.js:243-250). The descent branch now runs **first for every entry**, but `file_exists` is an existence check for ANY path — boolean `true` in the dmtools host, `{exists: true}` in the node coverage harness (node_testRunner.js:328, predicate `function() { return true; }`). So every existing `.md` file enters `walk(rel)`; `file_list` on a file returns `null` → zero entries → the `else if (/\\.md$/…)` shim-read branch at line 248 is unreachable for every real file. The index is always `{}`.\n\nEvidence — the harness's exact host shapes against the real tree (file_exists on the shim → exists:true; file_list on it → null):\n\n```\nshim index size=0\nfile_exists(shim .md file) = {\"exists\":true}\nfile_list(that file) = null\n```\n\nConsequence: `R13 — \"runner pack: refs … never pin a moved target while its v1 shim window is open\" — can never fire` (test_instructionRefs.js:544-589). `shims` is `{}`, so `var shim = shims[p]; if (shim) …` never triggers, and the check silently degrades to the dangling-pin lookup only. The suite still passes — I re-ran it under the node harness (20 passed, 0 failed) — which is exactly why CI cannot see this. The guard demonstrably worked at `980ac31a` (it failed on the pre-980ac31a tree with the exact violation, per the discussion); the rework disconnected the sensor while keeping the light green.\n\nThis guard is the regression protection for the live `AgentPackException` crash class this PR itself hit (runner pins vs pack contents) — merging with it dead re-exposes the PR's documented follow-up (the planned flip of `.dmtools/runners/fa-review.json` to the v2 path) to the exact failure R13 exists to catch.\n\nFix (two parts):\n1. Restore the read-before-descend order inside the split structure — `.md` files are files, never descent targets:\n```javascript\nif (/\\.md$/.test(rel)) {\n    shimBannerPaths(readText(rel)).forEach(function (live) { index[live] = rel; });\n} else if (isTrueishExists(file_exists({ path: fsPath(rel) }))) {\n    walk(rel);\n}\n```\n2. Pin the composite so this can't regress silently: one end-to-end test asserting `v1ShimIndex()` contains the 7 shim paths (e.g. `index['instructions/pr_review/review_verdict_rules.md'] === 'instructions/pr_review/review_verdict_rules.md'`). The new characterization suite pins the four helpers but nothing pins the assembled index — that is the gap that let a green suite ship a dead guard."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:e2f86a78",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: validator resolves skill-file `lens` paths against the wrong root — false-fails on the documented consuming-repo layout**\n\n`scripts/validate-review-skills.js` resolves **every** path through `toRepoRelative` (`path.join(repoRoot, p)`, lines 112–131), but the factory skill files' `lens` field carries a **pack-relative** path (`\"instructions/pr_review/generalist/lens.md\"`). In this checkout the two roots coincide, so the CI step passes — but the script's own documented usage is the consuming repo (\"from the consuming repo root, with the agents pack available\", header; `factoryDirs` even defaults to `agents/instructions/review`, line 90). With the pack at `agents/`, `readFile` looks for `<repoRoot>/instructions/pr_review/generalist/lens.md` while the file lives at `<repoRoot>/agents/instructions/...` — the read misses, and the check-3 split (lines 162–169) promotes \"lens file missing or empty\" from warning to **hard error → exit 1**.\n\nReproduced against a product-repo layout (`agents/` → this pack + a `.dmtools/config.js` carrying `reviewPolicy.required`):\n\n```\n✅ reviewer \"base\" (factory) — lens instructions/pr_review/generalist/lens.md | required:true | ...\n❌ base: lens file missing or empty: instructions/pr_review/generalist/lens.md\n❌ security: lens file missing or empty: instructions/pr_review/security/lens.md\nreviewer pool: 2 reviewer(s) validated · 2 error(s), 0 warning(s)\n❌ validate-review-skills: FAILED        # exit 1 — lenses exist; unfixable via --factory/--repo flags\n```\n\nSuggested fix: resolve factory-owned paths (lens, and any skill file path) against the discovered `packRoot` (fall back repoRoot-relative for repo-authored `.dmtools/review` paths — those are genuinely repo-root-relative, e.g. the valid fixture's `.dmtools/review/legal.lens.md`). A repo-vs-pack discriminator at the `io` bag keeps the pure `resolvePool` contract unchanged and lets a downstream repo actually use its §8 gate."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:6c219e19",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: the rework that CRAP-split `walk` broke `v1ShimIndex` — R13's moved-target guard is now dead code (always green, never fires)**\n\nThe CRAP-split hunk (this rework) flipped the branch order inside `walk` (test_instructionRefs.js:243-250). The descent branch now runs **first for every entry**, but `file_exists` is an existence check for ANY path — boolean `true` in the dmtools host, `{exists: true}` in the node coverage harness (node_testRunner.js:328, predicate `function() { return true; }`). So every existing `.md` file enters `walk(rel)`; `file_list` on a file returns `null` → zero entries → the `else if (/\\.md$/…)` shim-read branch at line 248 is unreachable for every real file. The index is always `{}`.\n\nEvidence — the harness's exact host shapes against the real tree (file_exists on the shim → exists:true; file_list on it → null):\n\n```\nshim index size=0\nfile_exists(shim .md file) = {\"exists\":true}\nfile_list(that file) = null\n```\n\nConsequence: `R13 — \"runner pack: refs … never pin a moved target while its v1 shim window is open\" — can never fire` (test_instructionRefs.js:544-589). `shims` is `{}`, so `var shim = shims[p]; if (shim) …` never triggers, and the check silently degrades to the dangling-pin lookup only. The suite still passes — I re-ran it under the node harness (20 passed, 0 failed) — which is exactly why CI cannot see this. The guard demonstrably worked at `980ac31a` (it failed on the pre-980ac31a tree with the exact violation, per the discussion); the rework disconnected the sensor while keeping the light green.\n\nThis guard is the regression protection for the live `AgentPackException` crash class this PR itself hit (runner pins vs pack contents) — merging with it dead re-exposes the PR's documented follow-up (the planned flip of `.dmtools/runners/fa-review.json` to the v2 path) to the exact failure R13 exists to catch.\n\nFix (two parts):\n1. Restore the read-before-descend order inside the split structure — `.md` files are files, never descent targets:\n```javascript\nif (/\\.md$/.test(rel)) {\n    shimBannerPaths(readText(rel)).forEach(function (live) { index[live] = rel; });\n} else if (isTrueishExists(file_exists({ path: fsPath(rel) }))) {\n    walk(rel);\n}\n```\n2. Pin the composite so this can't regress silently: one end-to-end test asserting `v1ShimIndex()` contains the 7 shim paths (e.g. `index['instructions/pr_review/review_verdict_rules.md'] === 'instructions/pr_review/review_verdict_rules.md'`). The new characterization suite pins the four helpers but nothing pins the assembled index — that is the gap that let a green suite ship a dead guard."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:1bbb9c19",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: CI red — CRAP ratchet fails on `walk` (quality job exit 2)**\n\nThe `crap` check fails on head `980ac31a` (ci_failures.md):\n\n```\nNEW > 8  js/unit-tests/test_instructionRefs.js::walk: 15\n0 regression(s), 1 new over threshold, 0 improvement(s), 0 removed\n##[error]Process completed with exit code 2.\n```\n\nThe new `v1ShimIndex()` helper (test_instructionRefs.js:200) inlines one `walk` closure carrying all of the branch work: the `file_list` shape normalization, dotfile skip, the `file_exists` dual-shape dir test (`ex === true || (ex && typeof ex === 'object' && ex.exists === true)`), the `.md`/dir fork, the banner cut ternary, the missing-banner `continue`, and the `livePat` exec loop — CC lands the function over the CRAP 8 threshold at its measured coverage.\n\nFix per the repo's CRAP-split convention: extract small pure helpers — e.g. `isDirEntry(ex)`, `shimBannerPaths(txt)` (returns the live paths named by a banner), and a per-entry step — and pin each with direct unit tests, or extend R13's fixtures so `walk`'s branches run under the coverage harness. Either way the ratchet must go green; everything else in this PR is already green (unit suite 10807 passed, 0 failed)."
+    },
+    {
+      "id": "pr_discussions.md:ajaxspace:2026-11-12:6ac7ae37",
+      "kind": "comment",
+      "author": "ajaxspace",
+      "createdAt": "2026-11-12",
+      "updatedAt": "2026-11-12",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Owner-directed changes pushed on top (2 commits, no scope creep — the execution layer stays in the follow-up):\n\n**1. `30fe8166e` — owner revision: merge gating via `reviewPolicy.required` (replaces the per-reviewer `isRequired` field).**\n- Skill-file schema drops `isRequired` (issue #1406 revised accordingly: §2/§3/§7/§8/§10 + a revision note at the top). A stale `isRequired` in any skill file now WARNS with the migration hint; a same-name tuning file still hard-errors (extend-never-replace) with the same hint.\n- `reviewPolicy` gains the `required` key (factory default `['base','security']`, repo-owned; `required: []` gates nothing — \"merge rules are repo rules\" in ONE place).\n- Explicit unknown required name = hard error (§8 check 8: a misspelled gate silently gates nothing). The factory DEFAULT list degrades to a WARNING for reviewers that did not load — keeps the `resolvePool` fail-soft contract (io-failure edge suites stay green).\n- Required-but-disabled reviewer = warning (it never runs, so it cannot gate).\n- PR-facing prose cleaned: the merge-gate hold line, PASS/pool/escalation marker texts and the quality.yml step name no longer carry issue ids (repo norm: issue refs live in comments; `test_mergeGate` now pins the generic invariant AND the absence of issue ids in runtime strings).\n\n**2. `2c70d0158` — frozen v1 instruction shims (backward compat for downstream repos pinning old paths).**\n- All 7 pre-split paths restored under `instructions/pr_review/` + `instructions/pr_test_automation_review/`: 3 renames carry the live v2 content verbatim (byte-sync test S3), 4 deleted/split files carry their pre-split content verbatim from history. Every shim opens with a DEPRECATED banner (removed next major). Full copies, not stubs — these files are prompt material for AI teammates with file-scope reads.\n- Pack reachability: shims are packed via the new hub `instructions/pr_review/deprecated-v1.md`, anchored by one comment line in `base/input_context.md` (instructionRefs R1–R4 green).\n- `validate-review-skills.js` warns when a repo config or `.dmtools/runners/*.json` still pins a v1 path (names the live replacement). Also carries §8 check 8.\n\nFull node harness on this head: `10767 passed, 4 failed` — the 4 are shell self-tests from gh-1137/gh-1450 (`setup/dart.sh`, `gh-auth-refresh.sh`, `gh-token-keeper.sh`), pre-existing macOS-local noise; the same head family is green on ubuntu CI. Regenerated docs/snapshots are committed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:a17ea634",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "### Thread 1 — owner-directed changes on top (30fe8166e, 2c70d0158)\n\nBoth owner-directed commits are verified ancestors of the current head (`d55e5fa6b` — `git merge-base --is-ancestor` green for `30fe8166e` and `2c70d0158`). No re-litigation of their content; this lap picked up the one red they left behind:\n\n**`teammate / teammate` job red on `d55e5fa6` — fixed in `980ac31a9`.**\n\n- **Cause**: `2c70d0158`'s split moved `review_verdict_rules.md` into `instructions/pr_review/base/`, and the runner `.dmtools/runners/fa-review.json` was re-pinned to `pack:instructions/pr_review/base/review_verdict_rules.md` in the same PR. Packs are cut from the base branch, so every released pack (`pr_review-0.1.337` from `agents-rel-20261112-203940` — verified by unzipping the release asset) still ships only the pre-split paths. The review leg crashed at setup: `AgentPackException: pack: reference ... not found in pack` — the PR could not go green regardless of content.\n- **Fix**: the runner pin now rides the frozen v1 shim (`pack:instructions/pr_review/review_verdict_rules.md`) — same binding content (the shim carries the v2 body verbatim plus a 4-line deprecation banner) and it resolves in today's released pack **and** in every post-merge pack (the shims are pack-reachable per the hub anchor). The flip to the v2 path is a one-line follow-up once a pack release carries it; `validate-review-skills.js` emits its designed migration warning meanwhile (`⚠️ runner ... pins the deprecated v1 path ... — moved to ...`; exit 0, non-fatal).\n- **Regression guard**: `R13` in `test_instructionRefs.js` — every runner `pack:` ref must exist on disk and must never pin a moved target while its frozen v1 shim is still on disk. It fails on the pre-fix tree with the exact violation and is green on the fixed tree; registered in `run_all.json` (CI coverage step) and verified under the full node harness: **10807 passed, 0 failed**.\n\nScope guard: `instructions/pr_review/security/{lens,few_shots,references}.md` are currently unreachable from any base config (so unpacked until then) — that wiring belongs to the pool execution layer that moved to the follow-up, so it was deliberately not touched here."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:cf4e225e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: One blocking CI break (CRAP ratchet red on `test_instructionRefs.js::walk`, quality job exit 2) and one important validator defect (factory `lens` paths resolved repoRoot-relative → false \"lens file missing\" exit 1 on the documented consuming-repo layout, reproduced) must be fixed. The pool core itself is solid: schema/validation are strict where the ticket demands it, the merge gate's pool clause is fail-closed on machine-identity trust with the 429 scenario, dedup, escalation and capability-miss paths all pinned by tests, and no secrets or issue-id strings leak into PR-facing runtime text.\n\n**Key Issues**:\n1. 🚨 `js/unit-tests/test_instructionRefs.js:202` — CI `crap` gate red: `NEW > 8 test_instructionRefs.js::walk: 15` → quality job exit 2.\n2. ⚠️ `scripts/validate-review-skills.js:117` — skill-file `lens` paths are pack-relative but `io.readFile` resolves repoRoot-relative; downstream repos with the pack at `agents/` get a red gate the flags cannot fix (verified: exit 1 with both factory lenses \"missing\").\n\n**Ranked digest** (post top-K cap not needed — no 💡/🪶 threads; these are the overflow):\n- `js/common/reviewPool.js:36` — `disabledRequiredNames(probe)` recomputed twice per loop iteration; hoist to a local.\n- `js/common/reviewPoolSchema.js:471` — `validateRequiredList` validates a reviewPolicy key but throws the ReviewSkillValidationError family (header taxonomy says policy keys → ReviewPolicyValidationError); nothing branches on the name today — consistency only.\n- `instructions/pr_review/review_verdict_rules.md:2-4` (all 7 shims) — banner lines open `<!--` without closing `-->`; HTML rendering swallows the heading + first flowchart up to the first `-->`. Raw-text consumers (the agents) are unaffected.\n- `js/common/reviewPoolMarkers.js:121` — marker prose reads \"Reviewer pool round \\`X\\` pool round on head\" (duplicated phrase).\n- `scripts/validate-review-skills.js:62-69` — `parseArgs` treats any unknown flag as the positional repoRoot.\n- `test_buildEncodedConfig.js` / `test_writeSolutionAndLabels.js` — DEFAULT_TRACKER `java` shim copy-pasted across suites (duplication gate measured and accepted; candidate for a shared helper).\n\n**Next Steps**:\n1. CRAP-split `v1ShimIndex`'s `walk` into small tested helpers (or raise its coverage via R13 fixtures) until the ratchet is green.\n2. Fix the validator's path roots: factory-owned paths against `packRoot`, repo-authored against `repoRoot`; re-run the node harness + the §8 step.\n3. Note: the merge gate now fails CLOSED on a broken comments read (retry-merge lane test updated from fail-open) — deliberate, documented (#1319 parity); no action, called out for release notes."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-13:7b0f8cb9",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-13",
+      "updatedAt": "2026-11-13",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES (re-review, head 274de9672)\n\n**Summary**: Both prior findings are verified fixed — F1 (🚨 CRAP ratchet red on `walk`): the CRAP-split hunk decomposed it into four pinned pure helpers and the ratchet is green on the new head; F2 (⚠️ validator lens-root mismatch): `toIoPath` + factory pack-root discovery resolves pack-relative lens paths, and the exact consuming-repo reproduction that exited 1 last round now exits 0 (plus a dedicated `consuming/` fixture test and the unknown-flag digest pickup). One new 🚨 BLOCKING: that same split flipped `walk`'s branch order — the descent branch now precedes the `.md` shim read, and since `file_exists` is truthy for plain files, `v1ShimIndex()` returns `{}` on the real tree (proven under the harness's exact host shapes), leaving R13's moved-target guard as dead code that always passes.\n\n**Key Issues**:\n1. 🚨 `js/unit-tests/test_instructionRefs.js:246` — R13's \"never pin a moved target while its v1 shim window is open\" guard can never fire: `shims` is always `{}` (shim-read branch unreachable for existing files). Green suite, dead sensor.\n\n**Ranked digest** (advisory; frozen-line items unchanged by this lap — never threads):\n- `js/unit-tests/test_instructionRefs.js` — pin the assembled `v1ShimIndex()` end-to-end (7 shim paths); only the four helpers are characterized today, which is how the dead index shipped green. (Part of the fix above.)\n- `scripts/validate-review-skills.js:130-133` — `toIoPath` never falls back to repoRoot for `instructions/…`-prefixed paths absent from every pack root: a repo-authored reviewer with a lens under a top-level `instructions/` dir false-fails.\n- `js/common/reviewPool.js:36-368` — `disabledRequiredNames(probe)` recomputed twice per loop iteration (frozen, advisory).\n- `js/common/reviewPoolSchema.js:471` — `validateRequiredList` throws the ReviewSkillValidationError family for a reviewPolicy key (frozen, advisory; nothing branches on the name).\n- `instructions/pr_review/*` shims — banner lines 2–4 open `<!--` without closing `-->` (frozen, advisory; HTML rendering only).\n\n**Next Steps**:\n1. Restore the `.md`-first branch order inside the split `walk` and add the end-to-end `v1ShimIndex()` pin (7 shim paths) so the guard cannot die silently again.\n2. Re-run the node harness + the full suite; CI must stay green with the guard live."
+    }
+  ]
+}
