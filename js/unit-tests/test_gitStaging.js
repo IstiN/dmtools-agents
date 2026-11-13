@@ -25,6 +25,7 @@ var ALL_ARTIFACTS = [
     '.dmtools/fa-sessions',
     // gh-1436: plan-mode appendix materialization — engine-written prompt input.
     '.dmtools/development-mode-plan-appendix.md',
+    '.dmtools-target-workingdir',
     '.dmtools-session-output.log',
     '.claude-session-id'
 ];
@@ -72,6 +73,17 @@ suite('gitStaging', function() {
         assert.equal(seen.length, 2);
         assert.contains(seen[1], '"' + '.dmtools/credential-helper.log' + '"');
         assert.equal(seen[1].indexOf('not-an-artifact'), -1, 'a path outside the artifact list is never removed');
+    });
+
+    test('untracks a branch-committed working-directory marker', function() {
+        var commands = [];
+        var removed = gitStaging.untrackRuntimeArtifacts(function(command) {
+            commands.push(command);
+            return command.indexOf('git ls-files') === 0 ? '.dmtools-target-workingdir\n' : '';
+        });
+        assert.deepEqual(removed, ['.dmtools-target-workingdir']);
+        assert.contains(commands[1], '".dmtools-target-workingdir"');
+        assert.contains(gitStaging.buildStagingPathspecs(), '":!.dmtools-target-workingdir"');
     });
 
     test('untrackRuntimeArtifacts: a failing listing propagates (callers keep their try/catch)', function() {

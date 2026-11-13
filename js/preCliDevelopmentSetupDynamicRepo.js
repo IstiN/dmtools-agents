@@ -15,26 +15,6 @@
 
 var resolveRepo = require('./resolveRepoFromTicket.js');
 var setupDev    = require('./preCliDevelopmentSetup.js');
-var branchSetup = require('./common/branchSetup.js');
-
-function workingDirFromDynamicParams(params) {
-    var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-    var targetRepo = customParams.targetRepository || {};
-    return targetRepo.workingDir || '';
-}
-
-function writeResolvedWorkingDirFile(params) {
-    if (branchSetup.isDryRunParams(params)) return;
-    try {
-        var workingDir = workingDirFromDynamicParams(params);
-        if (workingDir) {
-            file_write({ path: '.dmtools-target-workingdir', content: workingDir });
-            console.log('preCliDevelopmentSetupDynamicRepo: wrote workingDir to .dmtools-target-workingdir:', workingDir);
-        }
-    } catch (e) {
-        console.warn('preCliDevelopmentSetupDynamicRepo: could not write .dmtools-target-workingdir (non-fatal):', e);
-    }
-}
 
 function action(params) {
     // 1. Resolve target repo from ticket and mutate params in-place
@@ -44,12 +24,7 @@ function action(params) {
         return false;
     }
 
-    // 2. Write resolved workingDir to a file so that CLI shell scripts
-    //    (e.g. create_test_commit.sh) can discover the correct dependency dir
-    //    without duplicating the [repo] parsing logic.
-    writeResolvedWorkingDirFile(params);
-
-    // 3. Run standard pre-CLI development setup with the resolved targetRepository
+    // 2. Standard setup writes the working-directory marker after branch checkout.
     return setupDev.action(params);
 }
 

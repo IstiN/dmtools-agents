@@ -271,6 +271,7 @@
         "js/unit-tests/test_workflowLint.js",
         "js/unit-tests/test_workflowRuns.js",
         "js/unit-tests/test_workingDir.js",
+        "js/unit-tests/test_workingDirMarker.js",
         "js/unit-tests/test_writeContentOutput.js",
         "js/unit-tests/test_writeSolutionAndDiagrams.js",
         "js/unit-tests/test_writeSolutionAndLabels.js"

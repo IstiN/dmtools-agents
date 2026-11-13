@@ -74,6 +74,7 @@ function stubFileRead(files, readOpts) {
 function makeModule(fileMap, setupResult) {
     var files = fileMap || {};
     var setupCalls = [];
+    var fileWrites = [];
 
     var mod = loadModule(
         'js/preCliDevelopmentSetupDynamicRepo.js',
@@ -95,11 +96,15 @@ function makeModule(fileMap, setupResult) {
         {
             file_read: function(readOpts) {
                 return stubFileRead(files, readOpts);
+            },
+            file_write: function(opts) {
+                fileWrites.push(opts);
             }
         }
     );
 
     mod._setupCalls = setupCalls;
+    mod._fileWrites = fileWrites;
     return mod;
 }
 
@@ -178,6 +183,7 @@ suite('preCliDevelopmentSetupDynamicRepo — action', function() {
         var result = mod.action(params);
         assert.equal(result, true, 'returns true on success');
         assert.equal(mod._setupCalls.length, 1, 'setupDev was called');
+        assert.equal(mod._fileWrites.length, 0, 'does not write the marker before standard setup');
     });
 
     test('setupDev receives params with targetRepository already set', function() {

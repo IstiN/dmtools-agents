@@ -19,6 +19,7 @@ var setupCommands = require('./common/setupCommands.js');
 var baseBranchMarker = require('./common/baseBranchMarker.js');
 var branchSetup = require('./common/branchSetup.js');
 var gitStaging = require('./common/gitStaging.js');
+var workingDirMarker = require('./common/workingDirMarker.js');
 var trackersModule = require('./common/trackers.js');
 var commentMarkup = require('./common/commentMarkup.js');
 var legFailureReport = require('./common/legFailureReport.js');
@@ -37,9 +38,11 @@ var developmentModeAdaptive = require('./common/developmentModeAdaptive.js');
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
 // all git/shell commands are executed inside that directory.
 var _workingDir = null;
+var markerCheckoutGuard = workingDirMarker.createCheckoutGuard(function(args) { return cli_execute_command(args); });
+
 function runCmd(args) {
     if (_workingDir) args.workingDirectory = _workingDir;
-    return cli_execute_command(args);
+    return markerCheckoutGuard.run(args);
 }
 
 // Adapter matching the (command, workingDir) signature expected by
@@ -251,12 +254,9 @@ function establishFeatureBranch(config, customParams, ticket) {
 
 // gh-1358: pipeline-owned runtime artifacts that ARE tracked in the repo but
 // get rewritten by every leg — a stale local modification of one of them
-// aborts `git checkout` with "local changes would be overwritten" and the
-// whole leg dies at branch setup (four consecutive dev-leg failures on
-// #1352). The helpers below run best-effort before every branch switch:
-// non-fatal (warn and continue — the checkout reports any real conflict that
-// remains). Once gh-1358 untracks the marker on master and a branch aligns
-// with it, both are no-ops.
+// aborts `git checkout` with "local changes would be overwritten". Reset it
+// before switching branches; untracking is deferred to the staging helpers,
+// since a staged deletion can itself prevent checkout.
 var PIPELINE_RUNTIME_ARTIFACTS = ['.dmtools-target-workingdir'];
 
 /** Best-effort: reset a stale local modification of one runtime artifact. */
@@ -268,19 +268,9 @@ function resetRuntimeArtifact(artifact) {
     }
 }
 
-/** Best-effort: stop tracking one runtime artifact on the current branch. */
-function untrackRuntimeArtifact(artifact) {
-    try {
-        runCmd({ command: 'git rm --cached --ignore-unmatch ' + artifact });
-    } catch (rmErr) {
-        console.warn('Could not untrack runtime artifact', artifact + ':', rmErr);
-    }
-}
-
-/** Reset + untrack every known runtime artifact before a branch switch. */
+/** Reset every known runtime artifact before a branch switch. */
 function discardRuntimeArtifactModifications() {
     PIPELINE_RUNTIME_ARTIFACTS.forEach(resetRuntimeArtifact);
-    PIPELINE_RUNTIME_ARTIFACTS.forEach(untrackRuntimeArtifact);
 }
 
 /** Local dev branch: checkout, then align with the base branch. */
@@ -316,6 +306,7 @@ function checkoutExistingRemoteBranch(ticketKey, branchName, rebaseBase) {
  * exists (it becomes the base), then create the dev branch from branchBase.
  */
 function createNewDevBranch(config, customParams, ticket, branchName) {
+    discardRuntimeArtifactModifications();
     var branchBase = config.git.baseBranch;
     if (config.git.featureBranch && config.git.featureBranch.enabled) {
         branchBase = establishFeatureBranch(config, customParams, ticket);
@@ -338,16 +329,9 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     ticket = ticket || { key: ticketKey, fields: {} };
     customParams = customParams || {};
     _workingDir = config.workingDir || null;
-    // Write workingDir to a known file so CLI shell scripts (e.g. create_test_commit.sh)
-    // can discover the correct dependency dir without duplicating resolution logic.
-    if (_workingDir) {
-        try { file_write({ path: '.dmtools-target-workingdir', content: _workingDir }); } catch (e) { }
-    }
     var branchName = configLoader.resolveBranchName(config, ticket, 'development');
     var rebaseBase = configLoader.resolvePRTargetBranch(config, ticket);
     console.log('Setting up branch:', branchName);
-
-    stashGeneratedIndex();
 
     // gh-1318: the freshly regenerated input/ IS the current truth — stash it
     // aside for the duration of branch setup. A branch that already carries an
@@ -357,9 +341,12 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     // the restore below overlays the fresh copy over whatever the checked-out
     // branch materialized. Restore runs in finally: even a failed checkout
     // gives the reporter's answer back.
-    var stashedFreshInput = branchSetup.stashFreshInput(runCommandStr);
-
+    var stashedFreshInput = false;
+    var markerRestored = true;
+    markerCheckoutGuard.begin();
     try {
+        stashGeneratedIndex();
+        stashedFreshInput = branchSetup.stashFreshInput(runCommandStr);
         configureSetupAuthor(config);
         fetchDevBranchRefs(branchName, rebaseBase);
 
@@ -378,8 +365,18 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
         // a successful checkout (nothing was checked out otherwise).
         branchSetup.healLegContextArtifacts(runCommandStr, gitStaging.untrackLegContextArtifacts);
     } finally {
+        markerRestored = markerCheckoutGuard.finish();
         restoreGeneratedIndex();
         branchSetup.restoreFreshInput(runCommandStr, stashedFreshInput);
+    }
+
+    if (!markerRestored) {
+        throw new Error('Could not restore the previous working-directory marker after branch setup');
+    }
+
+    // Writing this marker before checkout can collide with a tracked file on the target branch.
+    if (_workingDir) {
+        workingDirMarker.writeWorkingDirMarker(_workingDir, cli_execute_command, file_write);
     }
 }
 

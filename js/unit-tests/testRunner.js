@@ -228,6 +228,7 @@ function loadModule(path, requireFn, mocks) {
 // Pure common modules loaded for real when a test's mock map omits them.
 var REAL_COMMON_MODULES = {
     branchSetup: 'js/common/branchSetup.js',
+    workingDirMarker: 'js/common/workingDirMarker.js',
     jiraWikiToMarkdown: 'js/common/jiraWikiToMarkdown.js',
     // gh-1406: mergeGate now loads the marker grammar (js/common/reviewPoolMarkers.js);
     // suites shim mergeGate's siblings but need the real marker module. The

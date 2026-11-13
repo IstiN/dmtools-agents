@@ -335,6 +335,116 @@ suite('preCliDevelopmentSetup.checkoutBranch — generated .codegraph index guar
 
 });
 
+suite('preCliDevelopmentSetup.checkoutBranch — working directory marker', function() {
+    test('does not create an untracked marker before checking out an existing remote branch', function() {
+        var events = [];
+        var markerWrites = [];
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'master', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: function(opts) {
+                var command = opts.command;
+                events.push('command:' + command);
+                if (command === 'git ls-remote --heads origin ai/PROJ-1') {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/PROJ-1';
+                }
+                if ((command === 'git checkout ai/PROJ-1' ||
+                    command === 'git checkout -B ai/PROJ-1 origin/ai/PROJ-1') && markerWrites.length) {
+                    throw new Error('untracked marker would be overwritten by checkout');
+                }
+                return '';
+            },
+            file_read: function() { return ''; },
+            file_write: function(opts) {
+                if (opts.path === '.dmtools-target-workingdir') {
+                    markerWrites.push(opts);
+                    events.push('marker');
+                }
+            }
+        });
+        var config = makeConfig({ git: { featureBranch: { enabled: false } }, workingDir: '.' });
+
+        mod.checkoutBranch('PROJ-1', config, TICKET, {});
+
+        var checkoutIdx = events.indexOf('command:git checkout ai/PROJ-1');
+        var markerIdx = events.indexOf('marker');
+        assert.ok(checkoutIdx !== -1, 'checks out the existing remote branch');
+        assert.ok(markerIdx > checkoutIdx, 'writes the marker only after checkout');
+        assert.equal(markerWrites.length, 1, 'writes the marker once');
+        assert.equal(markerWrites[0].content, '.', 'preserves the resolved working directory');
+    });
+
+    test('does not write the marker when branch checkout fails', function() {
+        var markerWrites = [];
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'master', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --list "ai/PROJ-1"') return 'ai/PROJ-1';
+                if (opts.command === 'git checkout ai/PROJ-1') {
+                    throw new Error('checkout failed');
+                }
+                return '';
+            },
+            file_read: function() { return ''; },
+            file_write: function(opts) {
+                if (opts.path === '.dmtools-target-workingdir') markerWrites.push(opts);
+            }
+        });
+        var config = makeConfig({ git: { featureBranch: { enabled: false } }, workingDir: '.' });
+
+        assert.throws(function() { mod.checkoutBranch('PROJ-1', config, TICKET, {}); });
+        assert.equal(markerWrites.length, 0, 'does not create the marker after a failed checkout');
+    });
+
+    test('warns without failing branch setup when the marker cannot be written', function() {
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'master', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --list "ai/PROJ-1"') return 'ai/PROJ-1';
+                return '';
+            },
+            file_read: function() { return ''; },
+            file_write: function(opts) {
+                if (opts.path === '.dmtools-target-workingdir') throw new Error('disk full');
+            }
+        });
+        var config = makeConfig({ git: { featureBranch: { enabled: false } }, workingDir: '.' });
+        var warnings = [];
+        var originalWarn = console.warn;
+        try {
+            console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+            mod.checkoutBranch('PROJ-1', config, TICKET, {});
+        } finally {
+            console.warn = originalWarn;
+        }
+        assert.ok(warnings.some(function(message) {
+            return message.indexOf('Could not write .dmtools-target-workingdir:') !== -1 &&
+                message.indexOf('disk full') !== -1;
+        }), 'reports the marker write failure');
+    });
+
+    test('refuses to write when the marker path cannot be checked safely', function() {
+        var markerWrites = [];
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'master', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --list "ai/PROJ-1"') return 'ai/PROJ-1';
+                if (opts.command === 'bash -c "test ! -L .dmtools-target-workingdir -a ! -d .dmtools-target-workingdir"') {
+                    throw new Error('marker is a symlink');
+                }
+                return '';
+            },
+            file_read: function() { return ''; },
+            file_write: function(opts) {
+                if (opts.path === '.dmtools-target-workingdir') markerWrites.push(opts);
+            }
+        });
+        var config = makeConfig({ git: { featureBranch: { enabled: false } }, workingDir: '.' });
+
+        assert.throws(function() { mod.checkoutBranch('PROJ-1', config, TICKET, {}); });
+        assert.equal(markerWrites.length, 0, 'does not follow a symlink or write when the safety check fails');
+    });
+});
+
 suite('preCliDevelopmentSetup.checkoutBranch — base branch fetch before checkout', function() {
 
     test('fetches baseBranch from origin before git checkout when creating a new branch', function() {
@@ -1411,6 +1521,7 @@ suite('preCliDevelopmentSetup.checkoutBranch — seam helpers (gh-1190)', functi
 
         mod.createNewDevBranch(config, {}, TICKET, 'ai/PROJ-1');
         assert.deepEqual(calls, [
+            'git checkout -- .dmtools-target-workingdir',
             'git branch --list "release/rc"',
             'git ls-remote --heads origin release/rc',
             'git checkout release/rc',
@@ -1490,9 +1601,9 @@ suite('preCliDevelopmentSetup.checkoutBranch — seam helpers (gh-1190)', functi
             mod.checkoutLocalBranchWithAlign('PROJ-1', 'ai/PROJ-1', 'master');
             assert.equal(calls[0], 'git checkout -- .dmtools-target-workingdir',
                 'gh-1358: runtime-artifact reset runs before the checkout');
-            assert.equal(calls[1], 'git rm --cached --ignore-unmatch .dmtools-target-workingdir',
-                'gh-1358: runtime-artifact untrack follows the reset');
-            assert.equal(calls[2], 'git checkout ai/PROJ-1', 'checkout runs first');
+            assert.equal(calls[1], 'git checkout ai/PROJ-1', 'checkout runs before untracking');
+            assert.ok(calls.indexOf('git rm --cached --ignore-unmatch .dmtools-target-workingdir') === -1,
+                'a staged marker deletion must not block checkout');
             assert.ok(calls.indexOf('git cherry origin/master HEAD') !== -1, 'alignment follows the checkout');
             assert.ok(calls.indexOf('git reset --hard origin/master') === -1,
                 'a unique-patch diverged branch is NOT reset');
@@ -1678,8 +1789,8 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
         return cli_execute_command({ command: cmd, workingDirectory: dir });
     }
 
-    function makeCollisionRepo() {
-        var tmp = String(cli_execute_command({ command: 'bash -c "mktemp -d"' })).trim();
+    function makeCollisionRepo(withRuntimeMarker, fixtureDir, prepareBranch) {
+        var tmp = fixtureDir || String(cli_execute_command({ command: 'bash -c "mktemp -d"' })).trim();
         git('git init', tmp);
         var base = String(git('git symbolic-ref --short HEAD', tmp)).trim();
         git('git config user.name "Test Agent"', tmp);
@@ -1689,7 +1800,12 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
         git('git commit -m seed', tmp);
         git('git checkout -b ai/BUG-1', tmp);
         file_write({ path: tmp + '/input/TICKET/comments.md', content: STALE });
+        if (withRuntimeMarker) {
+            file_write({ path: tmp + '/.dmtools-target-workingdir', content: 'old-working-dir' });
+        }
+        if (prepareBranch) prepareBranch(tmp);
         git('git add -A', tmp);
+        if (withRuntimeMarker) git('git add -f .dmtools-target-workingdir', tmp);
         git('git commit -m "ask-mode WIP snapshot"', tmp);
         git('git checkout ' + base, tmp);
         file_write({ path: tmp + '/input/TICKET/comments.md', content: FRESH });
@@ -1794,6 +1910,123 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
             'the fresh reporter answer wins over the branch-tracked stale snapshot');
         assert.equal(String(git('git ls-files -- input outputs', repo.tmp)), '',
             'the branch no longer tracks leg context (heal ran in the working dir)');
+    });
+
+    function withMarkerRepo(run, prepareBranch) {
+        var fixture;
+        try {
+            var root = String(cli_execute_command({ command: 'bash -c "pwd"' })).trim();
+            var relative = String(cli_execute_command({
+                command: 'bash -c "mktemp -d ./.precli-marker-test-XXXXXXXX"'
+            })).trim();
+            if (!/^\.\/\.precli-marker-test-[a-zA-Z0-9]{8}$/.test(relative)) {
+                throw new Error('Unexpected temporary directory: ' + relative);
+            }
+            fixture = { tmp: root + '/' + relative.substring(2), relative: relative };
+        } catch (e) {
+            console.warn('Skipping real Git marker test: could not create a fixture:', e);
+            return;
+        }
+
+        try {
+            var actualDir = String(git('bash -c "pwd"', fixture.tmp)).trim();
+            if (actualDir !== fixture.tmp) {
+                console.warn('Skipping real Git marker test: runtime ignores workingDirectory');
+                return;
+            }
+            run(makeCollisionRepo(true, fixture.tmp, prepareBranch));
+        } finally {
+            cli_execute_command({ command: 'bash -c "rm -rf -- ' + fixture.relative + '"' });
+        }
+    }
+
+    function loadMarkerCheckout(repo) {
+        var markerWrites = [];
+        var ctx = loadForRealGit(repo, {
+            cli_execute_command: function(args) {
+                if (args.command === 'bash -c "test ! -L .dmtools-target-workingdir -a ! -d .dmtools-target-workingdir"' &&
+                    !args.workingDirectory) {
+                    args = Object.assign({}, args, { workingDirectory: repo.tmp });
+                }
+                return cli_execute_command(args);
+            },
+            file_write: function(args) {
+                if (args.path === '.dmtools-target-workingdir') {
+                    markerWrites.push(args.content);
+                    return file_write({ path: repo.tmp + '/.dmtools-target-workingdir', content: args.content });
+                }
+                return null;
+            }
+        });
+        return { mod: ctx.mod, markerWrites: markerWrites };
+    }
+
+    function checkoutMarkerRepo(repo, ctx) {
+        ctx.mod.checkoutBranch('BUG-1', make1314ConfigLoaderStub(repo).loadProjectConfig(),
+            { key: 'BUG-1', fields: {} }, {});
+    }
+
+    function assertMarkerCheckout(repo, ctx) {
+        assert.equal(String(git('git symbolic-ref --short HEAD', repo.tmp)).trim(), 'ai/BUG-1');
+        assert.deepEqual(ctx.markerWrites, [repo.tmp], 'writes the resolved working directory after checkout');
+        assert.equal(file_read({ path: repo.tmp + '/.dmtools-target-workingdir' }), repo.tmp);
+    }
+
+    test('branch-tracked working-directory marker does not block checkout', function() {
+        withMarkerRepo(function(repo) {
+            var ctx = loadMarkerCheckout(repo);
+            checkoutMarkerRepo(repo, ctx);
+            assertMarkerCheckout(repo, ctx);
+        });
+    });
+
+    test('an existing untracked marker does not block checkout', function() {
+        withMarkerRepo(function(repo) {
+            file_write({ path: repo.tmp + '/.dmtools-target-workingdir', content: 'previous-working-dir' });
+            var ctx = loadMarkerCheckout(repo);
+            checkoutMarkerRepo(repo, ctx);
+            assertMarkerCheckout(repo, ctx);
+        });
+    });
+
+    test('a marker tracked on the source branch does not block checkout', function() {
+        withMarkerRepo(function(repo) {
+            file_write({ path: repo.tmp + '/.dmtools-target-workingdir', content: 'base-working-dir' });
+            git('git add -f .dmtools-target-workingdir', repo.tmp);
+            git('git commit -m "base marker"', repo.tmp);
+            var ctx = loadMarkerCheckout(repo);
+            checkoutMarkerRepo(repo, ctx);
+            assertMarkerCheckout(repo, ctx);
+        });
+    });
+
+    test('a failed checkout restores an existing untracked marker', function() {
+        withMarkerRepo(function(repo) {
+            file_write({ path: repo.tmp + '/conflict.txt', content: 'local content' });
+            file_write({ path: repo.tmp + '/.dmtools-target-workingdir', content: 'previous-working-dir' });
+            var ctx = loadMarkerCheckout(repo);
+
+            assert.throws(function() { checkoutMarkerRepo(repo, ctx); });
+            assert.equal(file_read({ path: repo.tmp + '/.dmtools-target-workingdir' }), 'previous-working-dir');
+            assert.equal(file_read({ path: repo.tmp + '/conflict.txt' }), 'local content');
+            assert.equal(ctx.markerWrites.length, 0, 'does not write a new marker on failure');
+        }, function(tmp) {
+            file_write({ path: tmp + '/conflict.txt', content: 'branch content' });
+        });
+    });
+
+    test('a branch-tracked marker symlink is never followed', function() {
+        withMarkerRepo(function(repo) {
+            file_write({ path: repo.tmp + '/victim.txt', content: 'must not change' });
+            var ctx = loadMarkerCheckout(repo);
+
+            assert.throws(function() { checkoutMarkerRepo(repo, ctx); });
+            assert.equal(file_read({ path: repo.tmp + '/victim.txt' }), 'must not change');
+            assert.equal(ctx.markerWrites.length, 0, 'does not write through the symlink');
+        }, function(tmp) {
+            git('bash -c "rm -f -- .dmtools-target-workingdir"', tmp);
+            git('bash -c "ln -s victim.txt .dmtools-target-workingdir"', tmp);
+        });
     });
 
     test('the ticket moves to In Development only AFTER branch setup succeeded', function() {

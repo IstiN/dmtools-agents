@@ -3,7 +3,8 @@
 # Used by story_development_dynamic_repo_test agents.
 #
 # Reads the target working directory from .dmtools-target-workingdir written by
-# preCliDevelopmentSetupDynamicRepo.js (which parses [repo] from the ticket summary).
+# preCliDevelopmentSetup.js after preCliDevelopmentSetupDynamicRepo.js resolves
+# [repo] from the ticket summary.
 #
 # Does NOT commit — instead it creates a test file (unstaged) and writes
 # outputs/response.md at the project root so that postJSAction (developTicketAndCreatePR)
@@ -49,4 +50,3 @@ This MR was created by \`story_development_dynamic_repo_test\` to verify the dyn
 - Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 EOF
 echo "✅ outputs/response.md written — postJSAction will proceed with push + MR"
-

@@ -42,6 +42,7 @@ var RUNTIME_ARTIFACT_PATHS = [
     // input, never leg work; the DURABLE plan artifact is the agent-committed
     // .dmtools/plan-snapshot.md.
     '.dmtools/development-mode-plan-appendix.md',
+    '.dmtools-target-workingdir',
     '.dmtools-session-output.log',
     '.claude-session-id'
 ];
