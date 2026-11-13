@@ -4,7 +4,7 @@
  *
  * The pool round runs INSIDE the single review job: the pre-cli action
  * executes each specialist as a bounded child agent session
- * (`bash scripts/run-agent.sh <prompt-file>` under `timeout -k 60 N` — the
+ * (`bash agents/scripts/run-agent.sh <prompt-file>` under `timeout -k 60 N` — the
  * gh-775 shape; `bash` is already whitelisted via CLI_ALLOWED_COMMANDS, no
  * new entry). Each specialist writes a candidates FILE
  * (`outputs/pr_review_candidates-<reviewer>.json`, the exact
