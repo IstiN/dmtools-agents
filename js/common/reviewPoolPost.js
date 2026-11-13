@@ -29,6 +29,17 @@
  * Pure module — no dmtools globals (all io injected). Requires hoisted
  * (gh-823 pack-require rule). GraalJS-clean (var + plain functions,
  * JSON-safe data only).
+ *
+ * The demotion ↔ re-escalation semantics (deliberate, per-round): the
+ * pipeline order inside poolRoundStep is merge → filter → post. The gh-1403
+ * filter re-verifies EVERY round's merged census fresh — a finding a
+ * previous round's filter demoted (BLOCKING → SUGGESTION with
+ * justification) carries no demotion state forward: if a specialist
+ * re-raises it as BLOCKING next round, the merge escalates (§5 severity
+ * only escalates) and the filter gets a fresh say. No demotion carry-over,
+ * by design: the filter's demotions are per-round judgments over the
+ * current census, not persistent verdicts — a stale demotion must never
+ * suppress a fresh specialist claim.
  */
 'use strict';
 
