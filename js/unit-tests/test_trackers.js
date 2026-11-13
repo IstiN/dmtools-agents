@@ -740,6 +740,13 @@ suite('trackers.js gitlab provider', function () {
         repository: { owner: 'acme-group', repo: 'widgets' }
     };
 
+    function assertPageError(fn, tool) {
+        var message = '';
+        try { fn(); } catch (e) { message = String(e.message || e); }
+        assert.contains(message, tool);
+        assert.contains(message, 'expected an array');
+    }
+
     test('factory resolves the gitlab provider instead of silently falling back to jira', function () {
         var trackers = loadTrackers({});
         assert.equal(trackers.createTracker({ tracker: { provider: 'gitlab' } }).provider(), 'gitlab');
@@ -849,6 +856,35 @@ suite('trackers.js gitlab provider', function () {
         assert.equal(glSearch.calls[0].workspace, 'acme-group');
         assert.equal(tickets.length, 1);
         assert.equal(tickets[0].key, 'acme-group/widgets#2');
+    });
+
+    test('GitLab page methods reject unexpected envelopes instead of silently returning no results', function () {
+        var trackers = loadTrackers({
+            gitlab_search_issues: recorder('gitlab_search_issues', JSON.stringify({ items: [GITLAB_TICKET] })),
+            gitlab_get_issue_comments: recorder('gitlab_get_issue_comments', JSON.stringify({ items: [] }))
+        });
+        var t = trackers.createTracker(GL_CONFIG);
+        assertPageError(function () { t.search('login'); }, 'gitlab_search_issues');
+        assertPageError(function () { t.getComments('gl-2'); }, 'gitlab_get_issue_comments');
+    });
+
+    test('GitLab page methods reject invalid JSON', function () {
+        var trackers = loadTrackers({
+            gitlab_search_issues: recorder('gitlab_search_issues', 'not json')
+        });
+        assertPageError(function () { trackers.createTracker(GL_CONFIG).search('login'); }, 'gitlab_search_issues');
+    });
+
+    test('GitLab page methods materialize host values exposing toJSON', function () {
+        var trackers = loadTrackers({
+            gitlab_search_issues: recorder('gitlab_search_issues', { toJSON: function () { return [GITLAB_TICKET]; } }),
+            gitlab_get_issue_comments: recorder('gitlab_get_issue_comments', { toJSON: function () {
+                return [{ id: 1, body: 'hello' }];
+            } })
+        });
+        var t = trackers.createTracker(GL_CONFIG);
+        assert.equal(t.search('login')[0].key, 'acme-group/widgets#2');
+        assert.equal(t.getComments('gl-2')[0].body, 'hello');
     });
 
     test('assignTo routes to gitlab_assign_issue with the username', function () {

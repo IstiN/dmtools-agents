@@ -98,6 +98,18 @@ suite('ticketKeyShapes: gitlabIssueNumberIn', function () {
         assert.equal(shapes.isGitLabRouterKey(null), false);
     });
 
+    test('GitLab shape gate agrees with the issue-number parser', function () {
+        var shapes = loadTicketKeyShapes();
+        ['gl-2', 'GL-7', 'acme/widgets#12', 'group/subgroup/project#12', '#12', '12'].forEach(function (key) {
+            assert.equal(shapes.isGitLabKeyShape(key), true);
+            assert.notEqual(shapes.gitlabIssueNumberIn(key), null);
+        });
+        ['PROJ-123', 'gh-2', 'group//project#12', 'group/sub/project#x', '', null].forEach(function (key) {
+            assert.equal(shapes.isGitLabKeyShape(key), false);
+            assert.equal(shapes.gitlabIssueNumberIn(key), null);
+        });
+    });
+
 });
 
 // ── shapeSources (extraction alternation derivation) ─────────────────────────
@@ -107,10 +119,8 @@ suite('ticketKeyShapes: shapeSources', function () {
     test('yields anchored-stripped fragments in list order', function () {
         var shapes = loadTicketKeyShapes();
         var sources = shapes.shapeSources();
-        assert.equal(sources.length, shapes.GITHUB_KEY_SHAPES.length);
-        // gh-N before bare N — extraction must prefer the router key so the
-        // original case survives (extractTicketKeyFromJql contract).
-        assert.equal(sources[0], 'gh-\\d+');
+        assert.equal(sources.length, shapes.GITLAB_KEY_SHAPES.length + shapes.GITHUB_KEY_SHAPES.length);
+        assert.equal(sources[0], 'gl-\\d+');
         assert.equal(sources[sources.length - 1], '\\d+');
         for (var i = 0; i < sources.length; i++) {
             assert.equal(/^\^|\$$/.test(sources[i]), false, 'fragment ' + i + ' still anchored: ' + sources[i]);
@@ -122,6 +132,8 @@ suite('ticketKeyShapes: shapeSources', function () {
         var re = new RegExp('(' + shapes.shapeSources().join('|') + ')', 'i');
         assert.equal(re.exec('key = gh-12')[1], 'gh-12');
         assert.equal(re.exec('key = acme/w#12')[1], 'acme/w#12');
+        assert.equal(re.exec('key = 123/sub/project#12')[1], '123/sub/project#12');
+        assert.equal(re.exec('key = gl-12')[1], 'gl-12');
         assert.equal(re.exec('key = #12')[1], '#12');
         assert.equal(re.exec('key = 12')[1], '12');
         assert.equal(re.exec('key = gh-abc'), null);

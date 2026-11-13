@@ -38,7 +38,9 @@
  * falls back to close-on-done + status-as-label over the basic issue tools,
  * while search/assignTo throw a clear error. gitlab covers
  * tickets/search/comments/status/assign/create and labels through the
- * canonical gitlab_* issue tools (Java runtime); keys follow the
+ * canonical gitlab_* issue tools, which require a runtime that provides them.
+ * GitLab search and comment tools must return arrays; other page shapes fail
+ * explicitly until the runtime's response contract is available. Keys follow the
  * gl-N router convention or the composite namespace/project#N form (nested
  * subgroups supported).
  *
@@ -914,6 +916,7 @@ function createTracker(config, customParams) {
         owner: owner,
         repo: repo,
         ticketKeyShapes: ticketKeyShapes,
+        parseJson: _parseJson,
         normalizeTicket: normalizeTicket,
         ticketPage: _ticketPage,
         commentPage: _commentPage,

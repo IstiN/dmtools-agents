@@ -116,6 +116,28 @@ suite('validateInputJql: extractTicketKeyFromJql — GitLab router keys', functi
         assert.equal(v.isValidTicketKey('gl-'), false);
     });
 
+    test('nested composite keys are accepted and extracted without changing their case', function() {
+        var v = makeValidator();
+        ['group/subgroup/project#12', 'group-2/Sub/Project#12', '123/sub/project#12'].forEach(function(key) {
+            assert.equal(v.isValidTicketKey(key), true);
+            assert.doesNotThrow(function() { v.validateTicketKeyFormat(key); });
+            assert.equal(v.extractTicketKeyFromJql('key = ' + key), key);
+            assert.equal(v.extractTicketKeyFromJql('key in (' + key + ')'), key);
+        });
+        assert.equal(v.isValidTicketKey('group//project#12'), false);
+        assert.equal(v.isValidTicketKey('group/sub/project#12 OR 1=1'), false);
+    });
+
+    test('nested composite key reaches the tracker during ticket validation', function() {
+        var v = makeValidator();
+        var key = 'group/subgroup/project#12';
+        var tracker = { getIssue: function(received) {
+            assert.equal(received, key);
+            return { key: received };
+        } };
+        assert.equal(v.validateAndRequireTicket({ inputJql: 'key = ' + key }, tracker).key, key);
+    });
+
 });
 
 suite('validateInputJql: validateTicketKeyFormat — GitHub key shapes (gh-770)', function() {
@@ -169,6 +191,7 @@ suite('validateInputJql: derives GitHub key shapes from ticketKeyShapes (gh-770)
     test('gate consults the shared isGitHubKeyShape (no local copy)', function() {
         var rejectingShapes = {
             isGitHubKeyShape: function() { return false; },
+            isGitLabKeyShape: function() { return false; },
             shapeSources: function() { return []; }
         };
         var v = makeValidator(undefined, rejectingShapes);
@@ -176,6 +199,7 @@ suite('validateInputJql: derives GitHub key shapes from ticketKeyShapes (gh-770)
 
         var acceptingShapes = {
             isGitHubKeyShape: function() { return true; },
+            isGitLabKeyShape: function() { return false; },
             shapeSources: function() { return []; }
         };
         var v2 = makeValidator(undefined, acceptingShapes);
@@ -185,6 +209,7 @@ suite('validateInputJql: derives GitHub key shapes from ticketKeyShapes (gh-770)
     test('extraction alternation is built from the shared shapeSources', function() {
         var ghOnlyShapes = {
             isGitHubKeyShape: function(key) { return /^gh-\d+$/i.test(String(key)); },
+            isGitLabKeyShape: function() { return false; },
             shapeSources: function() { return ['gh-\\d+']; }
         };
         var v = makeValidator(undefined, ghOnlyShapes);
@@ -432,4 +457,3 @@ suite('validateInputJql: Azure DevOps ticket ids and WIQL (agents#804)', functio
         assert.equal(String(adoCalls[0].id), '1839749');
     });
 });
-

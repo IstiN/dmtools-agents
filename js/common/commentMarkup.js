@@ -6,7 +6,7 @@
  * GitHub Issues (key shapes `gh-12`, `owner/repo#12`, `#12`, bare `12` —
  * owned by common/ticketKeyShapes.js) those comments render as noise. These helpers render each construct in
  * the flavor of the ticket's tracker: Jira wiki for Jira keys, Markdown
- * for GitHub keys — with an explicit override via
+ * for GitHub and GitLab keys — with an explicit override via
  * `customParams.commentMarkup` (`'jira' | 'markdown'`, `'github'` is
  * accepted as an alias for `'markdown'`).
  *
@@ -23,15 +23,21 @@
 
 var ticketKeyShapes = require('./ticketKeyShapes.js');
 
-function flavorForTicket(ticketKey, customParams) {
+function explicitFlavor(customParams) {
     var explicit = customParams && customParams.commentMarkup;
     if (typeof explicit === 'string' && explicit) {
         var norm = explicit.toLowerCase();
         if (norm === 'markdown' || norm === 'github') return 'markdown';
         if (norm === 'jira') return 'jira';
     }
+    return null;
+}
+
+function flavorForTicket(ticketKey, customParams) {
+    var explicit = explicitFlavor(customParams);
+    if (explicit) return explicit;
     // Key shapes come from the single owner (gh-770): common/ticketKeyShapes.js.
-    if (ticketKeyShapes.isGitHubKeyShape(ticketKey)) return 'markdown';
+    if (ticketKeyShapes.isGitHubKeyShape(ticketKey) || ticketKeyShapes.isGitLabKeyShape(ticketKey)) return 'markdown';
     return 'jira';
 }
 

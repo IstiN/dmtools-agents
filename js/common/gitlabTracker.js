@@ -28,11 +28,11 @@ function createGitlabTracker(options) {
     }
 
     function search(query) {
-        return options.ticketPage(gitlab_search_issues({
+        return options.ticketPage(requireArrayPage(gitlab_search_issues({
             query: query,
             workspace: owner || undefined,
             repository: repo || undefined
-        }));
+        }), 'gitlab_search_issues', options.parseJson));
     }
 
     function withIssueArgs(key, values) {
@@ -44,7 +44,15 @@ function createGitlabTracker(options) {
     }
 
     function getComments(key) {
-        return options.commentPage(gitlab_get_issue_comments(issueArgs(key)));
+        return options.commentPage(requireArrayPage(gitlab_get_issue_comments(issueArgs(key)), 'gitlab_get_issue_comments', options.parseJson));
+    }
+
+    function requireArrayPage(raw, tool, parseJson) {
+        var page = parseJson(raw);
+        if (!Array.isArray(page)) {
+            throw new Error('trackers: ' + tool + ' returned an unexpected page; expected an array');
+        }
+        return page;
     }
 
     function addLabel(key, label) {

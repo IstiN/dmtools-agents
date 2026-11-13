@@ -48,6 +48,13 @@ var GITHUB_KEY_CAPTURE_SHAPES = [
     /^(\d+)$/
 ];
 
+var GITLAB_KEY_SHAPES = [
+    /^gl-\d+$/i,
+    /^(?:[\w.-]+\/)+[\w.-]+#\d+$/,
+    /^#\d+$/,
+    /^\d+$/
+];
+
 // GitLab twin of the capture list: gl-N is the GitLab router key convention,
 // and the composite form allows nested namespaces (group/subgroup/project#12)
 // because GitLab project paths can be arbitrarily deep.
@@ -98,6 +105,14 @@ function isGitLabRouterKey(key) {
     return /^gl-\d+$/i.test(String(key == null ? '' : key).trim());
 }
 
+function isGitLabKeyShape(key) {
+    var k = String(key == null ? '' : key).trim();
+    for (var i = 0; i < GITLAB_KEY_SHAPES.length; i++) {
+        if (GITLAB_KEY_SHAPES[i].test(k)) return true;
+    }
+    return false;
+}
+
 /**
  * Parse the numeric GitLab issue IID out of any GitLab-shaped key
  * (gl-N, group/subgroup/project#N, #N, N).
@@ -123,8 +138,9 @@ function gitlabIssueNumberIn(key) {
  */
 function shapeSources() {
     var out = [];
-    for (var i = 0; i < GITHUB_KEY_SHAPES.length; i++) {
-        out.push(GITHUB_KEY_SHAPES[i].source.replace(/^\^/, '').replace(/\$$/, ''));
+    var shapes = GITLAB_KEY_SHAPES.concat(GITHUB_KEY_SHAPES);
+    for (var i = 0; i < shapes.length; i++) {
+        out.push(shapes[i].source.replace(/^\^/, '').replace(/\$$/, ''));
     }
     return out;
 }
@@ -184,7 +200,9 @@ function inputFolderCandidates(explicitFolder, ticketKey) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         GITHUB_KEY_SHAPES: GITHUB_KEY_SHAPES,
+        GITLAB_KEY_SHAPES: GITLAB_KEY_SHAPES,
         isGitHubKeyShape: isGitHubKeyShape,
+        isGitLabKeyShape: isGitLabKeyShape,
         githubIssueNumberIn: githubIssueNumberIn,
         gitlabIssueNumberIn: gitlabIssueNumberIn,
         isGitLabRouterKey: isGitLabRouterKey,
