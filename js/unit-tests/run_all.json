@@ -190,6 +190,7 @@
         "js/unit-tests/test_recoverStuckDevelopment.js",
         "js/unit-tests/test_recoverStuckTestCase.js",
         "js/unit-tests/test_redConvergence.js",
+        "js/unit-tests/test_redVerdict.js",
         "js/unit-tests/test_redirectToRepoAgent.js",
         "js/unit-tests/test_releaseArtefacts.js",
         "js/unit-tests/test_releaseKicker.js",
