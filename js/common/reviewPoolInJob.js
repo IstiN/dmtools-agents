@@ -100,8 +100,9 @@ function buildSpecialistPrompt(skill, roundCtx) {
             : '') +
         '- Candidates contract: `agents/instructions/pr_review/base/output_rules.md`',
         '  (the candidates-only output section — your ONLY output)',
-        '- Diff under review: `input/' + (roundCtx.ticketKey || '') + '/pr_new_hunks.txt`',
-        '  (plus the repo checkout itself — read any file you need)',
+        '- Diff under review: `input/' + (roundCtx.ticketKey || '') + '/pr_new_hunks.txt` —',
+        '  AUTHORITATIVE and pre-verified by the machine: review its content as',
+        '  given (the repo checkout provides the surrounding files)',
         '',
         '## Round context',
         '',
