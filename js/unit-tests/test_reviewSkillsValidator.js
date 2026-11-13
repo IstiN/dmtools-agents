@@ -24,7 +24,11 @@ var FIXTURES = 'js/unit-tests/_fixtures/review-skills';
 // node is not on the dmtools runner's command whitelist; bash is — the
 // validator runs through bash with the exit code echoed on the last line.
 function runValidator(repoRoot) {
-    var raw = cli_execute_command({ command: "bash -lc 'node " + VALIDATOR + ' ' + repoRoot + " 2>&1; echo EXIT=$?'" });
+    return runValidatorArgs(repoRoot);
+}
+
+function runValidatorArgs(validatorArgs) {
+    var raw = cli_execute_command({ command: "bash -lc 'node " + VALIDATOR + ' ' + validatorArgs + " 2>&1; echo EXIT=$?'" });
     var text = String(raw || '');
     var match = /EXIT=(\d+)/.exec(text);
     return { exit: match ? parseInt(match[1], 10) : -1, output: text };
@@ -80,5 +84,17 @@ suite('validate-review-skills — the gh-1406 §8 CI gate wiring', function() {
         var r = runValidator('js/unit-tests/_fixtures');
         assert.equal(r.exit, 0, 'validator output:\n' + r.output);
         assert.ok(r.output.indexOf('0 reviewer(s) validated') !== -1);
+    });
+
+    test('an unknown flag is never taken as the positional repoRoot (ranked-digest pickup)', function() {
+        // pre-fix: "--future-flag" consumed the repoRoot slot and the real
+        // path was dropped — the gate silently validated a nonexistent tree
+        // and exited 0 with an empty pool.
+        var r = runValidatorArgs('--future-flag ' + FIXTURES + '/valid');
+        assert.equal(r.exit, 0, 'validator output:\n' + r.output);
+        assert.ok(r.output.indexOf('reviewer "legal" (repo)') !== -1,
+            'the positional repoRoot after an unknown flag must still validate:\n' + r.output);
+        assert.ok(r.output.indexOf('ignoring unknown flag "--future-flag"') !== -1,
+            'the unknown flag is named on stderr:\n' + r.output);
     });
 });

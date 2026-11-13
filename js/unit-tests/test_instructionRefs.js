@@ -197,29 +197,58 @@ function isLegacy(dir) { return LEGACY_DIRS.indexOf(dir) !== -1; }
 // boolean `true` in the dmtools host, `{exists: bool}` in the node coverage
 // harness): R13 must not ride collectInstructionFiles, whose descent guard is
 // shape-sensitive, so R2/R3's historical behavior here is left untouched.
+// ─ pr-1465 CRAP-split: the v1-shim index decomposed into pinned pure helpers ─
+
+// gh-1244 host-bridge parity: file_exists is boolean `true` in the dmtools
+// host but `{exists: bool}` in the node coverage harness — a directory check
+// must accept both shapes.
+function isTrueishExists(ex) {
+    if (ex === true) return true;
+    if (!ex || typeof ex !== 'object') return false;
+    return ex.exists === true;
+}
+
+// A shim opens with HTML-comment banner lines; the banner is everything
+// before the first markdown heading (a file without one falls back to a
+// 400-char window).
+function bannerOf(txt) {
+    var cut = String(txt).indexOf('\n# ');
+    return txt.slice(0, cut === -1 ? 400 : cut);
+}
+
+// The live target path(s) a frozen v1 shim's BANNER names — [] when the text
+// is not a shim (no DEPRECATED v1 shim marker) or names no targets.
+function shimBannerPaths(txt) {
+    if (txt === null || txt === undefined || String(txt).indexOf('DEPRECATED v1 shim') === -1) return [];
+    var paths = [];
+    var m, livePat = /((?:instructions|prompts)\/[A-Za-z0-9_\-./]+\.(?:md|js))/g;
+    while ((m = livePat.exec(bannerOf(txt))) !== null) paths.push(m[1]);
+    return paths;
+}
+
+// file_list shape normalization + the dotfile skip: repo-relative entry
+// names in host order, hidden entries dropped.
+function listRelEntries(dir) {
+    var out = file_list(fsPath(dir));
+    if (typeof out === 'string') out = JSON.parse(out);
+    var entries = (out && out.entries) || [];
+    return entries.map(function (e) {
+        var s = String(e).replace(/\\/g, '/');
+        return s.slice(s.lastIndexOf('/') + 1);
+    }).filter(function (n) { return n[0] !== '.'; });
+}
+
 function v1ShimIndex() {
     var index = {};
     function walk(dir) {
-        var out = file_list(fsPath(dir));
-        if (typeof out === 'string') out = JSON.parse(out);
-        var entries = (out && out.entries) || [];
-        for (var i = 0; i < entries.length; i++) {
-            var s = String(entries[i]).replace(/\\/g, '/');
-            var rel = dir + '/' + s.slice(s.lastIndexOf('/') + 1);
-            if (rel.slice(rel.lastIndexOf('/') + 1)[0] === '.') continue;
-            var ex = file_exists({ path: s });
-            var isDir = ex === true || (ex && typeof ex === 'object' && ex.exists === true);
-            if (/\.md$/.test(rel)) {
-                var txt = readText(rel);
-                if (txt === null || String(txt).indexOf('DEPRECATED v1 shim') === -1) continue;
-                var bodyCut = txt.indexOf('\n# ');
-                var banner = txt.slice(0, bodyCut === -1 ? 400 : bodyCut);
-                var m, livePat = /((?:instructions|prompts)\/[A-Za-z0-9_\-./]+\.(?:md|js))/g;
-                while ((m = livePat.exec(banner)) !== null) index[m[1]] = rel;
-            } else if (isDir) {
+        listRelEntries(dir).forEach(function (name) {
+            var rel = dir + '/' + name;
+            if (isTrueishExists(file_exists({ path: fsPath(rel) }))) {
                 walk(rel);
+            } else if (/\.md$/.test(rel)) {
+                shimBannerPaths(readText(rel)).forEach(function (live) { index[live] = rel; });
             }
-        }
+        });
     }
     walk('instructions');
     return index;

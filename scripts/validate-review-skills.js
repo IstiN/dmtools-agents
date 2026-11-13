@@ -74,6 +74,12 @@ function parseArgs(argv) {
         else if (a === '--repo') out.repo = argv[++i];
         else if (a === '--config') out.config = argv[++i];
         else if (a === '-h' || a === '--help') out.help = true;
+        else if (a.indexOf('-') === 0) {
+            // An unknown flag is never the positional repoRoot: treating it
+            // as one silently validated a nonexistent tree (exit 0, empty
+            // pool). Name it loudly on stderr; keep the gate non-fatal.
+            console.error('validate-review-skills: ignoring unknown flag "' + a + '"');
+        }
         else if (out.repoRoot === '.') out.repoRoot = a;
     }
     return out;
