@@ -33,7 +33,7 @@ flowchart TD
 
 ### [4] `./agents/instructions/pr_review/base/input_context.md`
 
-# PR Review Input Context — reading order (base contract, gh-1406)
+# PR Review Input Context — reading order (base contract)
 
 Reviewer-agnostic: EVERY reviewer leg reads the same PR context. Read files
 that exist in `input/` locally — do NOT re-fetch via dmtools.
@@ -76,7 +76,7 @@ it changed and verify against requirements.
 ## Specialist legs — `reviewer_leg.md` present
 
 When `input/TICKET/reviewer_leg.md` exists, this run is a SPECIALIST leg of
-the gh-1406 reviewer pool: it is ONE reviewer's focused pass, not the
+the reviewer pool: it is ONE reviewer's focused pass, not the
 posting review. The file names this leg's reviewer, its output contract and
 its round. A specialist:
 
@@ -98,10 +98,10 @@ contract below applies unchanged.
 
 ### [5] `./agents/instructions/pr_review/base/output_rules.md`
 
-# PR Review Output Rules — the machine contract (base, gh-1406)
+# PR Review Output Rules — the machine contract (base)
 
 Reviewer-agnostic: every reviewer leg writes the same structured review
-artifacts; the machine parses them (gh-1350/1351). The lens may add
+artifacts; the machine parses them. The lens may add
 reviewer-specific files but never changes this contract.
 
 ```mermaid
@@ -141,7 +141,7 @@ flowchart TD
   resolved `reviewPolicy` — the census is the machine's source of truth;
   keep it accurate.
 
-## The candidates-only contract (specialist legs, gh-1471)
+## The candidates-only contract (specialist legs)
 
 A SPECIALIST leg (input/TICKET/reviewer_leg.md present — see
 input_context.md) writes ONE file and nothing else:
@@ -175,7 +175,7 @@ input_context.md) writes ONE file and nothing else:
 - Severity discipline still applies: raise only what the lens hunt
   justifies; an empty candidates list is a valid answer (the leg completes
   with zero findings).
-- The candidates pass the gh-1403 filter like every other finding (fresh
+- The candidates pass the finding filter like every other finding (fresh
   verification, weighted retention for high-weight reviewers) and the
   posting leg merges them into ONE review — a specialist never posts a
   second review.
@@ -185,10 +185,10 @@ input_context.md) writes ONE file and nothing else:
 
 ### [6] `./agents/instructions/pr_review/base/registry_protocol.md`
 
-# Finding-identity registry protocol (base contract, gh-1406)
+# Finding-identity registry protocol (base contract)
 
 Reviewer-agnostic: every reviewer leg answers the same previously-raised
-findings registry (gh-1332) before raising anything new. This protocol is a
+findings registry before raising anything new. This protocol is a
 factory invariant — the machine parses the dispositions.
 
 ## 9. Previously raised findings — the finding-identity registry
@@ -248,7 +248,7 @@ flowchart TD
 
 ### [8] `./agents/instructions/pr_review/base/few_shots_format.md`
 
-# pr_review.json shape — format contract (base, gh-1406)
+# pr_review.json shape — format contract (base)
 
 Reviewer-agnostic: the structured answer of every reviewer leg carries the
 same shape. The worked examples live in each reviewer's few-shots file; this
@@ -312,7 +312,7 @@ voice live in each reviewer's few-shots file.
 
 ### [9] `./agents/instructions/pr_review/generalist/lens.md`
 
-# Generalist Review Lens (gh-1406 reviewer pool — the base reviewer)
+# Generalist Review Lens (the base reviewer)
 
 The generalist lens: full-diff review across every dimension. The reviewer-agnostic
 contract (input reading order, output rules, verdict rules, registry protocol,

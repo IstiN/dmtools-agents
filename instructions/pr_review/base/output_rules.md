@@ -1,7 +1,7 @@
-# PR Review Output Rules — the machine contract (base, gh-1406)
+# PR Review Output Rules — the machine contract (base)
 
 Reviewer-agnostic: every reviewer leg writes the same structured review
-artifacts; the machine parses them (gh-1350/1351). The lens may add
+artifacts; the machine parses them. The lens may add
 reviewer-specific files but never changes this contract.
 
 ```mermaid
@@ -41,7 +41,7 @@ flowchart TD
   resolved `reviewPolicy` — the census is the machine's source of truth;
   keep it accurate.
 
-## The candidates-only contract (specialist legs, gh-1471)
+## The candidates-only contract (specialist legs)
 
 A SPECIALIST leg (input/TICKET/reviewer_leg.md present — see
 input_context.md) writes ONE file and nothing else:
@@ -75,7 +75,7 @@ input_context.md) writes ONE file and nothing else:
 - Severity discipline still applies: raise only what the lens hunt
   justifies; an empty candidates list is a valid answer (the leg completes
   with zero findings).
-- The candidates pass the gh-1403 filter like every other finding (fresh
+- The candidates pass the finding filter like every other finding (fresh
   verification, weighted retention for high-weight reviewers) and the
   posting leg merges them into ONE review — a specialist never posts a
   second review.

@@ -1,4 +1,4 @@
-# PR Review Input Context — reading order (base contract, gh-1406)
+# PR Review Input Context — reading order (base contract)
 
 Reviewer-agnostic: EVERY reviewer leg reads the same PR context. Read files
 that exist in `input/` locally — do NOT re-fetch via dmtools.
@@ -41,7 +41,7 @@ it changed and verify against requirements.
 ## Specialist legs — `reviewer_leg.md` present
 
 When `input/TICKET/reviewer_leg.md` exists, this run is a SPECIALIST leg of
-the gh-1406 reviewer pool: it is ONE reviewer's focused pass, not the
+the reviewer pool: it is ONE reviewer's focused pass, not the
 posting review. The file names this leg's reviewer, its output contract and
 its round. A specialist:
 

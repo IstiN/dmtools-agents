@@ -1,4 +1,4 @@
-# Generalist Review Lens (gh-1406 reviewer pool — the base reviewer)
+# Generalist Review Lens (the base reviewer)
 
 The generalist lens: full-diff review across every dimension. The reviewer-agnostic
 contract (input reading order, output rules, verdict rules, registry protocol,

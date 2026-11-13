@@ -1,4 +1,4 @@
-# pr_review.json shape — format contract (base, gh-1406)
+# pr_review.json shape — format contract (base)
 
 Reviewer-agnostic: the structured answer of every reviewer leg carries the
 same shape. The worked examples live in each reviewer's few-shots file; this

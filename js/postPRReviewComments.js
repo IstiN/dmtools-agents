@@ -1,11 +1,15 @@
 /**
- * Post PR Review Comments Action — reads outputs/pr_review.json, posts the
- * ONE review (general + inline threads), stamps the gh-807 verdict record +
- * gh-1332 registry, applies the ticket outcome. gh-1471: this action is
- * also the reviewer pool's execution layer — the specialist legs'
- * candidates-only post (markers, never a review) and the posting leg's
- * round aggregation point (merge → filter → census → ONE review).
- * gh-926: action() is a thin executor over a pipeline of named steps; pure
+ * Post PR Review Comments Action — posts the assembled review.
+ * The review payload is read from outputs/pr_review.json (one general
+ * comment + inline threads); the machine verdict record + the finding
+ * registry are stamped, and the ticket outcome is applied.
+ * applies the ticket outcome. When the reviewer pool is enabled this action
+ * is also the round's aggregation point: the in-job specialist sessions'
+ * candidates files merge into the census (dedup, weighted retention,
+ * severity escalation), the finding filter verifies rework-tier candidates,
+ * the completed specialists' PASS markers are stamped (the merge gate's
+ * currency), and ONE pool-outcome marker + the required-reviewer hold are
+ * posted. action() is a thin executor over named pipeline steps; pure
  * decisions live in unit-tested helpers, side-effecting steps in
  * single-purpose functions.
  */

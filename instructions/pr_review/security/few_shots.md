@@ -1,4 +1,4 @@
-# Security reviewer — worked examples (gh-1406 pool)
+# Security reviewer — worked examples
 
 Follow the shared shape contract (`instructions/pr_review/base/few_shots_format.md`);
 these examples show the security lens's evidence discipline.

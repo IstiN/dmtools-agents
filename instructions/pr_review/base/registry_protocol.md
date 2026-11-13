@@ -1,7 +1,7 @@
-# Finding-identity registry protocol (base contract, gh-1406)
+# Finding-identity registry protocol (base contract)
 
 Reviewer-agnostic: every reviewer leg answers the same previously-raised
-findings registry (gh-1332) before raising anything new. This protocol is a
+findings registry before raising anything new. This protocol is a
 factory invariant — the machine parses the dispositions.
 
 ## 9. Previously raised findings — the finding-identity registry
