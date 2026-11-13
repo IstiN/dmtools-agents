@@ -661,6 +661,10 @@ function makeSmAgent(opts) {
             // gh-1369: the terminal-PR guard — pure leaf, loaded real.
             './common/prTerminalState.js': loadModule('js/common/prTerminalState.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
+            './sm/redVerdict.js': loadModule('js/sm/redVerdict.js', makeRequire({
+                '../common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
+                '../common/prTerminalState.js': loadModule('js/common/prTerminalState.js', makeRequire({}), {})
+            }), {}),
             './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
             './common/planAdvance.js': loadModule('js/common/planAdvance.js', makeRequire({
                 './issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {})
@@ -4899,7 +4903,10 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
                 // Failed-run link (owner 2026-10-01): the RED run on this
                 // exact head must land in the report; the green one must not.
                 workflowApiRuns: [
+                    // run_attempt 2: the fa #2148 flake rerun was already
+                    // spent on this green→red sha — this red is a real verdict.
                     { id: 601, event: 'workflow_dispatch', head_sha: 'sha72', status: 'completed',
+                      run_attempt: 2,
                       conclusion: 'failure', html_url: 'https://github.com/a/b/actions/runs/601',
                       created_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:05:00Z' },
                     { id: 600, event: 'workflow_dispatch', head_sha: 'sha72', status: 'completed',

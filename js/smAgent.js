@@ -170,7 +170,7 @@ var trackersModule = require('./common/trackers.js');
 var configModule = require('./config.js');
 // gh-807: machine review-verdict records + their reconciliation logic.
 var reviewVerdictsModule = require('./common/reviewVerdicts.js');
-var redConvergenceModule = require('./common/redConvergence.js');
+var redVerdictModule = require('./sm/redVerdict.js');
 // Issue plans (intake on GitHub): the planning knobs and the advance_plan
 // localAction (rule plan-advance).
 var issuePlanModule = require('./common/issuePlan.js');
@@ -2158,7 +2158,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // the label and re-reviews the current head. The fresh verdict
             // carries the head's commit_id, so the stale query never
             // matches it again (convergent, no loop).
-            if (armReviewOnlyMachineMerges(effectiveRepoInfo, ticket, key, machineAuthor)) continue;
+            if (armReviewOnlyMachineMerges(effectiveRepoInfo, ticket, key,
+                machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig))) continue;
             try {
                 githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'agent:review');
                 console.log('  ✅ ' + key + ' agent:review re-armed (stale CHANGES_REQUESTED on PR #' + ticket.prNumber + ')');
@@ -5280,331 +5281,16 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         if (rule.localAction === 'fail_validation' || sweepFailure) {
-            // Validation CI went red: unarm, tell the PR, and — MACHINE PRs
-            // only — requeue the machine loop by re-arming agent:rework (the
-            // linked issue carries it; an unlinked machine PR gets the
-            // PR-anchored arm). Owner rule 2026-09-21: auto-REWORK is
-            // machine-author-ONLY. Accounts other than the machine login are
-            // guests: they get review + validation and no rework arm — a
-            // guest "fixes #<n>" body must not arm rework on a machine ticket.
-            // gh-757 (live fa#1286, 2026-10-06, vendor vabhzw17eg2qu4m9-bit):
-            // REVERTS the 2026-10-04 guest validation-red arm — that
-            // directive spent an AI rework leg on a vendor PR (the very burn
-            // the 2026-09-21 rule exists to prevent). Guest recovery = the
-            // #1179 validation_failed park + the #633 RESET probe (the guest
-            // pushes a fix, the park clears, validation re-runs);
-            // rework-on-label still honours a MANUAL agent:rework label from
-            // a human on any PR.
+            // Validation CI went red — the whole verdict (gh-755 cancelled
+            // skip, fa #2148 flake rerun, unarm/report/red-count markers,
+            // machine-only rework arm, guest park) lives in js/sm/redVerdict.js
+            // (dmtools-agents#1459 decomposition).
             try {
-                // gh-755 (owner directive 2026-10-05): CANCELLED is never
-                // a verdict. The query matched `checks: red` on a rollup
-                // snapshot — before any verdict action (unarm, report,
-                // guest park, rework arm), re-read the head's check
-                // rollup: if the red dissolves into cancelled-only (no
-                // FAILURE/TIMED_OUT on the LATEST run of any
-                // non-bookkeeping context), this is NO verdict — skip and
-                // wait for the rerun-cancelled-checks remedy to re-stamp
-                // the contexts. The ai_validating arm STAYS on: the rerun
-                // re-stamps under it and the verdict rules consume the
-                // fresh word next tick. Re-work legs burned on
-                // cancelled-only heads (live dmtools-agents #752/#753,
-                // kicker sm-liveness + docs-freshness after the 15m
-                // window) are exactly the token burn this directive
-                // forbids.
-                var fvHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
-                if (fvHead && !headHasRealFailure(effectiveRepoInfo, fvHead)) {
-                    console.log('  ⏭️  ' + key + ' red is cancelled-only — no verdict (gh-755):' +
-                                ' skipping the fail path, waiting on the rerun-cancelled-checks remedy');
-                    continue;
-                }
-                try {
-                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
-                } catch (e3) { /* absent label is fine */ }
-                var machineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
-                // gh-728: the knob is a LIST — a direct single-login string
-                // compare here parked bot PRs (github-actions[bot] ≠
-                // 'ai-teammate') as guests forever (live fa PR #1249).
-                var isMachinePr = machineAuthorModule.isMachineAuthored(
-                    ticket, machineAuthor, effectiveRepoInfo.owner);
-                // gh-806 AC1: consult the rework in-flight latch before ANY
-                // rework arm — a leg already flying for this (pr, head) owns
-                // the fix; re-arming stacked 9 arms / 8 dead legs (fa #1428).
-                // Guests never reach an arm branch — no consult for them.
-                var reworkLatched = isMachinePr
-                    ? consultReworkLatch(key, ticket, effectiveRepoInfo).latched
-                    : false;
-                var linked = null;
-                if (isMachinePr) {
-                    try {
-                        var prRaw = github_get_pr({
-                            workspace: effectiveRepoInfo.owner,
-                            repository: effectiveRepoInfo.repo,
-                            pullRequestId: ticket.prNumber
-                        });
-                        var prObj = typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
-                        var m = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(prObj.body || ''));
-                        if (m) linked = parseInt(m[1], 10);
-                    } catch (e4) { console.warn('  ⚠️ linked-issue lookup failed: ' + (e4.message || e4)); }
-                    // Fallback (live: fa pr-750 — body said "Fixes the Play Store
-                    // rejection (gh-746)", no closing keyword): machine PRs carry
-                    // the issue in the branch name (ai/gh-<n>). Guest branches
-                    // get nothing — issue RESOLUTION stays machine-only, and
-                    // gh-757: a guest red never arms rework anywhere (park only).
-                    if (!linked && ticket.branch) {
-                        var bm = /(?:^|\/)gh-(\d+)$/i.exec(String(ticket.branch));
-                        if (bm) linked = parseInt(bm[1], 10);
-                    }
-                    // gh-1369: the SAME github_get_pr read above carries the
-                    // terminal-state evidence — a PR that merged while
-                    // validation stayed red (the #1368 race) must not
-                    // re-arm rework on the merged head below. Fail-open:
-                    // prObj without state keeps the legacy arm semantics —
-                    // AND a github_get_pr THROW leaves prObj undefined (the
-                    // var only assigns inside the try): null-guard it so the
-                    // probe failure degrades to false (legacy re-arm) instead
-                    // of a TypeError that aborts the item's handling
-                    // (gh-1369 rework round 2).
-                    var fvPrTerminal = prObj
-                        ? prTerminalStateModule.isTerminalPrState(prObj.state, prObj.merged) : false;
-                }
-                // pr_approved is STICKY (owner rule 2026-09: no re-review
-                // after the first approval — review tokens are the budget).
-                // Validation red post-approval re-arms rework only; the
-                // fixed head re-validates via validate-armed and merges —
-                // the reviewer never re-fires. Pre-review red also skips
-                // this block: no approval exists to unarm. (Supersedes the
-                // fa pr-750 unarm fix: the validate↔fail burn it patched is
-                // now closed by the latch itself.)
-                // Failed-run link (owner 2026-10-01): the report says CI
-                // went red — link the exact red run(s) on this head so the
-                // reader (a guest especially) never hunts the runs tab.
-                // Graceful '' on any miss (no head SHA, empty run list,
-                // tool error): the report posts without the link and
-                // NOTHING else in this action changes.
-                // ONE github_list_workflow_runs fetch feeds BOTH the
-                // failed-run link line (below) and the gh-832
-                // consecutive-red streak — the list is the durable per-head
-                // verdict record; no markers, no second fetch.
-                var failCiWf = rule.ciWorkflow ||
-                    ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
-                var failRunList = dispatchedValidationRuns(effectiveRepoInfo, failCiWf);
-                var failedRunsLine = failedRunLinksFromList(failRunList,
-                    (ticket.pr && ticket.pr.headSha) || ticket.headSha);
-                // ── COMPOSITION #703 (review #703 blocker): the caps live on
-                // THIS red, in one report — the red-head marker bounds the
-                // RE-VALIDATION loop (any PR: a head with redHeadCap recorded
-                // reds is never re-armed — only a genuinely NEW head re-enters
-                // validation) and the empty-lap cap bounds the MACHINE rework
-                // loop (same-head red = a lap that pushed nothing — at
-                // emptyLapMax the machine arm is withheld and the owner is
-                // escalated to). #701's guest-rework cap is gone with the
-                // guest arm itself (gh-757: auto-rework is machine-only).
-                //
-                // One comment read per fail (review #703 💡): all marker
-                // kinds — red-head counts, empty laps — parse from a SINGLE
-                // github_get_pr_comments payload.
-                var failMarks = failMarkerState(effectiveRepoInfo, ticket.prNumber);
-                // Red-head history (owner directive 2026-10-04: red yields
-                // the slot): append the per-head counter marker to the
-                // report — the validate_pr arm side re-reads these markers
-                // and refuses to re-arm a head that already went red
-                // redHeadCap times (default 3). Recording is UNCONDITIONAL
-                // (the skip alone is toggleable via jobParams.redHeadSkip
-                // === false): flipping the escape hatch back on later finds
-                // the full history already on the PR.
-                var redCap = redHeadCapOf(RUN_JOB_PARAMS);
-                var failHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
-                var priorReds = failHead ? (failMarks.redHeads[failHead] || 0) : 0;
-                var redLine = redHeadMarkerLine(priorReds, failHead, redCap);
-                // gh-832 CONVERGENCE (live fa #1453, 2026-10-10: 12
-                // dispatch→red→unarm→rearm cycles on an unchanged approved
-                // head — no park, no comment, window idle 3.5h): the
-                // consecutive-red streak is DERIVED from the head's own
-                // dispatched run list (fetched above — the durable per-head
-                // verdict record; a green run breaks the streak, a head move
-                // resets it by construction, cancelled runs are never
-                // verdicts). At jobParams.redHeadParkCap (default 2) the PR
-                // PARKS validation_failed — validate-armed's query excludes
-                // the label, so NO third dispatch — and the report names
-                // the failing job(s). Machine PRs keep the rework arm
-                // (routing unchanged) and exit the park through the
-                // gh-750/#633 reset probes on the next head; guests were
-                // already parked at red 1 (gh-757). redHeadParkCap=false
-                // disables the park (the marker audit trail and the 3-red
-                // arm-side skip above are untouched).
-                var parkCap = redConvergenceModule.parkCapOf(RUN_JOB_PARAMS);
-                var redStreak = redConvergenceModule.streakFromRuns(failRunList, failHead);
-                var convergencePark = redConvergenceModule.shouldPark(redStreak, parkCap);
-                var failingJobs = convergencePark
-                    ? failingCheckNames(effectiveRepoInfo, failHead) : [];
-                var parkLine = convergencePark
-                    ? ('🅿️ CONVERGENCE PARK (gh-832) — ' + redStreak +
-                       ' consecutive red validation verdicts on the unchanged head `' + failHead +
-                       '` — parking validation_failed; the merge window yields until a NEW head' +
-                       ' lands (a rework push or a human push re-enters validation through the' +
-                       ' standard park-reset probes).')
-                    : null;
-                var failingJobsLine = failingJobs.length
-                    ? ('Failing job(s): ' + failingJobs.join(', ')) : null;
-                // Empty rework-lap state (owner finding 2026-10-04, live
-                // fa#1211: a 'successful' rework lap that pushed nothing):
-                // a red on the SAME head as the previous red means the lap
-                // in between moved nothing — count it; at
-                // jobParams.emptyLapMax (default 1, review #703 retune —
-                // was 2, dead code at redHeadCap=3) empty laps on the same
-                // head the rework arm is WITHHELD, the owner is escalated
-                // to, and the report says a human owns the PR.
-                var lapMax = emptyLapMaxOf(RUN_JOB_PARAMS);
-                var priorRedOnHead = priorReds > 0;
-                var emptyLaps = priorRedOnHead && failHead
-                    ? (failMarks.emptyLaps[failHead] || 0) : 0;
-                var reworkEmptyCapped = isMachinePr && priorRedOnHead && emptyLaps >= lapMax;
-                var emptyLapLine = (isMachinePr && priorRedOnHead && !reworkEmptyCapped && failHead)
-                    ? ('\uD83C\uDF00 empty rework lap ' + (emptyLaps + 1) + '/' + lapMax +
-                       ' \u2014 head ' + failHead +
-                       ' unchanged since the previous red (owner finding 2026-10-04:' +
-                       ' the rework lap closed itself successful without pushing a fix)' +
-                       ((emptyLaps + 1) >= lapMax
-                           ? ' \u2014 LAST CHANCE: one more red on this unchanged head' +
-                             ' WITHHOLDS the rework arm and escalates to a human'
-                           : ''))
-                    : null;
-                var report = (isMachinePr
-                    ? (fvPrTerminal
-                        // gh-1369: on a terminal PR the report stays truthful —
-                        // no "merge aborted / re-queued" promise, no linked-issue
-                        // re-arm claim; the red is recorded, the arm is skipped.
-                        ? '⚠️ Validation CI went red on the head, but this PR is already ' +
-                          'MERGED/CLOSED — terminal (gh-1369): nothing to rework, the rework ' +
-                          'arm is skipped (validation red on shipped code never re-queues rework).'
-                        : (reworkEmptyCapped
-                        ? '⚠️ Validation CI went red on the head AGAIN — and the last ' +
-                          emptyLaps + ' rework laps left the head `' + failHead + '` unchanged ' +
-                          '(empty laps: the leg closes itself successful without pushing a fix). ' +
-                          'The rework arm is WITHHELD — a human owns this PR from here.'
-                        : '⚠️ Validation CI went red on the head — merge aborted, rework re-queued.' +
-                          (linked ? ' (linked issue #' + linked + ' re-armed)' : '') +
-                          ' (approval latch kept — no re-review after fixes)'))
-                    : ('⚠️ Validation CI went red on the head. Guest PR: rebase onto main and push — ' +
-                       'validation re-runs automatically; auto-rework is reserved for the machine ' +
-                       'account (gh-757). Your push clears the validation_failed park via the ' +
-                       'head-change reset.'))
-                    + (failedRunsLine ? '\n' + failedRunsLine : '')
-                    + (redLine ? '\n' + redLine : '')
-                    + (emptyLapLine ? '\n' + emptyLapLine : '')
-                    + (parkLine ? '\n' + parkLine : '')
-                    + (((convergencePark || !isMachinePr) && failHead)
-                        // gh-994: the park's recorded head — the head-change
-                        // reset (update_branch FIRST rung) keys on this
-                        // marker to reset the park on ANY later head move.
-                        ? '\nparked-head: ' + failHead
-                        : '')
-                    + (failingJobsLine ? '\n' + failingJobsLine : '');
-                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, report);
-                if (convergencePark) {
-                    // The park label — the loud terminal state the live
-                    // window never got: the PR leaves validate-armed's FIFO
-                    // (the query excludes validation_failed) and no CI is
-                    // dispatched for it at all (the validate_pr sticky-park
-                    // backstop) until a new head clears the park.
-                    try {
-                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'validation_failed');
-                    } catch (eConvPark) {
-                        console.warn('  ⚠️  convergence park label failed: ' +
-                            (eConvPark.message || eConvPark));
-                    }
-                    console.log('  🅿️ ' + key + ' convergence park (gh-832) — ' + redStreak +
-                                ' consecutive reds on head ' + String(failHead).slice(0, 7) +
-                                ' — validation_failed; failing: ' +
-                                (failingJobs.length ? failingJobs.join(', ')
-                                                    : '(check-run rollup unavailable)'));
-                }
-                if (isMachinePr && fvPrTerminal) {
-                    // gh-1369: terminal PR — no empty-lap cap escalation
-                    // (a human cannot fix a merged head), no linked-issue
-                    // re-arm, no PR-anchored arm. The red is recorded in
-                    // the report above; nothing to rework.
-                    console.log('  ⏭️  ' + key + ' PR #' + ticket.prNumber + ' is terminal (merged/closed) — ' +
-                        'validation red on shipped code never re-arms rework (gh-1369)');
-                } else if (isMachinePr && reworkEmptyCapped) {
-                    // Withheld for MACHINE PRs regardless of linkage (the
-                    // cap bounds the machine rework loop — linked-issue arm
-                    // AND the PR-anchored unlinked arm).
-                    console.log('  🛑 ' + key + ' empty rework-lap cap reached (' + emptyLaps +
-                                '/' + lapMax + ' on head ' + failHead + ') — NO agent:rework arm,' +
-                                ' a human owns the PR (live fa#1211: successful laps that push nothing)');
-                    // Review #703 ⚠️: a capped PR must not exit the conveyor
-                    // SILENTLY — post ONE escalation comment naming the
-                    // owner (#701 guest-cap marker style) so a human is
-                    // actually summoned to the dead head.
-                    try {
-                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🛑 @' + effectiveRepoInfo.owner + ' \u2014 pr-' + ticket.prNumber + ' needs a human: validation went red on head `' + failHead + '` left UNCHANGED after ' + (emptyLaps + 1) + ' empty rework lap(s)' + ' (each lap closed itself successful without pushing a fix \u2014 owner' + ' finding 2026-10-04, live fa#1211). The agent:rework arm is WITHHELD' + ' (empty-lap cap ' + emptyLaps + '/' + lapMax + ') and this head will' + ' not be re-validated \u2014 the machine will not re-arm itself here.');
-                    } catch (eEscalate) {
-                        console.warn('  ⚠️  empty-lap escalation post failed: ' +
-                            (eEscalate.message || eEscalate));
-                    }
-                } else if (isMachinePr && linked) {
-                    if (reworkLatched) {
-                        console.log('  ⏭️  ' + key + ' rework re-arm suppressed — leg already in flight for this head (AC1)');
-                    } else {
-                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(linked, 'agent:rework');
-                        armReworkLatch(ticket);
-                    }
-                } else if (isMachinePr) {
-                    // Machine PR with NO OPEN linked issue: PR-anchored arm
-                    // (#544 fallback shape) — the machine fixes its own code,
-                    // that loop is ours. Never lands on a linked issue from
-                    // here: the issue path above is the only linked carrier.
-                    if (reworkLatched) {
-                        console.log('  ⏭️  ' + key + ' PR-anchored rework arm suppressed — leg already in flight for this head (AC1)');
-                    } else {
-                        try {
-                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'agent:rework');
-                            armReworkLatch(ticket);
-                        } catch (eUnlinkedArm) {
-                            console.warn('  ⚠️  unlinked machine rework arm failed: ' +
-                                (eUnlinkedArm.message || eUnlinkedArm));
-                        }
-                    }
-                } else {
-                    // GUEST PRs get the validation_failed PARK LABEL — and
-                    // NOTHING else (gh-757, live fa#1286: the 2026-10-04
-                    // guest rework arm spent an AI leg on a vendor PR;
-                    // auto-rework is machine-author-ONLY again, owner rule
-                    // 2026-09-21). The park (dmtools-agents#1179 mirror,
-                    // live fa 2026-10-02: 11 manual mitigations in one
-                    // night) takes the red guest out of validate-armed's
-                    // FIFO; the #633 RESET probe clears it on the guest's
-                    // own substantive push and validation re-runs. A MANUAL
-                    // agent:rework label by a human still fires via
-                    // rework-on-label (any author, owner override).
-                    try {
-                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'validation_failed');
-                    } catch (eGuestPark) {
-                        console.warn('  ⚠️  guest park label failed: ' +
-                            (eGuestPark.message || eGuestPark));
-                    }
-                }
-                console.log('  🔁 ' + key + ' validation failed — ' +
-                    (isMachinePr
-                        ? (reworkEmptyCapped
-                            ? 'rework arm WITHHELD (empty-lap cap ' + emptyLaps + '/' + lapMax +
-                              ') — owner escalated, a human owns the PR'
-                            : 'rework re-queued' + (linked
-                                ? ' (issue #' + linked + ')'
-                                : ' \u2014 no linked issue, armed PR-anchored'))
-                        : 'guest PR, parked (validation_failed) — no rework arm' +
-                          ' (auto-rework is machine-only, gh-757)'));
-                // Same-tick slot yield (owner directive 2026-10-04): the
-                // unarm (and the guest park add) just changed PR labels —
-                // drop the per-tick open-PRs cache so the LATER rules in
-                // this same tick (fail-validation now runs BEFORE
-                // validate-armed — see sm_github.json) re-query a fresh
-                // list, see the freed ai_validating mutex, and arm the
-                // NEXT oldest approved PR immediately. Without the drop
-                // the arm rule reads the stale arm and defers the whole
-                // approved FIFO to the next tick (live fa 11:0x: seven
-                // PRs 'FIFO-queued' 40+ min behind red #1194).
+                var fvWire = redVerdictWiring(rule, ticket, key, effectiveRepoInfo, effectiveConfig);
+                var fvOutcome = redVerdictModule.handle(fvWire.ctx, fvWire.deps);
+                if (fvOutcome === 'skip') continue;
+                // Same-tick slot yield (owner directive 2026-10-04): labels
+                // changed — later rules this tick must re-query open PRs.
                 dropOpenPrsCache(effectiveRepoInfo);
                 processedKeys.push(key);
             } catch (e) {
@@ -6518,32 +6204,10 @@ function dispatchedValidationRuns(repoInfo, ciWorkflow) {
  * contract: missing head SHA, empty list, or any tool error → '' — the
  * report posts without the link and never dies.
  */
-function failedRunLinksFromList(list, headSha) {
-    if (!headSha || !Array.isArray(list)) return '';
-    try {
-        var red = list.filter(function (r) {
-            return r && r.event === 'workflow_dispatch' &&
-                r.head_sha === headSha &&
-                r.status === 'completed' &&
-                (r.conclusion === 'failure' || r.conclusion === 'timed_out');
-        });
-        red.sort(function (a, b) {
-            return new Date(b.updated_at || b.created_at).getTime() -
-                   new Date(a.updated_at || a.created_at).getTime();
-        });
-        var urls = red.slice(0, 3).map(function (r) { return r.html_url; })
-            .filter(function (u) { return !!u; });
-        if (!urls.length) return '';
-        return (urls.length === 1 ? 'Failed run: ' : 'Failed runs: ') +
-               urls.join(', ');
-    } catch (e) {
-        console.warn('  ⚠️  failed-run link lookup failed: ' + (e.message || e));
-        return '';
-    }
-}
+// failedRunLinksFromList moved to js/sm/redVerdict.js (#1459).
 
 function failedRunLinksLine(repoInfo, ciWorkflow, headSha) {
-    return failedRunLinksFromList(dispatchedValidationRuns(repoInfo, ciWorkflow), headSha);
+    return redVerdictModule.failedRunLinksFromList(dispatchedValidationRuns(repoInfo, ciWorkflow), headSha);
 }
 
 /**
@@ -6568,6 +6232,46 @@ function failingCheckNames(repoInfo, headSha) {
         console.warn('  ⚠️  failing-check scan failed: ' + (e.message || e));
         return [];
     }
+}
+
+// ── fail_validation wiring (js/sm/redVerdict.js, dmtools-agents#1459) ─────
+// One factory: ctx + every tool dep the module touches (unit-testable seam).
+function redVerdictWiring(rule, ticket, key, repoInfo, config) {
+    var tr = githubTracker(repoInfo.owner, repoInfo.repo);
+    var ciWf = rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+    var cap = redHeadCapOf(RUN_JOB_PARAMS);
+    var ctx = { key: key, owner: repoInfo.owner, prNumber: ticket.prNumber,
+                head: reworkLatchHeadOf(ticket), branch: ticket.branch };
+    var deps = {
+        dry: DRY, jobParams: RUN_JOB_PARAMS,
+        log: function (m) { console.log(m); },
+        warn: function (m) { console.warn(m); },
+        postComment: function (n, body) { return tr.postComment(n, body); },
+        addLabel: function (n, label) { return tr.addLabel(n, label); },
+        removeLabel: function (n, label) { return tr.removeLabel(n, label); },
+        getPr: function (n) {
+            return mcpParse(github_get_pr({ workspace: repoInfo.owner,
+                repository: repoInfo.repo, pullRequestId: n }));
+        },
+        commentBodies: function () { return prCommentBodiesSafe(repoInfo, ticket.prNumber); },
+        readFailMarks: function () { return failMarkerState(repoInfo, ticket.prNumber); },
+        reworkLatched: function () { return consultReworkLatch(key, ticket, repoInfo).latched; },
+        latchRework: function () { armReworkLatch(ticket); },
+        realRed: function (h) { return headHasRealFailure(repoInfo, h); },
+        isMachinePr: function () {
+            return machineAuthorModule.isMachineAuthored(ticket,
+                machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, config), repoInfo.owner);
+        },
+        dispatchedRuns: function () { return dispatchedValidationRuns(repoInfo, ciWf); },
+        failingJobs: function (h) { return failingCheckNames(repoInfo, h); },
+        redLine: function (prior, h) { return redHeadMarkerLine(prior, h, cap); },
+        rerunFailed: function (runId) {
+            cli_execute_command({ command: 'gh run rerun ' + runId + ' --failed --repo ' +
+                repoInfo.owner + '/' + repoInfo.repo });
+        },
+        stampInProgress: function (h) { stampValidationChecksForModule(repoInfo, h, 'in_progress', null, null); }
+    };
+    return { ctx: ctx, deps: deps };
 }
 
 // ── One comment read per fail (review #703 💡) ────────────────────────────
@@ -7256,13 +6960,7 @@ function redHeadMarkerLine(priorReds, headSha, cap) {
 // awf-repo follow-up.
 var EMPTY_LAP_MARKER_RE = /\uD83C\uDF00 empty rework lap (\d+)\/(\d+) \u2014 head ([0-9a-f]{7,40}) unchanged/g;
 
-function emptyLapMaxOf(jobParams) {
-    var n = (jobParams || {}).emptyLapMax;
-    n = typeof n === 'string' ? parseInt(n, 10) : n;
-    // Default 1 (review #703 retune; was 2) — see the reachability note
-    // above: at 2 the WITHHELD branch never fired under redHeadCap=3.
-    return (typeof n === 'number' && n > 0) ? Math.floor(n) : 1;
-}
+// emptyLapMaxOf moved to js/sm/redVerdict.js (#1459).
 
 // gh-957: the no-op loop guard budget — consecutive rework legs on the SAME
 // head that closed with ZERO pushed commits AND ZERO resolved threads
