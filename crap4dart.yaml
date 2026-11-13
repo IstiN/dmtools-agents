@@ -28,3 +28,12 @@ gates:
       - 'snapshots/**'
       - 'docs/agents/generated/**'
       - 'js/unit-tests/**'
+      # The generalist's single-file aggregations embed the shared sources
+      # (general_guidelines.md + few_shots.md) BY DESIGN — the generalist
+      # session reads one self-contained file. Their similarity to the
+      # sources is the design, not a duplication bug (the metric re-breaks
+      # on every edit of either file; the baseline ratchet is the wrong
+      # tool for a designed pair — the gh-1147 snapshots exclusion is the
+      # same class).
+      - 'instructions/pr_review/generalist/lens.md'
+      - 'instructions/pr_review/generalist/few_shots.md'
