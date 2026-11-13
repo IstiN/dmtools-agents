@@ -76,7 +76,201 @@ flowchart TD
 
 ---
 
-### [5] `./agents/instructions/pr_test_automation_review/general_guidelines.md`
+### [5] `./agents/instructions/pr_review/base/input_context.md`
+
+# PR Review Input Context — reading order (base contract, gh-1406)
+
+Reviewer-agnostic: EVERY reviewer leg reads the same PR context. Read files
+that exist in `input/` locally — do NOT re-fetch via dmtools.
+
+```mermaid
+flowchart TD
+    subgraph PR_CONTEXT["⚠️ PR-specific files (read first)"]
+        P1["1️⃣ instruction.md (repo root) — project stack, conventions"]
+        P2["2️⃣ input/TICKET/pr_info.md — PR title, author, branch, description"]
+        P3["3️⃣ input/TICKET/pr_diff.txt — the diff to review"]
+        P4["4️⃣ input/TICKET/pr_files.txt — list of changed files"]
+        P5["5️⃣ input/TICKET/ci_failures.md — CI failures = BLOCKING (last 500 lines)"]
+        P5_FULL["5️⃣ input/TICKET/ci_failures_full.log — full CI logs"]
+        P6["6️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
+        P7["7️⃣ input/TICKET/pr_findings.md — previously raised findings (when present)"]
+        P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol"]
+        P9["9️⃣ input/TICKET/pr_new_hunks.txt — the hunks added since the last reviewed head (re-review rounds; when present)"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8 --> P9
+    end
+
+    subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
+        T1["7️⃣ input/TICKET/ticket.md — linked ticket description, ACs"]
+        T2["8️⃣ input/TICKET/comments.md — ticket discussion if present"]
+        T3["9️⃣ input/TICKET/parent-*.md — parent story context"]
+        T4["🔟 input/TICKET/confluence/*.md — linked specifications"]
+        T1 --> T2 --> T3 --> T4
+    end
+
+    subgraph RULE["⚠️ Rule"]
+        R1["If file exists in input/ → read locally, do NOT re-fetch via dmtools"]
+    end
+
+    PR_CONTEXT --> TICKET_CONTEXT --> RULE
+```
+
+Read PR files to understand WHAT changed. Read ticket files to understand WHY
+it changed and verify against requirements.
+
+<!-- Pack-reachability anchor: the deprecated v1 instruction shims are listed in instructions/pr_review/deprecated-v1.md (frozen; removed in the next major release). -->
+
+
+---
+
+### [6] `./agents/instructions/pr_review/base/output_rules.md`
+
+# PR Review Output Rules — the machine contract (base, gh-1406)
+
+Reviewer-agnostic: every reviewer leg writes the same structured review
+artifacts; the machine parses them (gh-1350/1351). The lens may add
+reviewer-specific files but never changes this contract.
+
+```mermaid
+flowchart TD
+    O1["Write outputs/pr_review.json — structured data for the PR review"]
+    O2["Write outputs/pr_review_general.md — brief general PR comment (1-2 paragraphs max)"]
+    O3["Write outputs/pr_review_comments/*.md — detailed inline comment files"]
+    O4["Always reference inline comment files via the 'comment' field — do NOT use inline 'body'"]
+    O5["Inline comments MUST use a line number that exists in the PR diff"]
+    O6["If a finding is on unchanged code outside the diff, put it in outputs/pr_review_general.md instead"]
+    O1 --> O2 --> O3 --> O4 --> O5 --> O6
+```
+
+## The contract
+
+- `outputs/pr_review.json` — valid JSON with `recommendation`
+  (APPROVE | REQUEST_CHANGES | BLOCK), `summary`, `generalComment`,
+  `inlineComments`, `issueCounts`.
+- `outputs/pr_review_general.md` — the general PR comment body; max 1-2
+  paragraphs, factual, no essays.
+- `outputs/pr_review_comments/<name>.md` — one file per detailed inline
+  comment; the `comment` field carries the file PATH, never the text itself.
+- Each inline comment: `path`, `line`, `startLine`, `side`, `comment`,
+  `severity` (BLOCKING | IMPORTANT | SUGGESTION | NIT).
+- Inline comments MUST target a line that appears in the PR diff (use line
+  numbers from the right-hand side of diff hunks; if `pr_diff.txt` is
+  truncated, run `git diff origin/{baseBranch}...HEAD` to locate the exact
+  line). A finding on unchanged code outside the diff goes to
+  `pr_review_general.md` — never an inline thread.
+- If `ci_failures.md` is present → include each failure as 🚨 BLOCKING
+  (full logs in `ci_failures_full.log`).
+- Keep `summary` under 2 sentences — details live in the inline comment
+  files, not the general text.
+- Ticket context: verify the PR changes satisfy the ticket ACs — note gaps
+  in the review.
+- The verdict is a MACHINE decision recomputed from `issueCounts` + the
+  resolved `reviewPolicy` — the census is the machine's source of truth;
+  keep it accurate.
+
+
+---
+
+### [7] `./agents/instructions/pr_review/base/registry_protocol.md`
+
+# Finding-identity registry protocol (base contract, gh-1406)
+
+Reviewer-agnostic: every reviewer leg answers the same previously-raised
+findings registry (gh-1332) before raising anything new. This protocol is a
+factory invariant — the machine parses the dispositions.
+
+## 9. Previously raised findings — the finding-identity registry
+
+When `input/TICKET/pr_findings.md` is present, earlier review rounds on this PR already raised findings **F1–Fn** (each with its claim, file and status). The registry dedup is what keeps repeated rounds from minting duplicate threads for the same defect.
+
+Answer the registry **before** raising anything new:
+
+- **verify fixed** — the fixing hunk you can cite closes the finding: disposition `"fixed"` with the hunk reference. Never mark `fixed` without a citable hunk.
+- **withdraw (reason required)** — the claim is wrong or no longer applies: disposition `"withdrawn"` with the reason. A withdrawal without a reason is rejected by the machine, and BLOCKING withdrawals surface to the owner.
+- **mark re-introduced** — the defect is still there (e.g. the fix was reverted): leave the finding open and let your re-raise match it; do not re-litigate the claim from scratch.
+
+New claims always need new evidence, and they pass the same §7 necessity test before they earn a thread. A finding on the registry list is answered, not re-raised as if it were news.
+
+**Candidates pending confirmation** (also listed in `pr_findings.md`): when a new finding you raised is *possibly same as F<n>*, the machine asks one word per candidate — confirm with `"same as F<n>"` or call it `"new"`. Unconfirmed candidates become new identities; nothing merges without your confirmation. This is a dedup request, not a push-back: confirming merges the threads, it does not weaken the finding (merges can only escalate severity, never de-escalate).
+
+Add a `findingReview` block to `outputs/pr_review.json` (alongside `inlineComments`):
+
+```json
+{"findingReview": {
+  "dispositions": [
+    {"n": 1, "status": "fixed", "hunk": "src/auth.ts:40-48 — try/catch added"},
+    {"n": 2, "status": "withdrawn", "reason": "validation exists at src/auth.ts:50 — claim was wrong"},
+    {"n": 3, "status": "re-introduced"}
+  ],
+  "confirmations": [
+    {"proposedFor": 1, "same": true}
+  ]
+}}
+```
+
+When `pr_findings.md` is absent, this section does not apply — review exactly as before.
+
+
+---
+
+### [8] `./agents/instructions/pr_review/base/formatting_rules.md`
+
+```mermaid
+flowchart TD
+    F1["outputs/pr_review_general.md — brief Markdown summary, under 20 lines, bullet-focused"]
+    F2["Required sections: Summary, Key Issues, Next Steps"]
+    F3["outputs/pr_review.json — valid JSON with recommendation, summary, inlineComments, issueCounts"]
+    F4["Each inline comment: path, line, startLine, side, comment, severity (BLOCKING|IMPORTANT|SUGGESTION|NIT)"]
+    F5["comment must be a path to a file under outputs/pr_review_comments/<name>.md"]
+    F6["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
+    F7["If ci_failures.md present → include each failure as 🚨 BLOCKING (full logs in ci_failures_full.log)"]
+    F8["Keep summary under 2 sentences — put details in inline comment files, not in general text"]
+    F9["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional clarity · NIT = style only"]
+    F10["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
+    F11["Inline comments MUST target a line that appears in the PR diff<br/>If the line is not in the diff, the comment becomes a general PR comment instead of a review thread"]
+    F12["Use line numbers from the right-hand side of diff hunks<br/>If pr_diff.txt is truncated, run git diff origin/{base}...HEAD to see the full diff"]
+```
+
+
+---
+
+### [9] `./agents/instructions/pr_review/base/few_shots_format.md`
+
+# pr_review.json shape — format contract (base, gh-1406)
+
+Reviewer-agnostic: the structured answer of every reviewer leg carries the
+same shape. The worked examples live in each reviewer's few-shots file; this
+file is the shape + severity-boundary contract.
+
+### outputs/pr_review.json
+```json
+{
+  "recommendation": "BLOCK",
+  "summary": "SQL injection in UserService.js must be fixed before merge.",
+  "generalComment": "outputs/pr_review_general.md",
+  "inlineComments": [
+    {"path":"src/auth/UserService.js","line":45,"comment":"outputs/pr_review_comments/comment1.md","severity":"BLOCKING"},
+    {"path":"src/auth/LoginController.js","line":78,"comment":"outputs/pr_review_comments/comment2.md","severity":"IMPORTANT"},
+    {"path":"src/utils/validation.js","line":23,"comment":"outputs/pr_review_comments/comment3.md","severity":"SUGGESTION"},
+    {"path":"src/auth/LoginController.js","line":20,"comment":"outputs/pr_review_comments/comment4.md","severity":"NIT"}
+  ],
+  "issueCounts": {"blocking":1,"important":1,"suggestions":1,"nits":1}
+}
+```
+
+**Severity boundary (4 tiers)**: a 🪶 NIT changes nothing behavioral and
+nothing documented (style, naming, formatting, micro-symmetry); a 💡 SUGGESTION
+changes clarity of the documented/behavioral surface (missing docs, unclear
+contract, better API shape). Anything that changes behavior or breaks a
+documented contract is ⚠️ IMPORTANT or 🚨 BLOCKING.
+
+The 4-tier census (`issueCounts`) counts posted threads + digest lines and
+drives the machine verdict — keep it consistent with the inlineComments
+severities.
+
+
+---
+
+### [10] `./agents/instructions/pr_test_automation_review/general_guidelines.md`
 
 ```mermaid
 flowchart TD
@@ -94,48 +288,31 @@ flowchart TD
     DATA --> RESULT{Test result in PR description}
     RESULT -->|PASSED| PASSED_REVIEW["Verify the PASSED result is meaningful — not a false positive"]
     RESULT -->|FAILED| FAILED_REVIEW["Verify the test fails for the right reason — not a test code issue"]
-    PASSED_REVIEW --> OUTPUT[Write outputs: response.md, pr_review.json, pr_review_general.md, pr_review_comments/]
+    PASSED_REVIEW --> OUTPUT[Write outputs per the base contract + this leg's tracker summary]
     FAILED_REVIEW --> OUTPUT
     OUTPUT --> END([End])
 ```
 
+## Outputs (this leg's specifics on top of the base contract)
 
----
+The reviewer-agnostic output contract (`outputs/pr_review.json`,
+`outputs/pr_review_general.md`, `outputs/pr_review_comments/*.md`, inline
+anchoring) lives in `instructions/pr_review/base/` and is assembled around
+this lens. This leg adds its own tracker-facing summary:
 
-### [6] `./agents/instructions/pr_test_automation_review/output_rules.md`
-
-```mermaid
-flowchart TD
-    O1["Write outputs/response.md — concise tracker-agnostic Markdown summary"]
-    O2["Write outputs/pr_review.json — structured data for GitHub PR review"]
-    O3["Write outputs/pr_review_general.md — brief general PR comment (1-2 paragraphs max)"]
-    O4["Write outputs/pr_review_comments/ — directory with individual inline comment files"]
-    O5["If pr_discussions.md present → include resolvedThreadIds in pr_review.json"]
-    O6["Tracker-specific formatting is injected via cliPromptsByTracker — do NOT hardcode Jira/ADO markup in response.md"]
-    O1 --> O2 --> O3 --> O4 --> O5 --> O6
-```
-
-
----
-
-### [7] `./agents/instructions/pr_test_automation_review/formatting_rules.md`
-
-```mermaid
-flowchart TD
-    F1["outputs/response.md — tracker-agnostic Markdown, under 20 lines, bullet-focused"]
-    F2["Required sections: Summary, Correctness, Architecture, Code Quality, Framework Usage, Test Data, Recommendation"]
-    F3["outputs/pr_review.json — valid JSON with recommendation (APPROVE|BLOCK|REQUEST_CHANGES), summary, inlineComments, issueCounts"]
-    F4["Each inline comment: path, line, startLine, side, body, severity (BLOCKING|IMPORTANT|SUGGESTION|NIT)"]
-    F5["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
-    F6["If ci_failures.md present → include each failure as 🚨 BLOCKING (full logs in ci_failures_full.log)"]
-    F7["Keep summary under 2 sentences — put details in inline comments, not in general text"]
-    F8["Tracker-specific formatting is injected via cliPromptsByTracker — do NOT hardcode Jira/ADO markup"]
-```
+- **Write `outputs/response.md`** — concise tracker-agnostic Markdown
+  summary, under 20 lines, bullet-focused. Required sections: Summary,
+  Correctness, Architecture, Code Quality, Framework Usage, Test Data,
+  Recommendation.
+- Tracker-specific formatting is injected via `cliPromptsByTracker` — do
+  NOT hardcode Jira/ADO markup in `response.md`.
+- If `pr_discussions.md` is present → include `resolvedThreadIds` in
+  `outputs/pr_review.json`.
 
 
 ---
 
-### [8] `./agents/instructions/pr_test_automation_review/few_shots.md`
+### [11] `./agents/instructions/pr_test_automation_review/few_shots.md`
 
 Example PR test automation review outputs — keep concise:
 
@@ -146,14 +323,25 @@ Example PR test automation review outputs — keep concise:
   "summary": "Test uses hardcoded selectors and sleeps instead of explicit waits. Architecture violates layered design.",
   "generalComment": "outputs/pr_review_general.md",
   "inlineComments": [
-    {"path":"testing/tests/TEST-123/test_login.py","line":34,"body":"🚨 BLOCKING: Hardcoded selector — Use Page Object method login_page.username_field instead of raw page.locator('#user').","severity":"BLOCKING"},
-    {"path":"testing/tests/TEST-123/test_login.py","line":45,"body":"🚨 BLOCKING: time.sleep(5) — Replace with Playwright's expect(...).to_be_visible(timeout=5000).","severity":"BLOCKING"},
-    {"path":"testing/tests/TEST-123/test_login.py","line":12,"body":"⚠️ IMPORTANT: Missing config.yaml — Each test folder must include config.yaml with framework, platform, and dependencies.","severity":"IMPORTANT"},
-    {"path":"testing/components/pages/login_page.py","line":8,"body":"💡 SUGGESTION: Add type hints — Constructor parameters lack types. Add driver: IWebDriver and return types.","severity":"SUGGESTION"},
-    {"path":"testing/tests/TEST-123/test_login.py","line":20,"body":"🪶 NIT: Import order — stdlib imports should precede third-party ones.","severity":"NIT"}
+    {"path":"testing/tests/TEST-123/test_login.py","line":34,"comment":"outputs/pr_review_comments/comment1.md","severity":"BLOCKING"},
+    {"path":"testing/tests/TEST-123/test_login.py","line":45,"comment":"outputs/pr_review_comments/comment2.md","severity":"BLOCKING"},
+    {"path":"testing/tests/TEST-123/test_login.py","line":12,"comment":"outputs/pr_review_comments/comment3.md","severity":"IMPORTANT"},
+    {"path":"testing/components/pages/login_page.py","line":8,"comment":"outputs/pr_review_comments/comment4.md","severity":"SUGGESTION"},
+    {"path":"testing/tests/TEST-123/test_login.py","line":20,"comment":"outputs/pr_review_comments/comment5.md","severity":"NIT"}
   ],
   "issueCounts": {"blocking":2,"important":1,"suggestions":1,"nits":1}
 }
+```
+
+Each `comment` field references a file under `outputs/pr_review_comments/`
+holding the finding text (the base output contract). Example
+`outputs/pr_review_comments/comment1.md`:
+
+```markdown
+🚨 **BLOCKING: Hardcoded selector**
+
+Use the Page Object method `login_page.username_field` instead of the raw
+`page.locator('#user')`.
 ```
 
 **Severity boundary (4 tiers)**: a 🪶 NIT changes nothing behavioral and
@@ -186,7 +374,7 @@ the documented/behavioral surface. Behavior or contract breakage is ⚠️/🚨.
 
 ---
 
-### [9] `./agents/instructions/pr_test_automation_review/inline_comment_mapping.md`
+### [12] `./agents/instructions/pr_test_automation_review/inline_comment_mapping.md`
 
 # Test Review Inline Comment Line Mapping
 
@@ -214,7 +402,7 @@ Example inline comment:
 
 ---
 
-### [10] `./agents/instructions/scm/github_pr_review_format.md`
+### [13] `./agents/instructions/scm/github_pr_review_format.md`
 
 # GitHub PR review format
 
@@ -228,7 +416,7 @@ Example inline comment:
 
 ---
 
-### [11] `./agents/prompts/bug_test_automation_review_prompt.md`
+### [14] `./agents/prompts/bug_test_automation_review_prompt.md`
 
 > Role: Senior QA Engineer & Code Reviewer
 > Task: Review the bulk test automation Pull Request for a Bug. Branch is `test/{BUG_KEY}`.
@@ -261,7 +449,96 @@ Write `outputs/pr_review.json` with `recommendation`, `summary`, `generalComment
 
 ---
 
-### [12] `./agents/instructions/common/dmtools_cli.md`
+### [15] `./agents/instructions/pr_review/base/review_verdict_rules.md`
+
+# Review verdict rules — machine protocol (binding)
+
+The review↔rework loop is a machine, not a conversation: your
+`recommendation` in `outputs/pr_review.json` is parsed mechanically and
+drives issue labels, rework runs and CI (each wasted round costs 15–20 CI
+minutes). These rules govern the verdict; every other instruction
+(severity definitions, output files, thread etiquette) is unchanged.
+
+## Verdict mapping
+
+Classify findings into 4 tiers:
+
+- 🚨 **BLOCKING** — correctness/bug findings: broken behavior, failing
+  gates (red CI), scope violations, security issues, data loss.
+- ⚠️ **IMPORTANT** — real maintainability debt worth fixing, but the PR
+  works as shipped.
+- 💡 **SUGGESTION** — clarity of the documented/behavioral surface:
+  missing docs, unclear contract, better API shape.
+- 🪶 **NIT** — changes nothing behavioral and nothing documented: style,
+  formatting, naming micro-preferences.
+
+Then map to the verdict (the machine recomputes it from the census —
+`postPRReviewComments` treats your token as advisory):
+
+| Findings | `recommendation` |
+|---|---|
+| Any 🚨 BLOCKING | `REQUEST_CHANGES` — or `BLOCK` for security / data loss |
+| Any ⚠️ IMPORTANT (no 🚨) | `REQUEST_CHANGES` (gates approval — policy default) |
+| Only 💡 / 🪶 remain | `APPROVE` — the cycle converges |
+
+**Downgrade protocol:** when the rework lap downgraded a specific ⚠️ to 💡 **with a
+written justification in the census** (the thread reply states why the finding is not
+maintainability debt), classify that finding 💡 in this round's census — the false-⚠️ review
+converges to APPROVE without a code change. Without the written justification, keep ⚠️: a silent
+downgrade does not exist, and the machine recomputes the verdict from the census you post.
+
+`APPROVE` with remaining 💡/🪶 findings is the expected terminal state
+(the resolved policy's `allowApproveWithSuggestions` derives from the
+tier table — SUGGESTION rounds polish, NIT rounds none): post every
+remaining finding as before (inline threads + general comment) — they do
+**not** block the merge and must **not** trigger another rework round.
+An open ⚠️ **does** gate approval unless the project's `reviewPolicy`
+explicitly weakens it (owner standing-approval doctrine, epic §4.4).
+
+## Anti-patterns
+
+- ❌ Returning `REQUEST_CHANGES` because a re-review surfaced new
+  suggestion-level nits (docs wording, import style, doc-comment refs). A cycle
+  with only suggestion-level findings **must** converge to `APPROVE`.
+- ❌ `REQUEST_CHANGES` while `issueCounts.blocking` is `0` — the machine
+  treats that as an approval and skips the rework round. Keep
+  `issueCounts` accurate: it is the machine's source of truth, not prose.
+  The machine also cross-checks the counter against your inline comments
+  (a `severity: "BLOCKING"` entry or a 🚨 marker in the referenced comment
+  file) before honoring a blocking-0 approval — if any finding is truly
+  blocking, set `recommendation: REQUEST_CHANGES` with `blocking: 1`+.
+- ❌ Verdict-by-prose: never phrase the verdict only in the summary text.
+  The `recommendation` field of `outputs/pr_review.json` is the verdict.
+- ❌ 🚨 BLOCKING driven by an uncited external-spec claim ("the spec says X"
+  without a `file:line` / doc URL the leg actually read).
+  Downgrade it to a ⚠️ question; the machine treats BLOCKING threads as
+  ground truth and arms rework on them. (Note: the post-action also
+  downgrades such findings mechanically — keep the JSON consistent with
+  the demoted severity so the census cross-check stays clean.)
+- ❌ Re-opening a thread that the rework demonstrably fixed in this diff —
+  add its id to `resolvedThreadIds` instead.
+
+## Label guard rails — the chore:pin lane
+
+`chore:pin` is a trusted, **non-exclusive** factory fast-lane: several PRs
+may carry it at the same time (a release bump `chore/release-vX.Y.Z` AND a
+factory pin `chore/factory-pin-*` are both legitimate holders — they ride
+the lane independently). Reviews must therefore:
+
+- ❌ **NEVER remove `chore:pin` from any PR** — not as a "one pin" dedup,
+  not as a side-effect of closing a related PR as superseded. Removing it
+  from a release bump or pin PR strands that PR behind the standard queue.
+- ✅ When a PR is superseded (e.g. a workflow change already shipped via
+  another PR), close **only that PR** and leave every label on every other
+  PR untouched. Label restoration is a keeper action, not yours.
+- ✅ If you believe two `chore:pin` holders conflict, SAY SO in the review
+  comment and keep both labels — the owner resolves the lane, the machine
+  only merges.
+
+
+---
+
+### [16] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -299,7 +576,7 @@ flowchart TD
 
 ---
 
-### [13] `./agents/prompts/bash_tools.md`
+### [17] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -344,7 +621,7 @@ flowchart TD
 
 ---
 
-### [14] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
+### [18] `./agents/prompts/codegraph_tools.md` _(conditional: `agents/js/conditions/isCodeGraphAvailable.js`)_
 
 **HARD GATE — read before any tool call:**
 

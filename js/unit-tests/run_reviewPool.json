@@ -1,0 +1,13 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/unit-tests/testRunner.js",
+    "jobParams": {
+      "testFiles": [
+        "js/unit-tests/test_reviewPool.js",
+        "js/unit-tests/test_reviewPoolMarkers.js",
+        "js/unit-tests/test_reviewPoolMerge.js"
+      ]
+    }
+  }
+}

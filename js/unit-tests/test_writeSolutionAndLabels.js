@@ -5,6 +5,19 @@
  * affected-repository labels from outputs/affected_repos.json.
  */
 
+// Hermetic DEFAULT_TRACKER (same contract as test_buildEncodedConfig.js): the
+// deployment-level env var must not leak through the real Java bridge — the
+// tests pin the tracker via customParams/config, so the shim answers null and
+// detectTrackerType falls through to the adapter.
+var __scope__ = typeof globalThis !== 'undefined' ? globalThis : (typeof global !== 'undefined' ? global : this);
+var __realJava__ = __scope__ ? __scope__.java : undefined;
+__scope__.java = {
+    lang: { System: { getenv: function(name) {
+        if (name === 'DEFAULT_TRACKER') { return null; }
+        try { return __realJava__.lang.System.getenv(name); } catch (eEnv) { return null; }
+    } } }
+};
+
 // gh-1250 shared helpers: pure modules with no requires of their own, so the
 // real implementation is loaded everywhere (no mocks needed).
 function labelsTrackerFieldValue() {

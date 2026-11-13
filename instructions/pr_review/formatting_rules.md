@@ -1,3 +1,8 @@
+<!-- ⚠️ DEPRECATED v1 shim — frozen content, REMOVED in the next major release. -->
+<!-- Live version(s): instructions/pr_review/base/formatting_rules.md — update your .dmtools/config.js (cliPrompts / cliPromptOverrides)
+<!-- or .dmtools/runners/*.json to pin the new path. Content below is kept verbatim so configs
+<!-- pinning this old path keep working during the deprecation window.
+
 ```mermaid
 flowchart TD
     F1["outputs/pr_review_general.md — brief Markdown summary, under 20 lines, bullet-focused"]

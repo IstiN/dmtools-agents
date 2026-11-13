@@ -100,6 +100,9 @@ var machineNotice = require('./machineNotice.js');
 var configLoader = require('../configLoader.js');
 var mergeBackstop = require('./mergeBackstop.js');
 var mergeVerdictGate = require('./mergeVerdictGate.js');
+// gh-1406 §7 (hoisted, never lazy — the gh-823 pack-require rule): the
+// reviewer-pool marker family + the required-reviewer hold state.
+var reviewPoolMarkers = require('./reviewPoolMarkers.js');
 
 // Delegates: the marker family (the dmtools:merge-hold prefix this gate
 // shares with the gh-1416 verdict holds), the comment reader and the
@@ -115,8 +118,9 @@ var MARKER_SUFFIX = mergeVerdictGate.MARKER_SUFFIX;
 var ESCALATION_LABEL = 'needs-human';
 
 // The reason constant of THIS gate's hold markers — the dedup filter key
-// that keeps the verdict-freshness holds (reason "verdict") and the
-// open-thread holds (reason "open-threads") separate marker budgets.
+// that keeps the verdict-freshness holds (reason "verdict"), the open-thread
+// holds (reason "open-threads") and the gh-1406 required-reviewer holds
+// (reason "required-reviewer") in separate marker budgets.
 var MARKER_REASON = 'open-threads';
 
 // The knob defaults (the ticket: strict by default — owner directive
@@ -369,6 +373,111 @@ function stampEscalationLabel(io, owner, name, input, out) {
     }
 }
 
+// ── the gh-1406 required-reviewer clause (§7) ────────────────────────────────
+
+/**
+ * The pool-outcome hold stamp for one head (the required-reviewer budget):
+ * deduped per head like every hold marker; the escalation valve is the
+ * same hold-age clock (mergeGate.humanHoldHours) — a required leg that
+ * keeps failing retries every merge tick until the valve fires
+ * (needs-human — never silent merge, never silent approval, gh-957).
+ */
+function requiredReviewerEscalates(state, inp) {
+    return !!state.hold && escalationDue(state.hold, inp.nowIso, inp.humanHoldHours);
+}
+
+/**
+ * The per-head dedup decision for the pool hold stamp: an already-stamped
+ * hold of the SAME kind is never re-posted (one marker per head; the
+ * escalation valve is the only transition). Returns the outcome field to
+ * set, or null when a fresh stamp is due.
+ */
+function requiredHoldDedupOf(state, escalate) {
+    if (escalate && state.hold && state.hold.escalated) return 'escalationDeduped';
+    if (!escalate && state.hold) return 'holdDeduped';
+    return null;
+}
+
+/**
+ * The marker post (observability — never the decision): a missing
+ * createComment primitive skips the stamp while the hold stands; a BROKEN
+ * post throws through to the caller's soft catch.
+ */
+function postRequiredReviewerHoldMarker(io, owner, name, inp, out, state, escalate) {
+    if (!io || typeof io.createComment !== 'function') {
+        out.markerSkipped = true; // hold stands — the marker is observability
+        return;
+    }
+    io.createComment({
+        workspace: owner, repository: name, number: inp.prNumber,
+        body: reviewPoolMarkers.buildRequiredReviewerHoldMarker(
+            out.poolMissing, out.head, inp.nowIso, escalate, escalate ? state.hold.at : null)
+    });
+    if (escalate) {
+        out.escalationPosted = true;
+        stampEscalationLabel(io, owner, name, inp, out);
+    } else {
+        out.holdPosted = true;
+    }
+}
+
+function stampRequiredReviewerHold(io, owner, name, inp, out, state) {
+    try {
+        var escalate = requiredReviewerEscalates(state, inp);
+        var deduped = requiredHoldDedupOf(state, escalate);
+        if (deduped) {
+            out[deduped] = true;
+            return;
+        }
+        postRequiredReviewerHoldMarker(io, owner, name, inp, out, state, escalate);
+    } catch (ePost) {
+        out.holdPostFailed = true; // soft — the merge stays withheld regardless
+    }
+}
+
+/**
+ * The comment list for the pool clause (ONE read per gate run): the
+ * caller's already-read list wins; the direct-call shape reads its own.
+ * A missing getComments primitive is a capability-miss skip (null).
+ */
+function poolCommentListOf(io, owner, name, inp, out, comments) {
+    if (comments !== undefined) return comments;
+    if (!io || typeof io.getComments !== 'function') {
+        out.poolSkipped = true; // capability miss — the skip shape
+        return null;
+    }
+    return mergeVerdictGate.prCommentList(io.getComments, owner, name, inp.prNumber);
+}
+
+/**
+ * Phase 0 — the required-reviewer pool clause (gh-1406 §7): when the
+ * CURRENT head's pool outcome names required reviewers and one of them
+ * lacks a same-head PASS marker, the merge is withheld (like red CI —
+ * a PR must not merge with no security review because a leg 429'd).
+ * `comments` is the caller's already-read list (ONE comments round-trip
+ * per gate run — shared with the open-threads dedup); when it arrives
+ * undefined the phase reads its own (direct-call shape). Fail-open exactly:
+ * no pool outcome on this head (legacy single-leg PRs, validation-only
+ * flows) → proceed — a missing head sha proceeds the same way, since an
+ * outcome only ever matches a real head (sameHead's falsy guard); no
+ * getComments primitive → capability-miss skip; a BROKEN read throws
+ * through (fail-closed, like every census in this gate). Returns true when
+ * the gate HELD on this clause (the caller skips the thread work — the
+ * hold stands).
+ */
+function poolPhase(io, owner, name, inp, out, comments) {
+    var list = poolCommentListOf(io, owner, name, inp, out, comments);
+    if (list === null) return false;
+    var state = reviewPoolMarkers.requiredReviewerHoldState(list, inp.logins || [], out.head, inp.nowIso);
+    if (!state.applicable) return false;
+    out.poolMissing = state.missing;
+    if (state.missing.length === 0) return false;
+    out.held = true;
+    out.holdReason = reviewPoolMarkers.HOLD_REASON;
+    stampRequiredReviewerHold(io, owner, name, inp, out, state);
+    return true;
+}
+
 // ── the gate ─────────────────────────────────────────────────────────────────
 
 /**
@@ -391,10 +500,12 @@ function gateOutcomeOf(inp) {
         prNumber: inp.prNumber,
         held: false,
         escalated: false,
+        holdReason: null,
         total: 0,
         human: 0,
         machine: 0,
         notices: 0,
+        poolMissing: [],
         head: inp.headSha || null,
         holdPosted: false,
         holdDeduped: false,
@@ -405,6 +516,7 @@ function gateOutcomeOf(inp) {
         labelPosted: false,
         labelFailed: false,
         threadsSkipped: false,
+        poolSkipped: false,
         commentsSkipped: false
     };
 }
@@ -432,7 +544,7 @@ function censusPhase(io, owner, name, inp, out) {
 
 // Phase 2 — the hold. Runs only once the census holds the merge:
 // the dedup-safe stamp, the escalation valve and its label transition.
-function holdPhase(io, owner, name, inp, out, census, escalate) {
+function holdPhase(io, owner, name, inp, out, census, escalate, comments) {
     out.held = true;
     if (!out.head) {
         out.markerSkipped = true; // hold stands — no dedup key, no marker
@@ -443,10 +555,14 @@ function holdPhase(io, owner, name, inp, out, census, escalate) {
         return out;
     }
     // Fail-closed dedup read: posting without it would comment-spam. ONE
-    // comments read per gate run — the hold lookup, the escalation clock
-    // and the stamp share it.
-    var holds = existingHolds(
-        mergeVerdictGate.prCommentList(io.getComments, owner, name, inp.prNumber));
+    // comments read per gate run — runGate reads it once for the gh-1406
+    // pool clause and threads the SAME list here (the hold lookup, the
+    // escalation clock and the stamp share it).
+    var list = comments;
+    if (list === undefined) {
+        list = mergeVerdictGate.prCommentList(io.getComments, owner, name, inp.prNumber);
+    }
+    var holds = existingHolds(list);
     var existing = holdForHead(holds, out.head);
     if (existing && escalate && escalationDue(existing, inp.nowIso, inp.humanHoldHours)) {
         out.holdDeduped = true;
@@ -466,6 +582,18 @@ function holdPhase(io, owner, name, inp, out, census, escalate) {
 function runGate(io, owner, name, input) {
     var inp = input || {};
     var out = gateOutcomeOf(inp);
+    // ONE comments read per gate run: the gh-1406 required-reviewer pool
+    // clause and the open-threads hold dedup parse the SAME list.
+    var comments;
+    if (typeof io.getComments === 'function') {
+        comments = mergeVerdictGate.prCommentList(io.getComments, owner, name, inp.prNumber);
+        // Phase 0 — the gh-1406 pool clause: a required reviewer without a
+        // same-head PASS marker holds the merge before any thread work
+        // (a PR never merges with no security review because a leg 429'd).
+        if (poolPhase(io, owner, name, inp, out, comments)) return out;
+    } else {
+        out.poolSkipped = true; // capability miss — the skip shape
+    }
     var census = censusPhase(io, owner, name, inp, out);
     if (!census) return out; // capability miss, or the merge proceeds
     // The escalation valve keys on HUMAN threads actually holding the
@@ -473,7 +601,7 @@ function runGate(io, owner, name, input) {
     // repeated failures escalate through the funnel job surface, never
     // through needs-human).
     var escalate = inp.holdOnHumanThreads !== false && census.human > 0;
-    return holdPhase(io, owner, name, inp, out, census, escalate);
+    return holdPhase(io, owner, name, inp, out, census, escalate, comments);
 }
 
 // ── caller-facing log lines ──────────────────────────────────────────────────
@@ -497,6 +625,12 @@ function holdStampLine(out) {
  */
 function outcomeLines(out) {
     if (!out) return [];
+    if (out.held && out.holdReason === reviewPoolMarkers.HOLD_REASON) {
+        return ['\uD83E\uDD16 merge hold on PR #' + out.prNumber + ': required reviewer(s) ' +
+            (out.poolMissing || []).join(', ') + ' missing a PASS marker on the current head — merge deferred ' +
+            '(a failed required review leg never merges); resolution: the reviewer leg completes ' +
+            '(retry with backoff, needs-human past the hold valve); ' + holdStampLine(out)];
+    }
     if (out.held) {
         return ['\uD83E\uDD16 merge hold on PR #' + out.prNumber + ': ' + out.total +
             ' unresolved review thread(s) (human ' + out.human + ', machine ' + out.machine +
@@ -593,6 +727,7 @@ if (typeof module !== 'undefined' && module.exports) {
         escalatedHoldForHead: escalatedHoldForHead,
         escalationDue: escalationDue,
         runGate: runGate,
+        poolPhase: poolPhase,
         outcomeLines: outcomeLines,
         githubBridgeIo: githubBridgeIo,
         runGateForPr: runGateForPr,

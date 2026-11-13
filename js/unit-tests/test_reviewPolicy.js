@@ -603,3 +603,145 @@ suite('reviewPolicy — verification knob (gh-1403: none | filter)', function() 
             'run-context stamp names the filter mode');
     });
 });
+
+// ═══════════════ gh-1406: the reviewer-pool keys (reviewers, promptAppend) ═══════════════
+
+suite('reviewPolicy — gh-1406 reviewer-pool schema extension', function() {
+
+    test('known keys gain reviewers + promptAppend (both accepted, strictness preserved)', function() {
+        var p = mod.validateReviewPolicy({
+            reviewers: { security: { isEnabled: true } },
+            promptAppend: { base: ['.dmtools/review/base.append.md'] }
+        }, 'test');
+        assert.deepEqual(p.reviewers, { security: { isEnabled: true } });
+        assert.deepEqual(p.promptAppend, { base: ['.dmtools/review/base.append.md'] });
+        // Absence rides the empty defaults.
+        var plain = mod.defaultPolicy();
+        assert.deepEqual(plain.reviewers, {});
+        assert.deepEqual(plain.promptAppend, {});
+        // Strictness preserved: unknown keys still throw.
+        var e = validationErrorMessage(function() {
+            mod.validateReviewPolicy({ reviewers: {}, promptAppend: {}, bogus: 1 }, 'test');
+        });
+        assert.ok(e, 'unknown key must still throw');
+        assert.ok(e.message.indexOf('bogus') !== -1);
+        assert.ok(e.message.indexOf('promptAppend') !== -1, 'known-key list names the new keys');
+    });
+
+    test('reviewers tuning accepts exactly the tunable field set with correct types', function() {
+        var p = mod.validateReviewPolicy({
+            reviewers: {
+                security: {
+                    isEnabled: false,
+                    rounds: ['first', 'hunks'],
+                    triggerPaths: ['src/'],
+                    options: { referencePack: 'sec/' },
+                    model: 'openai/gpt-x'
+                }
+            }
+        }, 'test');
+        var t = p.reviewers.security;
+        assert.equal(t.isEnabled, false);
+        assert.deepEqual(t.rounds, ['first', 'hunks']);
+        assert.deepEqual(t.triggerPaths, ['src/']);
+        assert.deepEqual(t.options, { referencePack: 'sec/' });
+        assert.equal(t.model, 'openai/gpt-x');
+    });
+
+    test('reviewers tuning rejects contract fields (extend, never replace — invariant 2)', function() {
+        var e = validationErrorMessage(function() {
+            mod.validateReviewPolicy({ reviewers: { security: { isRequired: true } } }, 'test');
+        });
+        assert.ok(e, 'isRequired is not tunable — must throw');
+        assert.ok(e.message.indexOf('isRequired') !== -1);
+        var e2 = validationErrorMessage(function() {
+            mod.validateReviewPolicy({ reviewers: { security: { lens: '.dmtools/review/own.md' } } }, 'test');
+        });
+        assert.ok(e2, 'lens is a contract field — must throw');
+    });
+
+    test('reviewers tuning rejects unknown keys, non-boolean isEnabled, bad model', function() {
+        var cases = [
+            { reviewers: { x: { enabeled: true } } },
+            { reviewers: { x: { isEnabled: 'yes' } } },
+            { reviewers: { x: { model: 42 } } },
+            { reviewers: { x: { options: [] } } },
+            { reviewers: { x: { triggerPaths: [7] } } },
+            { reviewers: 'security' }
+        ];
+        for (var i = 0; i < cases.length; i++) {
+            var e = validationErrorMessage(function() {
+                mod.validateReviewPolicy(cases[i], 'test');
+            });
+            assert.ok(e, 'case ' + i + ' must throw: ' + JSON.stringify(cases[i]));
+            assert.equal(e.name, 'ReviewPolicyValidationError');
+        }
+    });
+
+    test('rounds: valid flags only; ["all"] is exclusive; empty array rejected', function() {
+        assert.deepEqual(mod.validateRounds(['first'], 't'), ['first']);
+        assert.deepEqual(mod.validateRounds(['first', 'hunks'], 't'), ['first', 'hunks']);
+        assert.deepEqual(mod.validateRounds(['all'], 't'), ['all']);
+        var bad = [['everyone'], [], ['all', 'first'], ['all', 'hunks'], 'first', ['first', 'everyone']];
+        for (var i = 0; i < bad.length; i++) {
+            var e = validationErrorMessage(function() {
+                mod.validateRounds(bad[i], 't');
+            });
+            assert.ok(e, 'rounds value ' + JSON.stringify(bad[i]) + ' must throw');
+        }
+        var e3 = validationErrorMessage(function() {
+            mod.validateReviewPolicy({ reviewers: { x: { rounds: ['all', 'first'] } } }, 'test');
+        });
+        assert.ok(e3 && e3.message.indexOf('exclusive') !== -1, '["all","first"] must hit the exclusivity error');
+        var e4 = validationErrorMessage(function() {
+            mod.validateReviewPolicy({ reviewers: { x: { rounds: [] } } }, 'test');
+        });
+        assert.ok(e4 && e4.message.indexOf('isEnabled:false') !== -1, 'empty rounds names the isEnabled alternative');
+    });
+
+    test('promptAppend accepts reviewer keys (incl. base) with string arrays; rejects junk', function() {
+        var p = mod.validateReviewPolicy({
+            promptAppend: {
+                base: ['.dmtools/review/base.append.md'],
+                security: ['.dmtools/review/security.append.md']
+            }
+        }, 'test');
+        assert.deepEqual(p.promptAppend.security, ['.dmtools/review/security.append.md']);
+        var bad = [
+            { promptAppend: { security: 'not-an-array' } },
+            { promptAppend: { security: ['.md'] }, _expect: false },
+            { promptAppend: { security: [''] } },
+            { promptAppend: { security: [3] } },
+            { promptAppend: [] }
+        ];
+        for (var i = 0; i < bad.length; i++) {
+            var e = validationErrorMessage(function() {
+                mod.validateReviewPolicy(bad[i], 'test');
+            });
+            assert.ok(e, 'promptAppend junk case ' + i + ' must throw');
+        }
+    });
+
+    test('resolveReviewPolicy carries the pool keys through the jobParams string path', function() {
+        var p = mod.resolveReviewPolicy(null, {
+            reviewPolicy: JSON.stringify({ reviewers: { legal: { isEnabled: true } }, promptAppend: { legal: ['.dmtools/review/legal.append.md'] } })
+        });
+        assert.deepEqual(p.reviewers.legal, { isEnabled: true });
+        assert.deepEqual(p.promptAppend.legal, ['.dmtools/review/legal.append.md']);
+    });
+
+    test('junk tuning entries and empty keys are hard ReviewPolicyValidationErrors (name pinned)', function() {
+        var junk = [
+            { reviewers: { security: 'yes' } },      // non-object tuning entry
+            { reviewers: { '': { isEnabled: true } } }, // empty reviewer key
+            { promptAppend: { '': ['x.md'] } }       // empty append key
+        ];
+        for (var i = 0; i < junk.length; i++) {
+            var e = validationErrorMessage(function() {
+                mod.validateReviewPolicy(junk[i], 'test');
+            });
+            assert.ok(e, 'junk case ' + i + ' must throw');
+            assert.equal(e.name, 'ReviewPolicyValidationError');
+        }
+    });
+});

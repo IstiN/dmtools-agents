@@ -1,0 +1,5 @@
+{
+  "name": "base",
+  "isRequired": false,
+  "lens": ".dmtools/review/own.md"
+}

@@ -408,11 +408,15 @@ suite('retryMergeGithubPR: verdict gate at the merge instant (gh-1416)', functio
         assert.equal(r.calls.merges.length, 1);
     });
 
-    test('unreadable comment read -> merges, fail-open (logged)', function () {
+    test('unreadable comment read -> verdict gate fail-open, merge gate fail-closed (gh-1406 pool clause)', function () {
+        // The verdict gate absorbs its own read fault (gh-1416, unchanged);
+        // the merge gate reads the SAME comments eagerly for the gh-1406
+        // required-reviewer clause — a broken read there cannot classify as
+        // "no markers" (the #1319 pathology rule, gh-1370 semantics): defer.
         var r = runLane({ comments: [], getCommentsThrows: '500 boom', prDetail: prDetail() });
-        assert.equal(r.result, true, 'a broken read must not hold the merge');
-        assert.equal(r.calls.merges.length, 1);
-        assert.equal(holdsPosted(r.calls).length, 0);
+        assert.equal(r.result, false, 'a broken read must not read as "no required markers" — the merge defers');
+        assert.equal(r.calls.merges.length, 0);
+        assert.equal(holdsPosted(r.calls).length, 0, 'the gate faulted before any marker post — no comment spam');
     });
 
     test('unconfigured machineAuthor -> no trusted records, merges as today', function () {

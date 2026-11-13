@@ -1,0 +1,5 @@
+{
+  "name": "rounds",
+  "lens": ".dmtools/review/legal.lens.md",
+  "rounds": ["all", "first"]
+}

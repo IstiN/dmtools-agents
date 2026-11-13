@@ -7,14 +7,25 @@ Example PR test automation review outputs — keep concise:
   "summary": "Test uses hardcoded selectors and sleeps instead of explicit waits. Architecture violates layered design.",
   "generalComment": "outputs/pr_review_general.md",
   "inlineComments": [
-    {"path":"testing/tests/TEST-123/test_login.py","line":34,"body":"🚨 BLOCKING: Hardcoded selector — Use Page Object method login_page.username_field instead of raw page.locator('#user').","severity":"BLOCKING"},
-    {"path":"testing/tests/TEST-123/test_login.py","line":45,"body":"🚨 BLOCKING: time.sleep(5) — Replace with Playwright's expect(...).to_be_visible(timeout=5000).","severity":"BLOCKING"},
-    {"path":"testing/tests/TEST-123/test_login.py","line":12,"body":"⚠️ IMPORTANT: Missing config.yaml — Each test folder must include config.yaml with framework, platform, and dependencies.","severity":"IMPORTANT"},
-    {"path":"testing/components/pages/login_page.py","line":8,"body":"💡 SUGGESTION: Add type hints — Constructor parameters lack types. Add driver: IWebDriver and return types.","severity":"SUGGESTION"},
-    {"path":"testing/tests/TEST-123/test_login.py","line":20,"body":"🪶 NIT: Import order — stdlib imports should precede third-party ones.","severity":"NIT"}
+    {"path":"testing/tests/TEST-123/test_login.py","line":34,"comment":"outputs/pr_review_comments/comment1.md","severity":"BLOCKING"},
+    {"path":"testing/tests/TEST-123/test_login.py","line":45,"comment":"outputs/pr_review_comments/comment2.md","severity":"BLOCKING"},
+    {"path":"testing/tests/TEST-123/test_login.py","line":12,"comment":"outputs/pr_review_comments/comment3.md","severity":"IMPORTANT"},
+    {"path":"testing/components/pages/login_page.py","line":8,"comment":"outputs/pr_review_comments/comment4.md","severity":"SUGGESTION"},
+    {"path":"testing/tests/TEST-123/test_login.py","line":20,"comment":"outputs/pr_review_comments/comment5.md","severity":"NIT"}
   ],
   "issueCounts": {"blocking":2,"important":1,"suggestions":1,"nits":1}
 }
+```
+
+Each `comment` field references a file under `outputs/pr_review_comments/`
+holding the finding text (the base output contract). Example
+`outputs/pr_review_comments/comment1.md`:
+
+```markdown
+🚨 **BLOCKING: Hardcoded selector**
+
+Use the Page Object method `login_page.username_field` instead of the raw
+`page.locator('#user')`.
 ```
 
 **Severity boundary (4 tiers)**: a 🪶 NIT changes nothing behavioral and

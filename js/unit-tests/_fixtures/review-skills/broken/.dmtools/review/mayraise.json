@@ -1,0 +1,5 @@
+{
+  "name": "mayraise",
+  "lens": ".dmtools/review/legal.lens.md",
+  "mayRaise": ["HUGE"]
+}

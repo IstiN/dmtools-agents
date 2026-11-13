@@ -34,9 +34,14 @@
 'use strict';
 
 var reviewVerdicts = require('./reviewVerdicts.js');
+// gh-1406: the reviewer-pool schema (tiers, rounds, tuning keys, promptAppend,
+// skill files) lives in reviewPoolSchema.js — this module re-exports its
+// policy-side half (same public surface, CRAP-split by convention).
+var poolSchema = require('./reviewPoolSchema.js');
 
 // The 4-tier severity enum (gh-1351: NIT joins BLOCKING/IMPORTANT/SUGGESTION).
-var TIERS = ['BLOCKING', 'IMPORTANT', 'SUGGESTION', 'NIT'];
+// Owned by the pool schema; re-exported for the census vocabulary.
+var TIERS = poolSchema.TIERS;
 
 // The per-tier lap + fix enums (epic §4.2 schema).
 var ROUND_VALUES = ['rework', 'polish', 'none'];
@@ -48,6 +53,11 @@ var FIX_VALUES = ['mandatory', 'opportunistic', 'never'];
 // BitsAI-CR pattern). Majority voting may later land as `filter` with N
 // passes — the enum stays two-valued until that trial data exists.
 var VERIFICATION_VALUES = ['none', 'filter'];
+
+// gh-1406 §2/§3: the reviewer-pool tunable fields + §6 round flags — owned
+// (and validated) by the pool schema; re-exported here for the pool modules.
+var POOL_TUNABLE_FIELDS = poolSchema.POL_TUNABLE_FIELDS;
+var POOL_ROUND_FLAGS = poolSchema.POL_ROUND_FLAGS;
 
 // The known presets (epic §4.2).
 var PRESETS = ['default', 'fix-everything', 'relaxed', 'investigation'];
@@ -235,14 +245,22 @@ function validateSeverityEntry(tier, raw) {
 /** Shape gate: the policy must be a plain object with known keys only. */
 function validatePolicyShape(raw) {
     if (!isPlainObject(raw)) {
-        throw policyError('reviewPolicy must be an object { preset, severities, bounds, identity, verification }, got: ' + JSON.stringify(raw));
+        throw policyError('reviewPolicy must be an object { preset, severities, bounds, identity, verification, required, reviewers, promptAppend }, got: ' + JSON.stringify(raw));
     }
-    var unknown = unknownKeysOf(raw, { preset: 1, severities: 1, bounds: 1, identity: 1, verification: 1 });
+    var unknown = unknownKeysOf(raw, { preset: 1, severities: 1, bounds: 1, identity: 1, verification: 1, required: 1, reviewers: 1, promptAppend: 1 });
     if (unknown.length > 0) {
         throw policyError('reviewPolicy has unknown key(s): ' + unknown.join(', ') +
-            ' — known keys: preset, severities, bounds, identity, verification');
+            ' — known keys: preset, severities, bounds, identity, verification, required, reviewers, promptAppend');
     }
 }
+
+// ── gh-1406: the reviewer-pool keys (required, reviewers, promptAppend) ─────
+//
+// The validators live in reviewPoolSchema.js (validateRounds,
+// validateReviewerTuning, validateReviewersTuning, validatePromptAppend —
+// they throw the same ReviewPolicyValidationError family this module has
+// always thrown). validateReviewPolicy applies them to the raw policy keys
+// below; the functions themselves are re-exported unchanged.
 
 /**
  * gh-1403: the verification value — `none` (default) or `filter`. An absent
@@ -329,13 +347,18 @@ function validateReviewPolicy(raw, source) {
     if (raw.identity !== undefined && raw.identity !== null && !isPlainObject(raw.identity)) {
         throw policyError('reviewPolicy.identity must be an object (gh-1332 knobs)');
     }
+    var requiredIsDefault = raw.required === undefined || raw.required === null;
     return {
         preset: preset,
         source: source || 'built-in default',
         verification: resolveVerification(raw),
         severities: severityTableFor(preset, raw.severities),
         bounds: boundsOrDefault(raw),
-        identity: raw.identity || {}
+        identity: raw.identity || {},
+        required: poolSchema.validateRequiredList(raw.required, source),
+        requiredIsDefault: requiredIsDefault,
+        reviewers: poolSchema.validateReviewersTuning(raw.reviewers),
+        promptAppend: poolSchema.validatePromptAppend(raw.promptAppend)
     };
 }
 
@@ -635,6 +658,8 @@ if (typeof module !== 'undefined' && module.exports) {
         ROUND_VALUES: ROUND_VALUES,
         FIX_VALUES: FIX_VALUES,
         VERIFICATION_VALUES: VERIFICATION_VALUES,
+        POOL_TUNABLE_FIELDS: POOL_TUNABLE_FIELDS,
+        POOL_ROUND_FLAGS: POOL_ROUND_FLAGS,
         PRESETS: PRESETS,
         DEFAULT_BOUNDS: DEFAULT_BOUNDS,
         PRESET_TABLES: PRESET_TABLES,
@@ -644,6 +669,10 @@ if (typeof module !== 'undefined' && module.exports) {
         validateReviewPolicy: validateReviewPolicy,
         resolveVerification: resolveVerification,
         verificationPhrase: verificationPhrase,
+        validateRounds: poolSchema.validateRounds,
+        validateReviewerTuning: poolSchema.validateReviewerTuning,
+        validateReviewersTuning: poolSchema.validateReviewersTuning,
+        validatePromptAppend: poolSchema.validatePromptAppend,
         defaultPolicy: defaultPolicy,
         presetPolicy: presetPolicy,
         gatingCensusCount: gatingCensusCount,

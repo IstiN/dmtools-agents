@@ -1,3 +1,8 @@
+<!-- ⚠️ DEPRECATED v1 shim — frozen content, REMOVED in the next major release. -->
+<!-- Live version(s): instructions/pr_review/base/review_verdict_rules.md — update your .dmtools/config.js (cliPrompts / cliPromptOverrides)
+<!-- or .dmtools/runners/*.json to pin the new path. Content below is kept verbatim so configs
+<!-- pinning this old path keep working during the deprecation window.
+
 # Review verdict rules — machine protocol (binding)
 
 The review↔rework loop is a machine, not a conversation: your

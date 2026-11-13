@@ -40,7 +40,7 @@ touched, nothing is posted. Every acceptance replay case below ran through
 | review with ⚠️ open → REQUEST_CHANGES | `⚖️ Machine enforcement (gh-1351): advisory APPROVE → effective REQUEST_CHANGES — ⚠️ IMPORTANT open (1) — gates approval per reviewPolicy` + `✅ IMPORTANT gates approval (gh-1351): allowApproveWithSuggestions cannot approve an open ⚠️` |
 | rework → census important 0 → APPROVE | `⚖️ Machine enforcement (gh-1351): advisory REQUEST_CHANGES → effective APPROVE — no rework-tier threads open (only polish/none tiers) — converges per reviewPolicy` |
 | rework armed on open ⚠️ | `✅ armReworkDecision: APPROVE + important > 0 arms important-threads` + `✅ reconcileDecision: APPROVE winner with important > 0 keeps the rework arm (census exception)` |
-| false ⚠️ → downgrade-with-justification converges | downgrade protocol is contractual, no code change: `review_policy.md` run context + `instructions/pr_review/review_verdict_rules.md` carry it (`✅ carries the downgrade protocol wording (epic §3 escape hatch)`); the review instructions classify a justified downgrade 💡 in the next census, so the same machine gate converges to APPROVE |
+| false ⚠️ → downgrade-with-justification converges | downgrade protocol is contractual, no code change: `review_policy.md` run context + `instructions/pr_review/base/review_verdict_rules.md` carry it (`✅ carries the downgrade protocol wording (epic §3 escape hatch)`); the review instructions classify a justified downgrade 💡 in the next census, so the same machine gate converges to APPROVE |
 
 ### 3. Density replay
 

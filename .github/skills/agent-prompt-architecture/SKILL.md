@@ -72,7 +72,7 @@ module.exports = {
         pr_review: [
             './.dmtools/prompts/reviewer_role.md',
             './.dmtools/prompts/review_focus.md',
-            './agents/instructions/pr_review/general_guidelines.md',
+            './agents/instructions/pr_review/generalist/lens.md',
             './agents/instructions/scm/github_pr_review_format.md'
         ]
     },

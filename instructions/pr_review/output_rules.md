@@ -1,3 +1,8 @@
+<!-- ⚠️ DEPRECATED v1 shim — frozen content, REMOVED in the next major release. -->
+<!-- Live version(s): instructions/pr_review/base/input_context.md + instructions/pr_review/base/output_rules.md — update your .dmtools/config.js (cliPrompts / cliPromptOverrides)
+<!-- or .dmtools/runners/*.json to pin the new path. Content below is kept verbatim so configs
+<!-- pinning this old path keep working during the deprecation window.
+
 ```mermaid
 flowchart TD
     O1["Write outputs/pr_review.json — structured data for GitHub PR review"]

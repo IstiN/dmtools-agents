@@ -1,0 +1,5 @@
+{
+  "name": "base",
+  "lens": "instructions/review/base-lens.md",
+  "isRequired": true
+}

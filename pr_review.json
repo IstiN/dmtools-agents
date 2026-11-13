@@ -92,7 +92,7 @@
                 },
                 "comment": {
                   "type": "string",
-                  "description": "Path to a markdown file under outputs/pr_review_comments/ containing the comment text — NOT the comment text itself. See instructions/pr_review/output_rules.md and few_shots.md."
+                  "description": "Path to a markdown file under outputs/pr_review_comments/ containing the comment text \u2014 NOT the comment text itself. See instructions/pr_review/base/output_rules.md and generalist/few_shots.md."
                 },
                 "body": {
                   "type": "string"
@@ -138,14 +138,17 @@
     },
     "inputJql": "key = JD-107",
     "cliPrompts": [
-      "Senior Code Reviewer & Security Expert",
+      "Senior Code Reviewer",
       "./agents/instructions/common/agent_task_preamble.md",
       "./agents/instructions/common/review_coding_guidelines.md",
-      "./agents/instructions/pr_review/general_guidelines.md",
-      "./agents/instructions/pr_review/output_rules.md",
-      "./agents/instructions/pr_review/formatting_rules.md",
-      "./agents/instructions/pr_review/few_shots.md",
-      "./agents/instructions/pr_review/review_verdict_rules.md",
+      "./agents/instructions/pr_review/base/input_context.md",
+      "./agents/instructions/pr_review/base/output_rules.md",
+      "./agents/instructions/pr_review/base/registry_protocol.md",
+      "./agents/instructions/pr_review/base/formatting_rules.md",
+      "./agents/instructions/pr_review/base/few_shots_format.md",
+      "./agents/instructions/pr_review/generalist/lens.md",
+      "./agents/instructions/pr_review/generalist/few_shots.md",
+      "./agents/instructions/pr_review/base/review_verdict_rules.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md",
       {

@@ -299,7 +299,7 @@ module.exports = {
 
 - **Instruction files are part of dmtools-agents** (extensions of the
   default agents): `instructions/common/github_comment_format.md`,
-  `instructions/pr_review/review_verdict_rules.md`. Runner configs
+  `instructions/pr_review/base/review_verdict_rules.md`. Runner configs
   reference them through the agents checkout mount:
   `./factory-agents/instructions/…`.
 

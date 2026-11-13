@@ -190,6 +190,88 @@ function dirOf(p) { return p.slice(0, p.lastIndexOf('/')); }
 
 function isLegacy(dir) { return LEGACY_DIRS.indexOf(dir) !== -1; }
 
+// R13 helper (pure): every tracked instructions/*.md that is a frozen v1
+// shim — a file whose header carries the DEPRECATED v1 banner and names the
+// moved live target(s) in its "Live version(s):" comment lines — mapped as
+// livePath -> shimPath. Self-sufficient walk (normalized file_exists shape —
+// boolean `true` in the dmtools host, `{exists: bool}` in the node coverage
+// harness): R13 must not ride collectInstructionFiles, whose descent guard is
+// shape-sensitive, so R2/R3's historical behavior here is left untouched.
+// ─ pr-1465 CRAP-split: the v1-shim index decomposed into pinned pure helpers ─
+
+// gh-1244 host-bridge parity: file_exists is boolean `true` in the dmtools
+// host but `{exists: bool}` in the node coverage harness — a directory check
+// must accept both shapes.
+function isTrueishExists(ex) {
+    if (ex === true) return true;
+    if (!ex || typeof ex !== 'object') return false;
+    return ex.exists === true;
+}
+
+// A shim opens with HTML-comment banner lines; the banner is everything
+// before the first markdown heading (a file without one falls back to a
+// 400-char window).
+function bannerOf(txt) {
+    var cut = String(txt).indexOf('\n# ');
+    return txt.slice(0, cut === -1 ? 400 : cut);
+}
+
+// The live target path(s) a frozen v1 shim's BANNER names — [] when the text
+// is not a shim (no DEPRECATED v1 shim marker) or names no targets.
+function shimBannerPaths(txt) {
+    if (txt === null || txt === undefined || String(txt).indexOf('DEPRECATED v1 shim') === -1) return [];
+    var paths = [];
+    var m, livePat = /((?:instructions|prompts)\/[A-Za-z0-9_\-./]+\.(?:md|js))/g;
+    while ((m = livePat.exec(bannerOf(txt))) !== null) paths.push(m[1]);
+    return paths;
+}
+
+// file_list shape normalization + the dotfile skip: repo-relative entry
+// names in host order, hidden entries dropped. NOT a directory → null:
+// file_list THROWS on a file in the dmtools host (FileSystemException
+// "Not a directory" — pr-1465 canonical suite crashed R13 descending into
+// instructions/review/base.json) but returns null in the node coverage
+// harness — both spellings must read as "not a directory".
+function dirEntriesOf(dir) {
+    var out;
+    try {
+        out = file_list(fsPath(dir));
+    } catch (eList) {
+        return null;
+    }
+    if (out === null || out === undefined) return null;
+    if (typeof out === 'string') out = JSON.parse(out);
+    if (!out || !out.entries) return null;
+    return out.entries.map(function (e) {
+        var s = String(e).replace(/\\/g, '/');
+        return s.slice(s.lastIndexOf('/') + 1);
+    }).filter(function (n) { return n[0] !== '.'; });
+}
+
+function v1ShimIndex() {
+    var index = {};
+    function walk(dir) {
+        var names = dirEntriesOf(dir);
+        if (!names) return;
+        names.forEach(function (name) {
+            var rel = dir + '/' + name;
+            // Branch order IS the sensor: file_exists is truthy for plain
+            // FILES (both host shapes), so the .md read must come FIRST —
+            // descent-before-read sent every real .md into walk(rel), where
+            // file_list on a file yields no entries and the index silently
+            // degraded to {} with the suite green (R13 dead, pr-1465
+            // review 2026-11-13). .md files are files, never descent targets.
+            if (/\.md$/.test(rel)) {
+                shimBannerPaths(readText(rel)).forEach(function (live) { index[live] = rel; });
+            } else if (isTrueishExists(file_exists({ path: fsPath(rel) }))) {
+                walk(rel);
+            }
+        });
+    }
+    walk('instructions');
+    return index;
+}
+
 // ── tests ────────────────────────────────────────────────────────────────────
 
 suite('instructionRefs — pack reference integrity', function () {
@@ -253,7 +335,7 @@ suite('instructionRefs — pack reference integrity', function () {
             '#600 regression: github_comment_format.md is no longer reachable ' +
             '— story_development/bug_development/pr_review/pr_rework packs ' +
             'would ship without it (live crash 2026-10-01)');
-        assert.ok(c.reachable['instructions/pr_review/review_verdict_rules.md'],
+        assert.ok(c.reachable['instructions/pr_review/base/review_verdict_rules.md'],
             '#605 regression: review_verdict_rules.md is no longer reachable ' +
             '— the pr_review pack would ship without it (live crash pr-320)');
         assert.ok(c.reachable['prompts/codegraph_tools.md'],
@@ -429,12 +511,141 @@ suite('instructionRefs — pack reference integrity', function () {
                 'generated review/prompt text must not leak repo-specific gh-NNN references: ' + text);
         });
     });
+
+    test('R13 (pr-1465): runner pack: refs exist on disk and never pin a moved target while its v1 shim window is open', function () {
+        // Packs are cut from the BASE branch, so a runner pin moved to the
+        // split layout in the SAME PR that moved the file crashes the leg at
+        // setup until a post-merge pack is cut — live: pr-1465 review leg
+        // 2026-11-13, AgentPackException on
+        // pack:instructions/pr_review/base/review_verdict_rules.md against
+        // the released pr_review pack (which still ships the pre-split
+        // paths). The frozen v1 shims exist precisely so the pre-split pin
+        // keeps resolving for the whole deprecation window: runner pins ride
+        // the shim path until the shims are removed (next major), and the
+        // migration flip lands in a follow-up after a pack carries the new
+        // path.
+        var violations = [];
+        var shims = v1ShimIndex();
+        var runnerFiles = listEntries('.dmtools/runners').filter(function (e) {
+            return /\.json$/.test(String(e).replace(/\\/g, '/'));
+        });
+        if (runnerFiles.length === 0) {
+            violations.push('.dmtools/runners: no runner configs enumerated (unreadable directory — the guard must not pass silently)');
+        }
+        runnerFiles.forEach(function (e) {
+            var s = String(e).replace(/\\/g, '/');
+            var rel = '.dmtools/runners/' + s.slice(s.lastIndexOf('/') + 1);
+            var raw = readText(rel);
+            if (raw === null) {
+                violations.push(rel + ': unreadable');
+                return;
+            }
+            var refPat = /pack:((?:instructions|prompts)\/[A-Za-z0-9_\-./]+\.(?:md|js))/g;
+            var m;
+            while ((m = refPat.exec(String(raw))) !== null) {
+                var p = m[1];
+                if (!existsOnDisk(p)) {
+                    violations.push(rel + ': pack ref "' + p + '" does not exist on disk (dangling pin — #600 class)');
+                    continue;
+                }
+                var shim = shims[p];
+                if (shim) {
+                    violations.push(rel + ': pins the moved target "' + p +
+                        '" while its frozen v1 shim "' + shim + '" still exists — pin the shim path; flip to the live path only in a follow-up once a pack release carries it (shims removed at the next major)');
+                }
+            }
+        });
+        assert.deepEqual(violations, [], 'runner pack-ref violations:\n' + violations.join('\n'));
+    });
+});
+
+// ── pr-1465 characterization: v1-shim index helpers ──────────────────────────
+
+suite('instructionRefs — v1-shim index helpers (pr-1465 characterization)', function () {
+
+    test('isTrueishExists: both host shapes — boolean true and the {exists} wrapper', function () {
+        assert.equal(isTrueishExists(true), true);
+        assert.equal(isTrueishExists({ exists: true }), true);
+        assert.equal(isTrueishExists({ exists: false }), false);
+        assert.equal(isTrueishExists(false), false);
+        assert.equal(isTrueishExists(null), false);
+        assert.equal(isTrueishExists(undefined), false);
+        assert.equal(isTrueishExists('true'), false, 'wrong primitive type is not an exists shape');
+        assert.equal(isTrueishExists(1), false);
+    });
+
+    test('bannerOf: banner is everything before the first heading; no heading falls back to a 400-char window', function () {
+        assert.equal(bannerOf('<!-- line1 -->\n# Heading\nbody'), '<!-- line1 -->');
+        var noHeading = new Array(99).join('x');
+        assert.equal(bannerOf(noHeading), noHeading, 'no heading — the whole (short) text');
+        var long1000 = new Array(1001).join('y');
+        assert.equal(bannerOf(long1000).length, 400, 'no heading — clamped to 400 chars');
+    });
+
+    test('shimBannerPaths: live paths from a shim banner; [] for non-shims and for banners without targets', function () {
+        var shim = '<!-- \u26A0\uFE0F DEPRECATED v1 shim \u2014 frozen content. -->\n' +
+            '<!-- Live version(s): instructions/pr_review/base/review_verdict_rules.md \u2014 update your pins. -->\n' +
+            '\n# Heading\nbody';
+        assert.deepEqual(shimBannerPaths(shim), ['instructions/pr_review/base/review_verdict_rules.md']);
+        assert.deepEqual(shimBannerPaths('# plain file, no shim marker\n'), []);
+        assert.deepEqual(shimBannerPaths(null), []);
+        assert.deepEqual(shimBannerPaths(undefined), []);
+        assert.deepEqual(shimBannerPaths('<!-- DEPRECATED v1 shim, but no path named. -->\n# H\n'), []);
+        // a live path mentioned BELOW the banner (in the body) is not collected
+        var bodyMention = '<!-- DEPRECATED v1 shim \u2014 see instructions/pr_review/base/x.md. -->\n# H\ninstructions/pr_review/base/y.md\n';
+        assert.deepEqual(shimBannerPaths(bodyMention), ['instructions/pr_review/base/x.md']);
+    });
+
+    test('shimBannerPaths: collects every named target in banner order (multi-line banners)', function () {
+        var shim = '<!-- DEPRECATED v1 shim. -->\n' +
+            '<!-- Split into instructions/pr_review/base/input_context.md and -->\n' +
+            '<!-- instructions/pr_review/base/output_rules.md (both live). -->\n' +
+            '\n# Heading\n';
+        assert.deepEqual(shimBannerPaths(shim), [
+            'instructions/pr_review/base/input_context.md',
+            'instructions/pr_review/base/output_rules.md'
+        ]);
+    });
+
+    // Host-shape pin for the walk's descent guard: file_list on a FILE
+    // throws in the dmtools host and returns null in the node harness —
+    // dirEntriesOf must map BOTH spellings to null ("not a directory"),
+    // so the walk never crashes on a file inside instructions/ (pr-1465
+    // canonical dmtools suite: R13 crashed on instructions/review/base.json).
+    test('dirEntriesOf: a file path reads as "not a directory" (null); a real directory lists entries', function () {
+        assert.equal(dirEntriesOf('js/unit-tests/test_instructionRefs.js'), null,
+            'a file path must normalize to null, not entries and not a throw');
+        var dirEntries = dirEntriesOf('instructions');
+        assert.ok(Array.isArray(dirEntries) && dirEntries.length > 0,
+            'a real directory still lists its (dotfile-skipped) entries');
+    });
+
+    // Composite pin (end-to-end, real tree): the helper pins above cannot
+    // see a broken ASSEMBLY — the pr-1465 CRAP-split reordered walk's
+    // branches (descent before the .md read), and since file_exists is
+    // truthy for plain files, every real .md entered walk() and the index
+    // silently degraded to {} with the suite still green (R13's guard dead
+    // without a single red). This test IS that sensor: the index must map
+    // every live target a shim banner names back to the shim path.
+    test('v1ShimIndex: end-to-end over the real tree — all 7 shims map their live targets (livePath -> shimPath)', function () {
+        var index = v1ShimIndex();
+        var expected = {
+            'instructions/pr_review/generalist/few_shots.md': 'instructions/pr_review/few_shots.md',
+            'instructions/pr_review/base/formatting_rules.md': 'instructions/pr_test_automation_review/formatting_rules.md',
+            'instructions/pr_review/generalist/lens.md': 'instructions/pr_review/general_guidelines.md',
+            'instructions/pr_review/base/input_context.md': 'instructions/pr_review/output_rules.md',
+            'instructions/pr_review/base/registry_protocol.md': 'instructions/pr_review/general_guidelines.md',
+            'instructions/pr_review/base/output_rules.md': 'instructions/pr_test_automation_review/output_rules.md',
+            'instructions/pr_review/base/review_verdict_rules.md': 'instructions/pr_review/review_verdict_rules.md'
+        };
+        assert.deepEqual(index, expected,
+            'v1ShimIndex drifted from the real shim set (a dead index returns {})');
+    });
 });
 
 // ── gh-1230 CRAP characterization: reference-queue helpers ───────────────────
 
 suite('instructionRefs — reference queue helpers (gh-1230 characterization)', function () {
-
     test('queueConfigReferences: only path-shaped .md/.js strings are queued (recursively)', function () {
         var queue = [];
         queueConfigReferences('instructions/common/github_comment_format.md', queue);
