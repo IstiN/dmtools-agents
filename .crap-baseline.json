@@ -3,21 +3,15 @@
   "violations": [
     {
       "gate": "similarity",
-      "file": "instructions/pr_review/base/registry_protocol.md",
-      "line": null,
-      "message": "similar to instructions/pr_review/general_guidelines.md, instructions/pr_review/generalist/lens.md — near-duplicate content (jaccard 0.15, containment 0.88); reuse the shared source, generate one of them, or delete the stale copy"
-    },
-    {
-      "gate": "similarity",
       "file": "instructions/pr_review/general_guidelines.md",
       "line": null,
-      "message": "similar to instructions/pr_review/base/registry_protocol.md, instructions/pr_review/generalist/lens.md — near-duplicate content (jaccard 0.76, containment 0.96); reuse the shared source, generate one of them, or delete the stale copy"
+      "message": "similar to instructions/pr_review/generalist/lens.md — near-duplicate content (jaccard 0.84, containment 0.96); reuse the shared source, generate one of them, or delete the stale copy"
     },
     {
       "gate": "similarity",
       "file": "instructions/pr_review/generalist/lens.md",
       "line": null,
-      "message": "similar to instructions/pr_review/base/registry_protocol.md, instructions/pr_review/general_guidelines.md — near-duplicate content (jaccard 0.76, containment 0.96); reuse the shared source, generate one of them, or delete the stale copy"
+      "message": "similar to instructions/pr_review/general_guidelines.md — near-duplicate content (jaccard 0.84, containment 0.96); reuse the shared source, generate one of them, or delete the stale copy"
     },
     {
       "gate": "similarity",
