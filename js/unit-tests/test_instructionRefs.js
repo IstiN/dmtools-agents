@@ -460,10 +460,15 @@ suite('instructionRefs — pack reference integrity', function () {
         // path.
         var violations = [];
         var instructionFiles = collectInstructionFiles('instructions');
-        listEntries('.dmtools/runers').forEach(function (e) {
+        var runnerFiles = listEntries('.dmtools/runners').filter(function (e) {
+            return /\.json$/.test(String(e).replace(/\\/g, '/'));
+        });
+        if (runnerFiles.length === 0) {
+            violations.push('.dmtools/runners: no runner configs enumerated (unreadable directory — the guard must not pass silently)');
+        }
+        runnerFiles.forEach(function (e) {
             var s = String(e).replace(/\\/g, '/');
-            if (s.slice(-5) !== '.json') return;
-            var rel = '.dmtools/runers/' + s.slice(s.lastIndexOf('/') + 1);
+            var rel = '.dmtools/runners/' + s.slice(s.lastIndexOf('/') + 1);
             var raw = readText(rel);
             if (raw === null) {
                 violations.push(rel + ': unreadable');
