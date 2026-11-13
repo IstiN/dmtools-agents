@@ -106,6 +106,43 @@ suite('buildEncodedConfig payload', function() {
         assert.equal(decoded.params.inputJql, 'key = TS-24');
     });
 
+
+    test('rule.paramPatches merges into customParams LAST (the gh-1471 per-leg dispatch shape)', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({ params: { customParams: { responseTarget: 'scm', keep: 'agent' } } })
+        });
+        var encoded = builder.buildEncodedConfig('T-1',
+            { configFile: 'agents/test.json',
+              paramPatches: { reviewerPoolLeg: { reviewer: 'security', contract: 'candidates', required: true, round: 'first', head: 'abc1234' } } },
+            {});
+        var decoded = decode(encoded);
+        assert.equal(decoded.params.customParams.responseTarget, 'scm', 'agent params survive');
+        assert.equal(decoded.params.customParams.keep, 'agent');
+        assert.equal(decoded.params.customParams.reviewerPoolLeg.reviewer, 'security');
+        assert.equal(decoded.params.customParams.reviewerPoolLeg.contract, 'candidates');
+        assert.equal(decoded.params.customParams.reviewerPoolLeg.head, 'abc1234');
+    });
+
+    test('rule.paramPatches wins over project config patches', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({ params: { customParams: { marker: 'agent' } } })
+        }, { jobParamPatches: { test: { customParams: { marker: 'project' } } } });
+        var encoded = builder.buildEncodedConfig('T-1',
+            { configFile: 'agents/test.json', paramPatches: { marker: 'leg' } }, {});
+        var decoded = decode(encoded);
+        assert.equal(decoded.params.customParams.marker, 'leg', 'the per-leg patch is the final word');
+    });
+
+    test('a missing or non-object paramPatches changes nothing', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({ params: { customParams: { marker: 'agent' } } })
+        });
+        var decoded = decode(builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json', paramPatches: null }, {}));
+        assert.equal(decoded.params.customParams.marker, 'agent');
+        var decoded2 = decode(builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json', paramPatches: 'nope' }, {}));
+        assert.equal(decoded2.params.customParams.marker, 'agent');
+    });
+
     test('copies primitive, boolean, number, array and object params from agent JSON', function() {
         var builder = loadBuilder({
             'agents/test.json': JSON.stringify({

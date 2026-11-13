@@ -1,17 +1,9 @@
 /**
- * Post PR Review Comments Action
- * PostJSAction that:
- * 1. Reads outputs/pr_review.json with structured review data
- * 2. Posts general review comment to GitHub PR using github_add_pr_comment
- * 3. Posts inline code comments to GitHub PR using github_add_inline_comment
- * 4. Posts a formatted review summary to the ticket (Jira/ADO/GitHub via common/trackers.js)
- * 5. Updates ticket status based on review outcome
- * 6. Adds labels to indicate review completion
- *
- * gh-926: action() is a thin executor over a pipeline of named steps.
- * Pure decisions live in parse/normalize/decide/build/resolve helpers
- * (unit-tested directly); side-effecting steps live in single-purpose
- * functions invoked by action() in the same order as before the flattening.
+ * Post PR Review Comments Action — reads outputs/pr_review.json, posts the
+ * ONE review (general + inline threads), stamps the gh-807 verdict record +
+ * gh-1332 registry, applies the ticket outcome. gh-926: action() is a thin
+ * executor over a pipeline of named steps; pure decisions live in
+ * unit-tested helpers, side-effecting steps in single-purpose functions.
  */
 
 const {
