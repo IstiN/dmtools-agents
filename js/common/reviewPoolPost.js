@@ -124,6 +124,7 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
     // marker collection. roundCtx.inJob = { completed, unavailable,
     // candidates (validated records) } from reviewPoolInJob.runSpecialists.
     var inJobRound = roundCtx.inJob || {};
+    var coverageNotes = Array.isArray(inJobRound.coverageNotes) ? inJobRound.coverageNotes : [];
     var completed = Array.isArray(inJobRound.completed) ? inJobRound.completed : [];
     var unavailable = Array.isArray(inJobRound.unavailable) ? inJobRound.unavailable : expectedNames.slice();
     var records = Array.isArray(inJobRound.candidates) ? inJobRound.candidates : [];
@@ -194,6 +195,7 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
         unavailable: collect.unavailable,
         roundName: plan.round,
         partialCoverage: partialCoverage,
+        coverageNotes: coverageNotes,
         merged: merged.merged,
         applied: applied,
         dropped: dropped

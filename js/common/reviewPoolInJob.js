@@ -40,6 +40,7 @@ var SAFE_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 var DEFAULT_SPECIALIST_TIMEOUT_SECONDS = 900;
 var DEFAULT_ROUND_BUDGET_SECONDS = 180;
 var CANDIDATES_FILE_PREFIX = 'pr_review_candidates-';
+var COVERAGE_FILE_PREFIX = 'pr_review_coverage-';
 
 /** 'first' on a clean review, 'hunks' on a re-review with new hunks. */
 function roundTypeOf(roundCtx) {
@@ -79,12 +80,52 @@ function selectSpecialists(pool, roundCtx) {
 }
 
 /**
- * The specialist's prompt file content: identity + lens + the candidates
- * contract + the termination rules. The lens/contract paths are passed as
- * REPO PATHS (the child reads them itself — the content stays single-sourced
- * in the pack).
+ * The coverage-file contract (the gh-1471 incremental-review memory). Every
+ * pass plans FIRST (covered=[], pending=<the full intended file list>) and
+ * moves files pending → covered as it goes — a killed session leaves the
+ * file behind, so the next pass continues where this one stopped (never a
+ * permanent silent gap). The SKIP rule is machine-verified: a covered file
+ * absent from the current hunks is unchanged since the previous pass.
  */
-function buildSpecialistPrompt(skill, roundCtx) {
+function coverageSection(roundCtx, prev) {
+    var head = String((roundCtx && roundCtx.headSha) || '');
+    var lines = [
+        '## Coverage file (the only thing that survives your session)',
+        '',
+        '- File: `' + coveragePathOf('__REVIEWER__') + '` — write it FIRST, before any review:',
+        '  ```json',
+        '  { "reviewer": "__REVIEWER__", "head": "' + head + '",',
+        '    "covered": [],',
+        '    "pending": ["<every repo file you plan to review>"],',
+        '    "truncated": false, "at": "<iso timestamp>" }',
+        '  ```',
+        '- Move files `pending` → `covered` as you finish them (re-write the file).',
+        '- NEAR THE CAP: set `"truncated": true` — unfinished files stay `pending`.'
+    ];
+    if (prev && (prev.covered.length > 0 || prev.pending.length > 0)) {
+        lines = lines.concat([
+            '',
+            '### Your previous pass (head ' + (prev.head || '?') + ')',
+            '',
+            '- Covered then: ' + (prev.covered.length > 0 ? prev.covered.map(function(p) { return '`' + p + '`'; }).join(', ') : '(none)'),
+            '- Pending then (never finished): ' + (prev.pending.length > 0 ? prev.pending.map(function(p) { return '`' + p + '`'; }).join(', ') : '(none)'),
+            '- SKIP the covered files that are NOT in the current hunks — they are',
+            '  unchanged since your pass (machine-verified; the hunks file is the delta',
+            '  since the last reviewed head).',
+            '- REVIEW: every current-hunks path PLUS every still-pending file —',
+            '  start with the pending ones, they are the oldest debt.'
+        ]);
+    }
+    return lines.join('\n');
+}
+
+/**
+ * The specialist's prompt file content: identity + lens + the coverage-file
+ * contract + the candidates contract + the termination rules. The lens/
+ * contract paths are passed as REPO PATHS (the child reads them itself —
+ * the content stays single-sourced in the pack).
+ */
+function buildSpecialistPrompt(skill, roundCtx, prevCoverage) {
     var name = skill.name;
     var lines = [
         '# Reviewer pool specialist — ' + name + ' (in-job round)',
@@ -133,6 +174,7 @@ function buildSpecialistPrompt(skill, roundCtx) {
         '  `"truncated": true` — a partial honest record is a valid result;',
         '  silence is not. Do not pad to seem complete.',
         '',
+        coverageSection(roundCtx, prevCoverage).split('__REVIEWER__').join(name),
         '## Output contract (strict)',
         '',
         'Write EXACTLY ONE file: `' + candidatesPathOf(name) + '` with this JSON shape:',
@@ -170,86 +212,153 @@ function buildSpecialistCommand(promptPath, timeoutSeconds) {
 }
 
 /**
- * One specialist round. io = { executeCommand, writeFile, readFile, nowIso }.
- * Returns { completed, unavailable, candidates, results } where candidates
- * are validated candidatesRecordFromPayload records (same-head enforced —
- * a stale file is the reviewer being unavailable for THIS head).
+ * The PARALLEL batch: every specialist runs backgrounded inside one bash,
+ * each under its own gh-75 cap; `wait` settles the batch; the OUTER timeout
+ * caps the whole batch at the round budget. If the outer cap fires, the
+ * in-flight children are orphaned but each self-terminates at its own
+ * per-specialist cap — bounded by design. The candidates files are the only
+ * round state: whoever wrote theirs before dying is in.
+ *
+ * The specialists are LM-bound sessions with per-reviewer files (no
+ * collisions) — parallel is safe; the wall clock stops scaling with the
+ * reviewer count (the gh-1471 in-job decision: one cli_execute_command per
+ * round, bash-only sandbox).
+ */
+function buildBatchCommand(promptPaths, timeoutSeconds, budgetSeconds) {
+    var t = parseInt(timeoutSeconds, 10);
+    if (!(t > 0)) t = DEFAULT_SPECIALIST_TIMEOUT_SECONDS;
+    var b = parseInt(budgetSeconds, 10);
+    if (!(b > 0)) b = DEFAULT_ROUND_BUDGET_SECONDS;
+    var inner = promptPaths.map(function(p) {
+        return 'timeout -k 60 ' + t + ' bash ' + RUN_AGENT_REL + ' ' + p + ' &';
+    }).join('\n') + '\nwait';
+    return 'bash -c "timeout -k 60 ' + b + ' bash -c \'' + inner + '\'"';
+}
+
+/**
+ * One specialist round — PARALLEL. io = { executeCommand, writeFile,
+ * readFile, nowIso }. All prompts are written (each with its previous-pass
+ * coverage memory), ONE composite command spawns every specialist
+ * backgrounded, then the candidates files are read — whoever wrote a valid
+ * same-head record is in; the rest are unavailable with per-specialist
+ * reasons. Returns { completed, unavailable, candidates, results, command,
+ * coverageNotes }.
  */
 function runSpecialists(io, pool, roundCtx) {
     var selected = selectSpecialists(pool, roundCtx);
-    var out = { completed: [], unavailable: [], candidates: [], results: [] };
-    // The round-level wall-clock budget (the security-lens CWE-400
-    // hardening): N sequential specialists x the per-specialist cap can
-    // otherwise park the review lane for hours on a wide pool. Past the
-    // budget the remaining specialists are not STARTED — they are
-    // unavailable for the round (fail-open, same as a timeout).
-    var budgetMs = (parseInt(roundCtx && roundCtx.roundBudgetSeconds, 10) > 0
-        ? parseInt(roundCtx.roundBudgetSeconds, 10) : DEFAULT_ROUND_BUDGET_SECONDS) * 1000;
-    var roundStart = clockMs(io);
+    var out = { completed: [], unavailable: [], candidates: [], results: [],
+        command: '', coverageNotes: [] };
+    var prepped = [];
     for (var i = 0; i < selected.length; i++) {
-        var skill = selected[i];
-        if (i > 0 && clockMs(io) - roundStart >= budgetMs) {
-            var skipped = { reviewer: skill.name, ok: false,
-                reason: 'round budget exhausted after ' + Math.round((clockMs(io) - roundStart) / 1000) +
-                    's — the specialist was not started (fail-open)' };
-            out.results.push(skipped);
-            out.unavailable.push(skill.name);
+        var prep = prepOneSpecialist(io, selected[i], roundCtx);
+        if (!prep.base.ok) {
+            out.results.push(prep.base);
+            out.unavailable.push(selected[i].name);
+            if (prep.coverageNote) out.coverageNotes.push(prep.coverageNote);
             continue;
         }
-        var record = runOneSpecialist(io, skill, roundCtx);
-        out.results.push(record);
-        if (record.ok) {
-            out.completed.push(skill.name);
-            out.candidates.push(record.record);
+        prepped.push(prep);
+    }
+    if (prepped.length > 0) {
+        out.command = buildBatchCommand(
+            prepped.map(function(p) { return p.base.promptPath; }),
+            roundCtx && roundCtx.specialistTimeoutSeconds,
+            roundCtx && roundCtx.roundBudgetSeconds);
+        try {
+            io.executeCommand(out.command);
+        } catch (eSpawn) {
+            // The composite itself failed (spawn-level: the sandbox refused
+            // the invocation, the wrapper exploded) — fail-open: every
+            // spawned specialist is unavailable, the coverage files still
+            // get read (a killed batch may have left memory behind).
+            for (var s = 0; s < prepped.length; s++) {
+                var failed = fail(prepped[s].base, 'spawn failed: ' + (eSpawn.message || String(eSpawn)));
+                out.results.push(failed);
+                out.unavailable.push(prepped[s].skill.name);
+                var note = coverageNoteOf(io, prepped[s].skill.name, failed);
+                if (note) out.coverageNotes.push(note);
+            }
+            prepped.length = 0;
+        }
+    }
+    for (var j = 0; j < prepped.length; j++) {
+        var outcome = readOneOutcome(io, prepped[j].skill, roundCtx, prepped[j].base);
+        out.results.push(outcome.base);
+        if (outcome.base.ok) {
+            out.completed.push(prepped[j].skill.name);
+            out.candidates.push(outcome.base.record);
         } else {
-            out.unavailable.push(skill.name);
+            out.unavailable.push(prepped[j].skill.name);
+            if (outcome.coverageNote) out.coverageNotes.push(outcome.coverageNote);
         }
     }
     return out;
 }
 
-/** The io clock in ms (io.nowIso is the house clock — ISO strings). */
-function clockMs(io) {
-    var t = io && typeof io.nowIso === 'function' ? Date.parse(io.nowIso()) : NaN;
-    return isNaN(t) ? Date.now() : t;
-}
-
-function runOneSpecialist(io, skill, roundCtx) {
+/** Prompt write + the previous-coverage read. A refusal (unsafe identifier)
+ * is a result — the specialist never spawns. */
+function prepOneSpecialist(io, skill, roundCtx) {
     var name = skill.name;
-    var base = { reviewer: name, ok: false, reason: '' };
-    // Defense-in-depth past the schema guard: the identifiers compose the
-    // spawn command string — refuse to build it from anything but path
-    // atoms (the ticket key rides the job context, not the schema).
+    var base = { reviewer: name, ok: false, reason: '', phase: 'prep' };
     var ticket = String((roundCtx && roundCtx.ticketKey) || '');
     if (!SAFE_IDENTIFIER_RE.test(name) || (ticket && !SAFE_IDENTIFIER_RE.test(ticket))) {
-        return fail(base, 'unsafe identifier — refusing to compose the spawn command');
+        return { base: fail(base, 'unsafe identifier — refusing to compose the spawn command') };
     }
     try {
-        var promptPath = writePromptFile(io, skill, roundCtx);
+        var prev = readCoverage(io, name);
+        var promptPath = writePromptFile(io, skill, roundCtx, prev);
         base.promptPath = promptPath;
-        var command = buildSpecialistCommand(promptPath, roundCtx.specialistTimeoutSeconds);
-        base.command = command;
-        io.executeCommand(command);
-        var raw = io.readFile(candidatesPathOf(name));
-        if (!raw) return fail(base, 'no candidates file after the session');
-        var parsed = JSON.parse(raw);
-        var record = candidatesModule.candidatesRecordFromPayload(parsed);
-        if (!record) return fail(base, 'invalid candidates record (reviewer/head/candidates required)');
-        if (roundCtx.headSha && !reviewVerdicts.sameHead(record.head, roundCtx.headSha)) {
-            return fail(base, 'stale candidates (head ' + record.head + ' != ' + roundCtx.headSha + ')');
-        }
-        record.reviewer = name;
-        return Object.assign({}, base, { ok: true, record: record });
+        base.ok = true;
+        return { base: base, skill: skill };
     } catch (e) {
-        return fail(base, e.message || String(e));
+        return { base: fail(base, e.message || String(e)) };
     }
 }
 
-function writePromptFile(io, skill, roundCtx) {
+/** The post-session read: candidates schema + same-head + the coverage note
+ * for a session that died without candidates but left memory behind. */
+function readOneOutcome(io, skill, roundCtx, base) {
+    var name = skill.name;
+    var raw;
+    try { raw = io.readFile(candidatesPathOf(name)); } catch (eRead) { raw = null; }
+    if (!raw) {
+        return { base: fail(base, 'no candidates file after the session'), coverageNote: coverageNoteOf(io, name, base) };
+    }
+    var record = null;
+    try { record = candidatesModule.candidatesRecordFromPayload(JSON.parse(raw)); } catch (eParse) { record = null; }
+    if (!record) {
+        return { base: fail(base, 'invalid candidates record (reviewer/head/candidates required)'),
+            coverageNote: coverageNoteOf(io, name, base) };
+    }
+    if (roundCtx.headSha && !reviewVerdicts.sameHead(record.head, roundCtx.headSha)) {
+        return { base: fail(base, 'stale candidates (head ' + record.head + ' != ' + roundCtx.headSha + ')') };
+    }
+    record.reviewer = name;
+    base.ok = true;
+    base.record = record;
+    return { base: base };
+}
+
+/** The killed-but-covered note: a session without candidates that left
+ * coverage memory — the next pass continues it (never a silent gap). */
+function coverageNoteOf(io, reviewer, base) {
+    var cov = readCoverage(io, reviewer);
+    if (!cov || (cov.covered.length === 0 && cov.pending.length === 0)) return null;
+    return {
+        reviewer: reviewer,
+        text: 'no candidates — coverage memory persisted (' +
+            'covered ' + cov.covered.length + ', pending ' + cov.pending.length +
+            '); the next pass continues it'
+    };
+}
+
+/** The prompt file: input/<ticket>/pool_specialist-<name>.md (or the
+ * roundCtx override) — the coverage memory rides the prompt content. */
+function writePromptFile(io, skill, roundCtx, prevCoverage) {
     var file = roundCtx.promptPathOf
         ? roundCtx.promptPathOf(skill)
         : 'input/' + (roundCtx.ticketKey || 'pool') + '/pool_specialist-' + skill.name + '.md';
-    var written = io.writeFile(file, buildSpecialistPrompt(skill, roundCtx));
+    var written = io.writeFile(file, buildSpecialistPrompt(skill, roundCtx, prevCoverage));
     return written || file;
 }
 
@@ -257,16 +366,9 @@ function fail(base, reason) {
     return Object.assign({}, base, { ok: false, reason: reason });
 }
 
-/**
- * The post action's view of the round: recompute the selection (the same
- * deterministic selectSpecialists the pre-cli runner used) and read each
- * specialist's candidates FILE — completed = a valid same-head record,
- * unavailable = everything else (timeout, crash, invalid, stale). No
- * execution, no markers — files are the only round state.
- */
 function readSpecialistOutcomes(io, pool, roundCtx) {
     var selected = selectSpecialists(pool, roundCtx);
-    var out = { completed: [], unavailable: [], candidates: [], results: [] };
+    var out = { completed: [], unavailable: [], candidates: [], results: [], coverageNotes: [] };
     for (var i = 0; i < selected.length; i++) {
         var name = selected[i].name;
         var raw = null;
@@ -299,6 +401,15 @@ function readSpecialistOutcomes(io, pool, roundCtx) {
                         : 'stale candidates (head ' + (record && record.head) + ')'
             });
         }
+        var cov = readCoverage(io, name);
+        if (cov && (cov.covered.length > 0 || cov.pending.length > 0)) {
+            out.coverageNotes.push({
+                reviewer: name,
+                text: 'no candidates — coverage memory persisted (covered ' +
+                    cov.covered.length + ', pending ' + cov.pending.length +
+                    '); the next pass continues it'
+            });
+        }
     }
     return out;
 }
@@ -325,9 +436,43 @@ function memoryIo(seedFiles, executor) {
     };
 }
 
+/** The per-reviewer coverage file — the ONLY thing that survives a killed
+ * session: the next pass continues where this one stopped. */
+function coveragePathOf(reviewer) {
+    return 'outputs/' + COVERAGE_FILE_PREFIX + reviewer + '.json';
+}
+
+/**
+ * The previous pass's coverage, shape-validated: {reviewer, head, covered[],
+ * pending[], truncated, at}. Anything malformed (or another reviewer's file)
+ * is NO memory — the pass starts blind (fail-open, same as the candidates).
+ */
+function readCoverage(io, reviewer) {
+    var raw;
+    try {
+        raw = io.readFile(coveragePathOf(reviewer));
+    } catch (eRead) { return null; }
+    if (!raw) return null;
+    var parsed;
+    try { parsed = JSON.parse(raw); } catch (eParse) { return null; }
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (String(parsed.reviewer || '') !== reviewer) return null;
+    if (!Array.isArray(parsed.covered) || !Array.isArray(parsed.pending)) return null;
+    return {
+        reviewer: reviewer,
+        head: String(parsed.head || ''),
+        covered: parsed.covered.map(function(p) { return String(p); }),
+        pending: parsed.pending.map(function(p) { return String(p); }),
+        truncated: parsed.truncated === true
+    };
+}
+
 module.exports = {
     SAFE_IDENTIFIER_RE: SAFE_IDENTIFIER_RE,
     DEFAULT_ROUND_BUDGET_SECONDS: DEFAULT_ROUND_BUDGET_SECONDS,
+    buildBatchCommand: buildBatchCommand,
+    coveragePathOf: coveragePathOf,
+    readCoverage: readCoverage,
     roundTypeOf: roundTypeOf,
     selectSpecialists: selectSpecialists,
     buildSpecialistPrompt: buildSpecialistPrompt,

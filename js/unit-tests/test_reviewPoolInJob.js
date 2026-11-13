@@ -105,38 +105,24 @@ test('the CWE-78 guard: a hostile ticket key is refused the same way', function(
     assert.deepStrictEqual(round.unavailable, ['security']);
 });
 
-test('the round budget: past the budget the remaining specialists are not started (fail-open)', function() {
-    // The security-lens CWE-400 hardening: N sequential specialists x 900s
-    // can park the review lane for hours — the round budget stops STARTING
-    // specialists past the cap; they are unavailable (fail-open).
-    var clock = { now: Date.parse('2026-11-13T12:00:00Z') };
-    var spawned = [];
-    var files = {};
-    var HEADV = HEAD;
-    var mkRecord = function(name) {
-        return JSON.stringify({ reviewer: name, head: HEADV, candidates: [], count: 0, truncated: false, at: '2026-11-13T12:00:00Z' });
-    };
-    var io = {
-        nowIso: function() { return new Date(clock.now).toISOString(); },
-        executeCommand: function(cmd) {
-            spawned.push(cmd);
-            clock.now += 70 * 1000; // each session eats 70s of wall clock
-        },
-        writeFile: function(p, c) { files[p] = c; },
-        readFile: function(p) { return Object.prototype.hasOwnProperty.call(files, p) ? files[p] : null; }
-    };
-    // Pre-write the candidates for BOTH specialists (they succeed fast; the
-    // budget is what stops the second START, not the per-specialist cap).
-    files[inJob.candidatesPathOf('alpha')] = mkRecord('alpha');
-    var pool = poolOf([skillOf('alpha'), skillOf('beta')]);
-    var round = inJob.runSpecialists(io, pool, ctxOf({ hasNewHunks: true, newHunkPaths: ['js/x.js'], roundBudgetSeconds: 60 }));
-    assert.deepStrictEqual(round.completed, ['alpha'], 'alpha ran inside the budget');
-    assert.deepStrictEqual(spawned.length, 1, 'beta was NEVER spawned');
-    assert.strictEqual(round.unavailable[0], 'beta');
-    assert.ok(round.results[1].reason.indexOf('round budget exhausted') === 0,
-        'the skip reason names the budget');
+test('the batch command: parallel spawn, per-child caps, the outer round-budget cap', function() {
+    // The parallel in-job decision: every specialist runs backgrounded under
+    // its own gh-75 cap; `wait` settles the batch; the OUTER timeout caps
+    // the whole batch at the round budget — the wall clock stops scaling
+    // with the reviewer count (the security-lens CWE-400 hardening).
+    var cmd = inJob.buildBatchCommand(
+        ['input/gh-1/pool_specialist-alpha.md', 'input/gh-1/pool_specialist-beta.md'],
+        900, 1800);
+    assert.ok((cmd.match(/timeout -k 60 900 bash agents\/scripts\/run-agent.sh/g) || []).length === 2,
+        'each specialist carries its own 900s cap');
+    assert.ok(cmd.indexOf('timeout -k 60 1800') !== -1, 'the outer cap is the round budget');
+    assert.ok(cmd.indexOf('\nwait') !== -1, 'the batch settles on wait');
+    assert.ok(cmd.indexOf('&') !== -1, 'the specialists are backgrounded');
+    // One specialist degenerates to the same shape (a single backgrounded run).
+    var single = inJob.buildBatchCommand(['input/gh-1/pool_specialist-solo.md'], null, null);
+    assert.ok(single.indexOf('timeout -k 60 900') !== -1 && single.indexOf('wait') !== -1,
+        'the defaults apply (900s cap, the default budget)');
 });
-
 test('prompt: the incremental + partial-write discipline (truncated flag)', function() {
     var prompt = inJob.buildSpecialistPrompt(skillOf('security'), ctxOf({ hasNewHunks: true }));
     assert.ok(prompt.indexOf('INCREMENTAL WRITES') !== -1, 'the incremental-write instruction is present');
@@ -219,58 +205,100 @@ function candidatesFile(dir, reviewer, head, findings) {
         JSON.stringify(payload));
 }
 
+function coverageFile(dir, reviewer, head, covered, pending) {
+    fs.mkdirSync(path.join(dir, 'outputs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, inJob.coveragePathOf(reviewer)),
+        JSON.stringify({ reviewer: reviewer, head: head, covered: covered,
+            pending: pending, truncated: false, at: '2026-11-13T00:00:00Z' }));
+}
+
 var pool = poolOf([skillOf('general'), skillOf('security'), skillOf('flaky')]);
 // NOTE: 'base' (the posting reviewer) is excluded from the specialists by
 // design — these fixtures use 'general' as a non-posting specialist name.
 
-test('runSpecialists: completed vs unavailable, validated candidates only', function() {
-    var outcomesSeq = [
-        null, // base ran, no file → unavailable
-        function(dir) { candidatesFile(dir, 'security', HEAD, []); },
-        'THROW' // flaky timed out (the command threw)
-    ];
+test('runSpecialists: completed vs unavailable, validated candidates only (batch)', function() {
     var t = recordingIo([]);
+    var spawnedPrompts = [];
     t.io.executeCommand = function(command) {
         t.executed.push(command);
-        var write = outcomesSeq[t.executed.length - 1];
-        if (write === 'THROW') throw new Error('timeout -k 60 900 …');
-        if (typeof write === 'function') write(t.dir);
+        // The composite spawns every prompt; only security lands a valid file.
+        (command.match(/pool_specialist-[a-z]+\.md/g) || []).forEach(function(p) { spawnedPrompts.push(p); });
+        candidatesFile(t.dir, 'security', HEAD, []);
     };
     var round = inJob.runSpecialists(t.io, pool, ctxOf());
+    assert.strictEqual(t.executed.length, 1, 'ONE composite command per round');
+    assert.strictEqual(spawnedPrompts.length, 3, 'every specialist spawns (parallel)');
     assert.deepStrictEqual(round.completed, ['security']);
     assert.deepStrictEqual(round.unavailable, ['general', 'flaky']);
     assert.strictEqual(round.candidates.length, 1);
     assert.strictEqual(round.candidates[0].reviewer, 'security');
     assert.strictEqual(round.candidates[0].count, 0);
 });
-
 test('runSpecialists: stale candidates (wrong head) are unavailable', function() {
-    var t = recordingIo([
-        null,
-        function(dir) { candidatesFile(dir, 'security', STALE, []); },
-        null
-    ]);
+    var t = recordingIo([]);
+    t.io.executeCommand = function(command) {
+        t.executed.push(command);
+        candidatesFile(t.dir, 'security', STALE, []);
+    };
     var round = inJob.runSpecialists(t.io, pool, ctxOf());
     assert.deepStrictEqual(round.completed, []);
     assert.strictEqual(round.unavailable.indexOf('security') !== -1, true);
 });
-
 test('runSpecialists: an invalid record degrades to unavailable (no throw)', function() {
-    var t = recordingIo([
-        null,
-        function(dir) {
-            fs.mkdirSync(path.join(dir, 'outputs'), { recursive: true });
-            fs.writeFileSync(path.join(dir, inJob.candidatesPathOf('security')),
-                '{"nope": true}');
-        },
-        null
-    ]);
+    var t = recordingIo([]);
+    t.io.executeCommand = function(command) {
+        t.executed.push(command);
+        fs.mkdirSync(path.join(t.dir, 'outputs'), { recursive: true });
+        fs.writeFileSync(path.join(t.dir, inJob.candidatesPathOf('security')),
+            '{"nope": true}');
+    };
     var round = inJob.runSpecialists(t.io, pool, ctxOf());
     assert.deepStrictEqual(round.completed, []);
     var sec = round.results.filter(function(r) { return r.reviewer === 'security'; })[0];
     assert.ok(sec && sec.reason && sec.reason.indexOf('invalid candidates record') !== -1);
 });
 
+test('runSpecialists: the composite throwing degrades EVERYTHING (fail-open, no throw)', function() {
+    var t = recordingIo([]);
+    t.io.executeCommand = function(command) {
+        t.executed.push(command);
+        throw new Error('timeout -k 60 1800 …');
+    };
+    var round = inJob.runSpecialists(t.io, pool, ctxOf());
+    assert.deepStrictEqual(round.completed, []);
+    assert.strictEqual(round.unavailable.length, 3);
+    assert.ok(round.results.every(function(r) { return !r.ok; }), 'every result is unavailable');
+});
+
+test('runSpecialists: a killed specialist with coverage memory notes the continuation', function() {
+    var t = recordingIo([]);
+    t.io.executeCommand = function(command) {
+        t.executed.push(command);
+        // The child died mid-pass but its coverage file landed (the
+        // incremental-write discipline).
+        coverageFile(t.dir, 'security', HEAD, ['js/x.js'], ['js/y.js']);
+    };
+    var round = inJob.runSpecialists(t.io, pool, ctxOf());
+    assert.deepStrictEqual(round.completed, []);
+    assert.strictEqual(round.coverageNotes.length, 1, 'the continuation note exists');
+    assert.strictEqual(round.coverageNotes[0].reviewer, 'security');
+    assert.ok(round.coverageNotes[0].text.indexOf('covered 1, pending 1') !== -1,
+        'the note carries the counts');
+});
+
+test('prompt: the coverage file contract (plan-first) + the previous-pass memory', function() {
+    var prompt = inJob.buildSpecialistPrompt(skillOf('security'), ctxOf({ hasNewHunks: true }));
+    assert.ok(prompt.indexOf('coverage-security.json') !== -1, 'the coverage file path is present');
+    assert.ok(prompt.indexOf('write it FIRST') !== -1, 'the plan-first discipline is explicit');
+    assert.ok(prompt.indexOf('"pending"') !== -1, 'the pending list is in the contract');
+    var withPrev = inJob.buildSpecialistPrompt(skillOf('security'),
+        ctxOf({ hasNewHunks: true }),
+        { reviewer: 'security', head: 'aaa1111', covered: ['js/x.js'], pending: ['js/y.js'], truncated: true });
+    assert.ok(withPrev.indexOf('Your previous pass (head aaa1111)') !== -1, 'the previous head is named');
+    assert.ok(withPrev.indexOf('SKIP the covered files that are NOT in the current hunks') !== -1,
+        'the machine-verified skip rule is explicit');
+    assert.ok(withPrev.indexOf('start with the pending ones') !== -1, 'the debt-first ordering is taught');
+});
 // ── readSpecialistOutcomes: the post action's file-view ─────────────────────
 
 test('readSpecialistOutcomes: same selection, file-driven outcomes', function() {

@@ -360,6 +360,12 @@ function buildPoolPacket(ctx) {
         lines.push('⚠️ ' + partial[p] + ': partial coverage — the specialist flagged truncated=true ' +
             '(its findings cover only what it reviewed before the cap)');
     }
+    var notes = Array.isArray(c.coverageNotes) ? c.coverageNotes : [];
+    for (var n = 0; n < notes.length; n++) {
+        if (notes[n] && notes[n].reviewer && notes[n].text) {
+            lines.push('🔁 ' + notes[n].reviewer + ': ' + notes[n].text);
+        }
+    }
     var merged = Array.isArray(c.merged) ? c.merged : [];
     var census = poolCensusLineOf(merged);
     if (census) lines.push(census);
