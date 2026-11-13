@@ -41,7 +41,7 @@ var BASE_JSON = JSON.stringify({ name: 'base', lens: 'instructions/pr_review/gen
 var SECURITY_JSON = JSON.stringify({ name: 'security', lens: 'instructions/pr_review/security/lens.md',
     rounds: ['first', 'hunks'], triggerPaths: [] });
 var PERF_JSON = JSON.stringify({ name: 'perf', lens: 'instructions/pr_review/generalist/lens.md',
-    rounds: ['first'], triggerPaths: ['perf/'] });
+    rounds: ['first', 'hunks'], triggerPaths: ['perf/'] });
 
 var FACTORY_DIRS = { 'instructions/review': ['base.json', 'security.json', 'perf.json'] };
 var FACTORY_FILES = {
@@ -104,7 +104,8 @@ suite('reviewPoolDispatch — buildRoundPlan (rounds/triggerPaths + duplicate-sa
     test('first round: base + security + perf all run; base is the posting leg', function() {
         var plan = mod.buildRoundPlan(poolOf(), { headSha: HEAD, passMarkers: [], hasNewHunks: false, newHunkPaths: [] });
         var legNames = plan.legs.map(function(l) { return l.reviewer; });
-        assert.deepEqual(legNames, ['base', 'security', 'perf']);
+        assert.deepEqual(legNames, ['base', 'perf', 'security'],
+            'legs follow the pool definition order (alphabetical factory files)');
         assert.equal(plan.postingLeg.reviewer, 'base');
         assert.equal(plan.legs[0].contract, 'verdict');
         assert.equal(plan.legs[1].contract, 'candidates');
@@ -131,26 +132,29 @@ suite('reviewPoolDispatch — buildRoundPlan (rounds/triggerPaths + duplicate-sa
         var secDone = passMarkersOf([['security', '1111111111111111111111111111111111111111']]);
         var withHunks = mod.buildRoundPlan(poolOf(), {
             headSha: HEAD, passMarkers: secDone, hasNewHunks: true, newHunkPaths: ['src/auth/login.js'] });
-        assert.deepEqual(withHunks.legs.map(function(l) { return l.reviewer; }), ['base', 'security'],
-            'security re-fires on new hunks; base (all) rides along; perf (first, done) stays frozen');
+        assert.deepEqual(withHunks.legs.map(function(l) { return l.reviewer; }), ['base', 'perf', 'security'],
+            'security re-fires on new hunks; base (all) rides along; perf never completed a first pass, so it fires too');
         assert.equal(withHunks.round, 'hunks');
     });
 
     test('AC4: triggerPaths gate the hunks re-run — untouched paths never re-fire', function() {
-        var secDone = passMarkersOf([['security', '1111111111111111111111111111111111111111']]);
+        // perf completed its first pass on an older head — only the hunks
+        // flag can wake it now, and only when the hunks hit perf/ paths.
+        var secDone = passMarkersOf([['security', '1111111111111111111111111111111111111111'],
+            ['perf', '2222222222222222222222222222222222222222']]);
         var plan = mod.buildRoundPlan(poolOf(), {
             headSha: HEAD, passMarkers: secDone, hasNewHunks: true, newHunkPaths: ['src/docs/readme.md'] });
-        assert.deepEqual(plan.legs.map(function(l) { return l.reviewer; }), ['base'],
-            'perf triggers on perf/ paths only — docs hunks do not wake it');
+        assert.deepEqual(plan.legs.map(function(l) { return l.reviewer; }), ['base', 'security'],
+            'security (triggerPaths []) re-fires on any hunks; perf triggers on perf/ only — docs hunks do not wake it');
         var hit = mod.buildRoundPlan(poolOf(), {
             headSha: HEAD, passMarkers: secDone, hasNewHunks: true, newHunkPaths: ['src/perf/bench.js'] });
-        assert.ok(hit.legs.map(function(l) { return l.reviewer; }).indexOf('perf') !== -1,
-            'perf hunks hit perf/ — perf re-fires');
+        assert.deepEqual(hit.legs.map(function(l) { return l.reviewer; }), ['base', 'perf', 'security'],
+            'perf hunks hit perf/ — perf re-fires alongside security');
     });
 
     test('expected entries name every enabled reviewer with required flags + completion state', function() {
-        var secDone = passMarkersOf([['security']]);
-        var plan = mod.buildRoundPlan(poolOf(), { headSha: HEAD, passMarkers: secDone, hasNewHunks: false, newHunkPaths: [] });
+        var done = passMarkersOf([['security'], ['base']]);
+        var plan = mod.buildRoundPlan(poolOf(), { headSha: HEAD, passMarkers: done, hasNewHunks: false, newHunkPaths: [] });
         var byName = {};
         plan.expected.forEach(function(e) { byName[e.name] = e; });
         assert.equal(byName.base.required, true, 'factory default required: [base, security]');
@@ -227,7 +231,8 @@ suite('reviewPoolDispatch — retry mechanics for required legs (the 429 replay)
         var ex = {};
         exhausted.decisions.forEach(function(d) { ex[d.reviewer] = d; });
         assert.equal(ex.security.action, 'escalate', 'budget spent without a completion — escalate, never silent merge');
-        assert.deepEqual(exhausted.escalated, ['security']);
+        assert.equal(ex.base.action, 'escalate', 'base is required too — both exhausted required legs escalate');
+        assert.deepEqual(exhausted.escalated, ['base', 'security']);
         assert.equal(ex.security.attempts, mod.DEFAULT_MAX_LEG_ATTEMPTS);
     });
 
@@ -259,7 +264,8 @@ suite('reviewPoolDispatch — retry mechanics for required legs (the 429 replay)
         var byName = {};
         out.decisions.forEach(function(d) { byName[d.reviewer] = d; });
         assert.equal(byName.perf.action, 'give-up', 'non-required exhaustion is fail-open silence-with-audit');
-        assert.deepEqual(out.escalated, [], 'non-required legs never escalate');
+        assert.deepEqual(out.escalated, ['base', 'security'],
+            'only the REQUIRED legs escalate here — perf never escalates');
     });
 
     test('retry decisions back off exponentially per attempt', function() {
