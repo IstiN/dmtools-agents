@@ -54,6 +54,7 @@ var reviewFilterModule = require('./common/reviewFilter.js');
 // posting leg's round aggregation point (candidates FILES, not markers).
 var reviewPoolModule = require('./common/reviewPool.js');
 var reviewPoolPostModule = require('./common/reviewPoolPost.js');
+var reviewPoolLegSetup = require('./common/reviewPoolLegSetup.js');
 var reviewPoolInJobModule = require('./common/reviewPoolInJob.js');
 var outputFiles = require('./common/outputFiles.js');
 // The one model-written-path guard — owned by the pure filter module since
@@ -1416,22 +1417,12 @@ function filterStampSection(m, filterOutcome) {
 // round from the merged census).
 
 /**
- * The pool resolution io bag (file_read/file_list, failure-soft — the same
- * shape the pre-cli dispatcher's setup uses).
+ * The pool resolution io bag (file_read/file_list, failure-soft) — owned by
+ * reviewPoolLegSetup.poolResolveIoOf (the dispatcher's setup uses the same
+ * bag; one normalization shape, no duplicated parse block).
  */
 function poolFileIo() {
-    return {
-        readFile: function(path) {
-            try { return file_read({ path: path }); } catch (e) { return null; }
-        },
-        listFiles: function(dir) {
-            try {
-                var raw = file_list({ path: dir });
-                var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                return Array.isArray(parsed) ? parsed : (parsed && parsed.entries) ? parsed.entries : [];
-            } catch (eList) { return null; }
-        }
-    };
+    return reviewPoolLegSetup.poolResolveIoOf({ file_read: file_read, file_list: file_list });
 }
 
 /** {reviewer: 'high'|'normal'} over the pool's enabled reviewers. */
