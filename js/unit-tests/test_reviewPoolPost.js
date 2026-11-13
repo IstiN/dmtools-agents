@@ -203,14 +203,16 @@ suite('reviewPoolPost — poolRoundStep (the aggregation point)', function() {
 
     test('arrived specialist candidates merge into the review; one outcome marker is stamped', function() {
         var reviewData = baseReviewData();
-        var io = roundIo({ comments: [candidatesComment()] });
+        var io = roundIo({ comments: [commentOf(candidatesComment())] });
         var out = mod.poolRoundStep(reviewData, poolOf(), {
             headSha: HEAD, passMarkers: [], hasNewHunks: false, newHunkPaths: []
         }, io);
         assert.equal(out.round, 'first');
         assert.deepEqual(out.arrived, ['security']);
-        assert.equal(out.mergedCount, 2, 'sql (base+security merged) + cache');
-        assert.equal(reviewData.inlineComments.length, 2);
+        assert.equal(out.mergedCount, 1, 'the sql finding merges (base+security) — one census');
+        assert.equal(reviewData.inlineComments.length, 1);
+        assert.ok(reviewData.inlineComments[0].__poolReviewers.indexOf('security') !== -1,
+            'the posted thread carries the reviewer attribution');
         assert.ok(io.posted.length >= 1, 'the pool-outcome marker is stamped');
         var outcomes = markers.parsePoolOutcomeMarkers(parseComments(io.posted), { authorLogins: MACHINE_LOGINS });
         assert.equal(outcomes.length, 1);
@@ -228,36 +230,44 @@ suite('reviewPoolPost — poolRoundStep (the aggregation point)', function() {
         assert.deepEqual(out.arrived, []);
         assert.deepEqual(out.unavailable, ['security']);
         assert.ok((out.packet.join('\n')).indexOf('security unavailable this round') !== -1);
-        assert.equal(out.heldRequired, null, 'base-only missing required leg stamps the hold (see hold test)');
+        assert.deepEqual(out.heldRequired, ['security'],
+            'a required specialist that never showed up stamps the required-reviewer hold');
     });
 
-    test('a missing REQUIRED reviewer stamps the required-reviewer hold (deduped per head)', function() {
-        // Simulate security already completed once (PASS) but base missing its
-        // completion while being required: the hold names the missing one.
+    test('completed specialists never hold; the posting leg never holds on itself', function() {
+        // security completed (PASS on this head) and base is the posting leg
+        // (its PASS stamp lands moments later in the action) — nobody holds.
         var pass = markers.buildPassMarkerComment('security', HEAD, '2026-11-14T11:30:00Z');
         var reviewData = baseReviewData();
-        var io = roundIo({ comments: [pass] });
+        var io = roundIo({ comments: [commentOf(pass)] });
         var out = mod.poolRoundStep(reviewData, poolOf(), {
             headSha: HEAD, passMarkers: markers.parsePassMarkers([commentOf(pass)], { authorLogins: MACHINE_LOGINS }),
             hasNewHunks: false, newHunkPaths: []
         }, io);
-        // base posted this round's review but its PASS stamp happens later in
-        // the action — at aggregation time base is "not yet completed": the
-        // hold must NOT fire on the posting leg itself.
-        assert.equal(out.heldRequired, null, 'the posting leg never holds on itself');
+        assert.equal(out.heldRequired, null, 'no hold when every required specialist completed');
+    });
+
+    test('a specialist that arrived but has no PASS yet never holds (mid-flight guard)', function() {
+        var reviewData = baseReviewData();
+        var io = roundIo({ comments: [commentOf(candidatesComment())] });
+        var out = mod.poolRoundStep(reviewData, poolOf(), {
+            headSha: HEAD, passMarkers: [], hasNewHunks: false, newHunkPaths: []
+        }, io);
+        assert.equal(out.heldRequired, null,
+            'candidates arrived — the leg is mid-flight, its completion is imminent');
     });
 
     test('the hold is deduped — an existing same-head required-reviewer hold never re-posts', function() {
         var plan = dispatch.buildRoundPlan(poolOf(), { headSha: HEAD, passMarkers: [], hasNewHunks: false, newHunkPaths: [] });
         var hold = markers.buildRequiredReviewerHoldMarker(['security'], HEAD, '2026-11-14T10:00:00Z', false, null);
         var reviewData = baseReviewData();
-        var io = roundIo({ comments: [candidatesComment(), hold] });
+        var io = roundIo({ comments: [commentOf(candidatesComment()), commentOf(hold)] });
         var out = mod.poolRoundStep(reviewData, poolOf(), {
             headSha: HEAD, passMarkers: [], hasNewHunks: false, newHunkPaths: []
         }, io);
         var holds = io.posted.filter(function(b) { return b.indexOf('merge-hold') !== -1; });
         assert.equal(holds.length, 0, 'the existing hold stands — no second hold comment');
-        assert.ok(out.holdDeduped);
+        assert.equal(out.existingHold, true, 'the pre-existing same-head hold is reported, not re-stamped');
     });
 
     test('the filter merge point runs the pool-shaped candidates through the round', function() {
@@ -281,7 +291,7 @@ suite('reviewPoolPost — poolRoundStep (the aggregation point)', function() {
     test('no wait when every expected specialist already arrived', function() {
         var reviewData = baseReviewData();
         var sleeps = 0;
-        var io = roundIo({ comments: [candidatesComment()] });
+        var io = roundIo({ comments: [commentOf(candidatesComment())] });
         io.sleep = function() { sleeps++; };
         mod.poolRoundStep(reviewData, poolOf(), { headSha: HEAD, passMarkers: [], hasNewHunks: false, newHunkPaths: [] }, io);
         assert.equal(sleeps, 0);
@@ -296,7 +306,7 @@ suite('reviewPoolPost — poolRoundStep (the aggregation point)', function() {
         io.pollSeconds = 30;
         io.readComments = function() {
             polls++;
-            if (polls >= 2) comments.push(candidatesComment());
+            if (polls >= 2) comments.push(commentOf(candidatesComment()));
             return comments.slice();
         };
         var out = mod.poolRoundStep(reviewData, poolOf(), { headSha: HEAD, passMarkers: [], hasNewHunks: false, newHunkPaths: [] }, io);
@@ -313,7 +323,7 @@ suite('reviewPoolPost — poolRoundStep (the aggregation point)', function() {
         io.readComments = function() { polls++; return []; };
         var out = mod.poolRoundStep(reviewData, poolOf(), { headSha: HEAD, passMarkers: [], hasNewHunks: false, newHunkPaths: [] }, io);
         assert.deepEqual(out.arrived, []);
-        assert.ok(polls <= 2, 'the wait is bounded');
+        assert.ok(polls <= 3, 'the wait is bounded (two poll reads + the final marker read)');
         assert.ok((out.packet.join('\n')).indexOf('unavailable this round') !== -1);
     });
 });

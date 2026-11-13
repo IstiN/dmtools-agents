@@ -29,3 +29,30 @@ documented contract is ⚠️ IMPORTANT or 🚨 BLOCKING.
 The 4-tier census (`issueCounts`) counts posted threads + digest lines and
 drives the machine verdict — keep it consistent with the inlineComments
 severities.
+
+### outputs/pr_review_candidates.json — specialist legs only
+
+A SPECIALIST leg (reviewer_leg.md present) answers with candidates, never a
+verdict — the posting leg mints the verdict; the machine merges, filters
+and posts. The shape is the reviewPoolMerge candidate contract:
+
+```json
+{
+  "reviewer": "security",
+  "candidates": [
+    {"id": 1, "path": "src/auth/UserService.js", "line": 45,
+     "severity": "BLOCKING",
+     "claim": "User query at line 45 concatenates req.body.user straight into the SQL string; parameterize the statement."},
+    {"id": 2, "path": "docs/migration.md", "line": null,
+     "severity": "SUGGESTION",
+     "claim": "The rollback path for the new columns is undocumented — a bad deploy cannot revert cleanly."}
+  ]
+}
+```
+
+Rules: `id` = position in the file; `path` repo-relative; `line` = the
+diff line or `null` for a digest candidate; `claim` = the substance (no
+severity header, no verdict language). Severity boundary identical to the
+verdict tiers above. Nothing else gets written (no pr_review.json, no
+comment files) and nothing gets posted — worked examples of the claim
+voice live in each reviewer's few-shots file.

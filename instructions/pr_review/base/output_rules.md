@@ -40,3 +40,42 @@ flowchart TD
 - The verdict is a MACHINE decision recomputed from `issueCounts` + the
   resolved `reviewPolicy` — the census is the machine's source of truth;
   keep it accurate.
+
+## The candidates-only contract (specialist legs, gh-1471)
+
+A SPECIALIST leg (input/TICKET/reviewer_leg.md present — see
+input_context.md) writes ONE file and nothing else:
+
+`outputs/pr_review_candidates.json`
+
+```json
+{
+  "reviewer": "<the reviewer name from reviewer_leg.md>",
+  "candidates": [
+    {"id": 1, "path": "src/auth/UserService.js", "line": 45,
+     "severity": "BLOCKING", "claim": "one-paragraph statement of the finding"},
+    {"id": 2, "path": "docs/arch.md", "line": null,
+     "severity": "SUGGESTION", "claim": "a digest candidate — no diff line"}
+  ]
+}
+```
+
+- `claim` is the finding's substance: what is wrong, where the evidence
+  is, why it matters. No severity header line, no verdict language — the
+  tier rides the `severity` field (BLOCKING | IMPORTANT | SUGGESTION |
+  NIT) and the machine classifies the posted thread from it.
+- `id` numbers the candidates within the file (1..n). `path` is
+  repo-relative; `line` is the diff line (right-hand side) or `null` for a
+  digest candidate — findings anchored outside the diff are allowed as
+  digest candidates, never as invented line numbers.
+- Write NOTHING else: no `outputs/pr_review.json`, no
+  `pr_review_general.md`, no `pr_review_comments/*`, no `response.md`. Do
+  not post, label, resolve threads, or change statuses — the post action
+  does all machine bookkeeping (candidates marker + completion marker).
+- Severity discipline still applies: raise only what the lens hunt
+  justifies; an empty candidates list is a valid answer (the leg completes
+  with zero findings).
+- The candidates pass the gh-1403 filter like every other finding (fresh
+  verification, weighted retention for high-weight reviewers) and the
+  posting leg merges them into ONE review — a specialist never posts a
+  second review.

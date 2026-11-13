@@ -37,6 +37,7 @@ var dispatch = require('./reviewPoolDispatch.js');
 var markers = require('./reviewPoolMarkers.js');
 var aggregate = require('./reviewPoolAggregate.js');
 var poolModule = require('./reviewPool.js');
+var reviewVerdicts = require('./reviewVerdicts.js');
 
 // ── the specialist leg (invariant 1) ─────────────────────────────────────────
 
@@ -152,7 +153,7 @@ function weightedListsOf(lists, weightsByName) {
 function hasSameHeadHold(comments, io, headSha) {
     var holds = markers.parseRequiredReviewerHolds(comments, loginsOf(io));
     for (var i = 0; i < holds.length; i++) {
-        if (markers.sameHead(holds[i].head, headSha)) return true;
+        if (reviewVerdicts.sameHead(holds[i].head, headSha)) return true;
     }
     return false;
 }
@@ -232,27 +233,28 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
         console.warn('reviewer pool: the pool-outcome marker post failed (non-fatal):', ePost);
     }
 
-    // The required-reviewer hold (deduped per head) — the posting leg never
-    // holds on itself (its PASS stamp lands moments later); the hold-age
-    // escalation valve stays owned by the merge gate (§7).
+    // The required-reviewer hold (deduped per head) — it fires only for a
+    // required specialist that NEVER showed up (no candidates marker, no
+    // completion): arrived-but-incomplete legs are mid-flight, and their
+    // crash-window hold is the merge gate's own §7 concern. The posting leg
+    // never holds on itself (its PASS stamp lands moments later); the
+    // hold-age escalation valve stays owned by the merge gate.
+    var existingHold = hasSameHeadHold(latestComments, io, headSha);
+    var arrivedSet = {};
+    for (var a = 0; a < collect.arrived.length; a++) arrivedSet[collect.arrived[a]] = true;
     var missingRequired = [];
     for (var e = 0; e < entries.length; e++) {
-        if (entries[e].required && !entries[e].completed && entries[e].name !== dispatch.POSTING_REVIEWER) {
-            missingRequired.push(entries[e].name);
-        }
+        if (!entries[e].required || entries[e].completed) continue;
+        if (entries[e].name === dispatch.POSTING_REVIEWER || arrivedSet[entries[e].name]) continue;
+        missingRequired.push(entries[e].name);
     }
-    var holdDeduped = false;
     var heldRequired = null;
-    if (missingRequired.length > 0) {
-        if (hasSameHeadHold(latestComments, io, headSha)) {
-            holdDeduped = true;
-        } else {
-            try {
-                io.postComment(markers.buildRequiredReviewerHoldMarker(missingRequired, headSha, io.nowIso(), false, null));
-                heldRequired = missingRequired;
-            } catch (eHold) {
-                console.warn('reviewer pool: the required-reviewer hold post failed (non-fatal):', eHold);
-            }
+    if (missingRequired.length > 0 && !existingHold) {
+        try {
+            io.postComment(markers.buildRequiredReviewerHoldMarker(missingRequired, headSha, io.nowIso(), false, null));
+            heldRequired = missingRequired;
+        } catch (eHold) {
+            console.warn('reviewer pool: the required-reviewer hold post failed (non-fatal):', eHold);
         }
     }
 
@@ -263,7 +265,7 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
         mergedCount: merged.merged.length,
         packet: packet,
         heldRequired: heldRequired,
-        holdDeduped: holdDeduped,
+        existingHold: existingHold,
         outcomeStamped: true,
         filterApplied: filterApplied,
         expected: expectedNames

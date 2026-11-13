@@ -493,6 +493,12 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
 
     var agent = loadAgentJsonParams(p, rule, effectiveConfig);
     p = applyProjectConfigResolutions(p, agent.resolvedCf, agent.agentParamsRoot, effectiveConfig);
+    // Per-leg param patches (gh-1471 reviewer pool): a dispatcher
+    // specializes ONE shared agent config per leg — the patch merges LAST
+    // so it wins over every config composition layer.
+    if (rule && rule.paramPatches && typeof rule.paramPatches === 'object') {
+        p.customParams = Object.assign({}, p.customParams, rule.paramPatches);
+    }
     p = stampConfigPath(p, effectiveConfig);
     p = stampLocalTeammate(p, isLocal);
 
