@@ -23,7 +23,8 @@ function loadTrackers(mocks) {
             'config': configModule,
             // Single owner of the GitHub key-shape convention (gh-770) —
             // the router's issue-number parser derives from it.
-            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
+            './gitlabTracker.js': loadModule('js/common/gitlabTracker.js', makeRequire({}), mocks || {})
         }),
         mocks || {}
     );
@@ -876,7 +877,7 @@ suite('trackers.js gitlab provider', function () {
 
     test('unparseable keys fail with a clear error instead of hitting Jira', function () {
         var t = loadTrackers({}).createTracker(GL_CONFIG);
-        assert.throws(function () { t.addLabel('EPMCSRCSRD-113', 'x'); }, 'cannot parse GitLab issue key');
+        assert.throws(function () { t.addLabel('PROJ-113', 'x'); }, 'cannot parse GitLab issue key');
     });
 });
 
