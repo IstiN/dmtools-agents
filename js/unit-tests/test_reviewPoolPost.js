@@ -337,6 +337,30 @@ test('poolRoundStep: an escalated FILE-REFERENCED body keeps its exact path shap
         escalated.__poolEscalated.to === 'BLOCKING', 'the escalation is traced on the entry');
 });
 
+test('stampPostingLegCompletion: stamps the posting PASS on the round head', function() {
+    var posted = [];
+    var out = mod.stampPostingLegCompletion({
+        headSha: function() { return HEAD; },
+        nowIso: function() { return '2026-11-13T00:00:00Z'; },
+        postComment: function(text) { posted.push(text); }
+    });
+    assert.deepEqual(out, { success: true, stamped: true });
+    assert.equal(posted.length, 1);
+    assert.ok(posted[0].indexOf('base') !== -1 && posted[0].indexOf(HEAD) !== -1,
+        'the marker names the posting reviewer and the head');
+});
+
+test('stampPostingLegCompletion: a failed post is fail-soft (unstamped, never throws)', function() {
+    var out = mod.stampPostingLegCompletion({
+        headSha: function() { return HEAD; },
+        nowIso: function() { return '2026-11-13T00:00:00Z'; },
+        postComment: function() { throw new Error('scm down'); }
+    });
+    assert.equal(out.success, true, 'the LEG still reports success (fail-soft)');
+    assert.equal(out.stamped, false, 'the marker is honestly unstamped');
+    assert.ok(String(out.error).indexOf('scm down') !== -1, 'the error carries the cause');
+});
+
 test('expectedCandidateNamesOf reads the in-job plan legs', function() {
     var plan = { legs: [{ reviewer: 'security', contract: 'candidates' }, { reviewer: 'polish', contract: 'candidates' }] };
     assert.deepEqual(mod.expectedCandidateNamesOf(plan), ['security', 'polish']);
