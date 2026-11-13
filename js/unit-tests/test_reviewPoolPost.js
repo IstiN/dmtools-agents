@@ -147,20 +147,8 @@ function makeIo(opts) {
     };
 }
 
-var passed = 0, total = 0;
-function ok(label, fn) {
-    try {
-        fn();
-        console.log('ok - ' + label);
-        return 1;
-    } catch (e) {
-        console.log('NOT OK - ' + label + ' → ' + (e && e.message));
-        if (process.env.DBG) console.log(e && e.stack);
-        return 0;
-    }
-}
 
-total++; passed += ok('buildInJobPlan: specialists only (the posting reviewer never plans as a leg)', function() {
+test('buildInJobPlan: specialists only (the posting reviewer never plans as a leg)', function() {
     var pool = poolOf([skillOf('base'), skillOf('security')]);
     var plan = mod.buildInJobPlan(pool, { headSha: HEAD, hasNewHunks: false, newHunkPaths: [] });
     assert.equal(plan.round, 'first');
@@ -168,7 +156,7 @@ total++; passed += ok('buildInJobPlan: specialists only (the posting reviewer ne
     assert.ok(plan.legs[0].contract === 'candidates');
 });
 
-total++; passed += ok('buildInJobPlan: the required flag comes from the pool policy', function() {
+test('buildInJobPlan: the required flag comes from the pool policy', function() {
     var pool = poolOf(
         [skillOf('security', { isRequired: true }), skillOf('polish')],
         { reviewPolicy: { required: ['security'] } }
@@ -180,7 +168,7 @@ total++; passed += ok('buildInJobPlan: the required flag comes from the pool pol
     assert.equal(byName.polish, false, 'the unlisted reviewer is not required');
 });
 
-total++; passed += ok('poolRoundStep: the in-job candidates merge into ONE census with attribution', function() {
+test('poolRoundStep: the in-job candidates merge into ONE census with attribution', function() {
     var pool = poolOf([skillOf('base'), skillOf('security')]);
     var reviewData = postingReviewData();
     var t = makeIo({
@@ -219,7 +207,7 @@ total++; passed += ok('poolRoundStep: the in-job candidates merge into ONE censu
     assert.equal(outcomes[0].head, HEAD);
 });
 
-total++; passed += ok('poolRoundStep: a missing required specialist holds the merge (fail-open round)', function() {
+test('poolRoundStep: a missing required specialist holds the merge (fail-open round)', function() {
     var pool = poolOf(
         [skillOf('security', { isRequired: true })],
         { reviewPolicy: { required: ['security'] } }
@@ -240,7 +228,7 @@ total++; passed += ok('poolRoundStep: a missing required specialist holds the me
     assert.equal(reviewData.inlineComments.length, 1, 'the base review still posts');
 });
 
-total++; passed += ok('poolRoundStep: no hold when the required specialist completed', function() {
+test('poolRoundStep: no hold when the required specialist completed', function() {
     var pool = poolOf(
         [skillOf('security', { isRequired: true })],
         { reviewPolicy: { required: ['security'] } }
@@ -261,7 +249,7 @@ total++; passed += ok('poolRoundStep: no hold when the required specialist compl
     assert.equal(holds.length, 0, 'no hold: the required specialist completed');
 });
 
-total++; passed += ok('poolRoundStep: the filter merge point runs over the MERGED census', function() {
+test('poolRoundStep: the filter merge point runs over the MERGED census', function() {
     var pool = poolOf([skillOf('security')]);
     var reviewData = postingReviewData();
     var t = makeIo({
@@ -288,10 +276,8 @@ total++; passed += ok('poolRoundStep: the filter merge point runs over the MERGE
     assert.equal(reviewData.inlineComments.length, 1, 'the dropped candidate never threads');
 });
 
-total++; passed += ok('expectedCandidateNamesOf reads the in-job plan legs', function() {
+test('expectedCandidateNamesOf reads the in-job plan legs', function() {
     var plan = { legs: [{ reviewer: 'security', contract: 'candidates' }, { reviewer: 'polish', contract: 'candidates' }] };
     assert.deepEqual(mod.expectedCandidateNamesOf(plan), ['security', 'polish']);
 });
 
-console.log('\n✔ test_reviewPoolPost: ' + passed + '/' + total + ' assertion groups passed');
-process.exit(passed === total ? 0 : 1);

@@ -20,16 +20,6 @@ var fs = require('fs');
 var inJob = require(path.resolve(__dirname, '../common/reviewPoolInJob.js'));
 var candidatesModule = require(path.resolve(__dirname, '../common/reviewPoolCandidates.js'));
 
-function ok(label, fn) {
-    try {
-        fn();
-        console.log('ok - ' + label);
-        return 1;
-    } catch (e) {
-        console.log('NOT OK - ' + label + ' → ' + (e && e.message));
-        return 0;
-    }
-}
 
 var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
 var STALE = '9999888877776666555544443333222211110000';
@@ -59,17 +49,16 @@ var ctxOf = function(overrides) {
     }, overrides || {});
 };
 
-var passed = 0, total = 0;
 
 // ── selection ────────────────────────────────────────────────────────────────
 
-total++; passed += ok('selection: enabled reviewers only', function() {
+test('selection: enabled reviewers only', function() {
     var pool = poolOf([skillOf('general'), skillOf('off', { isEnabled: false })]);
     var got = inJob.selectSpecialists(pool, ctxOf());
     assert.deepStrictEqual(got.map(function(s) { return s.name; }), ['general']);
 });
 
-total++; passed += ok('selection: rounds scope excludes the specialist on a first round', function() {
+test('selection: rounds scope excludes the specialist on a first round', function() {
     var pool = poolOf([skillOf('general'), skillOf('hunksOnly', { rounds: ['hunks'] })]);
     var got = inJob.selectSpecialists(pool, ctxOf({ hasNewHunks: false }));
     assert.deepStrictEqual(got.map(function(s) { return s.name; }), ['general']);
@@ -77,7 +66,7 @@ total++; passed += ok('selection: rounds scope excludes the specialist on a firs
     assert.deepStrictEqual(hunks.map(function(s) { return s.name; }), ['general', 'hunksOnly']);
 });
 
-total++; passed += ok('selection: triggerPaths gate on the diff paths (empty = always)', function() {
+test('selection: triggerPaths gate on the diff paths (empty = always)', function() {
     var pool = poolOf([
         skillOf('general'),
         skillOf('scoped', { triggerPaths: ['js/'] }),
@@ -87,14 +76,14 @@ total++; passed += ok('selection: triggerPaths gate on the diff paths (empty = a
     assert.deepStrictEqual(got.map(function(s) { return s.name; }), ['general', 'scoped']);
 });
 
-total++; passed += ok('roundTypeOf: first vs hunks', function() {
+test('roundTypeOf: first vs hunks', function() {
     assert.strictEqual(inJob.roundTypeOf(ctxOf({ hasNewHunks: false })), 'first');
     assert.strictEqual(inJob.roundTypeOf(ctxOf({ hasNewHunks: true })), 'hunks');
 });
 
 // ── prompt contract ──────────────────────────────────────────────────────────
 
-total++; passed += ok('prompt: identity, lens path, head sha, output file, no-posting rule', function() {
+test('prompt: identity, lens path, head sha, output file, no-posting rule', function() {
     var skill = skillOf('security');
     var prompt = inJob.buildSpecialistPrompt(skill, ctxOf());
     assert.ok(prompt.indexOf('security') !== -1, 'the reviewer name is present');
@@ -107,14 +96,14 @@ total++; passed += ok('prompt: identity, lens path, head sha, output file, no-po
 
 // ── command shape (gh-775 bounded invocation) ────────────────────────────────
 
-total++; passed += ok('command: run-agent.sh under timeout -k 60 with a prompt file', function() {
+test('command: run-agent.sh under timeout -k 60 with a prompt file', function() {
     var command = inJob.buildSpecialistCommand('outputs/pool_specialist-security.md', 900);
     assert.ok(command.indexOf('timeout -k 60 900') !== -1, 'the hard wall-clock cap is present');
     assert.ok(command.indexOf('bash scripts/run-agent.sh') !== -1, 'the wrapper is bash');
     assert.ok(command.indexOf('outputs/pool_specialist-security.md') !== -1, 'the prompt rides a file');
 });
 
-total++; passed += ok('command: the default timeout applies on garbage input', function() {
+test('command: the default timeout applies on garbage input', function() {
     var command = inJob.buildSpecialistCommand('x.md', 'nope');
     assert.ok(command.indexOf('timeout -k 60 ' + inJob.DEFAULT_SPECIALIST_TIMEOUT_SECONDS) !== -1);
 });
@@ -165,7 +154,7 @@ var pool = poolOf([skillOf('general'), skillOf('security'), skillOf('flaky')]);
 // NOTE: 'base' (the posting reviewer) is excluded from the specialists by
 // design — these fixtures use 'general' as a non-posting specialist name.
 
-total++; passed += ok('runSpecialists: completed vs unavailable, validated candidates only', function() {
+test('runSpecialists: completed vs unavailable, validated candidates only', function() {
     var outcomesSeq = [
         null, // base ran, no file → unavailable
         function(dir) { candidatesFile(dir, 'security', HEAD, []); },
@@ -186,7 +175,7 @@ total++; passed += ok('runSpecialists: completed vs unavailable, validated candi
     assert.strictEqual(round.candidates[0].count, 0);
 });
 
-total++; passed += ok('runSpecialists: stale candidates (wrong head) are unavailable', function() {
+test('runSpecialists: stale candidates (wrong head) are unavailable', function() {
     var t = recordingIo([
         null,
         function(dir) { candidatesFile(dir, 'security', STALE, []); },
@@ -197,7 +186,7 @@ total++; passed += ok('runSpecialists: stale candidates (wrong head) are unavail
     assert.strictEqual(round.unavailable.indexOf('security') !== -1, true);
 });
 
-total++; passed += ok('runSpecialists: an invalid record degrades to unavailable (no throw)', function() {
+test('runSpecialists: an invalid record degrades to unavailable (no throw)', function() {
     var t = recordingIo([
         null,
         function(dir) {
@@ -210,13 +199,12 @@ total++; passed += ok('runSpecialists: an invalid record degrades to unavailable
     var round = inJob.runSpecialists(t.io, pool, ctxOf());
     assert.deepStrictEqual(round.completed, []);
     var sec = round.results.filter(function(r) { return r.reviewer === 'security'; })[0];
-    if (process.env.DBG) console.log('DBG sec:', JSON.stringify(sec), 'completed:', JSON.stringify(round.completed));
     assert.ok(sec && sec.reason && sec.reason.indexOf('invalid candidates record') !== -1);
 });
 
 // ── readSpecialistOutcomes: the post action's file-view ─────────────────────
 
-total++; passed += ok('readSpecialistOutcomes: same selection, file-driven outcomes', function() {
+test('readSpecialistOutcomes: same selection, file-driven outcomes', function() {
     var t = recordingIo([]);
     candidatesFile(t.dir, 'security', HEAD, [{ severity: 'SUGGESTION', path: 'js/y.js', line: 2, body: 'b', claim: 'c' }]);
     var io = {
@@ -236,11 +224,9 @@ total++; passed += ok('readSpecialistOutcomes: same selection, file-driven outco
     assert.ok(candidatesModule.candidatesRecordFromPayload(out.candidates[0]));
 });
 
-total++; passed += ok('readSpecialistOutcomes: every specialist unavailable on an empty workspace', function() {
+test('readSpecialistOutcomes: every specialist unavailable on an empty workspace', function() {
     var out = inJob.readSpecialistOutcomes({ readFile: function() { return null; } }, pool, ctxOf());
     assert.deepStrictEqual(out.completed, []);
     assert.strictEqual(out.unavailable.length, 3);
 });
 
-console.log('\n✔ test_reviewPoolInJob: ' + passed + '/' + total + ' assertions groups passed');
-process.exit(passed === total ? 0 : 1);
