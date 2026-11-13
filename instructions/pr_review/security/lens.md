@@ -92,7 +92,7 @@ trust.
 
 ## Output — the candidates-only contract
 
-The security reviewer is a SPECIALIST leg: it writes
+The security reviewer is a pool specialist session: it writes
 `outputs/pr_review_candidates.json` (the candidates-only contract in the
 base output_rules — reviewer, candidates: id/path/line/severity/claim) and
 nothing else. No `pr_review.json`, no general comment, no comment files,

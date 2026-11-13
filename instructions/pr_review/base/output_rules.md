@@ -41,22 +41,27 @@ flowchart TD
   resolved `reviewPolicy` — the census is the machine's source of truth;
   keep it accurate.
 
-## The candidates-only contract (specialist legs)
+## The candidates-only contract (pool specialist sessions)
 
-A SPECIALIST leg (input/TICKET/reviewer_leg.md present — see
-input_context.md) writes ONE file and nothing else:
+A pool specialist session (its prompt file is
+`input/TICKET/pool_specialist-<reviewer>.md` — see input_context.md) writes
+ONE file and nothing else:
 
-`outputs/pr_review_candidates.json`
+`outputs/pr_review_candidates-<reviewer>.json`
 
 ```json
 {
-  "reviewer": "<the reviewer name from reviewer_leg.md>",
+  "reviewer": "<the reviewer name from the prompt>",
+  "head": "<the round head sha from the prompt>",
   "candidates": [
     {"id": 1, "path": "src/auth/UserService.js", "line": 45,
      "severity": "BLOCKING", "claim": "one-paragraph statement of the finding"},
     {"id": 2, "path": "docs/arch.md", "line": null,
      "severity": "SUGGESTION", "claim": "a digest candidate — no diff line"}
-  ]
+  ],
+  "count": 2,
+  "truncated": false,
+  "at": "<iso timestamp>"
 }
 ```
 
@@ -70,8 +75,9 @@ input_context.md) writes ONE file and nothing else:
   digest candidates, never as invented line numbers.
 - Write NOTHING else: no `outputs/pr_review.json`, no
   `pr_review_general.md`, no `pr_review_comments/*`, no `response.md`. Do
-  not post, label, resolve threads, or change statuses — the post action
-  does all machine bookkeeping (candidates marker + completion marker).
+  not post, label, resolve threads, or change statuses — the aggregation
+  step reads this file and the posting review does all machine
+  bookkeeping (the merged census + the marker stamps).
 - Severity discipline still applies: raise only what the lens hunt
   justifies; an empty candidates list is a valid answer (the leg completes
   with zero findings).

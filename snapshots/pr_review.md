@@ -51,7 +51,7 @@ flowchart TD
         P7["7️⃣ input/TICKET/pr_findings.md — previously raised findings (when present)"]
         P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol"]
         P9["9️⃣ input/TICKET/pr_new_hunks.txt — the hunks added since the last reviewed head (re-review rounds; when present)"]
-        P10["🔟 input/TICKET/reviewer_leg.md — THIS run's reviewer-pool identity (specialist legs only; when present)"]
+        P10["🔟 input/TICKET/pool_specialist-<reviewer>.md — THIS session's pool-specialist prompt (specialist sessions only; when present)"]
         P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8 --> P9 --> P10
     end
 
@@ -73,23 +73,24 @@ flowchart TD
 Read PR files to understand WHAT changed. Read ticket files to understand WHY
 it changed and verify against requirements.
 
-## Specialist legs — `reviewer_leg.md` present
+## Pool specialist sessions — the pool prompt file
 
-When `input/TICKET/reviewer_leg.md` exists, this run is a SPECIALIST leg of
-the reviewer pool: it is ONE reviewer's focused pass, not the
-posting review. The file names this leg's reviewer, its output contract and
-its round. A specialist:
+When the run's prompt file is `input/TICKET/pool_specialist-<reviewer>.md`,
+this session is ONE reviewer's focused pass of the reviewer pool — not the
+posting review. The prompt names the reviewer, its lens, the output
+contract and the round head. A specialist session:
 
-- hunts ONLY its lens's dimension (the lens file assembled around this
-  contract names it) — the generalist posting pass owns everything else;
-- writes `outputs/pr_review_candidates.json` per the base candidates-only
-  contract (output_rules.md) — NEVER `outputs/pr_review.json`, never
-  `pr_review_general.md`, never `pr_review_comments/*`;
-- posts nothing, labels nothing, changes no status — the machine parses the
-  candidates file and stamps the markers.
+- hunts ONLY its lens's dimension (the lens file it is pointed at names it)
+  — the generalist posting pass owns everything else;
+- writes `outputs/pr_review_candidates-<reviewer>.json` per the base
+  candidates-only contract (output_rules.md) — NEVER
+  `outputs/pr_review.json`, never `pr_review_general.md`, never
+  `pr_review_comments/*`;
+- posts nothing, labels nothing, changes no status — the aggregation step
+  reads the candidates file and the posting session stamps the markers.
 
-A leg WITHOUT `reviewer_leg.md` is the posting leg: the full verdict
-contract below applies unchanged.
+A session WITHOUT a pool-specialist prompt is the posting review: the full
+verdict contract below applies unchanged.
 
 <!-- Pack-reachability anchor: the deprecated v1 instruction shims are listed in instructions/pr_review/deprecated-v1.md (frozen; removed in the next major release). -->
 
@@ -141,22 +142,27 @@ flowchart TD
   resolved `reviewPolicy` — the census is the machine's source of truth;
   keep it accurate.
 
-## The candidates-only contract (specialist legs)
+## The candidates-only contract (pool specialist sessions)
 
-A SPECIALIST leg (input/TICKET/reviewer_leg.md present — see
-input_context.md) writes ONE file and nothing else:
+A pool specialist session (its prompt file is
+`input/TICKET/pool_specialist-<reviewer>.md` — see input_context.md) writes
+ONE file and nothing else:
 
-`outputs/pr_review_candidates.json`
+`outputs/pr_review_candidates-<reviewer>.json`
 
 ```json
 {
-  "reviewer": "<the reviewer name from reviewer_leg.md>",
+  "reviewer": "<the reviewer name from the prompt>",
+  "head": "<the round head sha from the prompt>",
   "candidates": [
     {"id": 1, "path": "src/auth/UserService.js", "line": 45,
      "severity": "BLOCKING", "claim": "one-paragraph statement of the finding"},
     {"id": 2, "path": "docs/arch.md", "line": null,
      "severity": "SUGGESTION", "claim": "a digest candidate — no diff line"}
-  ]
+  ],
+  "count": 2,
+  "truncated": false,
+  "at": "<iso timestamp>"
 }
 ```
 
@@ -170,8 +176,9 @@ input_context.md) writes ONE file and nothing else:
   digest candidates, never as invented line numbers.
 - Write NOTHING else: no `outputs/pr_review.json`, no
   `pr_review_general.md`, no `pr_review_comments/*`, no `response.md`. Do
-  not post, label, resolve threads, or change statuses — the post action
-  does all machine bookkeeping (candidates marker + completion marker).
+  not post, label, resolve threads, or change statuses — the aggregation
+  step reads this file and the posting review does all machine
+  bookkeeping (the merged census + the marker stamps).
 - Severity discipline still applies: raise only what the lens hunt
   justifies; an empty candidates list is a valid answer (the leg completes
   with zero findings).
@@ -280,15 +287,20 @@ The 4-tier census (`issueCounts`) counts posted threads + digest lines and
 drives the machine verdict — keep it consistent with the inlineComments
 severities.
 
-### outputs/pr_review_candidates.json — specialist legs only
+### outputs/pr_review_candidates-<reviewer>.json — pool specialist sessions only
 
-A SPECIALIST leg (reviewer_leg.md present) answers with candidates, never a
-verdict — the posting leg mints the verdict; the machine merges, filters
-and posts. The shape is the reviewPoolMerge candidate contract:
+A pool specialist session (its prompt file present) answers with
+candidates, never a verdict — the posting review mints the verdict; the
+aggregation merges, the filter verifies and the posting review posts. The
+record schema adds the head binding:
 
 ```json
 {
   "reviewer": "security",
+  "head": "<the round head sha>",
+  "count": 2,
+  "truncated": false,
+  "at": "<iso timestamp>",
   "candidates": [
     {"id": 1, "path": "src/auth/UserService.js", "line": 45,
      "severity": "BLOCKING",
@@ -300,11 +312,13 @@ and posts. The shape is the reviewPoolMerge candidate contract:
 }
 ```
 
-Rules: `id` = position in the file; `path` repo-relative; `line` = the
-diff line or `null` for a digest candidate; `claim` = the substance (no
-severity header, no verdict language). Severity boundary identical to the
-verdict tiers above. Nothing else gets written (no pr_review.json, no
-comment files) and nothing gets posted — worked examples of the claim
+Rules: `head` = the round head sha from the prompt (a stale file never
+feeds a newer head); `id` = position in the file; `path` repo-relative;
+`line` = the diff line or `null` for a digest candidate; `claim` = the
+substance (no severity header, no verdict language). Severity boundary
+identical to the verdict tiers above. Nothing else gets written (no
+pr_review.json, no comment files) and nothing gets posted — worked
+examples of the claim
 voice live in each reviewer's few-shots file.
 
 

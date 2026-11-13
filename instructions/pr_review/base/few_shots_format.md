@@ -30,15 +30,20 @@ The 4-tier census (`issueCounts`) counts posted threads + digest lines and
 drives the machine verdict — keep it consistent with the inlineComments
 severities.
 
-### outputs/pr_review_candidates.json — specialist legs only
+### outputs/pr_review_candidates-<reviewer>.json — pool specialist sessions only
 
-A SPECIALIST leg (reviewer_leg.md present) answers with candidates, never a
-verdict — the posting leg mints the verdict; the machine merges, filters
-and posts. The shape is the reviewPoolMerge candidate contract:
+A pool specialist session (its prompt file present) answers with
+candidates, never a verdict — the posting review mints the verdict; the
+aggregation merges, the filter verifies and the posting review posts. The
+record schema adds the head binding:
 
 ```json
 {
   "reviewer": "security",
+  "head": "<the round head sha>",
+  "count": 2,
+  "truncated": false,
+  "at": "<iso timestamp>",
   "candidates": [
     {"id": 1, "path": "src/auth/UserService.js", "line": 45,
      "severity": "BLOCKING",
@@ -50,9 +55,11 @@ and posts. The shape is the reviewPoolMerge candidate contract:
 }
 ```
 
-Rules: `id` = position in the file; `path` repo-relative; `line` = the
-diff line or `null` for a digest candidate; `claim` = the substance (no
-severity header, no verdict language). Severity boundary identical to the
-verdict tiers above. Nothing else gets written (no pr_review.json, no
-comment files) and nothing gets posted — worked examples of the claim
+Rules: `head` = the round head sha from the prompt (a stale file never
+feeds a newer head); `id` = position in the file; `path` repo-relative;
+`line` = the diff line or `null` for a digest candidate; `claim` = the
+substance (no severity header, no verdict language). Severity boundary
+identical to the verdict tiers above. Nothing else gets written (no
+pr_review.json, no comment files) and nothing gets posted — worked
+examples of the claim
 voice live in each reviewer's few-shots file.
