@@ -3834,14 +3834,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     processedKeys.push(key);
                     continue;
                 }
-                // gh-1101 re-dispatch guard: the newest dispatched run on
-                // this head concluded (non-green) moments ago — its
-                // check-runs may still be invisible; the verdict paths own
-                // it. Never applies to the green latch above.
-                if (recentlyConcludedNonGreen(vProbe)) {
+                // gh-1101 / fa #2148: a run on this head concluded moments ago
+                // (non-green, or green on a ghost-free gate) — verdicts own it.
+                if (recentlyConcludedNonGreen(vProbe, effectiveRepoInfo, vHead0)) {
                     console.log('  ⏭️  ' + key + ' a dispatched run on this head concluded <' +
                                 (validationLivenessModule.CONCLUDED_REDISPATCH_GRACE_MS / 60000) +
-                                ' min ago — no re-dispatch (check visibility grace)');
+                                ' min ago — no re-dispatch (check visibility grace / fresh green, fa #2148)');
                     continue;
                 }
                 // Green-cover guard (rule flag skipIfGreenCi — the
@@ -7746,9 +7744,12 @@ function latchValidated(repoInfo, ticket) {
     if (!hasLabel(ticket, 'ai_validated')) tracker.addLabel(ticket.prNumber, 'ai_validated');
 }
 
-function recentlyConcludedNonGreen(probe) {
+// fa #2148: with repoInfo, a FRESH green on a ghost-free gate also holds.
+function recentlyConcludedNonGreen(probe, repoInfo, headSha) {
     var n = probe && probe.newest;
-    if (!n || n.conclusion === 'success') return false;
+    if (n && n.conclusion === 'success') return !!repoInfo &&
+        validationLivenessModule.freshGreen(probe, Date.now()) && headGateClean(repoInfo, headSha);
+    if (!n) return false;
     return validationLivenessModule.concludedWithin(n, Date.now(),
         validationLivenessModule.CONCLUDED_REDISPATCH_GRACE_MS);
 }

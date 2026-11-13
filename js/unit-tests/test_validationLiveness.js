@@ -593,4 +593,15 @@ suite('validationLiveness poolBusy — stale queued runs age out (fa #2133)', fu
         ]);
         assert.equal(live.poolBusy(withCi, NOW), true, 'an active CI run still marks the pool busy');
     });
+
+    test('fa #2148: freshGreen — green concluded inside the grace only', function () {
+        var now = Date.now();
+        function run(c, minsAgo, st) { return { newest: { status: st || 'completed', conclusion: c, updated_at: new Date(now - minsAgo * 60000).toISOString() } }; }
+        assert.equal(live.freshGreen(null, now), false);
+        assert.equal(live.freshGreen({ newest: null }, now), false);
+        assert.equal(live.freshGreen(run('success', 3), now), true);
+        assert.equal(live.freshGreen(run('success', 20), now), false);
+        assert.equal(live.freshGreen(run('failure', 3), now), false);
+        assert.equal(live.freshGreen(run(null, 3, 'in_progress'), now), false);
+    });
 });

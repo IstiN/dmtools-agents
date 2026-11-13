@@ -59,9 +59,8 @@
 'use strict';
 
 // ── Per-tick I/O cache ────────────────────────────────────────────────────
-// One TTL cache (60s) for the whole SM tick. Measured on a busy tick: the
-// same open-PR list was re-fetched per rule AND per issue findPr (18
-// github_list_prs calls returning the same payload in ONE tick). Routing
+// One TTL cache (60s) for the whole SM tick (18 identical github_list_prs
+// calls were measured in ONE tick before it). Routing
 // the three list sites + prStatus through this cache collapses that to a
 // single fetch per kind per repo. TTL hits change nothing observable —
 // same payload, same 60s staleness budget as the old per-provider memo
@@ -90,8 +89,10 @@ function ioCacheGet(owner, repo, kind, id) {
     return entry.data;
 }
 
+// fa #2148: data.fetchedAt (prStatus) pins the age — re-puts never refresh TTL.
 function ioCachePut(owner, repo, kind, id, data) {
-    _cache.entries[ioCacheKey(owner, repo, kind, id)] = { at: Date.now(), data: data };
+    var at = (data && typeof data.fetchedAt === 'number') ? data.fetchedAt : Date.now();
+    _cache.entries[ioCacheKey(owner, repo, kind, id)] = { at: at, data: data };
 }
 
 // Drop ONE cached entry (owner directive 2026-10-04 "red yields the slot"):
@@ -705,14 +706,13 @@ function _ghFindPr(owner, repo, issueNumber, branchPrefix) {
     return _ghFindMergedPr(owner, repo, headFilter, branch);
 }
 
-// Per-tick memo (kind prStatus, key = PR number): measured on a busy
-// tick — three rules re-fetched prStatus 23× for the same 7 PRs.
-// Results are read-only for callers (githubSource assigns item.pr;
-// matchesGuards only reads), so sharing the cached reference is safe.
+// Per-tick memo (kind prStatus, key = PR number; 23× re-fetch measured).
+// Results are read-only for callers — sharing the reference is safe.
 function _ghPrStatusMemo(owner, repo, prNumber, resolveBranchHead) {
     var memo = ioCacheGet(owner, repo, 'prStatus', prNumber);
     if (memo) return memo;
     var out = computePrStatus(owner, repo, prNumber, resolveBranchHead);
+    out.fetchedAt = Date.now();
     ioCachePut(owner, repo, 'prStatus', prNumber, out);
     return out;
 }

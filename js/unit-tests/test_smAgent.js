@@ -6553,6 +6553,17 @@ suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave sta
         assert.equal(sm.recentlyConcludedNonGreen({ newest: { status: 'completed', conclusion: 'cancelled', updated_at: old } }), false);
     });
 
+    test('fa #2148: a FRESH green dispatched run on a ghost-free head blocks the re-dispatch', function () {
+        var sm = makeSmAgent(config('a', 'b'));
+        var fresh = new Date(Date.now() - 3 * 60000).toISOString();
+        var old = new Date(Date.now() - 20 * 60000).toISOString();
+        var ri = { owner: 'a', repo: 'b' };
+        var green = function (t) { return { newest: { status: 'completed', conclusion: 'success', updated_at: t } }; };
+        assert.equal(sm.recentlyConcludedNonGreen(green(fresh), ri, 'abc'), true, 'fresh green holds');
+        assert.equal(sm.recentlyConcludedNonGreen(green(old), ri, 'abc'), false, 'old green does not');
+        assert.equal(sm.recentlyConcludedNonGreen(green(fresh)), false, 'legacy call (no repo) unchanged');
+    });
+
     test('gh-1101 bridge-free: approvedGreenHeadFastPath stamps validationChecks with checksToken before merge probe', function () {
         var r = Object.assign(run('success', 'shaBF', 30 * 60000, 60000), {
             html_url: 'https://github.com/IstiN/fah/actions/runs/39432702706'
