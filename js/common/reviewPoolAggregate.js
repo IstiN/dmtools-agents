@@ -30,6 +30,7 @@
 
 var reviewFilter = require('./reviewFilter.js');
 var reviewPoolMerge = require('./reviewPoolMerge.js');
+var reviewVerdicts = require('./reviewVerdicts.js');
 
 // ── the posting leg joins its own census ─────────────────────────────────────
 
@@ -48,8 +49,7 @@ function baseCandidatesFromReview(reviewData, resolveClaim) {
     for (var i = 0; i < inline.length; i++) {
         var entry = inline[i] || {};
         var claim = resolveClaim ? resolveClaim(entry) : (typeof entry.body === 'string' ? entry.body : '');
-        claim = reviewFilter.stripProseSeverityHead(
-            require('./reviewVerdicts.js').stripLeadingSeverityLine(String(claim || '')));
+        claim = reviewFilter.stripProseSeverityHead(reviewVerdicts.stripLeadingSeverityLine(String(claim || '')));
         if (!claim || !claim.trim()) continue;
         candidates.push({
             id: i,
@@ -121,6 +121,18 @@ function inlineEntryFromMerged(merged, baseInline) {
         severity: merged.severity,
         body: merged.claim + '\n\uD83D\uDC65 Raised by ' + attribution + '.'
     };
+}
+
+/**
+ * The rebuilt inline list REPLACES the review's inlineComments in place —
+ * the gh-1403 apply step (and the poster) then work on the merged census.
+ * Returns the built list ({ entries, mergedCount, consumedBase }).
+ */
+function applyMergedInline(reviewData, merged) {
+    var baseInline = reviewData && Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
+    var built = buildInlineFromMerged(merged, baseInline);
+    if (reviewData) reviewData.inlineComments = built.entries;
+    return built;
 }
 
 /**
@@ -218,6 +230,7 @@ if (typeof module !== 'undefined' && module.exports) {
         buildInlineFromMerged: buildInlineFromMerged,
         filterCandidatesFromMerged: filterCandidatesFromMerged,
         applyPoolVerdicts: applyPoolVerdicts,
+        applyMergedInline: applyMergedInline,
         poolPacketOf: poolPacketOf
     };
 }

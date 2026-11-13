@@ -17,7 +17,8 @@ var filterModule = loadModule('js/common/reviewFilter.js',
     makeRequire({
         './reviewPolicy.js': reviewPolicy,
         './reviewVerdicts.js': reviewVerdicts,
-        './reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
+        './reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js',
+            makeRequire({ './findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({}), {}) }), {})
     }), {});
 var mod = loadModule('js/common/reviewPoolAggregate.js',
     makeRequire({
@@ -63,7 +64,7 @@ var SECURITY_LIST = {
     reviewer: 'security',
     candidates: [
         { id: 1, path: 'src/auth/UserService.js', line: 45, severity: 'BLOCKING',
-            claim: 'raw user input concatenated into the query string' },
+            claim: 'raw user input is concatenated into the query string.' },
         { id: 2, path: 'src/perf/cache.js', line: 210, severity: 'IMPORTANT',
             claim: 'unbounded cache grows without eviction' }
     ]
@@ -128,7 +129,8 @@ suite('reviewPoolAggregate — buildInlineFromMerged (the merged census becomes 
         var merged = mergedOf(reviewData, { lists: [SECURITY_LIST], arrived: ['base', 'security'], unavailable: [], roundName: 'first' });
         var built = mod.buildInlineFromMerged(merged, reviewData.inlineComments);
         // merged order: sql(base#0 merged), secret(base#1), routes(base#2), cache(security)
-        assert.equal(built.entries.length, 4);
+        // + the untouched claim-less tail.
+        assert.equal(built.entries.length, 5);
         assert.equal(built.entries[0].comment, 'outputs/pr_review_comments/sql.md',
             'the original comment-file reference survives the merge');
         assert.equal(built.entries[0].severity, 'BLOCKING');
@@ -142,7 +144,7 @@ suite('reviewPoolAggregate — buildInlineFromMerged (the merged census becomes 
         var reviewData = baseReview();
         var secEscalating = { reviewer: 'security', candidates: [
             { id: 1, path: 'src/api/routes.js', line: 88, severity: 'IMPORTANT',
-                claim: 'duplicated validation logic in the route handler' }
+                claim: 'duplicated validation logic in the route handler.' }
         ]};
         var merged = mergedOf(reviewData, { lists: [secEscalating], arrived: ['base', 'security'], unavailable: [], roundName: 'first' });
         var built = mod.buildInlineFromMerged(merged, reviewData.inlineComments);
@@ -157,9 +159,10 @@ suite('reviewPoolAggregate — buildInlineFromMerged (the merged census becomes 
         var reviewData = baseReview();
         var merged = mergedOf(reviewData, { lists: [SECURITY_LIST], arrived: ['base', 'security'], unavailable: [], roundName: 'first' });
         var built = mod.buildInlineFromMerged(merged, reviewData.inlineComments);
-        var tail = built.entries[3];
-        assert.equal(tail.path, 'src/perf/cache.js', 'all four merged entries come first…');
-        assert.equal(built.entries.length, 4 + 0, '…and the claim-less base entry is the untouched tail');
+        assert.equal(built.entries.length, 5, 'four merged entries + the untouched claim-less tail');
+        assert.equal(built.entries[3].path, 'src/perf/cache.js', 'merged entries come first, in merged order');
+        assert.equal(built.entries[4].comment, 'outputs/pr_review_comments/missing-file.md',
+            'the claim-less base entry is the untouched tail');
     });
 
     test('claim-less base entries survive verbatim at the tail', function() {
@@ -199,6 +202,7 @@ suite('reviewPoolAggregate — applyPoolVerdicts (weighted retention + attribute
     test('a drop removes the entry and the drop record names the reviewers', function() {
         var reviewData = baseReview();
         var merged = mod.mergePoolCensus(reviewData, roundOf(SECURITY_LIST), claimResolver).merged;
+        mod.applyMergedInline(reviewData, merged);
         var candidates = mod.filterCandidatesFromMerged(merged, DEFAULT_POLICY);
         var cacheId = merged.filter(function(m) { return m.path === 'src/perf/cache.js'; })[0].id;
         var verdicts = [{ id: cacheId, decision: 'drop', reason: 'claim contradicted by the LRU bound at src/perf/cache.js:190' }];
@@ -214,6 +218,7 @@ suite('reviewPoolAggregate — applyPoolVerdicts (weighted retention + attribute
         var reviewData = baseReview();
         var highWeight = Object.assign({ filterWeight: 'high' }, SECURITY_LIST);
         var merged = mod.mergePoolCensus(reviewData, roundOf(highWeight), claimResolver).merged;
+        mod.applyMergedInline(reviewData, merged);
         var candidates = mod.filterCandidatesFromMerged(merged, DEFAULT_POLICY);
         var cacheId = merged.filter(function(m) { return m.path === 'src/perf/cache.js'; })[0].id;
         var verdicts = [{ id: cacheId, decision: 'drop' }];
@@ -226,6 +231,7 @@ suite('reviewPoolAggregate — applyPoolVerdicts (weighted retention + attribute
     test('a demote downgrades the severity and stamps the provenance note (pool parity with gh-1403)', function() {
         var reviewData = baseReview();
         var merged = mod.mergePoolCensus(reviewData, roundOf(SECURITY_LIST), claimResolver).merged;
+        mod.applyMergedInline(reviewData, merged);
         var candidates = mod.filterCandidatesFromMerged(merged, DEFAULT_POLICY);
         var cacheId = merged.filter(function(m) { return m.path === 'src/perf/cache.js'; })[0].id;
         var verdicts = [{ id: cacheId, decision: 'demote', tier: 'SUGGESTION', reason: 'real but cosmetic' }];
@@ -238,6 +244,7 @@ suite('reviewPoolAggregate — applyPoolVerdicts (weighted retention + attribute
     test('an empty verdict list applies nothing (round posts as merged)', function() {
         var reviewData = baseReview();
         var merged = mod.mergePoolCensus(reviewData, roundOf(SECURITY_LIST), claimResolver).merged;
+        mod.applyMergedInline(reviewData, merged);
         var candidates = mod.filterCandidatesFromMerged(merged, DEFAULT_POLICY);
         var out = mod.applyPoolVerdicts(reviewData, merged, candidates, []);
         assert.equal(out.result.changed, false);
@@ -251,6 +258,7 @@ suite('reviewPoolAggregate — poolPacketOf (availability + census + drop visibi
         var reviewData = baseReview();
         var round = { lists: [SECURITY_LIST], arrived: ['security'], unavailable: ['legal'], roundName: 'first' };
         var merged = mod.mergePoolCensus(reviewData, round, claimResolver).merged;
+        mod.applyMergedInline(reviewData, merged);
         var candidates = mod.filterCandidatesFromMerged(merged, DEFAULT_POLICY);
         var cacheId = merged.filter(function(m) { return m.path === 'src/perf/cache.js'; })[0].id;
         var out = mod.applyPoolVerdicts(reviewData, merged, candidates,
@@ -266,11 +274,15 @@ suite('reviewPoolAggregate — poolPacketOf (availability + census + drop visibi
         assert.ok(text.indexOf('filter drop [security]') !== -1, 'drops carry the reviewer attribution');
     });
 
-    test('a clean single-source round with no drops says nothing (no packet noise)', function() {
+    test('a clean single-source round with no drops renders only the availability line', function() {
         var lines = mod.poolPacketOf({
             arrived: ['base'], unavailable: [], roundName: 'first',
             merged: [], applied: [], dropped: []
         });
-        assert.deepEqual(lines, []);
+        assert.equal(lines.length, 1);
+        assert.ok(lines[0].indexOf('candidates from base') !== -1);
+        assert.deepEqual(mod.poolPacketOf({
+            arrived: [], unavailable: [], roundName: 'first', merged: [], applied: [], dropped: []
+        }), [], 'a no-pool round says nothing');
     });
 });

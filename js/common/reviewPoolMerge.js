@@ -89,10 +89,13 @@ function filterWeightOf(list) {
 
 /**
  * One merged candidate entry — the pool metadata rides alongside the
- * filter-visible fields (id/path/line/severity/claim).
+ * filter-visible fields (id/path/line/severity/claim). `_baseIndex`
+ * (gh-1471, optional) is the aggregation's provenance — the rebuilt inline
+ * list reuses the ORIGINAL posting-leg entry for a base-provenanced
+ * candidate; the filter input never sees it.
  */
 function mergedCandidateOf(c, id, reviewer, highWeight) {
-    return {
+    var entry = {
         id: id,
         path: String((c && c.path) || ''),
         line: c ? c.line : undefined,
@@ -101,6 +104,8 @@ function mergedCandidateOf(c, id, reviewer, highWeight) {
         reviewers: [reviewer],
         highWeight: highWeight === true
     };
+    if (c && c._baseIndex !== undefined) entry._baseIndex = c._baseIndex;
+    return entry;
 }
 
 /**
