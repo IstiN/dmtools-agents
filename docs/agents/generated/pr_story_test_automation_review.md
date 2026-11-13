@@ -67,6 +67,7 @@ _Post Story Test Automation Review Comments Action_
   - `autoStartMergeConfigFile`
   - `autoStartRework`
   - `autoStartReworkConfigFile`
+  - `branchCreateFnPath`
   - `commentMarkup`
   - `configPath`
   - `contentOutput`

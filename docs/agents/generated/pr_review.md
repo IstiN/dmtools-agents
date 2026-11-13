@@ -118,6 +118,7 @@ _Post PR Review Comments Action — posts the assembled review._
   - `allowApproveWithSuggestions`
   - `autoStartRework`
   - `autoStartReworkConfigFile`
+  - `branchCreateFnPath`
   - `commentMarkup`
   - `configPath`
   - `contentOutput`
