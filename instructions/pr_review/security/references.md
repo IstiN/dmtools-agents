@@ -1,4 +1,4 @@
-# Security reference pack (gh-1406 — options.referencePack)
+# Security reference pack (options.referencePack)
 
 The security reviewer cites one of these reference classes when raising a
 finding whose claim is "this is a known vulnerability class". The citation

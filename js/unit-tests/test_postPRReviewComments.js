@@ -4996,3 +4996,611 @@ suite('postPReviewComments — gh-1403 review filter leg (verification: filter)'
         assert.equal(data.issueCounts.important, 2, 'census untouched');
     });
 });
+
+// ═══════════════ gh-1471 reviewer-pool execution (post action, IN-JOB) ═══════════════
+
+/**
+ * Action-level loader for the gh-1471 pool suites: the standard action
+ * collaborators plus the real pool chain, name-aware outputFiles, and the
+ * file_read/file_list/github_get_pr/cli_execute_command/file_write globals
+ * the pool wiring reads.
+ */
+function loadPostPRReviewCommentsForPool(opts) {
+    opts = opts || {};
+    var jiraAddLabelCalls = [];
+    var jiraMoveToStatusCalls = [];
+    var jiraPostCommentCalls = [];
+    var triggerSmIfIdleCalls = [];
+    var scmAddLabelCalls = [];
+    var scmComments = [];
+    var scmInlineComments = [];
+    var cliCalls = [];
+    var fileWrites = [];
+    var prReviewReads = [];
+
+    var skills = poolSkillFiles(opts.highSecurity === true);
+    var inputFileMap = Object.assign({}, skills, opts.fileMap || {});
+    function file_read(args) {
+        var p = args && (args.path || args);
+        if (p && p.indexOf('pr_info.md') !== -1) return opts.prInfoContent || null;
+        if (inputFileMap[p] !== undefined) return inputFileMap[p];
+        // '.dmtools/config' reads fall through to the same null (an absent
+        // config) — no separate branch needed.
+        return null;
+    }
+    function file_list(args) {
+        var dir = args && (args.path || args);
+        if (dir === 'instructions/review' || dir === '.dmtools/review') {
+            return Object.keys(skills).map(function(p) { return p.substring(dir.length + 1); });
+        }
+        return null;
+    }
+
+    var scm = {
+        getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : null; },
+        listPrs: function() { return opts.openPrs || []; },
+        addComment: function(prId, body) { scmComments.push({ prId: prId, body: body }); },
+        addInlineComment: function(prId, path, line, body, startLine, side) {
+            scmInlineComments.push({ prId: prId, path: path, line: line, body: body, side: side });
+        },
+        getPrComments: function() { return opts.prComments || []; },
+        getPrDiff: function() {
+            return opts.prDiff !== undefined ? opts.prDiff :
+                'diff --git a/src/auth.js b/src/auth.js\n' +
+                '--- a/src/auth.js\n+++ b/src/auth.js\n@@ -10,2 +10,3 @@\n context line\n+rate limit line\n' +
+                'diff --git a/src/crypto.js b/src/crypto.js\n' +
+                '--- a/src/crypto.js\n+++ b/src/crypto.js\n@@ -22,2 +22,3 @@\n context line\n+hard-coded iv line\n';
+        },
+        addLabel: function(prId, label) { scmAddLabelCalls.push({ prId: prId, label: label }); },
+        removeLabel: function() {},
+        fetchDiscussions: function() { return { rawThreads: { threads: [] } }; }
+    };
+
+    // Name-aware outputFiles: the IN-JOB specialist candidates files
+    // (pr_review_candidates-<reviewer>.json), the posting leg's
+    // pr_review.json, the general comment md, the filter verdicts.
+    function candidatesFileOf(name, bare) {
+        var reviewer = bare.substring('pr_review_candidates-'.length).replace(/\.json$/, '');
+        var raw = (opts.candidatesFiles || {})[reviewer];
+        if (raw === undefined) raw = defaultSpecialistCandidates(reviewer);
+        return { content: raw, path: 'outputs/' + name };
+    }
+    function postingReviewFileOf(name) {
+        prReviewReads.push(name);
+        if (opts.reviewData === null) throw new Error('no pr_review.json');
+        return { content: JSON.stringify(opts.reviewData || poolPostingReviewData()), path: 'outputs/pr_review.json' };
+    }
+    var outputFiles = {
+        readOutputFileDetailed: function(name, o2) {
+            var bare = String(name || '').replace(/^outputs\//, '');
+            if (bare.indexOf('pr_review_candidates-') === 0) return candidatesFileOf(name, bare);
+            if (name === 'pr_review.json') return postingReviewFileOf(name);
+            if (name === 'pr_review_filter.json' && opts.filterVerdictsJson !== undefined) {
+                return { content: opts.filterVerdictsJson, path: 'outputs/pr_review_filter.json' };
+            }
+            return { content: null, path: 'outputs/' + name };
+        },
+        readOutputFile: function(name) {
+            var p = typeof name === 'string' ? name : (name && name.path);
+            if (p && p.indexOf('pr_review_general.md') !== -1) {
+                return opts.generalMd || '# Review summary\n';
+            }
+            return null;
+        }
+    };
+
+    var defaultMocks = {
+        file_read: file_read,
+        file_list: file_list,
+        file_write: function(a, b) {
+            fileWrites.push(typeof a === 'string' ? { path: a, content: b } : Object.assign({}, a));
+        },
+        github_get_pr: function() {
+            return opts.prObject !== undefined ? opts.prObject : { head: { sha: POOL_HEAD }, additions: 400 };
+        },
+        cli_execute_command: function(args) { cliCalls.push(args); return 'cli ok'; }
+    };
+    var mergedMocks = Object.assign(actionJiraMocks(jiraAddLabelCalls, jiraMoveToStatusCalls,
+        jiraPostCommentCalls, opts), defaultMocks, opts.mocks || {});
+
+    var mod = loadModule(
+        'js/postPRReviewComments.js',
+        makeRequire({
+            './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
+            './common/machineAuthor.js': machineAuthorModule,
+            './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
+            './config.js': configModule,
+            './common/scm.js': { createScm: function() { return scm; } },
+            './common/autoStart.js': actionAutoStartStub(triggerSmIfIdleCalls),
+            './configLoader.js': configLoaderStub(opts),
+            './common/outputFiles.js': outputFiles,
+            './common/githubHelpers.js': githubHelpersStub,
+            './common/trackers.js': makeTrackersModule(mergedMocks),
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/reviewPolicy.js': loadReviewPolicyModule(),
+            './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js',
+                    makeRequire({ './machineAuthor.js': machineAuthorReal() }), {})
+            }), {}),
+            './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
+            './common/reviewFilter.js': loadReviewFilterModule(),
+            // gh-1471: the real pool execution chain (pure modules).
+            './common/reviewPool.js': loadPoolChainReal().pool,
+            './common/reviewPoolPost.js': loadPoolChainReal().post,
+            './common/reviewPoolInJob.js': loadPoolChainReal().inJob,
+            './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js')
+        }),
+        mergedMocks
+    );
+
+    return {
+        mod: mod,
+        scmComments: scmComments,
+        scmInlineComments: scmInlineComments,
+        scmAddLabelCalls: scmAddLabelCalls,
+        jiraAddLabelCalls: jiraAddLabelCalls,
+        jiraMoveToStatusCalls: jiraMoveToStatusCalls,
+        jiraPostCommentCalls: jiraPostCommentCalls,
+        triggerSmIfIdleCalls: triggerSmIfIdleCalls,
+        cliCalls: cliCalls,
+        fileWrites: fileWrites,
+        prReviewReads: prReviewReads
+    };
+}
+
+
+// ── the pool fixtures (skill files + the posting review data) ────────────────
+
+// The factory skill files (the file_read/file_list mocks). highSecurity flips
+// the security reviewer's filterWeight to 'high' for the weighted-retention suite.
+function poolSkillFiles(highSecurity) {
+    return {
+        'instructions/review/base.json': JSON.stringify({
+            name: 'base',
+            lens: 'instructions/pr_review/generalist/lens.md',
+            roleLine: 'Senior Code Reviewer',
+            mayRaise: ['BLOCKING', 'IMPORTANT', 'SUGGESTION', 'NIT'],
+            filterWeight: 'normal',
+            isFiltered: true,
+            rounds: ['all'],
+            triggerPaths: [],
+            options: {},
+            model: null,
+            isEnabled: true
+        }),
+        'instructions/review/security.json': JSON.stringify({
+            name: 'security',
+            lens: 'instructions/pr_review/security/lens.md',
+            roleLine: 'Specialized Code Reviewer — security',
+            mayRaise: ['BLOCKING', 'IMPORTANT', 'SUGGESTION', 'NIT'],
+            filterWeight: highSecurity ? 'high' : 'normal',
+            isFiltered: true,
+            rounds: ['first', 'hunks'],
+            triggerPaths: [],
+            options: {},
+            model: null,
+            isEnabled: true
+        })
+    };
+}
+
+function poolPostingReviewData(opts) {
+    opts = opts || {};
+    return {
+        recommendation: opts.recommendation || 'REQUEST_CHANGES',
+        generalComment: 'outputs/pr_review_general.md',
+        resolvedThreadIds: [],
+        inlineComments: [{
+            path: 'src/auth.js', line: 10, severity: 'BLOCKING',
+            body: 'No rate limit on the login endpoint.'
+        }],
+        issueCounts: { blocking: 1, important: 0, suggestions: 0, nits: 0, digest: 0 }
+    };
+}
+
+// The default specialist candidates file: the security lens completed on the
+// round head with one crypto finding (the merge-attribution fixture).
+function defaultSpecialistCandidates(reviewer) {
+    if (reviewer !== 'security') return null;
+    return JSON.stringify({
+        reviewer: 'security',
+        head: POOL_HEAD,
+        candidates: [{
+            severity: 'IMPORTANT', path: 'src/crypto.js', line: 22,
+            body: 'Hard-coded IV in the AES setup.', claim: 'Hard-coded IV in the AES setup.'
+        }],
+        count: 1, truncated: false, at: '2026-11-13T00:00:00Z'
+    });
+}
+
+// The real pool execution chain (loaded once; pure modules).
+var poolChainCache = null;
+function loadPoolChainReal() {
+    if (poolChainCache) return poolChainCache;
+    var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    var verdicts = loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthor }), {});
+    var reviewPolicy = loadModule('js/common/reviewPolicy.js',
+        makeRequire({ './reviewVerdicts.js': verdicts }), {});
+    var poolSchema = loadModule('js/common/reviewPoolSchema.js', makeRequire({}), {});
+    var pool = loadModule('js/common/reviewPool.js',
+        makeRequire({ './reviewPolicy.js': reviewPolicy, './reviewPoolSchema.js': poolSchema }), {});
+    var specClaims = loadModule('js/common/reviewSpecClaims.js', makeRequire({
+        './findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({
+            './machineAuthor.js': machineAuthor, './reviewVerdicts.js': verdicts
+        }), {}),
+        './reviewVerdicts.js': verdicts
+    }), {});
+    var reviewFilter = loadModule('js/common/reviewFilter.js', makeRequire({
+        './reviewPolicy.js': reviewPolicy,
+        './reviewVerdicts.js': verdicts,
+        './reviewSpecClaims.js': specClaims
+    }), {});
+    var poolMerge = loadModule('js/common/reviewPoolMerge.js',
+        makeRequire({ './reviewPolicy.js': reviewPolicy }), {});
+    var candidates = loadModule('js/common/reviewPoolCandidates.js', makeRequire({
+        './reviewVerdicts.js': verdicts, './reviewPolicy.js': reviewPolicy
+    }), {});
+    var markers = loadModule('js/common/reviewPoolMarkers.js',
+        makeRequire({ './reviewVerdicts.js': verdicts }), {});
+    var aggregate = loadModule('js/common/reviewPoolAggregate.js', makeRequire({
+        './reviewFilter.js': reviewFilter, './reviewPoolMerge.js': poolMerge, './reviewVerdicts.js': verdicts
+    }), {});
+    var inJob = loadModule('js/common/reviewPoolInJob.js', makeRequire({
+        './reviewPoolCandidates.js': candidates
+    }), {});
+    var post = loadModule('js/common/reviewPoolPost.js', makeRequire({
+        './reviewPoolCandidates.js': candidates,
+        './reviewPoolMarkers.js': markers,
+        './reviewPoolAggregate.js': aggregate,
+        './reviewPool.js': pool,
+        './reviewVerdicts.js': verdicts,
+        './reviewPoolInJob.js': inJob
+    }), {});
+    poolChainCache = { pool: pool, post: post, candidates: candidates, markers: markers, inJob: inJob };
+    return poolChainCache;
+}
+
+// Marker parsers over the recorded scm.addComment bodies.
+function poolParsedMarkers(bodies) {
+    var chain = loadPoolChainReal();
+    var comments = (bodies || []).map(function(b) { return { body: b, user: { login: 'ai-teammate' } }; });
+    var opts = { authorLogins: ['ai-teammate'] };
+    return {
+        passes: chain.markers.parsePassMarkers(comments, opts),
+        outcomes: chain.markers.parsePoolOutcomeMarkers(comments, opts),
+        holds: chain.markers.parseRequiredReviewerHolds(comments, opts)
+    };
+}
+
+function runPoolAction(loaded, paramsOverrides) {
+    return loaded.mod.action(Object.assign({
+        ticket: { key: 'PROJ-1', fields: { labels: [] } },
+        response: 'Jira review content',
+        inputFolderPath: 'input/PROJ-1'
+    }, paramsOverrides || {}));
+}
+
+var POOL_HEAD = 'ccccdddd0000ccccdddd0000ccccdddd0000cccc';
+
+var POOL_PR_INFO = '- **PR #**: 42\n- **URL**: https://github.com/acme/widget/pull/42\n- **Branch**: ai/PROJ-1\n';
+
+suite('postPReviewComments — gh-1471 posting leg pool round (in-job)', function() {
+
+    test('in-job specialist candidates merge into the ONE review with attribution', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            generalMd: '# Review summary\n'
+        });
+
+        var result = runPoolAction(loaded);
+
+        assert.equal(result.success, true);
+
+        // ONE review: the base finding + the security candidate as a second thread.
+        assert.equal(loaded.scmInlineComments.length, 2, 'base + merged security candidate');
+        var securityThread = loaded.scmInlineComments.filter(function(c) {
+            return c.path === 'src/crypto.js';
+        })[0];
+        assert.ok(securityThread, 'the security candidate became a thread');
+        assert.ok(securityThread.body.indexOf('Raised by security.') !== -1,
+            'the candidate carries reviewer attribution');
+        assert.ok(securityThread.body.indexOf('severity: IMPORTANT') !== -1,
+            'the machine severity line stamps the candidate tier');
+
+        // The round's records: the specialists' PASS stamps + the posting
+        // leg's own + ONE pool-outcome marker; no hold (security completed).
+        var parsed = poolParsedMarkers(loaded.scmComments.map(function(c) { return c.body; }));
+        assert.equal(parsed.outcomes.length, 1, 'exactly one pool-outcome marker');
+        assert.equal(parsed.outcomes[0].head, POOL_HEAD);
+        var names = parsed.outcomes[0].reviewers.map(function(e) { return e.name; }).sort();
+        assert.deepEqual(names, ['security'], 'the outcome names the round specialists (base is the posting leg)');
+        assert.equal(parsed.passes.filter(function(p) { return p.reviewer === 'base'; }).length, 1,
+            'the posting leg stamps its own PASS marker');
+        assert.equal(parsed.passes.filter(function(p) { return p.reviewer === 'security'; }).length, 1,
+            'the posting leg stamps the completed specialist PASS marker');
+        assert.equal(parsed.holds.length, 0, 'no hold: the required specialist completed');
+    });
+
+    test('a missing specialist file holds the merge and the packet names it (fail-open round)', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            candidatesFiles: { security: null },
+            generalMd: '# Review summary\n'
+        });
+
+        var result = runPoolAction(loaded);
+
+        assert.equal(result.success, true, 'the round completes fail-open');
+        var parsed = poolParsedMarkers(loaded.scmComments.map(function(c) { return c.body; }));
+        assert.equal(parsed.outcomes.length, 1, 'one pool-outcome marker');
+        assert.equal(parsed.holds.length, 1, 'the required-reviewer hold is stamped');
+        assert.deepEqual(parsed.holds[0].missing, ['security']);
+        assert.equal(parsed.holds[0].head, POOL_HEAD);
+
+        var packetWrite = loaded.fileWrites.filter(function(w) {
+            return w.path === 'outputs/pr_review_general.md';
+        })[0];
+        assert.ok(packetWrite.content.indexOf('security unavailable this round') !== -1,
+            'the packet names the unavailable required reviewer');
+        assert.equal(loaded.scmInlineComments.length, 1, 'the base review still posts');
+    });
+
+    test('an empty pool (no skill files) degrades to the plain single-reviewer round', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            fileMap: { 'instructions/review/base.json': null, 'instructions/review/security.json': null }
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        var parsed = poolParsedMarkers(loaded.scmComments.map(function(c) { return c.body; }));
+        assert.equal(parsed.outcomes.length, 0, 'no pool-outcome marker without a pool');
+        assert.equal(parsed.passes.length, 0, 'no PASS stamp without a pool');
+        assert.equal(loaded.scmInlineComments.length, 1, 'the plain review posts');
+    });
+
+    test('a stale specialist candidates file (wrong head) is unavailable — the hold fires', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            candidatesFiles: {
+                security: JSON.stringify({
+                    reviewer: 'security', head: '1111111111111111111111111111111111111111',
+                    candidates: [], count: 0, truncated: false, at: '2026-11-13T00:00:00Z'
+                })
+            }
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        var parsed = poolParsedMarkers(loaded.scmComments.map(function(c) { return c.body; }));
+        assert.equal(parsed.holds.length, 1, 'the stale head is treated as unavailable');
+        assert.deepEqual(parsed.holds[0].missing, ['security']);
+        assert.equal(parsed.passes.filter(function(p) { return p.reviewer === 'security'; }).length, 0,
+            'no PASS stamp for a stale-head specialist');
+    });
+
+    test('a broken skill file degrades to the plain round (resolution failure is non-fatal)', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            fileMap: { 'instructions/review/security.json': '{ this is not json' }
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        var parsed = poolParsedMarkers(loaded.scmComments.map(function(c) { return c.body; }));
+        assert.equal(parsed.outcomes.length, 0, 'no pool markers from a broken pool');
+        assert.equal(loaded.scmInlineComments.length, 1, 'the plain review posts');
+    });
+
+    test('an unresolvable head sha skips the pool round (markers are dead letters without a head)', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            prObject: {}
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        var parsed = poolParsedMarkers(loaded.scmComments.map(function(c) { return c.body; }));
+        assert.equal(parsed.outcomes.length, 0, 'no outcome marker without a head');
+        assert.equal(parsed.passes.length, 0, 'no PASS stamp without a head');
+    });
+
+    test('the filter merge point: pool verdicts drop a specialist candidate into the digest', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: {
+                machineAuthor: 'ai-teammate',
+                repository: { owner: 'acme', repo: 'widget' },
+                reviewPolicy: { verification: 'filter' }
+            },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            generalMd: '# Review summary\n',
+            fileMap: { 'input/PROJ-1/pr_diff.txt': '--- a/src/crypto.js\n+++ b/src/crypto.js\n@@ -1,2 +1,3 @@\n old\n+new' },
+            filterVerdictsJson: JSON.stringify({
+                verdicts: [{ id: 1, decision: 'drop', reason: 'stale finding — not reproducible on the current hunks' }]
+            })
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+
+        // The security candidate was dropped: one thread only (the base finding).
+        assert.equal(loaded.scmInlineComments.length, 1, 'the dropped candidate never threads');
+        assert.equal(loaded.scmInlineComments[0].path, 'src/auth.js');
+        assert.equal(result.issueCounts ? result.issueCounts.important : 0, 0,
+            'the census recomputed after the round: no important thread survives');
+    });
+
+    test('a FAILED filter round never reconciles the verdict (the gh-1403 invariant holds on pool rounds)', function() {
+        // The filter verdicts file is unreadable → runFilterRound degrades to
+        // null → the round applies nothing → filterOutcome must be null, so
+        // the verdict reconciliation never flips a surviving model BLOCK to
+        // APPROVE ("filter applied" with zero filtering is a lie).
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: {
+                machineAuthor: 'ai-teammate',
+                repository: { owner: 'acme', repo: 'widget' },
+                reviewPolicy: { verification: 'filter' }
+            },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            generalMd: '# Review summary\n',
+            fileMap: { 'input/PROJ-1/pr_diff.txt': '--- a/src/crypto.js\n+++ b/src/crypto.js\n@@ -1,2 +1,3 @@\n old\n+new' },
+            filterVerdictsJson: null
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        // The security candidate (IMPORTANT) survived unfiltered: both threads
+        // post, and the recommendation keeps its non-approve token (no
+        // "filter applied" reconciliation without a filter pass).
+        assert.equal(loaded.scmInlineComments.length, 2, 'both findings post unfiltered');
+        assert.notEqual(result.recommendation, 'APPROVE', 'the model token is not flipped without filtering');
+    });
+
+    test('a reasoned drop of a high-weight specialist candidate applies and is visible in the packet', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            highSecurity: true,
+            config: {
+                machineAuthor: 'ai-teammate',
+                repository: { owner: 'acme', repo: 'widget' },
+                reviewPolicy: { verification: 'filter' }
+            },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            generalMd: '# Review summary\n',
+            fileMap: { 'input/PROJ-1/pr_diff.txt': '--- a/src/crypto.js\n+++ b/src/crypto.js\n@@ -1,2 +1,3 @@\n old\n+new' },
+            filterVerdictsJson: JSON.stringify({
+                verdicts: [{ id: 1, decision: 'drop', reason: 'verified false positive against the hunks' }]
+            })
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        var securityThread = loaded.scmInlineComments.filter(function(c) {
+            return c.path === 'src/crypto.js';
+        })[0];
+        assert.ok(!securityThread, 'the reasoned drop of the high-weight candidate applies');
+
+        var packetWrite = loaded.fileWrites.filter(function(w) {
+            return w.path === 'outputs/pr_review_general.md';
+        })[0];
+        assert.ok(packetWrite.content.indexOf('Weighted retention') !== -1,
+            'the high-weight drop is visible in the packet');
+    });
+});
+
+suite('postPReviewComments — gh-1471 round context (the materialized hunks file)', function() {
+    test('a pr_new_hunks.txt in the input folder scopes the round to the hunks paths', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            fileMap: {
+                'input/PROJ-1/pr_new_hunks.txt':
+                    'diff --git a/src/neu.js b/src/neu.js\n+++ b/src/neu.js\n@@ -1,2 +1,3 @@\n' +
+                    'diff --git a/docs/guide.md b/docs/guide.md\n+++ b/docs/guide.md\n@@ -1 +1 @@\n'
+            },
+            generalMd: '# Review summary\n'
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        // The round completed (the specialist still merges) — the hunks file
+        // only feeds the round context / triggerPaths scoping.
+        var parsed = poolParsedMarkers(loaded.scmComments.map(function(c) { return c.body; }));
+        assert.equal(parsed.outcomes.length, 1, 'the pool-outcome marker still stamps');
+        assert.equal(parsed.holds.length, 0);
+    });
+
+    test('no pr_new_hunks.txt anywhere is a first-review round (hasNewHunks false)', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            generalMd: '# Review summary\n'
+        });
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        assert.equal(loaded.scmInlineComments.length, 2, 'base + security candidate post as before');
+    });
+});
+
+suite('postPReviewComments — gh-1471 pool round escalation + partial coverage', function() {
+    test('a matching specialist candidate ESCALATES the base finding inline (provenance + escalation note)', function() {
+        // The security candidate sits on the SAME identity as the base
+        // finding (path+line+claim) with a HIGHER severity — the merge
+        // escalates the base entry in place and the inline body grows the
+        // note (identity = path+line+claim).
+        var base = poolPostingReviewData();
+        base.inlineComments = [{
+            path: 'src/crypto.js', line: 22, severity: 'SUGGESTION',
+            body: 'Hard-coded IV in the AES setup.'
+        }];
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            reviewData: base,
+            generalMd: '# Review summary\n'
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        var escalated = loaded.scmInlineComments.filter(function(c) {
+            return c.path === 'src/crypto.js';
+        })[0];
+        assert.ok(escalated, 'the escalated base finding posts inline');
+        assert.ok(escalated.body.indexOf('severity: IMPORTANT') !== -1,
+            'the merged (higher) severity stamps the thread');
+        assert.ok(escalated.body.indexOf('Pool merge: severity escalated') !== -1,
+            'the escalation note rides the inline body');
+        assert.ok(escalated.body.indexOf('matched by base, security') !== -1,
+            'the escalation names both matching reviewers');
+    });
+
+    test('a truncated specialist rides the packet partial-coverage lines (gh-1471 visibility)', function() {
+        var truncated = JSON.stringify({
+            reviewer: 'security',
+            head: POOL_HEAD,
+            candidates: [{
+                severity: 'IMPORTANT', path: 'src/crypto.js', line: 22,
+                body: 'Hard-coded IV in the AES setup.', claim: 'Hard-coded IV in the AES setup.'
+            }],
+            count: 1, truncated: true, at: '2026-11-13T00:00:00Z'
+        });
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            candidatesFiles: { security: truncated },
+            generalMd: '# Review summary\n'
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        var packetWrite = loaded.fileWrites.filter(function(w) {
+            return w.path === 'outputs/pr_review_general.md';
+        })[0];
+        assert.ok(packetWrite, 'the packet write exists');
+        assert.ok(packetWrite.content.indexOf('partial coverage') !== -1,
+            'the truncated specialist is named in the packet');
+    });
+});

@@ -3,24 +3,6 @@
   "violations": [
     {
       "gate": "similarity",
-      "file": "instructions/pr_review/base/registry_protocol.md",
-      "line": null,
-      "message": "similar to instructions/pr_review/general_guidelines.md, instructions/pr_review/generalist/lens.md — near-duplicate content (jaccard 0.15, containment 0.88); reuse the shared source, generate one of them, or delete the stale copy"
-    },
-    {
-      "gate": "similarity",
-      "file": "instructions/pr_review/general_guidelines.md",
-      "line": null,
-      "message": "similar to instructions/pr_review/base/registry_protocol.md, instructions/pr_review/generalist/lens.md — near-duplicate content (jaccard 0.76, containment 0.96); reuse the shared source, generate one of them, or delete the stale copy"
-    },
-    {
-      "gate": "similarity",
-      "file": "instructions/pr_review/generalist/lens.md",
-      "line": null,
-      "message": "similar to instructions/pr_review/base/registry_protocol.md, instructions/pr_review/general_guidelines.md — near-duplicate content (jaccard 0.76, containment 0.96); reuse the shared source, generate one of them, or delete the stale copy"
-    },
-    {
-      "gate": "similarity",
       "file": "instructions/pr_review/base/review_verdict_rules.md",
       "line": null,
       "message": "similar to instructions/pr_review/review_verdict_rules.md — near-duplicate content (jaccard 0.92, containment 1.00); reuse the shared source, generate one of them, or delete the stale copy"
@@ -30,18 +12,6 @@
       "file": "instructions/pr_review/review_verdict_rules.md",
       "line": null,
       "message": "similar to instructions/pr_review/base/review_verdict_rules.md — near-duplicate content (jaccard 0.92, containment 1.00); reuse the shared source, generate one of them, or delete the stale copy"
-    },
-    {
-      "gate": "similarity",
-      "file": "instructions/pr_review/few_shots.md",
-      "line": null,
-      "message": "similar to instructions/pr_review/generalist/few_shots.md — near-duplicate content (jaccard 0.59, containment 1.00); reuse the shared source, generate one of them, or delete the stale copy"
-    },
-    {
-      "gate": "similarity",
-      "file": "instructions/pr_review/generalist/few_shots.md",
-      "line": null,
-      "message": "similar to instructions/pr_review/few_shots.md — near-duplicate content (jaccard 0.59, containment 1.00); reuse the shared source, generate one of them, or delete the stale copy"
     }
   ]
 }

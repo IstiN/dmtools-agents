@@ -239,6 +239,20 @@ var REAL_COMMON_MODULES = {
     reviewPoolSchema: 'js/common/reviewPoolSchema.js',
     reviewVerdicts: 'js/common/reviewVerdicts.js',
     machineAuthor: 'js/common/machineAuthor.js',
+    // gh-1471: the reviewer-pool execution chain (pure end-to-end) — the
+    // post action and the pre-cli dispatcher require it; suites shim the
+    // collaborators and resolve these for real.
+    reviewPolicy: 'js/common/reviewPolicy.js',
+    findingRegistry: 'js/common/findingRegistry.js',
+    reviewSpecClaims: 'js/common/reviewSpecClaims.js',
+    reviewFilter: 'js/common/reviewFilter.js',
+    reviewPool: 'js/common/reviewPool.js',
+    reviewPoolMerge: 'js/common/reviewPoolMerge.js',
+    reviewPoolInJob: 'js/common/reviewPoolInJob.js',
+    reviewPoolCandidates: 'js/common/reviewPoolCandidates.js',
+    reviewPoolAggregate: 'js/common/reviewPoolAggregate.js',
+    reviewPoolLegSetup: 'js/common/reviewPoolLegSetup.js',
+    reviewPoolPost: 'js/common/reviewPoolPost.js',
     gitlabTracker: 'js/common/gitlabTracker.js'
 };
 

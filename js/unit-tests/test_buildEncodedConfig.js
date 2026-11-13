@@ -106,6 +106,10 @@ suite('buildEncodedConfig payload', function() {
         assert.equal(decoded.params.inputJql, 'key = TS-24');
     });
 
+
+
+
+
     test('copies primitive, boolean, number, array and object params from agent JSON', function() {
         var builder = loadBuilder({
             'agents/test.json': JSON.stringify({

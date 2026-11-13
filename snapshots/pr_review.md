@@ -33,7 +33,7 @@ flowchart TD
 
 ### [4] `./agents/instructions/pr_review/base/input_context.md`
 
-# PR Review Input Context — reading order (base contract, gh-1406)
+# PR Review Input Context — reading order (base contract)
 
 Reviewer-agnostic: EVERY reviewer leg reads the same PR context. Read files
 that exist in `input/` locally — do NOT re-fetch via dmtools.
@@ -51,7 +51,8 @@ flowchart TD
         P7["7️⃣ input/TICKET/pr_findings.md — previously raised findings (when present)"]
         P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: severity table, density cap, downgrade protocol"]
         P9["9️⃣ input/TICKET/pr_new_hunks.txt — the hunks added since the last reviewed head (re-review rounds; when present)"]
-        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8 --> P9
+        P10["🔟 input/TICKET/pool_specialist-<reviewer>.md — THIS session's pool-specialist prompt (specialist sessions only; when present)"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8 --> P9 --> P10
     end
 
     subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
@@ -72,6 +73,25 @@ flowchart TD
 Read PR files to understand WHAT changed. Read ticket files to understand WHY
 it changed and verify against requirements.
 
+## Pool specialist sessions — the pool prompt file
+
+When the run's prompt file is `input/TICKET/pool_specialist-<reviewer>.md`,
+this session is ONE reviewer's focused pass of the reviewer pool — not the
+posting review. The prompt names the reviewer, its lens, the output
+contract and the round head. A specialist session:
+
+- hunts ONLY its lens's dimension (the lens file it is pointed at names it)
+  — the generalist posting pass owns everything else;
+- writes `outputs/pr_review_candidates-<reviewer>.json` per the base
+  candidates-only contract (output_rules.md) — NEVER
+  `outputs/pr_review.json`, never `pr_review_general.md`, never
+  `pr_review_comments/*`;
+- posts nothing, labels nothing, changes no status — the aggregation step
+  reads the candidates file and the posting session stamps the markers.
+
+A session WITHOUT a pool-specialist prompt is the posting review: the full
+verdict contract below applies unchanged.
+
 <!-- Pack-reachability anchor: the deprecated v1 instruction shims are listed in instructions/pr_review/deprecated-v1.md (frozen; removed in the next major release). -->
 
 
@@ -79,10 +99,10 @@ it changed and verify against requirements.
 
 ### [5] `./agents/instructions/pr_review/base/output_rules.md`
 
-# PR Review Output Rules — the machine contract (base, gh-1406)
+# PR Review Output Rules — the machine contract (base)
 
 Reviewer-agnostic: every reviewer leg writes the same structured review
-artifacts; the machine parses them (gh-1350/1351). The lens may add
+artifacts; the machine parses them. The lens may add
 reviewer-specific files but never changes this contract.
 
 ```mermaid
@@ -122,15 +142,89 @@ flowchart TD
   resolved `reviewPolicy` — the census is the machine's source of truth;
   keep it accurate.
 
+## The candidates-only contract (pool specialist sessions)
+
+A pool specialist session (its prompt file is
+`input/TICKET/pool_specialist-<reviewer>.md` — see input_context.md) writes
+ONE file and nothing else:
+
+`outputs/pr_review_candidates-<reviewer>.json`
+
+```json
+{
+  "reviewer": "<the reviewer name from the prompt>",
+  "head": "<the round head sha from the prompt>",
+  "candidates": [
+    {"id": 1, "path": "src/auth/UserService.js", "line": 45,
+     "severity": "BLOCKING", "claim": "one-paragraph statement of the finding"},
+    {"id": 2, "path": "docs/arch.md", "line": null,
+     "severity": "SUGGESTION", "claim": "a digest candidate — no diff line"}
+  ],
+  "count": 2,
+  "truncated": false,
+  "at": "<iso timestamp>"
+}
+```
+
+- `claim` is the finding's substance: what is wrong, where the evidence
+  is, why it matters. No severity header line, no verdict language — the
+  tier rides the `severity` field (BLOCKING | IMPORTANT | SUGGESTION |
+  NIT) and the machine classifies the posted thread from it.
+- `id` numbers the candidates within the file (1..n). `path` is
+  repo-relative; `line` is the diff line (right-hand side) or `null` for a
+  digest candidate — findings anchored outside the diff are allowed as
+  digest candidates, never as invented line numbers.
+- Write NOTHING else: no `outputs/pr_review.json`, no
+  `pr_review_general.md`, no `pr_review_comments/*`, no `response.md`. Do
+  not post, label, resolve threads, or change statuses — the aggregation
+  step reads this file and the posting review does all machine
+  bookkeeping (the merged census + the marker stamps).
+- Severity discipline still applies: raise only what the lens hunt
+  justifies; an empty candidates list is a valid answer (the leg completes
+  with zero findings).
+- The candidates pass the finding filter like every other finding (fresh
+  verification, weighted retention for high-weight reviewers) and the
+  posting leg merges them into ONE review — a specialist never posts a
+  second review.
+
+### The coverage file (the second specialist output — the memory)
+
+Alongside the candidates file the specialist maintains ONE more file:
+
+`outputs/pr_review_coverage-<reviewer>.json`
+
+```json
+{
+  "reviewer": "<the reviewer name>",
+  "head": "<the round head sha>",
+  "covered": ["src/auth/UserService.js"],
+  "pending": ["docs/arch.md", "src/auth/Session.js"],
+  "truncated": false,
+  "at": "<iso timestamp>"
+}
+```
+
+- **Write it FIRST** — before any review: `covered: []`, `pending:` the
+  full list of repo files you plan to review (your pass's scope).
+- Move files `pending` → `covered` as you finish them (re-write the file).
+  The file is re-read by the machine after your session ends, whatever its
+  cause — a timeout kills the session but not what landed on disk.
+- The NEXT pass receives this file as memory: covered files that the fresh
+  hunks do not touch are skipped (unchanged — machine-verified), still-
+  pending files are finished first. Big requests converge: every round
+  reviews the delta plus the oldest debt, until nothing is pending.
+- `truncated: true` near the cap: unfinished files stay `pending` — a
+  partial honest record is a valid state, silence is not.
+
 
 ---
 
 ### [6] `./agents/instructions/pr_review/base/registry_protocol.md`
 
-# Finding-identity registry protocol (base contract, gh-1406)
+# Finding-identity registry protocol (base contract)
 
 Reviewer-agnostic: every reviewer leg answers the same previously-raised
-findings registry (gh-1332) before raising anything new. This protocol is a
+findings registry before raising anything new. This protocol is a
 factory invariant — the machine parses the dispositions.
 
 ## 9. Previously raised findings — the finding-identity registry
@@ -190,7 +284,7 @@ flowchart TD
 
 ### [8] `./agents/instructions/pr_review/base/few_shots_format.md`
 
-# pr_review.json shape — format contract (base, gh-1406)
+# pr_review.json shape — format contract (base)
 
 Reviewer-agnostic: the structured answer of every reviewer leg carries the
 same shape. The worked examples live in each reviewer's few-shots file; this
@@ -222,12 +316,46 @@ The 4-tier census (`issueCounts`) counts posted threads + digest lines and
 drives the machine verdict — keep it consistent with the inlineComments
 severities.
 
+### outputs/pr_review_candidates-<reviewer>.json — pool specialist sessions only
+
+A pool specialist session (its prompt file present) answers with
+candidates, never a verdict — the posting review mints the verdict; the
+aggregation merges, the filter verifies and the posting review posts. The
+record schema adds the head binding:
+
+```json
+{
+  "reviewer": "security",
+  "head": "<the round head sha>",
+  "count": 2,
+  "truncated": false,
+  "at": "<iso timestamp>",
+  "candidates": [
+    {"id": 1, "path": "src/auth/UserService.js", "line": 45,
+     "severity": "BLOCKING",
+     "claim": "User query at line 45 concatenates req.body.user straight into the SQL string; parameterize the statement."},
+    {"id": 2, "path": "docs/migration.md", "line": null,
+     "severity": "SUGGESTION",
+     "claim": "The rollback path for the new columns is undocumented — a bad deploy cannot revert cleanly."}
+  ]
+}
+```
+
+Rules: `head` = the round head sha from the prompt (a stale file never
+feeds a newer head); `id` = position in the file; `path` repo-relative;
+`line` = the diff line or `null` for a digest candidate; `claim` = the
+substance (no severity header, no verdict language). Severity boundary
+identical to the verdict tiers above. Nothing else gets written (no
+pr_review.json, no comment files) and nothing gets posted — worked
+examples of the claim
+voice live in each reviewer's few-shots file.
+
 
 ---
 
 ### [9] `./agents/instructions/pr_review/generalist/lens.md`
 
-# Generalist Review Lens (gh-1406 reviewer pool — the base reviewer)
+# Generalist Review Lens (the base reviewer)
 
 The generalist lens: full-diff review across every dimension. The reviewer-agnostic
 contract (input reading order, output rules, verdict rules, registry protocol,

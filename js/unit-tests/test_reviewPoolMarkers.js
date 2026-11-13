@@ -64,7 +64,7 @@ suite('reviewPoolMarkers — PASS markers (§7 completions)', function() {
 
 suite('reviewPoolMarkers — pool-outcome markers (§7 expectations)', function() {
 
-    test('build → parse round-trip; entries normalize to {name, required}', function() {
+    test('build → parse round-trip; entries normalize to {name, required, completed}', function() {
         var entries = [{ name: 'base', required: true, completed: true }, { name: 'security', required: true }];
         var body = mod.buildPoolOutcomeMarkerComment(HEAD, 'first', entries, '2026-11-12T11:00:00Z');
         assert.ok(body.indexOf('dmtools:review-pool') !== -1);
@@ -73,9 +73,9 @@ suite('reviewPoolMarkers — pool-outcome markers (§7 expectations)', function(
         assert.equal(records[0].round, 'first');
         assert.equal(records[0].head, HEAD);
         assert.deepEqual(records[0].reviewers, [
-            { name: 'base', required: true },
-            { name: 'security', required: true }
-        ], 'completed is informational — the gate reads PASS markers');
+            { name: 'base', required: true, completed: true },
+            { name: 'security', required: true, completed: false }
+        ], 'completed rides the payload — the GATE still reads PASS markers');
     });
 
     test('newestPoolOutcomeForHead: head-scoped newest record wins; other heads invisible', function() {
@@ -185,6 +185,6 @@ suite('reviewPoolMarkers — the required-reviewer gate state (§7)', function()
             '"reviewers":[{"required":true},{"name":"security","required":true}],"at":"2026-11-12T12:00:00Z"} -->';
         var records = mod.parsePoolOutcomeMarkers([commentOf(raw)], { authorLogins: MACHINE_LOGINS });
         assert.equal(records.length, 1, 'the nameless entry does not invalidate the record');
-        assert.deepEqual(records[0].reviewers, [{ name: 'security', required: true }]);
+        assert.deepEqual(records[0].reviewers, [{ name: 'security', required: true, completed: false }]);
     });
 });

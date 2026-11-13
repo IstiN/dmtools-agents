@@ -32,6 +32,13 @@ var findingRegistry = require('./common/findingRegistry.js');
 // policy config — resolved once here so a malformed config fails the leg at
 // start, and the resolved table is stamped into the review run context.
 var reviewPolicyModule = require('./common/reviewPolicy.js');
+// gh-1471 (hoisted, never lazy — the gh-823 pack-require rule): the reviewer
+// pool execution layer — this pre-cli action is the round's leg dispatcher
+// (posting leg) and the specialist identity materializer (specialist leg).
+var reviewPoolModule = require('./common/reviewPool.js');
+var reviewPoolInJob = require('./common/reviewPoolInJob.js');
+var reviewPoolLegSetup = require('./common/reviewPoolLegSetup.js');
+var outputFiles = require('./common/outputFiles.js');
 
 // ── Parsing / context ────────────────────────────────────────────────────────
 
@@ -487,6 +494,35 @@ function buildSuccessResult(prDetails, branchName, repoInfo) {
     };
 }
 
+// ── gh-1471: the reviewer-pool round, IN-JOB (the fire-and-forget dispatcher
+//    is gone — one review job runs every specialist itself) ──────────────────
+
+/**
+ * The gh-1471 round executor. Resolves the pool, derives THIS run's round
+ * context (round type from the diff-of-diff, head sha) and runs every
+ * selected specialist IN-PROCESS: bounded child agent sessions
+ * (`run-agent.sh` under `timeout`, the gh-775 shape) that each write a
+ * candidates file (`outputs/pr_review_candidates-<reviewer>.json`, the
+ * candidatesRecordFromPayload schema). No PR-comment markers, no
+ * cross-run identity patches, no poll/wait — the round state is per-run by
+ * construction. The post action aggregates the files and stamps the
+ * specialists' PASS markers itself (single writer — the gh-1406 merge gate
+ * keeps its same-head semantics untouched).
+ * Non-fatal end to end: any failure logs and leaves the leg exactly as
+ * before (a single-reviewer round is the gh-1406 baseline behavior).
+ */
+function reviewerPoolRoundSetup(ctx, prDetails, prComments) {
+    return reviewPoolLegSetup.reviewerPoolRoundSetup({
+        file_read: file_read,
+        file_list: file_list,
+        gitOps: gitOps,
+        outputFiles: outputFiles,
+        cli_execute_command: cli_execute_command,
+        resolveNewHunksContext: resolveNewHunksContext,
+        prCommentsForContextSteps: prCommentsForContextSteps
+    }, ctx, prDetails, prComments);
+}
+
 // ── Orchestrator ─────────────────────────────────────────────────────────────
 
 function extractHeadBranch(prDetails) {
@@ -553,6 +589,10 @@ function action(params) {
         // the last reviewed head, so already-reviewed code stays frozen.
         writeNewHunksContext(ctx, prDetails, prComments);
 
+        // gh-1471: the reviewer pool — the specialist identity materializer
+        // (specialist legs) / the round's leg dispatcher (posting leg).
+        reviewerPoolRoundSetup(ctx, prDetails, prComments);
+
         var failedChecks = detectCheckFailures(ctx, prDetails, diff);
 
         finishReviewStart(ctx, prDetails, branchName, failedChecks);
@@ -597,6 +637,7 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveNewHunksContext: resolveNewHunksContext,
         resolveRegistryComments: resolveRegistryComments,
         prCommentsForContextSteps: prCommentsForContextSteps,
+        reviewerPoolRoundSetup: reviewerPoolRoundSetup,
         detectCheckFailures: detectCheckFailures,
         buildFailedChecksPanel: buildFailedChecksPanel,
         buildReviewStartedComment: buildReviewStartedComment,

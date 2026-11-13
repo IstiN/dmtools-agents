@@ -56,7 +56,7 @@
       "functions": 43
     },
     "js/common/scm.js": {
-      "lines": 1706,
+      "lines": 1705,
       "functions": 113
     },
     "js/common/sessionDelta.js": {
@@ -124,8 +124,8 @@
       "functions": 43
     },
     "js/postPRReviewComments.js": {
-      "lines": 3120,
-      "functions": 264
+      "lines": 3422,
+      "functions": 276
     },
     "js/postStoryTestAutomationResults.js": {
       "lines": 1400,
@@ -160,7 +160,7 @@
       "functions": 115
     },
     "js/smAgent.js": {
-      "lines": 10007,
+      "lines": 10006,
       "functions": 193
     },
     "js/tcDifferentialDispatcher.js": {

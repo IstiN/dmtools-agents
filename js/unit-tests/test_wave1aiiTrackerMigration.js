@@ -68,7 +68,30 @@ function w2LoadPR(rec) {
                 makeRequire({ './machineAuthor.js': machineAuthor, './reviewVerdicts.js': reviewVerdicts }), {});
         })(),
         './common/forkCheckout.js': loadModule('js/common/forkCheckout.js',
-            makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js') }))
+            makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js') })),
+        // gh-1471: the real reviewer-pool execution chain — preparePRForReview
+        // requires it at the top level, so this stubbed map must resolve it.
+        './common/reviewPool.js': (function() {
+            var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+            var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': machineAuthor }), {});
+            var reviewPolicy = loadModule('js/common/reviewPolicy.js',
+                makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+            return loadModule('js/common/reviewPool.js',
+                makeRequire({ './reviewPolicy.js': reviewPolicy, './reviewPoolSchema.js': loadModule('js/common/reviewPoolSchema.js', makeRequire({}), {}) }), {});
+        })(),
+        './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), Object.assign({ config: {} }, rec.mocks)),
+        './common/reviewPoolMarkers.js': (function() {
+            var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+            var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+                makeRequire({ './machineAuthor.js': machineAuthor }), {});
+            return loadModule('js/common/reviewPoolMarkers.js',
+                makeRequire({ './reviewVerdicts.js': reviewVerdicts }), {});
+        })(),
+        './common/autoStart.js': {
+            triggerConfiguredWorkflowForTicket: function() { return true; },
+            triggerSmIfIdle: function() {}
+        }
     }), Object.assign({ config: {} }, rec.mocks));
 }
 

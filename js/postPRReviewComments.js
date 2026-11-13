@@ -1,17 +1,17 @@
 /**
- * Post PR Review Comments Action
- * PostJSAction that:
- * 1. Reads outputs/pr_review.json with structured review data
- * 2. Posts general review comment to GitHub PR using github_add_pr_comment
- * 3. Posts inline code comments to GitHub PR using github_add_inline_comment
- * 4. Posts a formatted review summary to the ticket (Jira/ADO/GitHub via common/trackers.js)
- * 5. Updates ticket status based on review outcome
- * 6. Adds labels to indicate review completion
- *
- * gh-926: action() is a thin executor over a pipeline of named steps.
- * Pure decisions live in parse/normalize/decide/build/resolve helpers
- * (unit-tested directly); side-effecting steps live in single-purpose
- * functions invoked by action() in the same order as before the flattening.
+ * Post PR Review Comments Action — posts the assembled review.
+ * The review payload is read from outputs/pr_review.json (one general
+ * comment + inline threads); the machine verdict record + the finding
+ * registry are stamped, and the ticket outcome is applied.
+ * applies the ticket outcome. When the reviewer pool is enabled this action
+ * is also the round's aggregation point: the in-job specialist sessions'
+ * candidates files merge into the census (dedup, weighted retention,
+ * severity escalation), the finding filter verifies rework-tier candidates,
+ * the completed specialists' PASS markers are stamped (the merge gate's
+ * currency), and ONE pool-outcome marker + the required-reviewer hold are
+ * posted. action() is a thin executor over named pipeline steps; pure
+ * decisions live in unit-tested helpers, side-effecting steps in
+ * single-purpose functions.
  */
 
 const {
@@ -48,6 +48,15 @@ var reviewSpecClaims = require('./common/reviewSpecClaims.js');
 // finding-filter leg — reviewPolicy.verification = filter re-verifies each
 // rework/polish-tier candidate in a fresh context before it posts.
 var reviewFilterModule = require('./common/reviewFilter.js');
+// gh-1471 (hoisted, never lazy — the gh-823 pack-require rule): the
+// reviewer-pool execution layer — the IN-JOB specialist runner (the pre-cli
+// action executes each specialist as a bounded child session) and the
+// posting leg's round aggregation point (candidates FILES, not markers).
+var reviewPoolModule = require('./common/reviewPool.js');
+var reviewPoolPostModule = require('./common/reviewPoolPost.js');
+var reviewPoolLegSetup = require('./common/reviewPoolLegSetup.js');
+var reviewPoolInJobModule = require('./common/reviewPoolInJob.js');
+var outputFiles = require('./common/outputFiles.js');
 // The one model-written-path guard — owned by the pure filter module since
 // the round-2 demote fix needs it there too; aliased here so every call
 // site in this file keeps its name.
@@ -1137,17 +1146,11 @@ function verificationEnabledOf(policy) {
 
 function filterDiffPathOf(params, ticketKey) {
     // The review leg's diff: the first input-folder candidate that actually
-    // holds pr_diff.txt. The chain is ticketKeyShapes.inputFolderCandidates
-    // (gh-1403 review thread 1) — params.inputFolderPath when the dispatch
-    // carries it (unwrapping the jobParams wrapper the way
-    // linkedIssuesReport.resolveInputContext does), else the Java-derived
-    // input/<inputFolderNameFor(key)> layout — a composite key
-    // owner/repo#1407 dispatches input/gh-1407, not input/<raw key> — then
-    // the legacy input/<ticketKey>. When no candidate holds the file, the
-    // first candidate is named anyway: fail-open, the same degradation
-    // class as every other filter failure.
-    var actualParams = params && params.inputFolderPath ? params : ((params && params.jobParams) || params || {});
-    var folders = ticketKeyShapes.inputFolderCandidates(actualParams.inputFolderPath, ticketKey);
+    // holds pr_diff.txt (the chain is ticketKeyShapes.inputFolderCandidates,
+    // gh-1403 review thread 1). When no candidate holds the file, the first
+    // candidate is named anyway: fail-open, the same degradation class as
+    // every other filter failure.
+    var folders = inputFolderCandidatesOf(params, ticketKey);
     for (var i = 0; i < folders.length; i++) {
         if (readInputFileOrNull(folders[i] + '/pr_diff.txt')) return folders[i] + '/pr_diff.txt';
     }
@@ -1396,6 +1399,225 @@ function filterStampSection(m, filterOutcome) {
     }
     if (filterOutcome.warning) line += '\n' + filterOutcome.warning;
     return line + '\n\n';
+}
+
+// ═══════════════ gh-1471 reviewer pool: the post-action aggregation ═══════════════
+//
+// One review leg again: the pre-cli action executed the round's specialists
+// IN-JOB (bounded child sessions writing candidates files), and THIS post
+// action is the round's aggregation point (runPoolRound): the candidates
+// files merge into the review (one census), the gh-1403 filter pass runs
+// over the MERGED census with the pool duties (weighted retention first,
+// reviewer-attributed drops), the census recomputes AFTER the round, and
+// the round stamps the specialists' PASS markers (single writer — the
+// gh-1406 merge gate keeps its same-head semantics), ONE pool-outcome
+// marker + the required reviewer hold. The gh-1351 verdict machinery then
+// reads the merged census unchanged — reviewers never post, label or vote
+// (lifecycle labels stay a property of the machine loop, set once per
+// round from the merged census).
+
+/**
+ * The pool resolution io bag (file_read/file_list, failure-soft) — owned by
+ * reviewPoolLegSetup.poolResolveIoOf (the dispatcher's setup uses the same
+ * bag; one normalization shape, no duplicated parse block).
+ */
+function poolFileIo() {
+    return reviewPoolLegSetup.poolResolveIoOf({ file_read: file_read, file_list: file_list });
+}
+
+/** {reviewer: 'high'|'normal'} over the pool's enabled reviewers. */
+function poolWeightsByName(pool) {
+    var weights = {};
+    var reviewers = reviewPoolModule.enabledReviewers(pool);
+    for (var i = 0; i < reviewers.length; i++) {
+        weights[reviewers[i].name] = reviewers[i].filterWeight === 'high' ? 'high' : 'normal';
+    }
+    return weights;
+}
+
+/**
+ * The resolved pool for a POSTING leg, or null (no skill files / resolution
+ * failure → the plain single-reviewer round, the gh-1406 baseline).
+ * Fail-soft on purpose: the pre-cli action hard-fails a misconfigured pool
+ * at leg start; this resolution only decides whether the round aggregates.
+ */
+function resolvePostingPoolOrNull(ctx) {
+    try {
+        var pool = reviewPoolModule.resolvePool(poolFileIo(), ctx.config, ctx.jp, {});
+        if (!pool || reviewPoolModule.enabledReviewers(pool).length === 0) return null;
+        (pool.warnings || []).forEach(function(w) { console.warn('⚠️ reviewer pool: ' + w); });
+        console.log(reviewPoolModule.poolSummaryLine(pool));
+        return pool;
+    } catch (e) {
+        console.warn('reviewer pool resolution failed (non-fatal, single-reviewer round):', e.message || e);
+        return null;
+    }
+}
+
+
+// The input-folder candidate chain shared by the filter diff and the new
+// hunks context (the runtime-passed folder, the Java-derived name, the
+// legacy <ticketKey> folder).
+function inputFolderCandidatesOf(params, ticketKey) {
+    var actualParams = params && params.inputFolderPath ? params : ((params && params.jobParams) || params || {});
+    return ticketKeyShapes.inputFolderCandidates(actualParams.inputFolderPath, ticketKey);
+}
+
+/**
+ * The new-hunks context of THIS run, from the pr_new_hunks.txt the pre-cli
+ * action materialized (the diff-of-diff the legs actually saw): present ⟺
+ * this round is a re-review with new hunks; the paths feed triggerPaths.
+ */
+function newHunksContextOf(params, ticketKey) {
+    var folders = inputFolderCandidatesOf(params, ticketKey);
+    var text = null;
+    for (var i = 0; i < folders.length && !text; i++) {
+        text = readInputFileOrNull(folders[i] + '/pr_new_hunks.txt');
+    }
+    if (!text) return { hasNewHunks: false, paths: [] };
+    var matches = String(text).match(/^\+\+\+ b\/(.+)$/gm) || [];
+    var paths = [];
+    for (var m = 0; m < matches.length; m++) paths.push(matches[m].substring(6).trim());
+    return { hasNewHunks: true, paths: paths };
+}
+
+/**
+ * The posting leg's round aggregation (gh-1471 work item 3). Returns
+ * { round, headSha, arrived, unavailable, filterOutcome } or null — any
+ * degradation (no PR, no head sha, resolution failure) leaves the plain
+ * single-reviewer round, and the caller runs the plain gh-1403 filter.
+ * reviewData is MUTATED: the merged census replaces inlineComments and the
+ * census recomputes after the round's filtering.
+ */
+/**
+ * The round's head context: the PR probe and the head sha — the markers
+ * are head-carried, so a head-less round is a dead letter (null).
+ */
+function roundHeadContextOf(pr, repoInfo) {
+    if (!pr || !pr.number) {
+        console.warn('reviewer pool: no PR attached to this run — the round aggregation is skipped');
+        return null;
+    }
+    var prObj = repoInfo ? probePrObject(repoInfo, pr.number) : null;
+    var headSha = prObj ? headShaOfObject(prObj) : null;
+    if (!headSha) {
+        console.warn('reviewer pool: no head sha resolved — the round aggregation is skipped ' +
+            '(head-carried markers would be dead letters)');
+        return null;
+    }
+    return { headSha: headSha };
+}
+
+/** The in-job round state from the candidates FILES (deterministic, same
+ * selection both sides) + the fail-open warn naming every unavailable leg. */
+function inJobRoundOf(ctx, pool, hunks, headSha) {
+    var inJobRound = reviewPoolInJobModule.readSpecialistOutcomes({
+        readFile: function(path) {
+            var file = outputFiles.readOutputFileDetailed(path, {
+                ticketKey: ctx.ticketKey,
+                workingDir: ctx.workingDir
+            });
+            return file && file.content ? file.content : null;
+        }
+    }, pool, {
+        headSha: headSha,
+        hasNewHunks: hunks.hasNewHunks,
+        newHunkPaths: hunks.paths
+    });
+    if (inJobRound.unavailable.length > 0) {
+        console.warn('reviewer pool: unavailable specialists (fail-open): ' +
+            inJobRound.unavailable.join(', ') + ' — ' + inJobRound.results.filter(function(r) {
+                return !r.ok;
+            }).map(function(r) { return r.reviewer + ': ' + r.reason; }).join('; '));
+    }
+    return inJobRound;
+}
+
+/** The poolRoundStep io: the posting leg's PR side effects + the pool
+ * duties (the gh-1403 filter only when verification = filter). */
+function poolRoundIoOf(reviewData, ctx, pr, logins, pool, filterOn, filterDiffPath) {
+    return {
+        readComments: function() { return prCommentsForRegistry(ctx.scm, pr.number) || []; },
+        logins: logins,
+        nowIso: function() { return new Date().toISOString(); },
+        postComment: function(text) { ctx.scm.addComment(pr.number, text); },
+        resolveClaim: filterClaimResolver(ctx),
+        policy: ctx.reviewPolicy,
+        weightsByName: poolWeightsByName(pool),
+        verification: filterOn ? 'filter' : 'none',
+        runFilterRound: filterOn ? function(candidates) {
+            return runFilterRound(candidates, ctx, filterDiffPath);
+        } : null,
+        stampDemotionFiles: function(rd, applied) {
+            stampDemotionNotesOnFiles(rd, applied, ctx);
+        },
+        recomputeCensus: function(rd, droppedCount) {
+            return reviewFilterModule.recomputeCensus(rd, droppedCount);
+        },
+        appendToGeneralComment: function(section) {
+            appendDroppedSection(reviewData, section, ctx);
+        }
+    };
+}
+
+function runPoolRound(reviewData, ctx, params, pr, repoInfo, pool, filterDiffPath) {
+    if (!pool) return null;
+    try {
+        var head = roundHeadContextOf(pr, repoInfo);
+        if (!head) return null;
+        var headSha = head.headSha;
+        var logins = machineAuthorModule.machineAuthorLogins(ctx.machineAuthor);
+        var hunks = newHunksContextOf(params, ctx.ticketKey);
+        var filterOn = verificationEnabledOf(ctx.reviewPolicy);
+        var inJobRound = inJobRoundOf(ctx, pool, hunks, headSha);
+        var round = reviewPoolPostModule.poolRoundStep(reviewData, pool, {
+            headSha: headSha,
+            hasNewHunks: hunks.hasNewHunks,
+            newHunkPaths: hunks.paths,
+            inJob: inJobRound
+        }, poolRoundIoOf(reviewData, ctx, pr, logins, pool, filterOn, filterDiffPath));
+        console.log('✅ Reviewer pool round ' + round.round + ': arrived [' +
+            round.arrived.join(', ') + '], unavailable [' + round.unavailable.join(', ') +
+            '], merged ' + round.mergedCount + ' candidate(s)');
+        // The filter outcome exists ONLY when the round actually filtered
+        // (the gh-1403 invariant the plain path keeps: a failed/absent filter
+        // pass never reconciles the verdict token — a surviving model BLOCK
+        // stays a BLOCK). The round's real drops ride the ticket section.
+        var filterOutcome = null;
+        if (round.filterApplied) {
+            filterOutcome = {
+                stats: reviewFilterModule.filterStats(round.candidatesTotal, round.applied),
+                applied: round.applied,
+                dropped: round.dropped
+            };
+        }
+        return {
+            round: round.round,
+            headSha: headSha,
+            arrived: round.arrived,
+            unavailable: round.unavailable,
+            filterOutcome: filterOutcome
+        };
+    } catch (e) {
+        console.warn('reviewer pool round failed (non-fatal, single-reviewer round):', e.message || e);
+        return null;
+    }
+}
+
+/**
+ * The posting leg's completion stamp (pool rounds only — a pool-disabled
+ * deployment never stamps PASS markers). Fail-soft: a lost stamp re-fires
+ * the leg next round (duplicate-safe) and the gate keeps holding.
+ */
+function stampPostingLegPass(ctx, headSha, pr) {
+    var outcome = reviewPoolPostModule.stampPostingLegCompletion({
+        headSha: function() { return headSha; },
+        nowIso: function() { return new Date().toISOString(); },
+        postComment: function(text) { ctx.scm.addComment(pr.number, text); }
+    });
+    if (outcome.stamped) {
+        console.log('✅ Reviewer pool: posting leg PASS stamped on head ' + String(headSha).substring(0, 7));
+    }
 }
 
 // ═══════════════ gh-1332 finding-identity registry ═══════════════
@@ -2887,6 +3109,22 @@ function buildReviewContext(params) {
 }
 
 /**
+ * The gh-1471 aggregation point + the gh-1403 filter leg, as ONE
+ * pre-posting outcome: on a pool round the filter already ran inside the
+ * merge (the round's filterOutcome wins); otherwise the plain
+ * single-reviewer filter applies. Returns { poolRound, filterOutcome }.
+ */
+function poolFilterOutcomeOf(reviewData, ctx, params, pr, repoInfo) {
+    var filterOn = verificationEnabledOf(ctx.reviewPolicy);
+    var filterPath = filterOn ? filterDiffPathOf(params, ctx.ticketKey) : null;
+    var poolRound = runPoolRound(reviewData, ctx, params, pr, repoInfo,
+        resolvePostingPoolOrNull(ctx), filterPath);
+    var filterOutcome = poolRound ? poolRound.filterOutcome
+        : applyReviewFilter(reviewData, ctx, filterPath);
+    return { poolRound: poolRound, filterOutcome: filterOutcome };
+}
+
+/**
  * Main action function
  * Posts review results to GitHub and Jira, updates ticket
  *
@@ -2926,16 +3164,30 @@ function action(params) {
         // claim keeps BLOCKING force with the citation auto-appended.
         applySpecClaimDowngrades(reviewData, ctx.ticketKey, ctx.workingDir, params.inputFolderPath);
 
+        // Step 2: Extract PR info from input folder or find PR. gh-1471: the
+        // discovery moved above the filter/aggregation step — it is read-only,
+        // and the reviewer-pool round needs the PR + head before the merge.
+        var discovered = discoverPullRequest(params, ctx);
+        var repoInfo = discovered.repoInfo;
+        var pr = discovered.pr;
+
+        // gh-1471: the reviewer-pool aggregation point (posting legs). When
+        // a pool resolves, the round's specialist candidates merge into the
+        // review, the gh-1403 filter pass runs over the MERGED census with
+        // the pool duties, and the round stamps its markers — the plain
+        // filter below is skipped (the pool round owns the merge point).
+        // Fail-open: any degradation (empty pool, no head, resolution
+        // failure) falls through to the unmerged single-reviewer round.
+        var roundOutcome = poolFilterOutcomeOf(reviewData, ctx, params, pr, repoInfo);
+        var poolRound = roundOutcome.poolRound;
+
         // gh-1403: the finding-filter leg (reviewPolicy.verification =
         // filter) — a fresh-context pass verifies each rework/polish-tier
         // candidate BEFORE posting; drops become digest lines, demotes tier
         // downgrades, the census is recomputed after filtering. Non-fatal:
-        // any filter failure degrades to the unfiltered review. The diff
-        // path is probed lazily (round-2 NIT): only when the filter is
-        // enabled — the default `none` round never touches the input
-        // folders for pr_diff.txt.
-        var filterOutcome = applyReviewFilter(reviewData, ctx,
-            verificationEnabledOf(ctx.reviewPolicy) ? filterDiffPathOf(params, ctx.ticketKey) : null);
+        // any filter failure degrades to the unfiltered review. Skipped on
+        // pool rounds (the pool round already ran the filter merge point).
+        var filterOutcome = roundOutcome.filterOutcome;
 
         console.log('Review recommendation:', reviewData.recommendation);
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
@@ -2943,11 +3195,6 @@ function action(params) {
         // Resolve statuses — project-wide overrides via .dmtools/config.js's jira.statuses,
         // plus legacy per-invocation overrides via customParams.customStatuses
         var statuses = resolveStatuses(ctx.customParams, jiraStatusesOf(ctx.config));
-
-        // Step 2: Extract PR info from input folder or find PR
-        var discovered = discoverPullRequest(params, ctx);
-        var repoInfo = discovered.repoInfo;
-        var pr = discovered.pr;
 
         var recommendation = normalizeRecommendation(reviewData);
         var issueCounts = normalizeIssueCounts(reviewData);
@@ -2989,6 +3236,11 @@ function action(params) {
 
         // Step 4: Post all comments to GitHub PR (always, regardless of outcome)
         postGitHubReview(ctx, pr, repoInfo, reviewData, isApproved, recommendation, issueCounts);
+
+        // gh-1471: the posting leg stamps its own PASS marker on the head
+        // (the completion receipt the §6 rounds gating and the required
+        // reviewer merge gate read). Pool rounds only.
+        if (poolRound) stampPostingLegPass(ctx, poolRound.headSha, pr);
 
         // ── PR-anchored runs end here (#687)
         if (ctx.prAnchor) {
