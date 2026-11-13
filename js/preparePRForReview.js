@@ -510,77 +510,68 @@ function buildSuccessResult(prDetails, branchName, repoInfo) {
  * Non-fatal end to end: any failure logs and leaves the leg exactly as
  * before (a single-reviewer round is the gh-1406 baseline behavior).
  */
-/** The pool-resolution io (gh-1471): file_list returns entry objects/JSON —
- * normalized through the sessionDelta parse (the same shape reviewPool's
- * nameOf accepts). Read failures are null (no pool → no round). */
-function poolResolveIoOf() {
-    return {
-        readFile: function(path) { try { return file_read({ path: path }); } catch (e) { return null; } },
-        listFiles: function(dir) {
-            try {
-                var raw = file_list({ path: dir });
-                var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                return Array.isArray(parsed) ? parsed : (parsed && parsed.entries) ? parsed.entries : [];
-            } catch (eList) { return null; }
-        }
-    };
-}
-
-/** The hunks context for the round: the diff-of-diff between the last
- * reviewed head and this one, as the `+++ b/` path list. */
-function roundHunksOf(ctx, prDetails, comments) {
-    var heads = resolveNewHunksContext(ctx, prDetails, comments);
-    var hunks = heads ? gitOps.getDiffBetweenCommits(heads.lastHead, heads.currentHead, ctx.config.workingDir) : null;
-    var hunkPaths = [];
-    if (hunks) {
-        var matches = String(hunks).match(/^\+\+\+ b\/(.+)$/gm) || [];
-        for (var m = 0; m < matches.length; m++) hunkPaths.push(matches[m].substring(6).trim());
-    }
-    return { hasNewHunks: !!hunks, newHunkPaths: hunkPaths };
-}
-
-/** The in-job specialist io: the pre-cli sandbox spawns the leg sessions,
- * the prompts land in the ticket's input folder (the RETURN value is the
- * child-visible path), the candidates files resolve across the outputs/
- * and workingDir shapes. */
-function inJobIoOf(ctx) {
-    return {
-        executeCommand: function(command) {
-            // The pre-cli sandbox exposes cli_execute_command (see
-            // preCliTestAutomationSetup); `bash` is whitelisted by the
-            // leg's CLI_ALLOWED_COMMANDS.
-            cli_execute_command({ command: command });
-        },
-        writeFile: function(path, content) {
-            gitOps.writeInputFile(path, content, 'pool specialist prompt');
-            return path;
-        },
-        readFile: function(path) {
-            var file = outputFiles.readOutputFileDetailed(path, {
-                ticketKey: ctx.ticketKey,
-                workingDir: ctx.config && ctx.config.workingDir
-            });
-            return file && file.content ? file.content : null;
-        },
-        nowIso: function() { return new Date().toISOString(); }
-    };
-}
-
 function reviewerPoolRoundSetup(ctx, prDetails, prComments) {
     if (ctx.dryRun || branchSetup.isDryRunParams(ctx.params)) return null;
+    // The pool io/hunks helpers stay NESTED (module-size: preparePRForReview
+    // sits at the 40-top-level-function limit; closures add no top-level
+    // count and keep the split's CRAP profile).
+    function roundHunksOf(comments) {
+        var heads = resolveNewHunksContext(ctx, prDetails, comments);
+        var hunks = heads ? gitOps.getDiffBetweenCommits(heads.lastHead, heads.currentHead, ctx.config.workingDir) : null;
+        var hunkPaths = [];
+        if (hunks) {
+            var matches = String(hunks).match(/^\+\+\+ b\/(.+)$/gm) || [];
+            for (var m = 0; m < matches.length; m++) hunkPaths.push(matches[m].substring(6).trim());
+        }
+        return { hasNewHunks: !!hunks, newHunkPaths: hunkPaths };
+    }
+    function poolResolveIoOf() {
+        return {
+            readFile: function(path) { try { return file_read({ path: path }); } catch (e) { return null; } },
+            listFiles: function(dir) {
+                try {
+                    var raw = file_list({ path: dir });
+                    var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    return Array.isArray(parsed) ? parsed : (parsed && parsed.entries) ? parsed.entries : [];
+                } catch (eList) { return null; }
+            }
+        };
+    }
+    function inJobIoOf() {
+        return {
+            executeCommand: function(command) {
+                // The pre-cli sandbox exposes cli_execute_command (see
+                // preCliTestAutomationSetup); `bash` is whitelisted by the
+                // leg's CLI_ALLOWED_COMMANDS.
+                cli_execute_command({ command: command });
+            },
+            writeFile: function(path, content) {
+                gitOps.writeInputFile(path, content, 'pool specialist prompt');
+                return path;
+            },
+            readFile: function(path) {
+                var file = outputFiles.readOutputFileDetailed(path, {
+                    ticketKey: ctx.ticketKey,
+                    workingDir: ctx.config && ctx.config.workingDir
+                });
+                return file && file.content ? file.content : null;
+            },
+            nowIso: function() { return new Date().toISOString(); }
+        };
+    }
     try {
         var jp = ctx.jp || ctx.params.jobParams || {};
         var pool = reviewPoolModule.resolvePool(poolResolveIoOf(), ctx.config, jp, {});
         if (!pool || pool.reviewers.length === 0) return null;
         var comments = prComments === undefined ? prCommentsForContextSteps(ctx.scm, prDetails.number) : prComments;
-        var hunks = roundHunksOf(ctx, prDetails, comments);
+        var hunks = roundHunksOf(comments);
         var roundCtx = {
             ticketKey: ctx.ticketKey,
             headSha: prDetails.head && prDetails.head.sha,
             hasNewHunks: hunks.hasNewHunks,
             newHunkPaths: hunks.newHunkPaths
         };
-        var round = reviewPoolInJob.runSpecialists(inJobIoOf(ctx), pool, roundCtx);
+        var round = reviewPoolInJob.runSpecialists(inJobIoOf(), pool, roundCtx);
         if (round.completed.length > 0 || round.unavailable.length > 0) {
             console.log('✅ Reviewer pool in-job round: completed [' + round.completed.join(', ') + ']' +
                 (round.unavailable.length > 0 ? ', unavailable [' + round.unavailable.join(', ') + '] (fail-open)' : ''));

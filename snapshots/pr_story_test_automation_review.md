@@ -232,6 +232,35 @@ ONE file and nothing else:
   posting leg merges them into ONE review — a specialist never posts a
   second review.
 
+### The coverage file (the second specialist output — the memory)
+
+Alongside the candidates file the specialist maintains ONE more file:
+
+`outputs/pr_review_coverage-<reviewer>.json`
+
+```json
+{
+  "reviewer": "<the reviewer name>",
+  "head": "<the round head sha>",
+  "covered": ["src/auth/UserService.js"],
+  "pending": ["docs/arch.md", "src/auth/Session.js"],
+  "truncated": false,
+  "at": "<iso timestamp>"
+}
+```
+
+- **Write it FIRST** — before any review: `covered: []`, `pending:` the
+  full list of repo files you plan to review (your pass's scope).
+- Move files `pending` → `covered` as you finish them (re-write the file).
+  The file is re-read by the machine after your session ends, whatever its
+  cause — a timeout kills the session but not what landed on disk.
+- The NEXT pass receives this file as memory: covered files that the fresh
+  hunks do not touch are skipped (unchanged — machine-verified), still-
+  pending files are finished first. Big requests converge: every round
+  reviews the delta plus the oldest debt, until nothing is pending.
+- `truncated: true` near the cap: unfinished files stay `pending` — a
+  partial honest record is a valid state, silence is not.
+
 
 ---
 

@@ -5506,3 +5506,39 @@ suite('postPReviewComments — gh-1471 posting leg pool round (in-job)', functio
             'the high-weight drop is visible in the packet');
     });
 });
+
+suite('postPReviewComments — gh-1471 round context (the materialized hunks file)', function() {
+    test('a pr_new_hunks.txt in the input folder scopes the round to the hunks paths', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            fileMap: {
+                'input/PROJ-1/pr_new_hunks.txt':
+                    'diff --git a/src/neu.js b/src/neu.js\n+++ b/src/neu.js\n@@ -1,2 +1,3 @@\n' +
+                    'diff --git a/docs/guide.md b/docs/guide.md\n+++ b/docs/guide.md\n@@ -1 +1 @@\n'
+            },
+            generalMd: '# Review summary\n'
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        // The round completed (the specialist still merges) — the hunks file
+        // only feeds the round context / triggerPaths scoping.
+        var parsed = poolParsedMarkers(loaded.scmComments.map(function(c) { return c.body; }));
+        assert.equal(parsed.outcomes.length, 1, 'the pool-outcome marker still stamps');
+        assert.equal(parsed.holds.length, 0);
+    });
+
+    test('no pr_new_hunks.txt anywhere is a first-review round (hasNewHunks false)', function() {
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: { machineAuthor: 'ai-teammate', repository: { owner: 'acme', repo: 'widget' } },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            generalMd: '# Review summary\n'
+        });
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        assert.equal(loaded.scmInlineComments.length, 2, 'base + security candidate post as before');
+    });
+});
