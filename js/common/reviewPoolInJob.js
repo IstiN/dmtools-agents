@@ -36,6 +36,7 @@ var reviewPolicy = require('./reviewPolicy.js');
 var reviewVerdicts = require('./reviewVerdicts.js');
 
 var RUN_AGENT_REL = 'agents/scripts/run-agent.sh';
+var SAFE_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 var DEFAULT_SPECIALIST_TIMEOUT_SECONDS = 900;
 var CANDIDATES_FILE_PREFIX = 'pr_review_candidates-';
 
@@ -186,6 +187,13 @@ function runSpecialists(io, pool, roundCtx) {
 function runOneSpecialist(io, skill, roundCtx) {
     var name = skill.name;
     var base = { reviewer: name, ok: false, reason: '' };
+    // Defense-in-depth past the schema guard: the identifiers compose the
+    // spawn command string — refuse to build it from anything but path
+    // atoms (the ticket key rides the job context, not the schema).
+    var ticket = String((roundCtx && roundCtx.ticketKey) || '');
+    if (!SAFE_IDENTIFIER_RE.test(name) || (ticket && !SAFE_IDENTIFIER_RE.test(ticket))) {
+        return fail(base, 'unsafe identifier — refusing to compose the spawn command');
+    }
     try {
         var promptPath = writePromptFile(io, skill, roundCtx);
         base.promptPath = promptPath;
@@ -288,6 +296,7 @@ function memoryIo(seedFiles, executor) {
 }
 
 module.exports = {
+    SAFE_IDENTIFIER_RE: SAFE_IDENTIFIER_RE,
     roundTypeOf: roundTypeOf,
     selectSpecialists: selectSpecialists,
     buildSpecialistPrompt: buildSpecialistPrompt,

