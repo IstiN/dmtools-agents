@@ -3730,6 +3730,65 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm churn');
     });
 
+    test('validate_pr: gh-852 AC2 — the running machine-sm.yml tick + kicker runs do NOT self-block repoPoolFree (fa #2133)', function () {
+        var CUR = 'd29efb16d29efb16d29efb16d29efb16d29efb16';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var checkRuns = { check_runs: [
+            { name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-11T12:06:29Z' },
+            { name: 'Quality gate', status: 'completed', conclusion: 'success',
+              started_at: '2026-10-11T12:08:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38137997380' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(2133, { branch: 'fix/2132-nosandbox-release', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns,
+                      prComments: [],
+                      prAfterRefresh: { number: 2133, head: { sha: 'f00df00d' } },
+                      workflowApiRuns: [
+                          { id: 43293089787, status: 'in_progress', conclusion: null,
+                            path: '.github/workflows/machine-sm.yml', head_branch: 'main',
+                            created_at: new Date().toISOString() },
+                          { id: 43293262920, status: 'queued', conclusion: null,
+                            path: '.github/workflows/sm-kicker.yml', head_branch: 'main',
+                            created_at: new Date().toISOString() },
+                          { id: 43297113854, status: 'in_progress', conclusion: null,
+                            path: '.github/workflows/release.yml', head_branch: 'main',
+                            created_at: new Date().toISOString() }
+                      ] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1 ||
+                    c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [
+                        { id: 38137997380, event: 'workflow_dispatch',
+                          head_branch: 'fix/2132-nosandbox-release', head_sha: CUR,
+                          status: 'completed', conclusion: 'success',
+                          created_at: '2026-10-11T12:08:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1; }).length, 1,
+            'fresh-sha refresh fires when only machine-sm / sm-kicker are active');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; }).length, 1,
+            'validation dispatched on the fresh sha');
+    });
+
     test('validate_pr: gh-852 AC2 — the per-PR per-window reset cap parks the resets (one note)', function () {
         var CUR = 'caaaaaaaaaaaaaaaaaaaaaaaaaaaaaap852';
         var greenRule = { source: 'github',

@@ -1,53 +1,45 @@
-/**
- * Validation liveness (gh-821) — the arm-must-mean-a-live-run state machine.
- *
- * Live fa PR #1443 (2026-10-09 13:36–15:00Z): the dispatched validation run
- * concluded CANCELLED (kicker/dispatch race, gh-748 guard family) while the
- * `ai_validating` arm stayed on; the stale-arm sweeper skipped it ("no
- * concluded-and-stale validation run on the head — arm stays") and four
- * validated PRs deferred on the mutex for ~2h until a manual
- * `gh workflow run ci.yml --ref <head>` unstick. CANCELLED is never a
- * VERDICT (gh-755 — no rework on a cancel), but a cancel (or a lost
- * dispatch) behind an arm is a ZOMBIE: the mutex is held with no live run
- * behind it, which is exactly what the serial slot must never do.
- *
- * This module is the pure half of the fix:
- *
- *   classify(probe)  — the liveness state machine over a
- *                      probeDispatchedState bundle: 'running' (in-flight,
- *                      or concluded inside the check-visibility grace),
- *                      'green' / 'red' (verdict paths — callers keep their
- *                      existing consumption), 'zombie-cancelled' /
- *                      'zombie-no-run' (the arm holds the slot with no
- *                      live run; caller re-dispatches, bounded).
- *   zombie marks     — durable per-head re-dispatch bookkeeping carried in
- *                      marker comments (the red-head/empty-lap carrier:
- *                      per-PR state with zero extra infrastructure). One
- *                      marker per re-dispatch gives the crash-loop guard
- *                      (3 in a row on the same head ⇒ park) and the rate
- *                      bound (1 auto re-dispatch per head per hour).
- *
- * Probe-error degeneracy: newestDispatchedRun fails CLOSED (null on error
- * AND on an empty list), so a degraded read classifies as 'zombie-no-run'.
- * That is the documented fail-open contract of the dispatch guards — the
- * worst case is one bounded duplicate CI run (1/head/hour), never a wedge;
- * the alternative (treating a probe outage as live) re-creates the deadlock
- * this module exists to break.
- *
- * Pure functions, no tool globals — smAgent wires the transport, tests
- * inject nothing. CommonJS module like every other js/ module. GraalJS
- * rules apply: var + plain functions only.
- */
-
+// Validation liveness (gh-821): pure classify() + marker bookkeeping for
+// zombie/stale-cancel/ghost-guard/silent-update/fork-route/workflow-write.
 'use strict';
 
-// Run states that mean "a run is materially in flight" — THE single source
-// of truth for that vocabulary (gh-821 round-2 review): smAgent's
-// hasActiveDispatchedRun and hasActiveHeadRun consume this constant instead
-// of keeping parallel inline lists that drift. The PROBE_WORKER_SOURCE copy
-// in smAgent keeps its own literal list by necessity (the worker source is
-// serialized via fn.toString() and cannot close over module scope).
 var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
+var POOL_STALE_NON_RUNNING_MS = 6 * 60 * 60 * 1000;
+
+// GitHub-hosted orchestration / release workflows never compete for the
+// validation / self-hosted runner pool (macos / ubuntu-arm).
+// repoPoolFree runs FROM INSIDE machine-sm.yml — counting these runs
+// made repoPoolFree self-block on every live tick (fa #2133).
+var POOL_EXCLUDED_WORKFLOW_FILES = [
+    'machine-sm.yml', 'factory-sm.yml', 'sm-kicker.yml', 'factory-sm-kicker.yml',
+    'agent-pack-release-kicker.yml', 'machine-merge.yml', 'merge-trigger.yml',
+    'sm-merge-guard.yml', 'release.yml', 'agent-pack-release.yml', 'codeql.yml'
+];
+
+function workflowFileOf(r) {
+    var p = String((r && r.path) || '').toLowerCase();
+    var slash = p.lastIndexOf('/');
+    return slash !== -1 ? p.slice(slash + 1) : p;
+}
+
+function isPoolExcludedWorkflowRun(r) {
+    return POOL_EXCLUDED_WORKFLOW_FILES.indexOf(workflowFileOf(r)) !== -1;
+}
+
+function isFreshNonRunning(r, nowMs, limit) {
+    var created = Date.parse(r.created_at || r.run_started_at || '');
+    return isNaN(created) || (nowMs - created) <= limit; // unknown age: busy
+}
+
+function runOccupiesPool(r, nowMs, limit) {
+    var st = String((r && r.status) || '').toLowerCase();
+    if (ACTIVE_RUN_STATES.indexOf(st) === -1 || isPoolExcludedWorkflowRun(r)) return false;
+    return st === 'in_progress' || isFreshNonRunning(r, nowMs, limit);
+}
+/** True when `runs` carry a run that materially occupies the pool. */
+function poolBusy(runs, nowMs, staleMs) {
+    var limit = typeof staleMs === 'number' ? staleMs : POOL_STALE_NON_RUNNING_MS;
+    return (runs || []).some(function (r) { return runOccupiesPool(r, nowMs, limit); });
+}
 
 // gh-1101: post-conclusion check-visibility grace. Applies ONLY to the
 // re-DISPATCH decision (a just-concluded run's check-runs may not be
@@ -61,34 +53,8 @@ function concludedWithin(run, nowMs, ms) {
     return age >= 0 && age < ms;
 }
 
-// ── Liveness classification ────────────────────────────────────────────────
-
-/**
- * Classify the head's dispatched-run state from one probeDispatchedState
- * bundle ({ active, verdict, green, newest }).
- *
- *   'running'          — a live run exists (queued/in_progress/waiting/
- *                        pending), OR the newest run concluded inside the
- *                        check-visibility grace (hasActiveDispatchedRun
- *                        counts a completed run active for 15 min after its
- *                        conclusion — the verdict race window gh-755 and the
- *                        rerun-cancelled-checks remedy own; a FRESH cancel
- *                        therefore still reads 'running', never a zombie).
- *   'green'            — newest concluded success (verdict path).
- *   'red'              — newest concluded failure/timed_out/… — any
- *                        non-cancelled, non-success conclusion is a verdict
- *                        word (sweep parity: the existing code treats every
- *                        `conclusion !== 'cancelled'` as sweepable).
- *   'zombie-cancelled' — newest concluded CANCELLED outside every grace —
- *                        no verdict, no live run: the arm dead-holds.
- *   'zombie-no-run'    — no dispatched run on the head at all (lost
- *                        dispatch, silent gh CLI failure): same dead-hold.
- *
- * Missing probe / odd per-facet shapes fail SAFE toward 'running' (arm
- * stays). A fully-failed probe (every facet at its catch default) reads
- * 'zombie-no-run' — the deliberate gh-821 bias documented in the header:
- * worst case one bounded duplicate CI run, never a wedge.
- */
+// Classify probeDispatchedState ({ active, verdict, green, newest }) →
+// 'running' | 'green' | 'red' | 'zombie-cancelled' | 'zombie-no-run'.
 function cancelledState(run) {
     return concludedWithin(run, Date.now(), CONCLUDED_REDISPATCH_GRACE_MS)
         ? 'running' : 'zombie-cancelled';
@@ -110,27 +76,8 @@ function classify(probe) {
     return 'red';
 }
 
-// ── Zombie re-dispatch markers (durable per-head bookkeeping) ───────────────
-//
-// One standalone PR comment per zombie re-dispatch, carrying the marker
-// line the next tick's guard re-reads (failMarkerState parity — same
-// single github_get_pr_comments fetch as the red-head/empty-lap markers):
-//
-//   🔄 zombie re-dispatch <fullHeadSha> — zombie <N>/<cap> at <iso>
-//
-// The head SHA keys the count: a head move (new push) starts a fresh
-// count by construction, so "3 in a row on the same head" is exactly
-// "3 markers for this SHA".
-
+// Zombie re-dispatch markers: 🔄 zombie re-dispatch <sha> — zombie <N>/<cap> at <iso>
 var ZOMBIE_MARKER_RE = /\uD83D\uDD04 zombie re-dispatch ([0-9a-f]{7,40}) \u2014 zombie (\d+)\/\d+ at (\S+)/g;
-
-/**
- * Aggregate marker lines over comment bodies →
- * { <fullSha>: { count: <max N>, lastAtMs: <newest marker epoch ms> } }.
- * Malformed lines and other heads' markers are ignored; unparsable
- * timestamps degrade to lastAtMs=null (the rate bound then cannot fire —
- * the crash-loop cap still can, it reads the count only).
- */
 function zombieMarks(bodies) {
     var map = {};
     (bodies || []).forEach(function (body) {
@@ -185,51 +132,14 @@ function zombieWindowMsOf(jobParams) {
     return Math.floor(n);
 }
 
-// ── Stale-cancel markers (gh-846) ───────────────────────────────────────────
-//
-// The refresh-path twin of the zombie marker: when a silent update moves
-// the head, every dispatched validation run on the superseded head is
-// cancelled (its result would be discarded). One marker line per cancelled
-// head records the 'cancelled: stale base' reason durably on the PR — the
-// gh-755 parity contract: CANCELLED is never a VERDICT, so the line is
-// bookkeeping/audit only. No tick-side machinery consumes it (the verdict
-// probes skip cancelled conclusions by construction; the zombie re-dispatch
-// and red-head counters key on head shas and only ever read the CURRENT
-// head), which is exactly why a cancelled-stale run can never trip
-// fail-validation / zombie re-dispatch / red-head counting (AC3).
-//
-//   🛑 stale-cancel <fullHeadSha> — stale base at <iso>
-
+// Stale-cancel markers (gh-846): 🛑 stale-cancel <fullHeadSha> — stale base at <iso>
 var STALE_CANCEL_MARKER_RE = /\uD83D\uDED1 stale-cancel ([0-9a-f]{7,40}) \u2014 stale base at (\S+)/g;
-
-/**
- * The marker line for one stale-cancelled head. Caller dedupes shas and
- * joins lines; count/cap are meaningless here (a head is cancelled once).
- */
 function staleCancelMarkerLine(headSha, atIso) {
     return '\uD83D\uDED1 stale-cancel ' + headSha +
         ' \u2014 stale base at ' + (atIso || '');
 }
 
-// ── Ghost-guard markers (gh-848) ───────────────────────────────────────────
-//
-// The gh-748 twin-guard cancel path must never cancel a run before its jobs
-// materialized — a queued cancel orphans the run's already-registered
-// check-runs as `in_progress` ghosts forever (no run to re-run, no API to
-// conclude them with the tick PAT) and the merge gate holds on the dead
-// checks indefinitely (live fa #1457 five ghost cycles / #1520, ghosts
-// #4-#6, 2026-10-10). One marker line per head records the two ghost-guard
-// events durably on the PR — same bookkeeping-only contract as the markers
-// above (gh-846/gh-755 parity: nothing tick-side consumes them; `cancelled`
-// is never a verdict, no fail-validation / zombie re-dispatch keys on them):
-//
-//   ⏸ ghost-guard defer <fullHeadSha> — run <id> still queued at <iso>
-//   🧹 ghost-guard clean <fullHeadSha> — <N> orphaned check-run(s) concluded at <iso>
-//
-// A head can sit queued across MANY ticks before its jobs materialize, and
-// the audit poster dedupes per (event, head) against these markers — exactly
-// ONE marker comment per head, never a comment per tick.
-
+// Ghost-guard markers (gh-848): one-marker-per-head dedupe for defer/clean events.
 var GHOST_GUARD_DEFER_RE = /⏸ ghost-guard defer ([0-9a-f]{7,40}) — run (\d+) still queued at (\S+)/g;
 var GHOST_GUARD_CLEAN_RE = /🧹 ghost-guard clean ([0-9a-f]{7,40}) — (\d+) orphaned check-run\(s\) concluded at (\S+)/g;
 
@@ -275,19 +185,7 @@ function ghostGuardMarks(bodies) {
     return out;
 }
 
-// ── Silent-update failure markers (gh-1000 I5) ──────────────────────────────
-//
-// update_branch's silentUpdateBranch runs a throwaway /tmp clone to merge
-// main under the head (no CI). A bare `exit 1` from that harness (live
-// 2026-10-17 ~19:14Z) skipped park-set/unpark bookkeeping silently and the
-// branch stayed stale forever. One marker line per failed attempt records
-// the event durably on the PR — smAgent's recordSilentUpdateFailure (wired
-// via silentUpdateBranchTracked) is the consumer: it posts the marker on
-// every clone failure and applies the degraded flag once the attempts run
-// out (the every-tick retry itself stays self-healing):
-//
-//   ⚠️ silent-update failure — attempt <n> at <iso>
-
+// Silent-update failure markers (gh-1000 I5).
 var SILENT_UPDATE_MAX_FAILURES = 3;
 var SILENT_UPDATE_DEGRADED_LABEL = 'silent-update-degraded';
 var SILENT_UPDATE_MARKER_RE = /⚠️ silent-update failure — attempt (\d+) at (\S+)/g;
@@ -337,28 +235,7 @@ function silentUpdateAttemptsLeft(count) {
     return left > 0 ? left : 0;
 }
 
-// ── Silent-update failure surface: the stderr tail (gh-1074) ────────────────
-//
-// Live fa PR #1591 (2026-10-19 05:51/05:52Z): the fork silent-update push
-// failed 3× and the SM run log preserved only the BEGINNING of stderr
-// ("Cloning into '…' / Updating files: N%"). cli_execute_command's failure
-// message embeds the command output from the START (head-truncated), while
-// git writes the decisive rejection ("remote: error: …", "! [remote
-// rejected] HEAD:branch (reason)") at the END — exactly the part that is
-// cut. The smAgent chain tees its stderr to a side file (clone truncates,
-// the brace group appends — the file always holds THIS attempt's stderr);
-// these pure helpers turn the capture into the failure surface:
-//
-//   silentUpdateStderrTail      — the LAST ~20 lines (the propagated error
-//                                 carries these, not the head)
-//   silentUpdateRejectionReason — the one-line reason for the marker
-//                                 comment (AC2)
-//   redactSilentUpdateSecrets   — the same secrets hygiene the command
-//                                 line gets (AC3): git echoes the push URL
-//                                 with the EXPANDED credential ("To
-//                                 https://x-access-token:<token>@…") and a
-//                                 hook can echo token-shaped strings.
-
+// Silent-update failure surface: stderr tail + reason + secret redaction (gh-1074).
 var SILENT_UPDATE_STDERR_TAIL_LINES = 20;
 
 function silentUpdateStderrTail(text, maxLines) {
@@ -401,39 +278,9 @@ function redactSilentUpdateSecrets(text) {
     return s;
 }
 
-// ── Fork-aware silent-update routing (gh-1070) ──────────────────────────────
-//
-// update_branch's silent refresh was fork-blind: it cloned and pushed the
-// BASE repo, so a fork PR's head (the branch lives on the fork) failed 3×
-// and got flagged silent-update-degraded while the gh-757 guest park
-// waited on the human author (live fa PR #1591, 2026-10-18). GitHub grants
-// the base-repo token a push to the fork's PR branch when the author left
-// "Allow edits from maintainers" on (default on personal forks; the PR
-// payload field is maintainer_can_modify / maintainerCanModify; org forks
-// never allow it). Pure dispatch — smAgent probes and executes, this
-// module only routes:
-//
-//   base — same-repo head: the untouched base-repush path (AC4)
-//   fork — editable fork: the machine merges main into the fork branch
-//          via the maintainer-edit push; the head move clears the park
-//          through the existing gh-994 head-change reset (AC1)
-//   park — non-editable fork: the gh-757 guest park with ZERO
-//          silent-update attempts and ZERO failure bookkeeping (AC2 —
-//          the attempt can never succeed)
-
-// The fork's 'owner/repo' full name when the PR head lives in a FOREIGN
-// repo, null otherwise (same-repo, missing headRepo from a legacy payload,
-// deleted fork, malformed name) — those keep the base path.
+// Fork-aware silent-update routing (gh-1070): 'base' | 'fork' | 'park'.
 function forkHeadFull(headRepoFull, baseOwner, baseRepo) {
-    // gh-1070 rework: the same-repo comparison is CASE-INSENSITIVE. The
-    // base side comes from config (effectiveRepoInfo.owner/repo) while
-    // headRepoFull comes from the API's head.repo.full_name, and GitHub
-    // repo names are case-insensitive — a casing drift (config
-    // 'istin/dmtools-agents' vs API 'IstiN/dmtools-agents') must NOT
-    // classify a same-repo PR as a fork (AC4 silently violated, or a
-    // false guest park when maintainer_can_modify=false — the exact
-    // silent-misroute class gh-1059 eliminated). The fork's own casing
-    // is preserved: the push URL is built from it.
+    // Case-insensitive same-repo comparison (gh-1070 rework).
     var full = String(headRepoFull || '');
     if (full.indexOf('/') === -1) return null;
     var baseFull = (String(baseOwner || '') + '/' + String(baseRepo || '')).toLowerCase();
@@ -458,28 +305,7 @@ function forkPushTokenUrl(forkFull) {
     return 'https://x-access-token:${GH_TOKEN}@github.com/' + forkFull + '.git';
 }
 
-// ── Workflow-write rejection escalation (gh-1106) ───────────────────────────
-//
-// Live fa PR #1591 (2026-10-19 17:16/17:17Z): the fork silent-update pushed
-// the main merge with the silent token (github.token, github-actions[bot])
-// and GitHub refused EVERY push touching `.github/workflows/*`:
-//
-//   ! [remote rejected] HEAD -> fix/android-dap-home-sandbox (refusing to
-//   allow a GitHub App to create or update workflow
-//   `.github/workflows/build-mobile.yml` without `workflows` permission)
-//
-// GITHUB_TOKEN can never gain that capability (there is no `permissions:`
-// key that grants `workflows` to it), so the failure is a deterministic
-// token-capability fact — retrying the same token can never succeed — and
-// gh-1070's "maintainer edits revoked" 3-strike trail mis-frames it as an
-// author decision, ending in a guest park the author cannot clear (the
-// head predates the park; only the machine can move it: no push → park
-// holds → no push). The pure half lives here: classify the rejection from
-// the captured stderr tail and shape the distinct AC3 park marker. The
-// wiring (smAgent fork lane, smProvider base lane) swaps env GH_TOKEN to a
-// workflow-capable token (App installation token with Workflows: write, or
-// a PAT with the `workflow` scope) for exactly one escalated attempt.
-
+// Workflow-write rejection escalation (gh-1106).
 var WORKFLOWS_APP_REJECTION_RE =
     /refusing to allow a GitHub App to create or update workflow/i;
 var WORKFLOWS_OAUTH_REJECTION_RE =
@@ -556,6 +382,10 @@ module.exports = {
     ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
     CONCLUDED_REDISPATCH_GRACE_MS: CONCLUDED_REDISPATCH_GRACE_MS,
     concludedWithin: concludedWithin,
+    POOL_STALE_NON_RUNNING_MS: POOL_STALE_NON_RUNNING_MS,
+    poolBusy: poolBusy,
+    POOL_EXCLUDED_WORKFLOW_FILES: POOL_EXCLUDED_WORKFLOW_FILES,
+    isPoolExcludedWorkflowRun: isPoolExcludedWorkflowRun,
     STALE_CANCEL_MARKER_RE: STALE_CANCEL_MARKER_RE,
     staleCancelMarkerLine: staleCancelMarkerLine,
     SILENT_UPDATE_MAX_FAILURES: SILENT_UPDATE_MAX_FAILURES,

@@ -194,46 +194,47 @@ suite('release workflow wiring', function () {
             'the sync must stay gated OFF workflow_dispatch');
     });
 
-    test('R2 guard 1: main-already-carries-it skips the ledger PR entirely', function () {
+    test('R2 guard 1: main-already-carries-it skips the ledger push entirely', function () {
         var guardDiff = wf.indexOf('git diff --quiet HEAD origin/main -- versions.json');
         assert.ok(guardDiff !== -1, 'the nothing-changed guard must exist');
-        var create = wf.indexOf('gh pr create');
-        assert.ok(create !== -1 && guardDiff < create,
-            'the guard must run BEFORE the PR is opened (skip, not open an empty/duplicate ledger PR)');
+        var push = wf.indexOf('git push origin HEAD:main');
+        assert.ok(push !== -1 && guardDiff < push,
+            'the guard must run BEFORE the push (skip, never push an empty/duplicate ledger)');
         assert.ok(wf.indexOf('::notice::main already carries the target agent versions') !== -1,
             'the skip must be visible in the run log');
     });
 
-    test('R2 guard 2: rebased onto fresh main, re-checked after the checks, empty diff closes the PR', function () {
+    test('R2 guard 2: every retry fetches fresh main, re-checks, rebases, then pushes', function () {
         var firstGuard = wf.indexOf('git diff --quiet HEAD origin/main -- versions.json');
-        var rebase = wf.indexOf('git rebase origin/main');
-        var create = wf.indexOf('gh pr create');
-        var checks = wf.indexOf('gh pr checks');
-        var secondGuard = wf.indexOf('git diff --quiet HEAD origin/main -- versions.json', checks);
-        var merge = wf.indexOf('gh pr merge');
-        assert.ok(rebase > firstGuard && create > rebase,
-            'the ledger branch is cut from the freshest main (strict up-to-date checks)');
-        assert.ok(checks > create && secondGuard > checks && merge > secondGuard,
-            'wait for checks, re-run the guard, THEN merge (the #689 window)');
-        assert.ok(wf.indexOf('gh pr close') !== -1, 'an emptied ledger PR is closed, not merged');
+        var loop = wf.indexOf('for attempt in 1 2 3; do');
+        var fetch = wf.indexOf('git fetch origin main', loop);
+        var secondGuard = wf.indexOf('git diff --quiet HEAD origin/main -- versions.json', loop);
+        var rebase = wf.indexOf('git rebase origin/main', loop);
+        var push = wf.indexOf('git push origin HEAD:main', loop);
+        assert.ok(loop > firstGuard, 'retry loop after guard 1');
+        assert.ok(fetch > loop && secondGuard > fetch && rebase > secondGuard && push > rebase,
+            'fetch -> guard 2 -> rebase -> push on each attempt (non-fast-forward retry)');
     });
 
-    test('R2: no direct push to main and no ruleset bypass — PR merged by the SM merge app', function () {
-        assert.ok(wf.indexOf('git push origin HEAD:main') === -1,
-            'main accepts updates only through PRs merged by dmtools-factory-bot (ruleset main-merge-only-sm)');
+    test('R2: direct push to main with the dmtools-factory-bot app token (no PR)', function () {
+        assert.ok(wf.indexOf('gh pr create') === -1 && wf.indexOf('gh pr merge') === -1,
+            'the ledger no longer goes through a PR');
         assert.ok(wf.indexOf('actions/create-github-app-token') !== -1 &&
             wf.indexOf('secrets.APP_PRIVATE_KEY') !== -1,
-            'the ledger PR is opened and merged with the merge-bot app token');
+            'the ledger is pushed with the merge-bot app token (ruleset bypass actor)');
         assert.ok(wf.indexOf('GH_TOKEN: ${{ steps.app-token.outputs.token }}') !== -1,
             'the ledger step must use the app token, not GITHUB_TOKEN / PAT');
+        assert.ok(wf.indexOf('x-access-token:${GH_TOKEN}') !== -1, 'the push remote carries the app token');
+        var unset = wf.indexOf('git config --local --unset-all http.https://github.com/.extraheader');
+        assert.ok(unset !== -1 && unset < wf.indexOf('git push origin HEAD:main'),
+            'checkout\'s persisted GITHUB_TOKEN extraheader must be dropped, else the push runs as github-actions[bot] and is declined');
+        assert.ok(wf.indexOf('git commit -m "chore(release): bump agent versions [skip ci]"') !== -1,
+            '[skip ci] keeps the ledger push from re-triggering a release');
     });
 
-    test('R2: red checks never fail the release after publishing', function () {
-        assert.ok(wf.indexOf('left open for the machine loop') !== -1,
-            'a red ledger PR is left for the machine loop with a warning');
-        var merge = wf.indexOf('gh pr merge');
-        assert.ok(merge !== -1 && wf.indexOf('|| echo "::warning::version PR', merge) !== -1,
-            'a refused merge degrades to a warning');
+    test('R2: a rejected push never fails the release after publishing', function () {
+        assert.ok(wf.indexOf('could not push versions.json to main after 3 attempts') !== -1,
+            'exhausted retries degrade to a warning');
     });
 
     test('R2: --auto merge is gone — it merges server-side, bypassing the guard', function () {

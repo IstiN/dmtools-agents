@@ -51,3 +51,7 @@ __pycache__/
 
 # dmtools pipeline runtime artifact (target-workingdir marker - rewritten every leg, gh-1358)
 .dmtools-target-workingdir
+
+# pre-commit quality gate local tool & baseline cache
+.cache/
+

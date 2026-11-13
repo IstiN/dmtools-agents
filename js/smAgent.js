@@ -8058,11 +8058,10 @@ function repoPoolFree(repoInfo) {
             perPage: 50
         })) || {};
         var list = runs.workflow_runs || runs.workflowRuns || [];
-        var busy = list.some(function (r) {
-            return r && validationLivenessModule.ACTIVE_RUN_STATES
-                .indexOf(String(r.status || '').toLowerCase()) !== -1;
-        });
-        return !busy;
+        // Stale queued/waiting runs age out and GitHub-hosted orchestration /
+        // release runs (machine-sm.yml, sm-kicker.yml, machine-merge.yml,
+        // release.yml, etc.) are excluded so they never block the pool (fa #2133).
+        return !validationLivenessModule.poolBusy(list, Date.now());
     } catch (ePool) {
         console.warn('  ⚠️  pool-free probe failed: ' + (ePool.message || ePool));
         return null;
