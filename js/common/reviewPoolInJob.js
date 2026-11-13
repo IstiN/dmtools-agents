@@ -18,14 +18,23 @@
  * leg stamps the specialists' PASS markers itself (single writer — the
  * gh-1406 merge gate keeps its same-head PASS semantics untouched).
  *
+ * Round semantics (the in-job decision): the round state is PER-RUN — every
+ * review run re-executes its selected specialists and re-stamps their
+ * markers on the current head. The §6 PASS-marker state machine
+ * (roundsDecide/reviewerShouldRun's cross-run memory) is superseded here:
+ * with the specialists in-process there is no cross-run dispatch to dedupe,
+ * and the merge gate reads only the CURRENT head's markers.
+ *
  * io injection (the reviewPoolPost house style): every environment touch —
  * process spawn, file io, clock — rides the io object, so the module stays
  * unit-testable without a runner.
  */
 
 var candidatesModule = require('./reviewPoolCandidates.js');
+var poolModule = require('./reviewPool.js');
+var reviewPolicy = require('./reviewPolicy.js');
 
-var RUN_AGENT_REL = 'scripts/run-agent.sh';
+var RUN_AGENT_REL = 'agents/scripts/run-agent.sh';
 var DEFAULT_SPECIALIST_TIMEOUT_SECONDS = 900;
 var CANDIDATES_FILE_PREFIX = 'pr_review_candidates-';
 
@@ -50,26 +59,20 @@ function selectSpecialists(pool, roundCtx) {
         // The posting reviewer IS the main review session — it never runs as
         // a specialist (its census is the aggregation target, not a candidate).
         if (skill.name === 'base') continue;
-        var rounds = Array.isArray(skill.rounds) ? skill.rounds : [];
-        if (rounds.length > 0 && rounds.indexOf(round) === -1 &&
-                rounds.indexOf('all') === -1) continue;
-        var triggers = Array.isArray(skill.triggerPaths) ? skill.triggerPaths : [];
-        if (triggers.length > 0 && !pathsIntersect(triggers, paths)) continue;
+        // The canonical §6 gating (reviewPool.js reviewerShouldRun) — one
+        // semantics for every engine that evaluates a pool config. In-job the
+        // state is per-run: this run IS the first pass at this head (no
+        // cross-run memory), the hunks flags come from the round context.
+        var state = {
+            firstDone: false,
+            hasNewHunks: !!(roundCtx && roundCtx.hasNewHunks),
+            hunksHitTrigger: poolModule.triggerPathsHit(skill.triggerPaths,
+                (roundCtx && roundCtx.newHunkPaths) || [])
+        };
+        if (!poolModule.reviewerShouldRun(skill, state)) continue;
         selected.push(skill);
     }
     return selected;
-}
-
-function pathsIntersect(triggers, paths) {
-    for (var i = 0; i < triggers.length; i++) {
-        // A trigger may carry a trailing slash ('js/') — normalize both sides.
-        var t = String(triggers[i] || '').replace(/\/+$/, '');
-        if (!t) continue;
-        for (var j = 0; j < paths.length; j++) {
-            if (paths[j] === t || paths[j].indexOf(t + '/') === 0) return true;
-        }
-    }
-    return false;
 }
 
 /**
@@ -90,9 +93,12 @@ function buildSpecialistPrompt(skill, roundCtx) {
         '',
         '## Read first',
         '',
-        '- Lens: `' + (skill.lens || '') + '`',
-        '- Candidates contract: `instructions/pr_review/base/output_rules.md` (the',
-        '  candidates-only output section — your ONLY output)',
+        '- Lens: `agents/' + (skill.lens || '') + '`',
+        (skill.options && skill.options.referencePack
+            ? '- Reference pack: `agents/' + skill.options.referencePack + '`\n'
+            : '') +
+        '- Candidates contract: `agents/instructions/pr_review/base/output_rules.md`',
+        '  (the candidates-only output section — your ONLY output)',
         '- Diff under review: `input/' + (roundCtx.ticketKey || '') + '/pr_new_hunks.txt`',
         '  (plus the repo checkout itself — read any file you need)',
         '',

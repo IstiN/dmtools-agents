@@ -66,14 +66,22 @@ test('selection: rounds scope excludes the specialist on a first round', functio
     assert.deepStrictEqual(hunks.map(function(s) { return s.name; }), ['general', 'hunksOnly']);
 });
 
-test('selection: triggerPaths gate on the diff paths (empty = always)', function() {
+test('selection: triggerPaths gate hunks-only reviewers; first-rounds reviewers run every pass', function() {
     var pool = poolOf([
         skillOf('general'),
         skillOf('scoped', { triggerPaths: ['js/'] }),
-        skillOf('other', { triggerPaths: ['docs/'] })
+        skillOf('docsOnlyHunks', { rounds: ['hunks'], triggerPaths: ['docs/'] }),
+        skillOf('jsOnlyHunks', { rounds: ['hunks'], triggerPaths: ['js/'] })
     ]);
-    var got = inJob.selectSpecialists(pool, ctxOf({ hasNewHunks: true, newHunkPaths: ['js/deep/file.js'] }));
-    assert.deepStrictEqual(got.map(function(s) { return s.name; }), ['general', 'scoped']);
+    // The canonical §6 doctrine, per-run state (firstDone is always false in
+    // a run): triggerPaths gate the HUNKS flag only — a first-rounds reviewer
+    // runs on every pass; a hunks-only reviewer runs when its paths hit.
+    var first = inJob.selectSpecialists(pool, ctxOf({ hasNewHunks: false, newHunkPaths: [] }));
+    assert.deepStrictEqual(first.map(function(s) { return s.name; }),
+        ['general', 'scoped'], 'a first pass runs the first-rounds reviewers');
+    var hunks = inJob.selectSpecialists(pool, ctxOf({ hasNewHunks: true, newHunkPaths: ['js/dep/file.js'] }));
+    assert.deepStrictEqual(hunks.map(function(s) { return s.name; }),
+        ['general', 'scoped', 'jsOnlyHunks'], 'the hunks round scopes hunks-only reviewers by triggerPaths');
 });
 
 test('roundTypeOf: first vs hunks', function() {
@@ -99,7 +107,7 @@ test('prompt: identity, lens path, head sha, output file, no-posting rule', func
 test('command: run-agent.sh under timeout -k 60 with a prompt file', function() {
     var command = inJob.buildSpecialistCommand('outputs/pool_specialist-security.md', 900);
     assert.ok(command.indexOf('timeout -k 60 900') !== -1, 'the hard wall-clock cap is present');
-    assert.ok(command.indexOf('bash scripts/run-agent.sh') !== -1, 'the wrapper is bash');
+    assert.ok(command.indexOf('bash agents/scripts/run-agent.sh') !== -1, 'the wrapper is bash (the agents/-mounted pack path)');
     assert.ok(command.indexOf('outputs/pool_specialist-security.md') !== -1, 'the prompt rides a file');
 });
 

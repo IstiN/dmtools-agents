@@ -128,7 +128,7 @@ function makeIo(opts) {
             logins: ['ai-teammate'],
             nowIso: function() { return NOW; },
             postComment: function(text) { posted.push(text); },
-            resolveClaim: function() { return { verdict: 'keep', reason: '' }; },
+            resolveClaim: opts.resolveClaim || function() { return { verdict: 'keep', reason: '' }; },
             policy: opts.policy || null,
             weightsByName: opts.weightsByName || {},
             verification: opts.verification || 'none',
@@ -274,6 +274,50 @@ test('poolRoundStep: the filter merge point runs over the MERGED census', functi
     // merged census — the base BLOCKING + the security IMPORTANT (2 candidates).
     assert.equal(t.filterCalls[0].length, 2, 'both merged rework-tier candidates verified');
     assert.equal(reviewData.inlineComments.length, 1, 'the dropped candidate never threads');
+});
+
+test('poolRoundStep: an escalated FILE-REFERENCED body keeps its exact path shape', function() {
+    // Both lenses raise the SAME claim (the merge matches on the claim
+    // fingerprint); the base finding's body is a comment-file path. The
+    // escalation must NOT append to that body — appending breaks the
+    // exact-match shape and the poster would publish the literal path +
+    // note instead of the finding (the hazard reviewFilter.stampDemotionBody
+    // documents and guards). The severity header carries the escalation.
+    var CLAIM = 'Hard-coded IV in the AES setup.';
+    var pool = poolOf([skillOf('security')]);
+    var reviewData = postingReviewData();
+    reviewData.inlineComments = [{
+        path: 'src/crypto.js', line: 22, severity: 'SUGGESTION',
+        body: 'pr_review_comments/crypto_finding.md'
+    }];
+    var t = makeIo({
+        weightsByName: { security: 'normal' },
+        resolveClaim: function(entry) {
+            // The comment-file resolver: the file's content is the claim.
+            return entry.body === 'pr_review_comments/crypto_finding.md'
+                ? CLAIM : (typeof entry.body === 'string' ? entry.body : '');
+        }
+    });
+    mod.poolRoundStep(reviewData, pool, {
+        headSha: HEAD, hasNewHunks: false, newHunkPaths: [],
+        inJob: {
+            completed: ['security'], unavailable: [],
+            candidates: [candidateRecord('security', HEAD, [{
+                severity: 'BLOCKING', path: 'src/crypto.js', line: 22,
+                body: CLAIM, claim: CLAIM
+            }])]
+        }
+    }, t.io);
+
+    var escalated = reviewData.inlineComments.filter(function(c) { return c.path === 'src/crypto.js'; })[0];
+    assert.equal(escalated.severity, 'BLOCKING', 'the severity escalates');
+    assert.equal(escalated.body, 'pr_review_comments/crypto_finding.md',
+        'the file-reference body survives verbatim — no appended note');
+    // The escalation's user-visible surface is the posted thread's severity
+    // header (BLOCKING); the machine trace rides the entry.
+    assert.ok(escalated.__poolEscalated &&
+        escalated.__poolEscalated.from === 'SUGGESTION' &&
+        escalated.__poolEscalated.to === 'BLOCKING', 'the escalation is traced on the entry');
 });
 
 test('expectedCandidateNamesOf reads the in-job plan legs', function() {

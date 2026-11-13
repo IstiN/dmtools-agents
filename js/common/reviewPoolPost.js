@@ -104,7 +104,7 @@ function hasSameHeadHold(comments, io, headSha) {
  * The aggregation point. reviewData is the posting leg's read verdict
  * payload — MUTATED in place (the merged census replaces inlineComments;
  * the census recomputes after the round). pool is the RESOLVED pool;
- * roundCtx = { headSha, passMarkers, hasNewHunks, newHunkPaths }; io =
+ * roundCtx = { headSha, hasNewHunks, newHunkPaths, inJob }; io =
  * { readComments, logins, nowIso, postComment, resolveClaim, policy,
  * weightsByName, runFilterRound?, stampDemotionFiles, recomputeCensus,
  * appendToGeneralComment, waitSeconds?, pollSeconds?, sleep?,
@@ -158,8 +158,10 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
     var applied = [];
     var dropped = [];
     var filterApplied = false;
+    var filterCandidatesCount = 0;
     if (io.verification === 'filter' && typeof io.runFilterRound === 'function') {
         var candidates = aggregate.filterCandidatesFromMerged(merged.merged, io.policy);
+        filterCandidatesCount = candidates.length;
         if (candidates.length > 0) {
             var parsed = io.runFilterRound(candidates);
             if (parsed) {
@@ -242,6 +244,9 @@ function poolRoundStep(reviewData, pool, roundCtx, io) {
         existingHold: existingHold,
         outcomeStamped: true,
         filterApplied: filterApplied,
+        candidatesTotal: filterCandidatesCount,
+        applied: applied,
+        dropped: dropped,
         expected: expectedNames
     };
 }

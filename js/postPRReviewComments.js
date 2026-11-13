@@ -1516,7 +1516,6 @@ function runPoolRound(reviewData, ctx, params, pr, repoInfo, pool, filterDiffPat
         var comments = prCommentsForRegistry(ctx.scm, pr.number) || [];
         var hunks = newHunksContextOf(params, ctx.ticketKey);
         var filterOn = verificationEnabledOf(ctx.reviewPolicy);
-        var filterRecord = { candidates: 0, applied: [] };
         // The in-job round state: the pre-cli action already executed the
         // specialists — the post action recomputes their outcomes from the
         // candidates FILES (deterministic, same selection both sides).
@@ -1554,11 +1553,9 @@ function runPoolRound(reviewData, ctx, params, pr, repoInfo, pool, filterDiffPat
             weightsByName: poolWeightsByName(pool),
             verification: filterOn ? 'filter' : 'none',
             runFilterRound: filterOn ? function(candidates) {
-                filterRecord.candidates = candidates.length;
                 return runFilterRound(candidates, ctx, filterDiffPath);
             } : null,
             stampDemotionFiles: function(rd, applied) {
-                filterRecord.applied = applied || [];
                 stampDemotionNotesOnFiles(rd, applied, ctx);
             },
             recomputeCensus: function(rd, droppedCount) {
@@ -1571,12 +1568,16 @@ function runPoolRound(reviewData, ctx, params, pr, repoInfo, pool, filterDiffPat
         console.log('✅ Reviewer pool round ' + round.round + ': arrived [' +
             round.arrived.join(', ') + '], unavailable [' + round.unavailable.join(', ') +
             '], merged ' + round.mergedCount + ' candidate(s)');
+        // The filter outcome exists ONLY when the round actually filtered
+        // (the gh-1403 invariant the plain path keeps: a failed/absent filter
+        // pass never reconciles the verdict token — a surviving model BLOCK
+        // stays a BLOCK). The round's real drops ride the ticket section.
         var filterOutcome = null;
-        if (filterOn && filterRecord.candidates > 0) {
+        if (round.filterApplied) {
             filterOutcome = {
-                stats: reviewFilterModule.filterStats(filterRecord.candidates, filterRecord.applied),
-                applied: filterRecord.applied,
-                dropped: []
+                stats: reviewFilterModule.filterStats(round.candidatesTotal, round.applied),
+                applied: round.applied,
+                dropped: round.dropped
             };
         }
         return {

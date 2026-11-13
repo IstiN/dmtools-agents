@@ -91,16 +91,23 @@ function escalationBodyOf(entry, merged) {
     var tail = '\n\uD83D\uDC65 Pool merge: severity escalated ' + entry.severity + ' → ' + merged.severity +
         ' (matched by ' + (merged.reviewers || []).join(', ') + ').';
     if (typeof entry.body !== 'string' || !entry.body.trim()) return tail.substring(1);
+    // A body-as-comment-file path is NEVER appended: appending breaks the
+    // exact-match path shape (isCommentFilePath) and the poster would
+    // publish the literal path + note instead of the finding — the same
+    // hazard reviewFilter.stampDemotionBody documents and guards. The
+    // severity header itself carries the escalation for this shape.
+    if (reviewFilter.isCommentFilePath(entry.body)) return entry.body;
     return entry.body.replace(/\s*$/, '') + tail;
 }
 
 /**
  * One inline entry from one merged candidate. Base-provenanced entries
  * reuse the ORIGINAL entry object (comment-file reference, startLine, side
- * survive) with the merged severity (escalation stamped for inline bodies;
- * file-referenced escalations are stamped by the caller — the file write
- * stays out of this module). Specialist-only candidates synthesize an
- * inline body: claim + reviewer attribution.
+ * survive) with the merged severity (escalation noted for inline bodies;
+ * file-referenced bodies keep their exact path shape — the severity header
+ * carries the escalation, appending would corrupt the reference).
+ * Specialist-only candidates synthesize an inline body: claim + reviewer
+ * attribution.
  */
 function inlineEntryFromMerged(merged, baseInline) {
     var baseIdx = merged._baseIndex;

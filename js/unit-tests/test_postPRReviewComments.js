@@ -5445,6 +5445,33 @@ suite('postPReviewComments — gh-1471 posting leg pool round (in-job)', functio
             'the census recomputed after the round: no important thread survives');
     });
 
+    test('a FAILED filter round never reconciles the verdict (the gh-1403 invariant holds on pool rounds)', function() {
+        // The filter verdicts file is unreadable → runFilterRound degrades to
+        // null → the round applies nothing → filterOutcome must be null, so
+        // the verdict reconciliation never flips a surviving model BLOCK to
+        // APPROVE ("filter applied" with zero filtering is a lie).
+        var loaded = loadPostPRReviewCommentsForPool({
+            config: {
+                machineAuthor: 'ai-teammate',
+                repository: { owner: 'acme', repo: 'widget' },
+                reviewPolicy: { verification: 'filter' }
+            },
+            prInfoContent: POOL_PR_INFO,
+            repoInfo: { owner: 'acme', repo: 'widget' },
+            generalMd: '# Review summary\n',
+            fileMap: { 'input/PROJ-1/pr_diff.txt': '--- a/src/crypto.js\n+++ b/src/crypto.js\n@@ -1,2 +1,3 @@\n old\n+new' },
+            filterVerdictsJson: null
+        });
+
+        var result = runPoolAction(loaded);
+        assert.equal(result.success, true);
+        // The security candidate (IMPORTANT) survived unfiltered: both threads
+        // post, and the recommendation keeps its non-approve token (no
+        // "filter applied" reconciliation without a filter pass).
+        assert.equal(loaded.scmInlineComments.length, 2, 'both findings post unfiltered');
+        assert.notEqual(result.recommendation, 'APPROVE', 'the model token is not flipped without filtering');
+    });
+
     test('a reasoned drop of a high-weight specialist candidate applies and is visible in the packet', function() {
         var loaded = loadPostPRReviewCommentsForPool({
             highSecurity: true,
