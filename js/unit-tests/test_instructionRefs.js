@@ -190,20 +190,39 @@ function dirOf(p) { return p.slice(0, p.lastIndexOf('/')); }
 
 function isLegacy(dir) { return LEGACY_DIRS.indexOf(dir) !== -1; }
 
-// R13 helper (pure): the frozen v1 shim covering `livePath`, if any. A shim
-// is an instructions/*.md whose header carries the DEPRECATED v1 banner and
-// names the moved live target(s) in its "Live version(s):" comment lines —
-// the banner is everything before the first markdown heading.
-function v1ShimFor(livePath, instructionFiles) {
-    var names = Object.keys(instructionFiles);
-    for (var i = 0; i < names.length; i++) {
-        var txt = readText(names[i]);
-        if (txt === null || String(txt).indexOf('DEPRECATED v1 shim') === -1) continue;
-        var bodyCut = txt.indexOf('\n# ');
-        var banner = txt.slice(0, bodyCut === -1 ? 400 : bodyCut);
-        if (banner.indexOf(livePath) !== -1) return names[i];
+// R13 helper (pure): every tracked instructions/*.md that is a frozen v1
+// shim — a file whose header carries the DEPRECATED v1 banner and names the
+// moved live target(s) in its "Live version(s):" comment lines — mapped as
+// livePath -> shimPath. Self-sufficient walk (normalized file_exists shape —
+// boolean `true` in the dmtools host, `{exists: bool}` in the node coverage
+// harness): R13 must not ride collectInstructionFiles, whose descent guard is
+// shape-sensitive, so R2/R3's historical behavior here is left untouched.
+function v1ShimIndex() {
+    var index = {};
+    function walk(dir) {
+        var out = file_list(fsPath(dir));
+        if (typeof out === 'string') out = JSON.parse(out);
+        var entries = (out && out.entries) || [];
+        for (var i = 0; i < entries.length; i++) {
+            var s = String(entries[i]).replace(/\\/g, '/');
+            var rel = dir + '/' + s.slice(s.lastIndexOf('/') + 1);
+            if (rel.slice(rel.lastIndexOf('/') + 1)[0] === '.') continue;
+            var ex = file_exists({ path: s });
+            var isDir = ex === true || (ex && typeof ex === 'object' && ex.exists === true);
+            if (/\.md$/.test(rel)) {
+                var txt = readText(rel);
+                if (txt === null || String(txt).indexOf('DEPRECATED v1 shim') === -1) continue;
+                var bodyCut = txt.indexOf('\n# ');
+                var banner = txt.slice(0, bodyCut === -1 ? 400 : bodyCut);
+                var m, livePat = /((?:instructions|prompts)\/[A-Za-z0-9_\-./]+\.(?:md|js))/g;
+                while ((m = livePat.exec(banner)) !== null) index[m[1]] = rel;
+            } else if (isDir) {
+                walk(rel);
+            }
+        }
     }
-    return null;
+    walk('instructions');
+    return index;
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
@@ -459,7 +478,7 @@ suite('instructionRefs — pack reference integrity', function () {
         // migration flip lands in a follow-up after a pack carries the new
         // path.
         var violations = [];
-        var instructionFiles = collectInstructionFiles('instructions');
+        var shims = v1ShimIndex();
         var runnerFiles = listEntries('.dmtools/runners').filter(function (e) {
             return /\.json$/.test(String(e).replace(/\\/g, '/'));
         });
@@ -482,7 +501,7 @@ suite('instructionRefs — pack reference integrity', function () {
                     violations.push(rel + ': pack ref "' + p + '" does not exist on disk (dangling pin — #600 class)');
                     continue;
                 }
-                var shim = v1ShimFor(p, instructionFiles);
+                var shim = shims[p];
                 if (shim) {
                     violations.push(rel + ': pins the moved target "' + p +
                         '" while its frozen v1 shim "' + shim + '" still exists — pin the shim path; flip to the live path only in a follow-up once a pack release carries it (shims removed at the next major)');
