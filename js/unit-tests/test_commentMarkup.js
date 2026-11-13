@@ -27,6 +27,14 @@ suite('commentMarkup', function () {
         assert.equal(commentMarkup.flavorForTicket('122'), 'markdown');
     });
 
+    test('flavorForTicket: GitLab key shapes select markdown and respect overrides', function () {
+        ['gl-122', 'GL-122', 'group/subgroup/project#122'].forEach(function (key) {
+            assert.equal(commentMarkup.flavorForTicket(key), 'markdown');
+            assert.equal(commentMarkup.forTicket(key).h(3, 'Update'), '### Update');
+            assert.equal(commentMarkup.flavorForTicket(key, { commentMarkup: 'jira' }), 'jira');
+        });
+    });
+
     test('flavorForTicket: customParams.commentMarkup overrides detection', function () {
         assert.equal(
             commentMarkup.flavorForTicket('PROJ-74', { commentMarkup: 'markdown' }),
@@ -92,6 +100,7 @@ suite('commentMarkup', function () {
         var emptyShapes = {
             GITHUB_KEY_SHAPES: [],
             isGitHubKeyShape: function () { return false; },
+            isGitLabKeyShape: function () { return false; },
             githubIssueNumberIn: function () { return null; },
             shapeSources: function () { return []; }
         };
@@ -119,4 +128,3 @@ suite('commentMarkup: branch names render inline on every flavor (agents#820)', 
         });
     });
 });
-

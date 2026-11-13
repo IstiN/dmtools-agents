@@ -169,7 +169,7 @@ function truncateSummary(summary, maxLength) {
  * @param {Object} customParams - customParams from agent config
  * @param {Object} customParams - customParams from agent config
  * @param {Object} [projectStatuses] - project-wide status overrides (config.jira.statuses or config.tracker.statuses)
- * @param {string} [trackerProvider] - optional tracker provider ('jira' | 'ado' | 'github') for per-provider overrides
+ * @param {string} [trackerProvider] - optional tracker provider ('jira' | 'ado' | 'github' | 'gitlab') for per-provider overrides
  * @returns {Object} STATUSES merged with project and customParams overrides
  */
 function _copyStringEntries(base, source) {

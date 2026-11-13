@@ -245,6 +245,7 @@ var branchLegGuardModule = require('./common/branchLegGuard.js');
 // when the consumer repo runs `dmtools run sm@latest` without an `agents/js/`
 // checkout in the working directory.
 var ticketKeyShapesModule = require('./common/ticketKeyShapes.js');
+var gitlabTrackerModule = require('./common/gitlabTracker.js');
 var linkedIssuesReportModule = require('./common/linkedIssuesReport.js');
 var tokenUsageCommentModule = require('./common/tokenUsageComment.js');
 var smDoneCheckModule = require('./common/smDoneCheck.js');
@@ -1598,6 +1599,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
     // checkout in CWD.
     var helperModules = [
         { id: 'ticketKeyShapes.js', varName: '_tks', fallbackExpr: helperFallbackExpr(ticketKeyShapesModule, 'ticketKeyShapesModule') },
+        { id: 'gitlabTracker.js', varName: '_glt', fallbackExpr: helperFallbackExpr(gitlabTrackerModule, 'gitlabTrackerModule') },
         { id: 'trackers.js', varName: '_tr', fallbackExpr: helperFallbackExpr(trackersModule, 'trackersModule') },
         { id: 'linkedIssuesReport.js', varName: '_lir', fallbackExpr: helperFallbackExpr(linkedIssuesReportModule, 'linkedIssuesReportModule') },
         { id: 'tokenUsageComment.js', varName: '_tu', fallbackExpr: helperFallbackExpr(tokenUsageCommentModule, 'tokenUsageCommentModule') },
@@ -1632,6 +1634,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
         '      if (id === "./configLoader.js" || id === "./configLoader" || id.indexOf("configLoader.js") !== -1) return _cl.exports;\n' +
         '      if (id.indexOf("scm.js") !== -1) return _scm.exports;\n' +
         '      if (id.indexOf("ticketKeyShapes.js") !== -1) return _tks.exports;\n' +
+        '      if (id.indexOf("gitlabTracker.js") !== -1) return _glt.exports;\n' +
         '      if (id.indexOf("trackers.js") !== -1) return _tr.exports;\n' +
         '      if (id.indexOf("linkedIssuesReport.js") !== -1) return _lir.exports;\n' +
         '      if (id.indexOf("tokenUsageComment.js") !== -1) return _tu.exports;\n' +

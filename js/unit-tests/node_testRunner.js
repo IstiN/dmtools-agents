@@ -201,7 +201,8 @@ var REAL_COMMON_MODULES = {
     // internally, so suites shim them but still need the real schema module.
     reviewPoolSchema: 'js/common/reviewPoolSchema.js',
     reviewVerdicts: 'js/common/reviewVerdicts.js',
-    machineAuthor: 'js/common/machineAuthor.js'
+    machineAuthor: 'js/common/machineAuthor.js',
+    gitlabTracker: 'js/common/gitlabTracker.js'
 };
 
 function makeRequire(moduleMap) {

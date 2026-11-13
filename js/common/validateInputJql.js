@@ -28,14 +28,11 @@ function loadTrackerConfig(params) {
     return configLoader ? configLoader.loadProjectConfig(params) : null;
 }
 
-// Jira-speak alternation first (uppercase normalization applies), then the
-// GitHub shapes so gh-N keys keep their original case — uppercasing would
-// mint 'GH-12', a different key from the 'gh-12' the machine loop created.
-// (A Jira project literally keyed 'GH' is unaffected: its keys already match
-// the Jira shape unchanged.)
+// Composite paths precede Jira keys so a namespace such as "group-2"
+// cannot be extracted as a partial Jira key.
 var KEY_EXTRACTION_RE = new RegExp(
-    'key\\s*(?:=|in\\s*\\()\\s*([A-Z][A-Z0-9_]*-\\d+|' +
-    ticketKeyShapes.shapeSources().join('|') + ')',
+    'key\\s*(?:=|in\\s*\\()\\s*(' +
+    ticketKeyShapes.shapeSources().join('|') + '|[A-Z][A-Z0-9_]*-\\d+)',
     'i'
 );
 
@@ -57,10 +54,12 @@ function extractTicketKeyFromJql(jql) {
     if (wiql) return wiql[1];
     var m = jql.match(KEY_EXTRACTION_RE);
     if (!m || !m[1]) return null;
-    // The Jira branch is case-insensitive, so it can also match a gh-N key —
-    // the shape check therefore decides: GitHub keys return as written (no
-    // 'GH-12' minting), everything else is a Jira key and uppercases.
-    return ticketKeyShapes.isGitHubKeyShape(m[1]) ? m[1] : m[1].toUpperCase();
+    // The Jira branch is case-insensitive, so it can also match a gh-N/gl-N
+    // key — the shape checks therefore decide: GitHub and GitLab router keys
+    // return as written (no 'GH-12'/'GL-12' minting), everything else is a
+    // Jira key and uppercases.
+    return ticketKeyShapes.isGitHubKeyShape(m[1]) || ticketKeyShapes.isGitLabKeyShape(m[1])
+        ? m[1] : m[1].toUpperCase();
 }
 
 /**
@@ -71,19 +70,22 @@ function extractTicketKeyFromJql(jql) {
 function validateTicketKeyFormat(key) {
     if (!isValidTicketKey(key)) {
         throw new Error('Invalid or missing ticket key: "' + key +
-            '". Expected a Jira key (PROJECT-123), a GitHub issue key (gh-123, owner/repo#123, #123, 123) ' +
+            '". Expected a Jira key (PROJECT-123), a GitHub issue key (gh-123, owner/repo#123, #123, 123), ' +
+            'a GitLab key (gl-123, group/subgroup/project#123) ' +
             'or an Azure DevOps work item id (123)');
     }
 }
 
 /**
- * True when key is a Jira key, a GitHub issue key shape or a bare numeric ADO work item id.
+ * True when key is a Jira key, a GitHub or GitLab issue key shape, or a
+ * bare numeric ADO work item id.
  * The single owner of "what is a ticket key" — buildEncodedConfig uses it too (#804).
  * @param {string|null} key
  * @returns {boolean}
  */
 function isValidTicketKey(key) {
-    return !!key && (TICKET_KEY_RE.test(key) || ticketKeyShapes.isGitHubKeyShape(key));
+    return !!key && (TICKET_KEY_RE.test(key) || ticketKeyShapes.isGitHubKeyShape(key)
+        || ticketKeyShapes.isGitLabKeyShape(key));
 }
 
 /**

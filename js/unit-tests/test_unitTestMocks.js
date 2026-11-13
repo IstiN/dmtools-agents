@@ -50,6 +50,15 @@ suite('unit-test mocks: trackersMock (the shared contentOutput tracker fallback)
 
 suite('unit-test mocks: gh-1244 module compat (trackers holder + token usage)', function () {
 
+    test('real tracker dependency loads when omitted from a consumer mock map', function () {
+        var provider = makeRequire({})('./gitlabTracker.js');
+        assert.equal(typeof provider.create, 'function');
+        assert.equal(typeof provider.normalizeTicket, 'function');
+        assert.equal(typeof provider.assigneeName, 'function');
+        var mock = { create: function () { return 'mock'; } };
+        assert.equal(makeRequire({ './gitlabTracker.js': mock })('./gitlabTracker.js'), mock);
+    });
+
     test('a trackers mock gains createTrackerHolder with canonical lazy semantics', function () {
         var created = [];
         var trackers = makeRequire({

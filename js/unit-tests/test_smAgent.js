@@ -15160,6 +15160,34 @@ suite('smAgent: runLocalAction require shim (gh-908)', function() {
         assert.equal(result.provider, 'jira', 'tracker must work from the agents/ layout as well');
     });
 
+    test('GitLab tracker helper works in checkout and packed-fallback local actions', function() {
+        var actionPath = '.dmtools/js/gitlabAction.js';
+        var actionSource = [
+            'var trackers = require("./common/trackers.js");',
+            'var gitlab = require("./common/gitlabTracker.js");',
+            'module.exports.action = function() {',
+            '    var tracker = trackers.createTracker({ tracker: { provider: "gitlab" } });',
+            '    return { provider: tracker.provider(),',
+            '        helper: typeof gitlab.create,',
+            '        ticket: tracker.normalizeTicket({ iid: 2, assignee: { username: "reviewer" } }) };',
+            '};'
+        ].join('\n');
+        [false, true].forEach(function(packedOnly) {
+            var fm = fileMapWith(actionPath, actionSource);
+            if (packedOnly) {
+                ['gitlabTracker.js', 'trackers.js'].forEach(function(name) {
+                    fm['agents/js/common/' + name] = null;
+                    fm['js/common/' + name] = null;
+                });
+            }
+            var result = makeSmAgent({ fileMap: fm }).runLocalAction(actionPath, { key: 'gl-2' }, {});
+            assert.equal(result.provider, 'gitlab');
+            assert.equal(result.helper, 'function');
+            assert.equal(result.ticket.key, 'gl-2');
+            assert.equal(result.ticket.assignee, 'reviewer');
+        });
+    });
+
     test('UT-2: autoStart/aiChat/buildEncodedConfig chains resolve incl. transitive requires (AC2)', function() {
         var sm = makeSmAgent({ fileMap: fileMapWith(CHAIN_ACTION_KEY, CHAIN_ACTION_SRC) });
         var result = sm.runLocalAction(CHAIN_ACTION_KEY, { key: 'PROJ-1' }, {});
@@ -15302,6 +15330,7 @@ suite('smAgent: runLocalAction require shim (gh-908)', function() {
             'js/configLoader.js',
             'js/common/scm.js',
             'js/common/ticketKeyShapes.js',
+            'js/common/gitlabTracker.js',
             'js/common/trackers.js',
             'js/common/linkedIssuesReport.js',
             'js/common/tokenUsageComment.js',
@@ -19830,4 +19859,3 @@ suite('smAgent: arm notice repeat-suppression wiring (gh-1387 L2 / gh-1392 revie
             'armReworkLatch fired under the suppressed notice — reworkInFlight carries pr-413@<head>');
     });
 });
-
