@@ -136,6 +136,19 @@ function coverageSection(roundCtx, prev) {
  * the content stays single-sourced in the pack).
  */
 /**
+ * The diff file for the round: the machine names it per round (the hunks
+ * delta on re-reviews; the standard full PR diff on first rounds — a first
+ * round never materializes pr_new_hunks.txt, the review BLOCKING).
+ */
+function diffFileOf(roundCtx) {
+    if (roundCtx && roundCtx.diffFile) return roundCtx.diffFile;
+    var ticket = (roundCtx && roundCtx.ticketKey) || '';
+    return roundCtx && roundCtx.hasNewHunks
+        ? 'input/' + ticket + '/pr_new_hunks.txt'
+        : 'input/' + ticket + '/pr_diff.txt';
+}
+
+/**
  * The read-first + round-context block: the reference-pack line renders
  * only when the skill carries one, and the scope line flips on new hunks.
  */
@@ -147,10 +160,7 @@ function specialistContextLines(skill, roundCtx) {
             : '') +
         '- Candidates contract: `agents/instructions/pr_review/base/output_rules.md`',
         '  (the candidates-only output section — your ONLY output)',
-        '- Diff under review: `' + (roundCtx.diffFile ||
-            (roundCtx.hasNewHunks
-                ? 'input/' + (roundCtx.ticketKey || '') + '/pr_new_hunks.txt'
-                : 'input/' + (roundCtx.ticketKey || '') + '/pr_diff.txt')) + '` —',
+        '- Diff under review: `' + diffFileOf(roundCtx) + '` —',
         '  AUTHORITATIVE and pre-verified by the machine: review its content as',
         '  given (the repo checkout provides the surrounding files)',
         '',
