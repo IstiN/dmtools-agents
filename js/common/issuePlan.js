@@ -123,10 +123,6 @@ function itemIdOf(body) {
     return markerPayload(body, ITEM_MARKER_PREFIX, false) || null;
 }
 
-function sameTitle(a, b) {
-    return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
-}
-
 /**
  * The existing sub-issue that already stands for an intake entry: the one whose
  * marker names the entry, else the one with the same title. null when none.
@@ -139,7 +135,10 @@ function findExistingItem(children, itemId, title) {
     var list = Array.isArray(children) ? children : [];
     var byMarker = list.filter(function (c) { return itemIdOf(c.description) === String(itemId); });
     if (byMarker.length) return byMarker[0];
-    var byTitle = list.filter(function (c) { return sameTitle(c.title, title); });
+    var wantedTitle = String(title || '').trim().toLowerCase();
+    var byTitle = list.filter(function (c) {
+        return String(c.title || '').trim().toLowerCase() === wantedTitle;
+    });
     return byTitle.length ? byTitle[0] : null;
 }
 
@@ -217,54 +216,28 @@ function allClosed(keys, isKeyClosed) {
     return keys.every(function (k) { return isKeyClosed(k); });
 }
 
-// Open leaf sub-issues already in development (carry the dev label).
-function activeChildren(open, cfg) {
-    return open.filter(function (c) { return hasLabel(c, cfg.devLabel); });
-}
-
 // Open leaf sub-issues not started yet whose recorded blockers are all closed, in plan order.
 function readyChildren(open, plan, cfg, isKeyClosed) {
+    var active = open.filter(function (c) { return hasLabel(c, cfg.devLabel); }).length;
+    var slots = cfg.maxParallel - active;
+    if (slots <= 0) return [];
     return open.filter(function (c) {
         if (hasLabel(c, cfg.devLabel) || hasLabel(c, cfg.plannedLabel)) return false;
         return allClosed(blockersOf(plan, c.key), isKeyClosed);
-    });
-}
-
-function parentBlockers(plan) {
-    return (plan && plan.blockedBy) ? plan.blockedBy : [];
-}
-
-function pickStartBatch(open, plan, cfg, isKeyClosed) {
-    var slots = cfg.maxParallel - activeChildren(open, cfg).length;
-    if (slots <= 0) return [];
-    return readyChildren(open, plan, cfg, isKeyClosed).slice(0, slots);
+    }).slice(0, slots);
 }
 
 /**
  * The next step for a planned parent.
- *
- * A sub-issue that is itself planned (it carries plannedLabel — an epic with
- * its own sub-issues) is advanced by its own rule match: it never gets the dev
- * label and does not count against maxParallel here.
- *
- * @param {Array<Object>} children    the parent's sub-issues in order, flat views ({key, status, labels})
- * @param {Object}        plan        findPlan() result
- * @param {Object}        cfg         resolvePlanningConfig() result
- * @param {Function}      isKeyClosed key → true when that ticket is closed
- * @returns {{type: string, start: Array<Object>, total: number}}
- *   type 'empty'    — the parent has no sub-issues (nothing to do)
- *   type 'blocked'  — a blocker of the parent itself is still open
- *   type 'complete' — every sub-issue is closed: close the parent
- *   type 'wait'     — nothing can start now (all slots busy, or blockers open)
- *   type 'start'    — add the dev label to every sub-issue in `start`
  */
 function decideNextSteps(children, plan, cfg, isKeyClosed) {
     var list = Array.isArray(children) ? children : [];
     if (list.length === 0) return { type: 'empty', start: [], total: 0 };
-    if (!allClosed(parentBlockers(plan), isKeyClosed)) return { type: 'blocked', start: [], total: list.length };
+    var pBlockers = (plan && plan.blockedBy) ? plan.blockedBy : [];
+    if (!allClosed(pBlockers, isKeyClosed)) return { type: 'blocked', start: [], total: list.length };
     var open = list.filter(function (c) { return !isClosed(c); });
     if (open.length === 0) return { type: 'complete', start: [], total: list.length };
-    var start = pickStartBatch(open, plan, cfg, isKeyClosed);
+    var start = readyChildren(open, plan, cfg, isKeyClosed);
     return { type: start.length ? 'start' : 'wait', start: start, total: list.length };
 }
 
@@ -279,6 +252,168 @@ function renderStartComment(decision, cfg) {
 /** The comment on the parent when every sub-issue is closed. */
 function renderCompleteComment(decision) {
     return 'All ' + decision.total + ' sub-issues of the plan are closed — closing this issue.';
+}
+
+/** Resolved blocker keys of an entry (unresolvable refs are dropped with a warning). */
+function resolvedBlockersForPlan(entry, keyMap) {
+    var refs = Array.isArray(entry.blockedBy) ? entry.blockedBy : [];
+    return refs.map(function (ref) {
+        var k = keyMap[ref] || null;
+        if (!k) console.warn('Cannot resolve blockedBy ref "' + ref + '" for ' + entry._createdKey);
+        return k;
+    }).filter(function (k) { return k; });
+}
+
+/**
+ * GitHub: the plan of every parent that got sub-issues — the source issue and each
+ * new epic with stories. deps[child] = its resolved blockers; an epic's own blockers
+ * also gate its stories (plans[epic].blockedBy).
+ * @returns {Object} parentKey -> { blockedBy: [], deps: {} }
+ */
+function collectGithubPlans(stories, keyMap) {
+    var plans = {};
+    function planOf(k) { return plans[k] || (plans[k] = { blockedBy: [], deps: {} }); }
+    (stories || []).forEach(function (entry) {
+        if (!entry._createdKey) return;
+        var blockers = resolvedBlockersForPlan(entry, keyMap || {});
+        planOf(entry._parentKey).deps[entry._createdKey] = blockers;
+        var hasChildren = stories.some(function (e) { return e._createdKey && e._parentKey === entry._createdKey; });
+        if (hasChildren) planOf(entry._createdKey).blockedBy = blockers;
+    });
+    return plans;
+}
+
+/**
+ * Build the final comment combining AI analysis + sub-issue list (GitHub Markdown).
+ */
+function buildGithubFinalComment(results, aiComment, planned) {
+    var lines = [aiComment, '', '### Sub-issues', ''];
+    if (!results || results.length === 0) {
+        lines.push('_No sub-issues were created (stories.json was empty)._');
+        return lines.join('\n');
+    }
+    var successes = results.filter(function (r) { return r.success; });
+    var failures = results.filter(function (r) { return !r.success; });
+    successes.forEach(function (r) {
+        lines.push('- ' + displayRef(r.key) + ' (' + r.type + ') - ' + r.summary + (r.reused ? ' _(existing)_' : ''));
+    });
+    if (failures.length > 0) {
+        lines.push('', '**Failed to create:**');
+        failures.forEach(function (r) {
+            lines.push('- (' + r.type + ') ' + r.summary + ' - Error: ' + r.error);
+        });
+    }
+    lines.push('', '**Total:** ' + successes.length + ' sub-issue(s)');
+    if (!planned) {
+        lines.push('', 'Not every entry exists yet, so development does not start. Re-run intake: ' +
+            'the sub-issues above are reused and only the missing ones are created.');
+    }
+    return lines.join('\n');
+}
+
+var CONTENT_TYPES = {
+    'pdf':  'application/pdf',
+    'png':  'image/png',
+    'jpg':  'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'gif':  'image/gif',
+    'webp': 'image/webp',
+    'svg':  'image/svg+xml',
+    'zip':  'application/zip',
+    'doc':  'application/msword',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xls':  'application/vnd.ms-excel',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'txt':  'text/plain',
+    'md':   'text/markdown',
+    'json': 'application/json',
+    'mp4':  'video/mp4',
+    'mov':  'video/quicktime'
+};
+
+function getContentType(filePath) {
+    var ext = String(filePath || '').split('.').pop().toLowerCase();
+    return CONTENT_TYPES[ext] || 'application/octet-stream';
+}
+
+function sectionIssueTypes(section) {
+    return (section && section.issueTypes) || {};
+}
+
+function resolveIntakeIssueTypes(defaultTypes, projectConfig, customParams, isAdo) {
+    var adoDefaults = { BUG: 'Bug', EPIC: 'Feature', STORY: 'Product Backlog Item' };
+    var jiraDefaults = defaultTypes || { BUG: 'Bug', EPIC: 'Epic', STORY: 'Story' };
+    var cfg = projectConfig || {};
+    return Object.assign(
+        {},
+        isAdo ? adoDefaults : jiraDefaults,
+        sectionIssueTypes(cfg.jira),
+        sectionIssueTypes(cfg.tracker),
+        sectionIssueTypes(customParams)
+    );
+}
+
+function explicitProjectFromSection(section) {
+    if (!section) return '';
+    return section.projectKey || section.adoProject || section.jiraProject || section.project || '';
+}
+
+function resolveIntakeProjectKey(ticketKey, projectConfig, customParams, isAdo) {
+    var cfg = projectConfig || {};
+    var explicit = explicitProjectFromSection(customParams) ||
+        explicitProjectFromSection(cfg.tracker) ||
+        explicitProjectFromSection(cfg.jira);
+    if (explicit) return explicit;
+    var prefix = String(ticketKey || '').split('-')[0];
+    return (isAdo && /^\d+$/.test(prefix)) ? '' : prefix;
+}
+
+function resolveIntakeCustomParams(params) {
+    var p = params || {};
+    return (p.jobParams && p.jobParams.customParams) || p.customParams || {};
+}
+
+function loadIntakeProjectConfig(configLoader, params) {
+    var arg = (params && params.jobParams) ? params.jobParams : (params || {});
+    return (configLoader && configLoader.loadProjectConfig && configLoader.loadProjectConfig(arg)) || {};
+}
+
+function sectionSkipExistingFlag(section) {
+    if (!section) return false;
+    return section.skipExistingFetch === true || section.fetchExisting === false;
+}
+
+function isIntakeSkipExistingFetch(ctx) {
+    var c = ctx || {};
+    var cfg = c.projectConfig || {};
+    return sectionSkipExistingFlag(c.customParams) ||
+        sectionSkipExistingFlag(cfg.jira) ||
+        sectionSkipExistingFlag(cfg.tracker);
+}
+
+function isIntakeRequireCliOutput(ctx, params) {
+    var p = params || {};
+    var jp = p.jobParams || {};
+    var cp = (ctx && ctx.customParams) || {};
+    return Boolean(p.requireCliOutputFile || jp.requireCliOutputFile || cp.requireCliOutputFile);
+}
+
+function formatIntakeTicketLink(key, projectConfig, configLoader) {
+    if (configLoader && typeof configLoader.formatJiraTicketLink === 'function') {
+        return configLoader.formatJiraTicketLink(key, projectConfig);
+    }
+    var s = String(key || '');
+    return /^\d+$/.test(s) ? ('#' + s) : s;
+}
+
+function resolveIntakeInputFolder(ctx, params) {
+    var p = params || {};
+    var jp = p.jobParams || {};
+    var explicit = p.inputFolderPath || jp.inputFolderPath;
+    return {
+        folder: explicit || ('input/' + (ctx && ctx.ticketKey)),
+        explicit: Boolean(explicit)
+    };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -297,6 +432,18 @@ if (typeof module !== 'undefined' && module.exports) {
         isClosed: isClosed,
         decideNextSteps: decideNextSteps,
         renderStartComment: renderStartComment,
-        renderCompleteComment: renderCompleteComment
+        renderCompleteComment: renderCompleteComment,
+        resolvedBlockersForPlan: resolvedBlockersForPlan,
+        collectGithubPlans: collectGithubPlans,
+        buildGithubFinalComment: buildGithubFinalComment,
+        getContentType: getContentType,
+        resolveIntakeIssueTypes: resolveIntakeIssueTypes,
+        resolveIntakeProjectKey: resolveIntakeProjectKey,
+        resolveIntakeCustomParams: resolveIntakeCustomParams,
+        loadIntakeProjectConfig: loadIntakeProjectConfig,
+        isIntakeSkipExistingFetch: isIntakeSkipExistingFetch,
+        isIntakeRequireCliOutput: isIntakeRequireCliOutput,
+        formatIntakeTicketLink: formatIntakeTicketLink,
+        resolveIntakeInputFolder: resolveIntakeInputFolder
     };
 }

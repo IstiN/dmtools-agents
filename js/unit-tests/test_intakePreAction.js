@@ -231,7 +231,7 @@ suite('intakePreAction.action', function () {
         assert.equal(loaded.calls.writes.length, 2);
     });
 
-    test('epic search failure: no epics file, story block still runs', function () {
+    test('epic search failure: no epics file, story block still runs, aborts with comment and false (gh-1479)', function () {
         var loaded = loadIntakePreAction({
             searchResults: (function () {
                 var m = {};
@@ -243,13 +243,16 @@ suite('intakePreAction.action', function () {
 
         var result = loaded.mod.action(intakeParams());
 
-        assert.equal(result, true);
+        assert.equal(result, false);
         assert.deepEqual(loaded.calls.writes.map(function (w) { return w.path; }), [
             'input/PROJ-5/existing_stories.json'
         ]);
+        assert.equal(loaded.calls.comments.length, 1);
+        assert.equal(loaded.calls.comments[0].key, 'PROJ-5');
+        assert.contains(loaded.calls.comments[0].body, 'Intake Pre-Action Failed');
     });
 
-    test('story search failure: no stories file and still true', function () {
+    test('story search failure: no stories file, aborts with comment and false (gh-1479)', function () {
         var loaded = loadIntakePreAction({
             searchResults: (function () {
                 var m = {};
@@ -261,19 +264,23 @@ suite('intakePreAction.action', function () {
 
         var result = loaded.mod.action(intakeParams());
 
-        assert.equal(result, true);
+        assert.equal(result, false);
         assert.deepEqual(loaded.calls.writes.map(function (w) { return w.path; }), [
             'input/PROJ-5/existing_epics.json'
         ]);
+        assert.equal(loaded.calls.comments.length, 1);
+        assert.equal(loaded.calls.comments[0].key, 'PROJ-5');
+        assert.contains(loaded.calls.comments[0].body, 'Intake Pre-Action Failed');
     });
 
-    test('file_write failure inside a block does not abort the run', function () {
+    test('file_write failure inside a block aborts with comment and false after attempting both searches (gh-1479)', function () {
         var loaded = loadIntakePreAction({ writeThrows: true });
 
         var result = loaded.mod.action(intakeParams());
 
-        assert.equal(result, true, 'unexpected errors never block intake');
+        assert.equal(result, false, 'failed write aborts intake pre-action');
         assert.deepEqual(loaded.calls.search.length, 2, 'both searches still attempted');
+        assert.equal(loaded.calls.comments.length, 1);
     });
 
     test('unexpected error (no ticket) is swallowed and never blocks', function () {
@@ -389,14 +396,27 @@ suite('epicIntakeFetch helper branches (via intakePreAction mapping)', function 
     test('fetchAndWrite swallows a collect failure and writes nothing', function () {
         var helper = loadEpicIntakeFetch();
         var writes = [];
-        helper.fetchAndWrite({}, 'input/P-9', {
+        var r = helper.fetchAndWrite({}, 'input/P-9', {
             listKey: 'stories',
             fileName: 'existing_stories.json',
             writeFile: function (folder, payload) { writes.push(payload); },
             plural: 'stories',
             collect: function () { throw new Error('search down'); }
         });
+        assert.equal(r, false);
         assert.deepEqual(writes, [], 'no file written when the collect step fails');
+    });
+
+    test('intakePreAction skipExistingFetch writes empty files without running search (gh-1478)', function () {
+        var loaded = loadIntakePreAction({});
+        var r = loaded.mod.action(intakeParams({
+            jobParams: { customParams: { skipExistingFetch: true } }
+        }));
+        assert.equal(r, true);
+        assert.deepEqual(loaded.calls.search, []);
+        assert.equal(loaded.calls.writes.length, 2);
+        assert.deepEqual(JSON.parse(loaded.calls.writes[0].content), { epics: [] });
+        assert.deepEqual(JSON.parse(loaded.calls.writes[1].content), { stories: [] });
     });
 
 });

@@ -38,8 +38,11 @@ function writeGithubSubIssues(tracker, folder, issueKey) {
         writeEpicsFile(folder, '{"epics":[]}');
         writeStoriesFile(folder, '{"stories":' + JSON.stringify(stories, null, 2) + '}');
         console.log('Wrote ' + stories.length + ' existing sub-issue(s) of ' + issueKey + ' to ' + folder);
+        return true;
     } catch (subIssueError) {
         console.error('Failed to fetch sub-issues, continuing without files:', subIssueError);
+        epicIntakeFetch.postFetchFailureComment(tracker, issueKey, 'sub-issues');
+        return false;
     }
 }
 
@@ -113,9 +116,12 @@ function writeStoriesFile(folder, payload) {
 }
 
 // Search spec for one issue family (provider-specific query: WIQL on ado).
-function epicSpec(project) {
+function epicSpec(tracker, project, issueTypes, scope) {
     return {
-        jql: 'project = ' + project + ' AND issuetype = Epic ORDER BY created DESC',
+        kind: 'epic',
+        issueTypes: issueTypes,
+        scope: scope,
+        jql: epicIntakeFetch.searchQueryFor(tracker, project, 'epic', issueTypes, scope),
         fields: ['key', 'summary', 'description', 'priority', 'parent'],
         map: mapEpic,
         listKey: 'epics',
@@ -123,13 +129,16 @@ function epicSpec(project) {
         writeFile: writeEpicsFile,
         plural: 'epics',
         brokenLabel: 'Failed to fetch epic',
-        collect: collectRefetchedIssues
+        collect: epicIntakeFetch.isAdoTracker(tracker) ? epicIntakeFetch.collectFromSearch : collectRefetchedIssues
     };
 }
 
-function storySpec(project) {
+function storySpec(tracker, project, issueTypes, scope) {
     return {
-        jql: 'project = ' + project + ' AND issuetype = Story ORDER BY created DESC',
+        kind: 'story',
+        issueTypes: issueTypes,
+        scope: scope,
+        jql: epicIntakeFetch.searchQueryFor(tracker, project, 'story', issueTypes, scope),
         fields: ['key', 'summary', 'status', 'priority', 'parent'],
         map: mapStory,
         listKey: 'stories',
@@ -137,7 +146,7 @@ function storySpec(project) {
         writeFile: writeStoriesFile,
         plural: 'stories',
         brokenLabel: 'Failed to fetch story',
-        collect: collectRefetchedIssues
+        collect: epicIntakeFetch.isAdoTracker(tracker) ? epicIntakeFetch.collectFromSearch : collectRefetchedIssues
     };
 }
 
@@ -156,20 +165,48 @@ function collectRefetchedIssues(tracker, spec) {
     return issues;
 }
 
+function resolveFetchContext(params, tracker, ticketKey) {
+    var projectConfig = epicIntakeFetch.loadProjectConfigFor(configLoader, params.jobParams || params);
+    var customParams = epicIntakeFetch.customParamsOf(params);
+    var issueTypes = epicIntakeFetch.resolveIssueTypes(projectConfig, customParams);
+    var scope = epicIntakeFetch.isAdoTracker(tracker)
+        ? epicIntakeFetch.resolveAdoScope(tracker, ticketKey, params.ticket, projectConfig)
+        : null;
+    var project = (scope && scope.project) ? scope.project : projectOf(ticketKey);
+    return {
+        projectConfig: projectConfig,
+        customParams: customParams,
+        issueTypes: issueTypes,
+        scope: scope,
+        project: project
+    };
+}
+
+function runEpicsAndStoriesFetch(tracker, folder, ticketKey, ctx) {
+    if (epicIntakeFetch.isSkipExistingFetch(ctx.customParams, ctx.projectConfig)) {
+        epicIntakeFetch.writeEmptyExistingFiles(folder, writeEpicsFile, writeStoriesFile);
+        return;
+    }
+    console.log('Fetching existing epics for project ' + ctx.project + '...');
+    var epicsOk = epicIntakeFetch.fetchAndWrite(tracker, folder, epicSpec(tracker, ctx.project, ctx.issueTypes, ctx.scope));
+    var storiesOk = epicIntakeFetch.fetchAndWrite(tracker, folder, storySpec(tracker, ctx.project, ctx.issueTypes, ctx.scope));
+    if (!epicsOk || !storiesOk) {
+        epicIntakeFetch.postFetchFailureComment(tracker, ticketKey, !epicsOk ? 'epics' : 'stories');
+        return false;
+    }
+}
+
 function action(params) {
     try {
         const folder = params.inputFolderPath;
         var ticketKey = folderKeyOf(folder);
-        var project = projectOf(ticketKey);
         var tracker = createTrackerFor(params);
         if (tracker.provider && tracker.provider() === 'github') {
-            writeGithubSubIssues(tracker, folder, ticketKey);
-            return;
+            var ghOk = writeGithubSubIssues(tracker, folder, ticketKey);
+            return ghOk ? undefined : false;
         }
-        console.log('Fetching existing epics for project ' + project + '...');
-
-        epicIntakeFetch.fetchAndWrite(tracker, folder, epicSpec(project));
-        epicIntakeFetch.fetchAndWrite(tracker, folder, storySpec(project));
+        var ctx = resolveFetchContext(params, tracker, ticketKey);
+        return runEpicsAndStoriesFetch(tracker, folder, ticketKey, ctx);
     } catch (error) {
         console.error('Error in fetchEpicsToInput:', error);
     }

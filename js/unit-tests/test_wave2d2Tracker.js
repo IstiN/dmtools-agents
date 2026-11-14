@@ -108,22 +108,22 @@ suite('wave2d2 ado — dfManager', function() {
 });
 
 suite('wave2d2 ado — fetchEpicsToInput', function() {
-    test('reads epics/stories via ado_search_by_wiql + ado_get_work_item by id', function() {
+    test('reads epics/stories via ado_search_by_wiql without per-item ado_get_work_item loop', function() {
         var writes = {};
         var rec = w2Rec({
             ado_search_by_wiql: function() { return [w2Wi(5, 'Epic five', 'New')]; },
-            ado_get_work_item: function(a) { return w2Wi(Number(a.id), 'Item ' + a.id, 'New'); }
+            ado_get_work_item: function(a) { return w2Wi(Number(a.id), 'Item ' + a.id, 'New', { 'System.AreaPath': 'TS\\Area' }); }
         });
         var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({ './common/trackers.js': w2Trackers(rec.mocks),
                 './common/epicIntakeFetch.js': w2EpicIntakeFetch(),
                 './configLoader.js': { loadProjectConfig: function() { return {}; } } }),
             Object.assign({ file_write: function(p, c) { writes[p] = c; } }, rec.mocks));
         mod.action({ inputFolderPath: 'input/TS-1', jobParams: W2_ADO });
-        assert.deepEqual(w2Args(rec.calls, 'ado_get_work_item').map(function(a) { return a.id; }), ['5', '5']);
+        assert.deepEqual(w2Args(rec.calls, 'ado_get_work_item').map(function(a) { return a.id; }), ['TS-1']);
         var epics = JSON.parse(writes['input/TS-1/existing_epics.json']).epics;
         assert.equal(epics.length, 1);
         assert.equal(epics[0].key, '5');
-        assert.equal(epics[0].summary, 'Item 5');
+        assert.equal(epics[0].summary, 'Epic five');
         w2NoJira(rec.calls);
     });
 });

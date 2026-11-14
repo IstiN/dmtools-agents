@@ -153,15 +153,16 @@ suite('intakePreAction: tracker layer', function() {
         var wiqls = [];
         var mod = d3LoadIntakePre({
             file_write: function(p, c) { writes[p] = c; },
+            ado_get_work_item: function() { return { id: 1, fields: { 'System.AreaPath': 'proj\\Team' } }; },
             ado_search_by_wiql: function(a) {
                 wiqls.push(a);
-                return { value: [{ id: 5, fields: { 'System.Title': 'Epic five', 'System.State': 'New', 'System.WorkItemType': 'Epic' } }] };
+                return { value: [{ id: 5, fields: { 'System.Title': 'Epic five', 'System.State': 'New', 'System.WorkItemType': 'Feature' } }] };
             },
             jira_search_by_jql: d3Boom('jira_search_by_jql')
         });
         var r = mod.action({ ticket: { key: 'proj-1', fields: {} }, jobParams: { customParams: { trackerProvider: 'ado' } } });
         assert.equal(r, true);
-        assert.equal(wiqls.length, 2);
+        assert.equal(wiqls.length, 4);
         var epics = JSON.parse(writes['input/proj-1/existing_epics.json']).epics;
         assert.equal(epics.length, 1);
         assert.equal(epics[0].summary, 'Epic five');
@@ -250,14 +251,14 @@ suite('createIntakeTickets: tracker layer', function() {
             jobParams: { customParams: { trackerProvider: 'ado' } }
         });
         assert.equal(r.success, true);
-        // ADO needs workItemType+title in fieldsJson; Jira-shaped fields miss them, so the
-        // create attempt fails and is reported as a failed entry (documented degradation).
         var tools = calls.map(function(c) { return c[0]; });
+        assert.ok(tools.indexOf('create') !== -1, 'created via ado_create_work_item');
         assert.ok(tools.indexOf('comment') !== -1, 'comment posted via ado');
         assert.ok(tools.indexOf('assign') !== -1, 'assigned via ado');
         var mv = calls.filter(function(c) { return c[0] === 'move'; })[0][1];
         assert.equal(mv.id, '50');
-        assert.equal(r.results[0].success, false);
+        assert.equal(r.results[0].success, true);
+        assert.equal(r.results[0].key, '321');
     });
 });
 
