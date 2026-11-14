@@ -57,6 +57,7 @@ _Pre-CLI Development Setup — Dynamic Repository variant_
   - `restoreFromReleases`
   - `scmProvider`
   - `setupCommands`
+  - `squashReworkWip`
   - `targetRepository`
   - `targetRepository.workingDir`
 
@@ -96,6 +97,7 @@ _Post-Action Development — Dynamic Repository variant_
   - `repositoriesFile`
   - `scmProvider`
   - `smFallback`
+  - `squashReworkWip`
   - `targetRepository`
   - `targetRepository.workingDir`
   - `trackerProvider`
@@ -130,6 +132,7 @@ _Post-Action Development — Dynamic Repository variant_
 - `restoreFromReleases` _(used by JS action)_
 - `scmProvider` _(used by JS action)_
 - `setupCommands` _(used by JS action)_
+- `squashReworkWip` _(used by JS action)_
 - `targetRepository` _(used by JS action)_
 - `targetRepository.workingDir` _(used by JS action)_
 - `autoStartReview` _(used by JS action)_

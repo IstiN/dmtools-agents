@@ -32,6 +32,7 @@ var legStartSignal = require('./common/legStartSignal.js');
 // signal-driven decision (js/common/developmentModeAdaptive.js).
 var developmentModePlan = require('./common/developmentModePlan.js');
 var developmentModeAdaptive = require('./common/developmentModeAdaptive.js');
+var wipSquash = require('./common/wipSquash.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
@@ -72,10 +73,6 @@ function isAncestorRef(ancestor, descendant) {
     } catch (e) {
         return false;
     }
-}
-
-function findMergeBase(left, right) {
-    return branchSetup.findMergeBase(prHelper, runCommandStr, left, right);
 }
 
 function alignBranchWithBase(ticketKey, branchName, baseBranch) {
@@ -154,20 +151,13 @@ function stashGeneratedIndex() {
     }
 }
 
-function ensureCodegraphLocalExclude() {
-    // .git/info/exclude (not .gitignore): the entry must never reach the
-    // target repo's committed files — agents run `git add -A`, and a
-    // factory-written .gitignore line would leak into every agent PR.
+function restoreGeneratedIndex() {
+    try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) { }
     branchSetup.ensureGitInfoExclude(
         '.codegraph/',
         '# CodeGraph generated index - regenerated per-run, must never be committed',
         'Could not add .codegraph/ to .git/info/exclude:'
     );
-}
-
-function restoreGeneratedIndex() {
-    try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) { }
-    ensureCodegraphLocalExclude();
     if (!commandSucceeds('bash -c "test -d .codegraph.branch-setup-bak"')) return;
     try {
         try { runCmd({ command: 'bash -c "rm -rf .codegraph"' }); } catch (e) { }
@@ -259,28 +249,12 @@ function establishFeatureBranch(config, customParams, ticket) {
 // with it, both are no-ops.
 var PIPELINE_RUNTIME_ARTIFACTS = ['.dmtools-target-workingdir'];
 
-/** Best-effort: reset a stale local modification of one runtime artifact. */
-function resetRuntimeArtifact(artifact) {
-    try {
-        runCmd({ command: 'git checkout -- ' + artifact });
-    } catch (resetErr) {
-        console.warn('Could not reset runtime artifact', artifact + ':', resetErr);
-    }
-}
-
-/** Best-effort: stop tracking one runtime artifact on the current branch. */
-function untrackRuntimeArtifact(artifact) {
-    try {
-        runCmd({ command: 'git rm --cached --ignore-unmatch ' + artifact });
-    } catch (rmErr) {
-        console.warn('Could not untrack runtime artifact', artifact + ':', rmErr);
-    }
-}
-
 /** Reset + untrack every known runtime artifact before a branch switch. */
 function discardRuntimeArtifactModifications() {
-    PIPELINE_RUNTIME_ARTIFACTS.forEach(resetRuntimeArtifact);
-    PIPELINE_RUNTIME_ARTIFACTS.forEach(untrackRuntimeArtifact);
+    PIPELINE_RUNTIME_ARTIFACTS.forEach(function (artifact) {
+        try { runCmd({ command: 'git checkout -- ' + artifact }); } catch (e) { console.warn('Could not reset runtime artifact', artifact + ':', e); }
+        try { runCmd({ command: 'git rm --cached --ignore-unmatch ' + artifact }); } catch (e2) { console.warn('Could not untrack runtime artifact', artifact + ':', e2); }
+    });
 }
 
 /** Local dev branch: checkout, then align with the base branch. */
@@ -992,9 +966,15 @@ function writeDevBaseHead(folder) {
     if (!folder) return;
     try {
         var sha = cleanCommandOutput(runCmd({ command: 'git rev-parse HEAD' }) || '').trim();
-        if (/^[0-9a-f]{7,40}$/i.test(sha)) {
-            file_write({ path: folder + '/dev_base_head.txt', content: sha });
-        }
+        if (!wipSquash.isValidGitSha(sha)) return;
+        wipSquash.persistBaseHeadFile({
+            folder: folder,
+            fileName: 'dev_base_head.txt',
+            currentSha: sha,
+            readFn: typeof file_read === 'function' ? file_read : null,
+            writeFn: file_write,
+            runCommand: runCommandStr
+        });
     } catch (e) {
         console.warn('Could not write dev_base_head.txt (non-fatal):', e && e.message ? e.message : e);
     }
