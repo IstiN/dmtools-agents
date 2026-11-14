@@ -107,10 +107,10 @@ Use the configured formatting rules to write the final output to `outputs/respon
 <bullet> *User Story:*
 <bullet> *Design / Mockups:* — link to Figma or attach mockup images. If design is required but unavailable, add `*⚠ BLOCKER:*` with a description of what is missing.
 <bullet> *Acceptance Criteria:* — numbered list. Each AC must be self-contained: include the rule, the trigger, and the expected outcome in the AC text itself. Do not assume the reader will search Confluence or the spec.
-<bullet> *Existing vs New Behavior:* — table with columns `||Behavior||Existing||New / Changed||`. List every behavior touched by this story. Mark unchanged copied behaviors as `Copied as-is from {source}`.
+<bullet> *Existing vs New Behavior:* — table with columns `Behavior`, `Existing`, `New / Changed` (formatted using the active tracker's table syntax). List every behavior touched by this story. Mark unchanged copied behaviors as `Copied as-is from {source}`.
 <bullet> *Business Rules:*
 <bullet> *Out of Scope:*
-<bullet> *Source References:* — list every source read: Jira tickets, Confluence pages, Figma links, attachments. Mark any source that was inaccessible with ⚠.
+<bullet> *Source References:* — list every source read: tracker tickets, wiki/Confluence pages, Figma links, attachments. Mark any source that was inaccessible with ⚠.
 
 
 ---
@@ -235,7 +235,7 @@ The structural template is an **example only**. Tags such as `<bold>`, `<bullet>
 
 - Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
 - Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
-- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
+- Follow the active tracker's markup syntax strictly and do not mix dialects from other trackers.
 - Use the tracker-specific link format when referencing tickets or URLs.
 
 
@@ -359,7 +359,7 @@ The structural template is an **example only**. Tags such as `<bold>`, `<bullet>
 
 - Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
 - Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
-- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
+- Follow the active tracker's markup syntax strictly and do not mix dialects from other trackers.
 - Use the tracker-specific link format when referencing tickets or URLs.
 
 

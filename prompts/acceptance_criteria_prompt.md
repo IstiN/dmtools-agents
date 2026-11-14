@@ -17,7 +17,7 @@ Use the configured formatting rules to write the final output to `outputs/respon
 <bullet> *User Story:*
 <bullet> *Design / Mockups:* — link to Figma or attach mockup images. If design is required but unavailable, add `*⚠ BLOCKER:*` with a description of what is missing.
 <bullet> *Acceptance Criteria:* — numbered list. Each AC must be self-contained: include the rule, the trigger, and the expected outcome in the AC text itself. Do not assume the reader will search Confluence or the spec.
-<bullet> *Existing vs New Behavior:* — table with columns `||Behavior||Existing||New / Changed||`. List every behavior touched by this story. Mark unchanged copied behaviors as `Copied as-is from {source}`.
+<bullet> *Existing vs New Behavior:* — table with columns `Behavior`, `Existing`, `New / Changed` (formatted using the active tracker's table syntax). List every behavior touched by this story. Mark unchanged copied behaviors as `Copied as-is from {source}`.
 <bullet> *Business Rules:*
 <bullet> *Out of Scope:*
-<bullet> *Source References:* — list every source read: Jira tickets, Confluence pages, Figma links, attachments. Mark any source that was inaccessible with ⚠.
+<bullet> *Source References:* — list every source read: tracker tickets, wiki/Confluence pages, Figma links, attachments. Mark any source that was inaccessible with ⚠.
