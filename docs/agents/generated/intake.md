@@ -65,8 +65,6 @@ _Fetch Epics To Input Pre-CLI Action_
   - `input/<KEY>/existing_stories.json`
 - Side effects:
   - post ticket comment (via tracker)
-- Parameters (customParams):
-  - `issueTypes`
 
 
 ### postJSAction: `createIntakeTickets.js`
@@ -82,7 +80,6 @@ _Create Intake Tickets Post-Action_
   - move ticket to status (via tracker)
   - assign ticket (via tracker)
 - Parameters (customParams):
-  - `issueTypes`
   - `trackerProvider`
 
 
@@ -97,7 +94,6 @@ _Create Intake Tickets Post-Action_
 - `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
 - `dryRun` _(used by JS action)_
-- `issueTypes` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 
 ---
