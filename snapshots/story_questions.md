@@ -93,7 +93,7 @@ flowchart TD
 
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
-        D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
+        D2["Use the active tracker's dmtools CLI command, dmtools confluence_search QUERY, etc."]
         D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
@@ -113,7 +113,7 @@ flowchart TD
     O4["No questions → write [] (empty array)"]
     O4 --> O5["⚠️ MANDATORY when writing []: also write outputs/response.md"]
     O5 --> O6["response.md must explain WHY no questions were needed:<br/>what was investigated, what confirmed the story is fully clear,<br/>which files/specs/code answered every open point"]
-    O6 --> O7["A human reviewer reads response.md as a Jira comment —<br/>it must be a real justification, not a one-line 'looks clear'"]
+    O6 --> O7["A human reviewer reads response.md as a tracker comment —<br/>it must be a real justification, not a one-line 'looks clear'"]
 ```
 
 

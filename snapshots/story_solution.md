@@ -135,7 +135,7 @@ The structural template is an **example only**. Tags such as `<bold>`, `<bullet>
 
 - Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
 - Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
-- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
+- Follow the active tracker's markup syntax strictly and do not mix dialects from other trackers.
 - Use the tracker-specific link format when referencing tickets or URLs.
 
 
@@ -313,7 +313,7 @@ List the input folder with `ls -la input/*/` and read every file found:
 
 **CRITICAL: MANDATORY OUTPUT FILES — YOU MUST CREATE ALL THREE**
 Do NOT print the solution to stdout. Write it to files:
-1. `outputs/response.md` — the full solution design text (REQUIRED — without this file nothing is saved to Jira)
+1. `outputs/response.md` — the full solution design text (REQUIRED — without this file nothing is saved to the tracker)
 2. `outputs/diagram.md` — the Mermaid architecture diagram
 3. `outputs/affected_repos.json` — affected repositories JSON array
 
@@ -453,7 +453,7 @@ flowchart TD
 
 #### [1] `./agents/instructions/common/jira_context.md`
 
-**IMPORTANT** You must check child tickets and parent story via following command to get better context: dmtools jira_search_by_jql <<EOF
+**IMPORTANT** When the active tracker is Jira, check child tickets and parent story via the following command to get better context (for other trackers, use the active tracker's search/context command from the tracker-specific instructions): dmtools jira_search_by_jql <<EOF
 {
   "jql": "parent = TICKET-XXX OR key = PARENT-KEY"
 }

@@ -62,7 +62,7 @@ flowchart TD
 
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
-        D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
+        D2["Use the active tracker's dmtools CLI command, dmtools confluence_search QUERY, etc."]
         D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
@@ -142,7 +142,7 @@ The structural template is an **example only**. Tags such as `<bold>`, `<bullet>
 
 - Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
 - Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
-- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
+- Follow the active tracker's markup syntax strictly and do not mix dialects from other trackers.
 - Use the tracker-specific link format when referencing tickets or URLs.
 
 
@@ -409,7 +409,7 @@ flowchart TD
 
 #### [1] `./agents/instructions/common/jira_context.md`
 
-**IMPORTANT** You must check child tickets and parent story via following command to get better context: dmtools jira_search_by_jql <<EOF
+**IMPORTANT** When the active tracker is Jira, check child tickets and parent story via the following command to get better context (for other trackers, use the active tracker's search/context command from the tracker-specific instructions): dmtools jira_search_by_jql <<EOF
 {
   "jql": "parent = TICKET-XXX OR key = PARENT-KEY"
 }

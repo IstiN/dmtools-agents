@@ -66,7 +66,7 @@ flowchart TD
 
     subgraph DMTOOLS_RULE["When to use dmtools for external data"]
         D1["ONLY if you need data NOT already in input/"]
-        D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
+        D2["Use the active tracker's dmtools CLI command, dmtools confluence_search QUERY, etc."]
         D3["See the dmtools CLI reference section included later in this prompt for full reference"]
     end
 
@@ -233,7 +233,7 @@ Write `outputs/story_test_automation_result.json` using the shared JSON schema f
 
 ## Mandatory tracker comment
 
-Write `outputs/tracker_comment.md` in Jira wiki format. It should include:
+Write `outputs/tracker_comment.md` using the active tracker's comment format (defined by the tracker-specific formatting instructions included in this prompt). It should include:
 
 - Story key and summary.
 - Counts of passed / failed / skipped Test Cases.
@@ -250,7 +250,7 @@ For each failed Test Case, write `outputs/failed_description_{TC_KEY}.md` contai
 4. Stack trace / logs / screenshots if available.
 5. Environment details.
 
-Use Jira wiki markup (headings, code blocks, lists) so the file is readable when attached to the Test Case ticket.
+Use the active tracker's markup format (headings, code blocks, lists) as defined by the tracker-specific formatting instructions in this prompt so the file is readable when attached to the Test Case ticket.
 
 
 ---
