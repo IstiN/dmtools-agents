@@ -73,13 +73,16 @@ function writeStoriesFile(inputFolder, payload) {
 
 // Map straight off the search results — no per-issue re-fetch at intake time.
 function collectFromSearch(tracker, spec) {
-    return tracker.searchIssues(spec.jql, { fields: spec.fields }).map(spec.map);
+    return epicIntakeFetch.collectFromSearch(tracker, spec);
 }
 
 // Search spec for one issue family (provider-specific query: WIQL on ado).
-function epicSpec(project) {
+function epicSpec(tracker, project, issueTypes, scope) {
     return {
-        jql: 'project = ' + project + ' AND issuetype = Epic ORDER BY created DESC',
+        kind: 'epic',
+        issueTypes: issueTypes,
+        scope: scope,
+        jql: epicIntakeFetch.searchQueryFor(tracker, project, 'epic', issueTypes, scope),
         fields: ['key', 'summary', 'description', 'priority', 'diagrams', 'parent'],
         map: mapEpic,
         listKey: 'epics',
@@ -90,9 +93,12 @@ function epicSpec(project) {
     };
 }
 
-function storySpec(project) {
+function storySpec(tracker, project, issueTypes, scope) {
     return {
-        jql: 'project = ' + project + ' AND issuetype = Story ORDER BY created DESC',
+        kind: 'story',
+        issueTypes: issueTypes,
+        scope: scope,
+        jql: epicIntakeFetch.searchQueryFor(tracker, project, 'story', issueTypes, scope),
         fields: ['key', 'summary', 'status', 'priority', 'diagrams', 'parent'],
         map: mapStory,
         listKey: 'stories',
@@ -101,6 +107,39 @@ function storySpec(project) {
         plural: 'stories',
         collect: collectFromSearch
     };
+}
+
+function resolvePreActionContext(params, tracker, ticket) {
+    var projectConfig = epicIntakeFetch.loadProjectConfigFor(configLoader, params);
+    var customParams = epicIntakeFetch.customParamsOf(params);
+    var issueTypes = epicIntakeFetch.resolveIssueTypes(projectConfig, customParams);
+    var ticketKey = ticket.key;
+    var scope = epicIntakeFetch.isAdoTracker(tracker)
+        ? epicIntakeFetch.resolveAdoScope(tracker, ticketKey, ticket, projectConfig)
+        : null;
+    var project = (scope && scope.project) ? scope.project : ticketKey.split('-')[0];
+    return {
+        projectConfig: projectConfig,
+        customParams: customParams,
+        issueTypes: issueTypes,
+        scope: scope,
+        project: project
+    };
+}
+
+function fetchIntakeInputs(tracker, inputFolder, ticketKey, ctx) {
+    if (epicIntakeFetch.isSkipExistingFetch(ctx.customParams, ctx.projectConfig)) {
+        epicIntakeFetch.writeEmptyExistingFiles(inputFolder, writeEpicsFile, writeStoriesFile);
+        return true;
+    }
+    console.log('Fetching existing epics for ' + ticketKey + '...');
+    var epicsOk = epicIntakeFetch.fetchAndWrite(tracker, inputFolder, epicSpec(tracker, ctx.project, ctx.issueTypes, ctx.scope));
+    var storiesOk = epicIntakeFetch.fetchAndWrite(tracker, inputFolder, storySpec(tracker, ctx.project, ctx.issueTypes, ctx.scope));
+    if (!epicsOk || !storiesOk) {
+        epicIntakeFetch.postFetchFailureComment(tracker, ticketKey, !epicsOk ? 'epics' : 'stories');
+        return false;
+    }
+    return true;
 }
 
 function action(params) {
@@ -121,13 +160,8 @@ function action(params) {
         // file_write creates parent directories automatically,
         // so this works even before dmtools creates input/<KEY>/
         var inputFolder = 'input/' + ticketKey;
-        var project = ticketKey.split('-')[0];
-        console.log('Fetching existing epics for ' + ticketKey + '...');
-
-        epicIntakeFetch.fetchAndWrite(tracker, inputFolder, epicSpec(project));
-        epicIntakeFetch.fetchAndWrite(tracker, inputFolder, storySpec(project));
-
-        return true;
+        var ctx = resolvePreActionContext(params, tracker, ticket);
+        return fetchIntakeInputs(tracker, inputFolder, ticketKey, ctx);
 
     } catch (error) {
         console.error('Error in intakePreAction:', error);

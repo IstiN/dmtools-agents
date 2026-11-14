@@ -429,3 +429,132 @@ suite('createIntakeTickets: GitHub sub-issues', function() {
         assert.deepEqual(w.of('label')[0].labels, ['sequenced']);
     });
 });
+
+// ── ADO creation & intake validation (gh-1479, gh-1480) ───────────────────
+
+suite('createIntakeTickets: ADO Feature/PBI/Bug creation with parent and priority (gh-1480)', function() {
+
+    function adoWorld() {
+        var w = { calls: [], next: 500 };
+        function rec(name, ret) {
+            return function(a) {
+                w.calls.push([name, a]);
+                return typeof ret === 'function' ? ret(a) : (ret !== undefined ? ret : {});
+            };
+        }
+        w.mocks = function() {
+            return {
+                ado_create_work_item: rec('create', function() { return { id: w.next++ }; }),
+                ado_link_work_items: rec('link'),
+                ado_set_priority: rec('priority'),
+                ado_update_field: rec('update'),
+                ado_add_work_item_comment: rec('comment'),
+                ado_add_work_item_label: rec('label'),
+                ado_remove_work_item_label: rec('rm'),
+                ado_assign_work_item: rec('assign'),
+                ado_move_to_state: rec('move'),
+                ado_attach_file: rec('attach'),
+                jira_create_ticket_with_json: function() { throw new Error('jira must not be called on ADO'); }
+            };
+        };
+        w.of = function(name) { return w.calls.filter(function(c) { return c[0] === name; }).map(function(c) { return c[1]; }); };
+        return w;
+    }
+
+    var ADO_PARAMS = {
+        ticket: { key: '99' },
+        initiator: 'dev@example.com',
+        metadata: { contextId: 'intake' },
+        jobParams: { customParams: { trackerProvider: 'ado', projectKey: 'MyAdoProj' } }
+    };
+
+    var ADO_CFG = {
+        jira: {
+            issueTypes: {
+                EPIC: 'Feature',
+                STORY: 'Product Backlog Item',
+                BUG: 'Bug'
+            }
+        }
+    };
+
+    test('creates Features, PBIs parented to Features, and Bugs on ADO with priority (gh-1480)', function() {
+        var w = adoWorld();
+        var stories = [
+            { tempId: 'e1', type: 'Epic', summary: 'Feature One', description: 'outputs/d.md', priority: 'High' },
+            { tempId: 's1', type: 'Story', summary: 'PBI One', parent: 'e1', description: 'outputs/d.md', priority: 'Medium', blockedBy: [] },
+            { tempId: 's2', type: 'Story', summary: 'PBI Two', parent: 'e1', description: 'outputs/d.md', blockedBy: ['s1'] },
+            { tempId: 'b1', type: 'Bug', summary: 'Bug One', description: 'outputs/d.md', priority: 'Critical' }
+        ];
+        var r = loadIntake(intakeFiles(stories, w.mocks()), ADO_CFG).action(ADO_PARAMS);
+        assert.equal(r.success, true);
+        var created = w.of('create');
+        assert.deepEqual(created.map(function(c) { return [c.project, c.workItemType, c.title]; }), [
+            ['MyAdoProj', 'Bug', 'Bug One'],
+            ['MyAdoProj', 'Feature', 'Feature One'],
+            ['MyAdoProj', 'Product Backlog Item', 'PBI One'],
+            ['MyAdoProj', 'Product Backlog Item', 'PBI Two']
+        ]);
+        // Parent links: PBIs (502, 503) linked to Feature (501) as child -> parent
+        var links = w.of('link');
+        var parentLinks = links.filter(function(l) { return l.relationship === 'parent'; });
+        assert.deepEqual(parentLinks.map(function(l) { return [l.sourceId, l.targetId]; }), [
+            ['502', '501'],
+            ['503', '501']
+        ]);
+        // Priority updates via ado_set_priority
+        var priorities = w.of('priority');
+        assert.equal(priorities.length, 3);
+    });
+});
+
+suite('createIntakeTickets: missing existing_*.json or CLI output aborts without advancing ticket (gh-1479)', function() {
+
+    test('aborts when input/<KEY> has ticket context on disk but existing_epics.json or existing_stories.json is missing', function() {
+        var rec = intakeRecorder();
+        var mocks = intakeFiles([], rec.jiraMocks());
+        var origRead = mocks.file_read;
+        mocks.file_read = function(p) {
+            if (p === 'input/P-5/ticket.json') return '{"key":"P-5"}';
+            if (p === 'input/P-5/existing_epics.json') return '{"epics":[]}';
+            if (p === 'input/P-5/existing_stories.json') return null; // missing!
+            return origRead(p);
+        };
+        var mod = loadIntake(mocks);
+        var r = mod.action({ ticket: { key: 'P-5' }, initiator: 'acc1', metadata: { contextId: 'intake' } });
+        assert.equal(r.success, false);
+        assert.contains(r.error, 'existing_stories.json');
+        // Ticket must NOT move to In Development
+        var moves = rec.calls.filter(function(c) { return c[0] === 'move'; });
+        assert.equal(moves.length, 0);
+        // WIP label removed and needs-attention label added
+        var removed = rec.calls.filter(function(c) { return c[0] === 'rm'; });
+        assert.equal(removed.length, 1);
+        assert.equal(removed[0][1].label, 'intake_wip');
+        var added = rec.calls.filter(function(c) { return c[0] === 'label'; });
+        assert.equal(added.length, 1);
+        assert.equal(added[0][1].label, 'ai_concerns');
+    });
+
+    test('aborts when requireCliOutputFile is true and outputs/response.md is missing', function() {
+        var rec = intakeRecorder();
+        var mocks = intakeFiles([], rec.jiraMocks());
+        var origRead = mocks.file_read;
+        mocks.file_read = function(p) {
+            if (p === 'outputs/response.md') return '';
+            return origRead(p);
+        };
+        var mod = loadIntake(mocks);
+        var r = mod.action({
+            ticket: { key: 'P-5' },
+            initiator: 'acc1',
+            metadata: { contextId: 'intake' },
+            jobParams: { customParams: { requireCliOutputFile: true } }
+        });
+        assert.equal(r.success, false);
+        assert.contains(r.error, 'outputs/response.md');
+        assert.equal(rec.calls.filter(function(c) { return c[0] === 'move'; }).length, 0);
+        assert.equal(rec.calls.filter(function(c) { return c[0] === 'rm'; }).length, 1);
+        assert.equal(rec.calls.filter(function(c) { return c[0] === 'label'; }).length, 1);
+    });
+});

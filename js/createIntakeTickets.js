@@ -69,35 +69,6 @@ function readCommentFile(ctx) {
 }
 
 /**
- * Get MIME content type from file extension
- * @param {string} filePath
- * @returns {string} MIME type
- */
-function getContentType(filePath) {
-    var ext = filePath.split('.').pop().toLowerCase();
-    var types = {
-        'pdf':  'application/pdf',
-        'png':  'image/png',
-        'jpg':  'image/jpeg',
-        'jpeg': 'image/jpeg',
-        'gif':  'image/gif',
-        'webp': 'image/webp',
-        'svg':  'image/svg+xml',
-        'zip':  'application/zip',
-        'doc':  'application/msword',
-        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'xls':  'application/vnd.ms-excel',
-        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'txt':  'text/plain',
-        'md':   'text/markdown',
-        'json': 'application/json',
-        'mp4':  'video/mp4',
-        'mov':  'video/quicktime'
-    };
-    return types[ext] || 'application/octet-stream';
-}
-
-/**
  * Attach files listed in entry.attachments to a created ticket
  * @param {string} key - Jira ticket key
  * @param {Object} entry - Entry from stories.json
@@ -107,7 +78,7 @@ function attachFilesToTicket(key, entry) {
     entry.attachments.forEach(function(filePath) {
         try {
             var fileName = filePath.split('/').pop();
-            tracker.attachFile(key, fileName, filePath, getContentType(filePath));
+            tracker.attachFile(key, fileName, filePath, issuePlan.getContentType(filePath));
             console.log('Attached ' + fileName + ' to ' + key);
         } catch (error) {
             console.warn('Failed to attach ' + filePath + ' to ' + key + ':', error);
@@ -129,88 +100,51 @@ function setStoryPoints(key, entry) {
 }
 
 /**
- * Create an Bug in Jira from an intake entry.
- * After creation, moves the bug directly to Ready For Development.
- * @param {Object} entry - Entry from stories.json with type === 'Bug'
- * @param {string} projectKey - Jira project key
- * @returns {string|null} Created ticket key or null on failure
+ * Tracker-aware ticket creation (gh-1480):
+ * On ADO, creates via createTicketWithParent and applies setPriority when priority is provided.
+ * On Jira, calls createTicketWithFields with the Jira field bag unchanged.
  */
-function createBug(entry, projectKey) {
-    var summary = buildSummary(entry.summary, 0);
-    var description = outputFiles.readDescriptionFile(entry.description, summary);
-
-    try {
-        var bugFields = {
-            summary: summary,
-            description: description,
-            issuetype: { name: ISSUE_TYPES.BUG }
-        };
-        if (entry.priority) {
-            bugFields.priority = { name: entry.priority };
+function createTicket(projectKey, fields) {
+    if (tracker.provider && tracker.provider() === 'ado') {
+        var parentKey = fields.parent ? fields.parent.key : null;
+        var key = tracker.createTicketWithParent(projectKey, fields.issuetype.name, fields.summary, fields.description, parentKey);
+        if (key && fields.priority) {
+            try {
+                tracker.setPriority(key, fields.priority.name);
+            } catch (e) {
+                console.warn('Failed to set priority on ' + key + ':', e);
+            }
         }
-        var key = tracker.createTicketWithFields(projectKey, bugFields);
-        console.log('Created Bug: ' + (key || '(unknown key)') + ' - ' + summary);
         return key;
-    } catch (error) {
-        console.error('Failed to create Bug "' + summary + '":', error);
-        return null;
     }
+    return tracker.createTicketWithFields(projectKey, fields);
 }
 
 /**
- * Create an Epic in Jira
- * @param {Object} entry - Entry from stories.json (no parent)
- * @param {string} projectKey - Jira project key
- * @returns {string|null} Created ticket key or null on failure
+ * Create a Bug, Epic, or Story in Jira/ADO from an intake entry.
  */
-function createEpic(entry, projectKey) {
+function createTrackerTicket(entry, projectKey, issueType, resolvedParent, kindLabel) {
     var summary = buildSummary(entry.summary, 0);
     var description = outputFiles.readDescriptionFile(entry.description, summary);
+    var underSuffix = resolvedParent ? (' under ' + resolvedParent) : '';
 
     try {
-        var epicFields = {
+        var fields = {
             summary: summary,
             description: description,
-            issuetype: { name: ISSUE_TYPES.EPIC }
+            issuetype: { name: issueType }
         };
-        if (entry.priority) {
-            epicFields.priority = { name: entry.priority };
+        if (resolvedParent) {
+            fields.parent = { key: resolvedParent };
         }
-        var key = tracker.createTicketWithFields(projectKey, epicFields);
-        console.log('Created Epic: ' + (key || '(unknown key)') + ' - ' + summary);
+        if (entry.priority) {
+            fields.priority = { name: entry.priority };
+        }
+        var key = createTicket(projectKey, fields);
+        console.log('Created ' + kindLabel + ': ' + (key || '(unknown key)') + underSuffix + ' - ' + summary);
         return key;
     } catch (error) {
-        console.error('Failed to create Epic "' + summary + '":', error);
-        return null;
-    }
-}
-
-/**
- * Create a Story in Jira under the given parent
- * @param {Object} entry - Entry from stories.json (has parent)
- * @param {string} resolvedParent - Resolved parent ticket key
- * @param {string} projectKey - Jira project key
- * @returns {string|null} Created ticket key or null on failure
- */
-function createStory(entry, resolvedParent, projectKey) {
-    var summary = buildSummary(entry.summary, 0);
-    var description = outputFiles.readDescriptionFile(entry.description, summary);
-
-    try {
-        var storyFields = {
-            summary: summary,
-            description: description,
-            issuetype: { name: ISSUE_TYPES.STORY },
-            parent: { key: resolvedParent }
-        };
-        if (entry.priority) {
-            storyFields.priority = { name: entry.priority };
-        }
-        var key = tracker.createTicketWithFields(projectKey, storyFields);
-        console.log('Created Story: ' + (key || '(unknown key)') + ' under ' + resolvedParent + ' - ' + summary);
-        return key;
-    } catch (error) {
-        console.error('Failed to create Story "' + summary + '" under ' + resolvedParent + ':', error);
+        console.error('Failed to create ' + kindLabel + ' "' + summary + '"' + underSuffix + ':', error);
         return null;
     }
 }
@@ -231,38 +165,6 @@ function linkToSource(createdKey, sourceKey) {
 }
 
 /**
- * Build the final comment combining AI analysis + sub-issue list (GitHub Markdown).
- * @param {Array} results - Array of { type, summary, key, success, error, reused }
- * @param {string} aiComment - AI-generated comment from outputs/comment.md
- * @param {boolean} planned - true when the issue was labeled planned
- * @returns {string} Full comment for GitHub
- */
-function buildGithubFinalComment(results, aiComment, planned) {
-    var lines = [aiComment, '', '### Sub-issues', ''];
-    if (results.length === 0) {
-        lines.push('_No sub-issues were created (stories.json was empty)._');
-        return lines.join('\n');
-    }
-    var successes = results.filter(function(r) { return r.success; });
-    var failures = results.filter(function(r) { return !r.success; });
-    successes.forEach(function(r) {
-        lines.push('- ' + issuePlan.displayRef(r.key) + ' (' + r.type + ') - ' + r.summary + (r.reused ? ' _(existing)_' : ''));
-    });
-    if (failures.length > 0) {
-        lines.push('', '**Failed to create:**');
-        failures.forEach(function(r) {
-            lines.push('- (' + r.type + ') ' + r.summary + ' - Error: ' + r.error);
-        });
-    }
-    lines.push('', '**Total:** ' + successes.length + ' sub-issue(s)');
-    if (!planned) {
-        lines.push('', 'Not every entry exists yet, so development does not start. Re-run intake: ' +
-            'the sub-issues above are reused and only the missing ones are created.');
-    }
-    return lines.join('\n');
-}
-
-/**
  * Build the final comment combining AI analysis + created ticket list
  * @param {Array} results - Array of { type, summary, key, success, error }
  * @param {string} aiComment - AI-generated comment from outputs/comment.md
@@ -279,7 +181,7 @@ function buildFinalComment(results, aiComment, projectConfig) {
         comment += '_No tickets were created (stories.json was empty)._\n';
     } else {
         successes.forEach(function(r) {
-            comment += '* ' + configLoader.formatJiraTicketLink(r.key, projectConfig) + ' (' + r.type + ') - ' + r.summary + '\n';
+            comment += '* ' + issuePlan.formatIntakeTicketLink(r.key, projectConfig, configLoader) + ' (' + r.type + ') - ' + r.summary + '\n';
         });
 
         if (failures.length > 0) {
@@ -305,20 +207,10 @@ function resolveParentRef(entry, keyMap) {
     if (keyMap[entry.parent]) {
         return { resolved: true, parent: keyMap[entry.parent] };
     }
-    if (!/^[A-Z]+-\d+$/.test(entry.parent)) {
+    if (!/^(?:[A-Z]+-\d+|\d+)$/.test(entry.parent)) {
         return { resolved: false, parent: null };
     }
-    return { resolved: true, parent: entry.parent };
-}
-
-/**
- * Resolve any ref (tempId or real key) to a created tracker key.
- * @param {string} ref
- * @param {Object} keyMap
- * @returns {string|null}
- */
-function resolveKey(ref, keyMap) {
-    return keyMap[ref] || null;
+    return { resolved: true, parent: String(entry.parent) };
 }
 
 /**
@@ -328,15 +220,19 @@ function resolveKey(ref, keyMap) {
  */
 function initActionContext(params, projectConfig, customParams) {
     var ticketKey = params.ticket.key;
+    var isAdo = Boolean(tracker.provider && tracker.provider() === 'ado');
     return {
         ticketKey: ticketKey,
-        projectKey: ticketKey.split('-')[0],
+        projectKey: issuePlan.resolveIntakeProjectKey(ticketKey, projectConfig, customParams, isAdo),
         initiatorId: params.initiator,
         wipLabel: params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'
             : null,
         github: tracker.provider() === 'github',
+        ado: isAdo,
         projectConfig: projectConfig,
+        customParams: customParams,
+        issueTypes: issuePlan.resolveIntakeIssueTypes(ISSUE_TYPES, projectConfig, customParams, isAdo),
         planCfg: issuePlan.resolvePlanningConfig(projectConfig, customParams),
         children: {}
     };
@@ -390,12 +286,9 @@ function createEntry(ctx, entry, kind, parentKey) {
         entry._parentKey = parentKey || ctx.ticketKey;
         return createGithubItem(ctx, entry, entry._parentKey);
     }
-    var creators = {
-        Bug: function() { return createBug(entry, ctx.projectKey); },
-        Epic: function() { return createEpic(entry, ctx.projectKey); },
-        Story: function() { return createStory(entry, parentKey, ctx.projectKey); }
-    };
-    return { key: creators[kind](), reused: false };
+    var types = ctx.issueTypes || ISSUE_TYPES;
+    var typeMap = { Bug: types.BUG, Epic: types.EPIC, Story: types.STORY };
+    return { key: createTrackerTicket(entry, ctx.projectKey, typeMap[kind], parentKey, kind), reused: false };
 }
 
 /**
@@ -538,7 +431,7 @@ function createStoriesPass(stories, ctx, state) {
  * @returns {boolean}
  */
 function linkBlockedByRef(blockedKey, ref, keyMap) {
-    var blockerKey = resolveKey(ref, keyMap);
+    var blockerKey = keyMap[ref] || null;
     if (!blockerKey) {
         console.warn('Cannot resolve blockedBy ref "' + ref + '" for ' + blockedKey);
         return false;
@@ -594,7 +487,7 @@ function linkIntegrationsPass(stories, keyMap) {
         var storyKey = entry._createdKey;
         if (!storyKey || !Array.isArray(entry.integrates) || entry.integrates.length === 0) return;
         entry.integrates.forEach(function(ref) {
-            var otherKey = resolveKey(ref, keyMap);
+            var otherKey = keyMap[ref] || null;
             if (!otherKey || otherKey === storyKey) return;
             try {
                 tracker.linkIssues(storyKey, otherKey, 'Relates');
@@ -604,35 +497,6 @@ function linkIntegrationsPass(stories, keyMap) {
             }
         });
     });
-}
-
-/** Resolved blocker keys of an entry (unresolvable refs are dropped with a warning). */
-function resolvedBlockers(entry, keyMap) {
-    var refs = Array.isArray(entry.blockedBy) ? entry.blockedBy : [];
-    return refs.map(function(ref) {
-        var k = resolveKey(ref, keyMap);
-        if (!k) console.warn('Cannot resolve blockedBy ref "' + ref + '" for ' + entry._createdKey);
-        return k;
-    }).filter(function(k) { return k; });
-}
-
-/**
- * GitHub: the plan of every parent that got sub-issues — the source issue and each
- * new epic with stories. deps[child] = its resolved blockers; an epic's own blockers
- * also gate its stories (plans[epic].blockedBy).
- * @returns {Object} parentKey -> { blockedBy: [], deps: {} }
- */
-function collectGithubPlans(stories, ctx, keyMap) {
-    var plans = {};
-    function planOf(k) { return plans[k] || (plans[k] = { blockedBy: [], deps: {} }); }
-    stories.forEach(function(entry) {
-        if (!entry._createdKey) return;
-        var blockers = resolvedBlockers(entry, keyMap);
-        planOf(entry._parentKey).deps[entry._createdKey] = blockers;
-        var hasChildren = stories.some(function(e) { return e._createdKey && e._parentKey === entry._createdKey; });
-        if (hasChildren) planOf(entry._createdKey).blockedBy = blockers;
-    });
-    return plans;
 }
 
 /**
@@ -647,7 +511,7 @@ function recordGithubPlans(stories, ctx, state) {
         console.warn('Not every entry exists - ' + ctx.ticketKey + ' is not labeled ' + ctx.planCfg.plannedLabel);
         return false;
     }
-    var plans = collectGithubPlans(stories, ctx, state.keyMap);
+    var plans = issuePlan.collectGithubPlans(stories, state.keyMap);
     var parents = Object.keys(plans).filter(function(k) { return k !== ctx.ticketKey; }).concat([ctx.ticketKey]);
     try {
         parents.forEach(function(parentKey) {
@@ -672,7 +536,7 @@ function recordGithubPlans(stories, ctx, state) {
 function postFinalComment(ctx, results, planned) {
     try {
         var finalComment = ctx.github
-            ? buildGithubFinalComment(results, readCommentFile(ctx), planned)
+            ? issuePlan.buildGithubFinalComment(results, readCommentFile(ctx), planned)
             : buildFinalComment(results, readCommentFile(ctx), ctx.projectConfig);
         tracker.postComment(ctx.ticketKey, finalComment);
         console.log('Posted intake analysis comment to ' + ctx.ticketKey);
@@ -763,15 +627,65 @@ function finalizeIntakeTicket(ctx, results, params, planned) {
     postTokenUsage(ctx, params);
 }
 
-function resolveCustomParams(params) {
-    if (params && params.jobParams && params.jobParams.customParams) return params.jobParams.customParams;
-    if (params && params.customParams) return params.customParams;
-    return {};
+// ── Incomplete-run / missing-input guard (gh-1479) ──────────────────────────
+
+function hasNonEmptyFile(path) {
+    try {
+        var content = file_read(path);
+        return Boolean(content && String(content).trim() !== '');
+    } catch (e) {
+        return false;
+    }
 }
 
-function loadProjectCfg(params) {
-    var arg = (params && params.jobParams) ? params.jobParams : (params || {});
-    return configLoader.loadProjectConfig(arg) || {};
+function isInputFolderTracked(inputFolder) {
+    return hasNonEmptyFile(inputFolder + '/request.md') ||
+        hasNonEmptyFile(inputFolder + '/ticket.json') ||
+        hasNonEmptyFile(inputFolder + '/existing_epics.json') ||
+        hasNonEmptyFile(inputFolder + '/existing_stories.json');
+}
+
+function checkExistingInputsMissing(ctx, params) {
+    if (issuePlan.isIntakeSkipExistingFetch(ctx)) return null;
+    var loc = issuePlan.resolveIntakeInputFolder(ctx, params);
+    if (!loc.explicit && !isInputFolderTracked(loc.folder)) return null;
+    var hasBoth = hasNonEmptyFile(loc.folder + '/existing_epics.json') &&
+        hasNonEmptyFile(loc.folder + '/existing_stories.json');
+    return hasBoth ? null : ('Missing required intake input file(s) in ' + loc.folder + ' (existing_epics.json / existing_stories.json)');
+}
+
+function checkIntakePrerequisites(ctx, params, stories) {
+    if (issuePlan.isIntakeRequireCliOutput(ctx, params)) {
+        if (!outputFiles.hasOutputFile('response.md', { ticketKey: ctx.ticketKey })) {
+            return 'CLI output file (outputs/response.md) is missing while requireCliOutputFile=true';
+        }
+    }
+    if (stories.length === 0) {
+        return checkExistingInputsMissing(ctx, params);
+    }
+    return null;
+}
+
+function finalizeFailedIntake(ctx, params, reason) {
+    console.error('Intake incomplete for ' + ctx.ticketKey + ': ' + reason);
+    try {
+        tracker.postComment(ctx.ticketKey, readCommentFile(ctx) + '\n\n*Intake Incomplete:* ' + reason +
+            '. The ticket was not moved to In Development.');
+    } catch (e) {
+        console.warn('Failed to post incomplete intake comment:', e);
+    }
+    removeWipLabel(ctx);
+    try {
+        tracker.addLabel(ctx.ticketKey, LABELS.AI_CONCERNS);
+    } catch (e) {
+        console.warn('Failed to add ' + LABELS.AI_CONCERNS + ' label:', e);
+    }
+    postTokenUsage(ctx, params);
+    return {
+        success: false,
+        error: reason,
+        results: []
+    };
 }
 
 function applyDependencyAndPlanPass(stories, ctx, state) {
@@ -793,9 +707,9 @@ function postIntakeWorkflowError(params, error) {
 }
 
 function action(params) {
-    var customParams = resolveCustomParams(params);
+    var customParams = issuePlan.resolveIntakeCustomParams(params);
     // The project config carries the repository that GitHub issue keys resolve against.
-    var projectConfig = loadProjectCfg(params);
+    var projectConfig = issuePlan.loadIntakeProjectConfig(configLoader, params);
     tracker = trackersModule.createTracker(projectConfig, customParams);
     try {
         var ctx = initActionContext(params, projectConfig, customParams);
@@ -804,6 +718,12 @@ function action(params) {
         // 1. Read stories.json
         var stories = readStoriesJson();
         console.log('Found ' + stories.length + ' entries in stories.json');
+
+        var prereqError = checkIntakePrerequisites(ctx, params, stories);
+        if (prereqError) {
+            return finalizeFailedIntake(ctx, params, prereqError);
+        }
+
         // Stable entry id for the GitHub sub-issue marker (a re-run reuses what exists).
         stories.forEach(function(entry, i) { entry._itemId = entry.tempId || ('item-' + (i + 1)); });
 

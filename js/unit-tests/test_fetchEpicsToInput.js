@@ -429,14 +429,163 @@ suite('epicIntakeFetch helper branches (via fetchEpicsToInput mapping)', functio
     test('fetchAndWrite swallows a collect failure and writes nothing', function () {
         var helper = loadEpicIntakeFetch();
         var writes = [];
-        helper.fetchAndWrite({}, 'input/A-9', {
+        var r = helper.fetchAndWrite({}, 'input/A-9', {
             listKey: 'epics',
             fileName: 'existing_epics.json',
             writeFile: function (folder, payload) { writes.push(payload); },
             plural: 'epics',
             collect: function () { throw new Error('search down'); }
         });
+        assert.equal(r, false);
         assert.deepEqual(writes, [], 'no file written when the collect step fails');
+    });
+
+});
+
+suite('epicIntakeFetch — ADO scoped WIQL, skipExistingFetch, and fetch failure handling (gh-1478, gh-1479)', function () {
+
+    test('searchQueryFor builds Jira JQL by default and configured issueTypes', function () {
+        var helper = loadEpicIntakeFetch();
+        var jiraTracker = { provider: function () { return 'jira'; } };
+        assert.equal(
+            helper.searchQueryFor(jiraTracker, 'PROJ', 'epic', { EPIC: 'Initiative' }),
+            'project = PROJ AND issuetype = Initiative ORDER BY created DESC'
+        );
+        assert.equal(
+            helper.searchQueryFor(jiraTracker, 'PROJ', 'story', { STORY: 'Product Backlog Item' }),
+            'project = PROJ AND issuetype = Product Backlog Item ORDER BY created DESC'
+        );
+        assert.equal(
+            helper.searchQueryFor(null, 'PROJ', 'epic', null),
+            'project = PROJ AND issuetype = Epic ORDER BY created DESC'
+        );
+    });
+
+    test('searchQueryFor builds scoped ADO WIQL with area path, excluded states, and configured work item types', function () {
+        var helper = loadEpicIntakeFetch();
+        var adoTracker = { provider: function () { return 'ado'; } };
+        var qEpics = helper.searchQueryFor(adoTracker, 'MyProj', 'epic', { EPIC: 'Feature' }, { areaPath: 'MyProj\\Team A' });
+        assert.contains(qEpics, "[System.TeamProject] = 'MyProj'");
+        assert.contains(qEpics, "[System.WorkItemType] = 'Feature'");
+        assert.contains(qEpics, "[System.State] NOT IN ('Removed', 'Done')");
+        assert.contains(qEpics, "[System.AreaPath] UNDER 'MyProj\\Team A'");
+        assert.contains(qEpics, 'ORDER BY [System.CreatedDate] DESC');
+
+        var qStories = helper.searchQueryFor(adoTracker, 'MyProj', 'story', null, {});
+        assert.contains(qStories, "[System.WorkItemType] = 'Product Backlog Item'");
+        assert.notContains(qStories, '[System.AreaPath] UNDER');
+    });
+
+    test('buildAdoChildrenWiql builds WorkItemLinks WIQL for source ID and escapes quotes', function () {
+        var helper = loadEpicIntakeFetch();
+        var q = helper.buildAdoChildrenWiql('1234', "O'Brien's Type");
+        assert.contains(q, 'FROM WorkItemLinks');
+        assert.contains(q, "[Source].[System.Id] = 1234");
+        assert.contains(q, "[Target].[System.WorkItemType] = 'O''Brien''s Type'");
+        assert.contains(q, 'MODE (MustContain)');
+    });
+
+    test('collectFromSearch on ADO merges source children and same-area items, deduplicates, and caps', function () {
+        var helper = loadEpicIntakeFetch();
+        var queries = [];
+        var tracker = {
+            provider: function () { return 'ado'; },
+            searchIssues: function (q) {
+                queries.push(q);
+                if (q.indexOf('WorkItemLinks') !== -1) {
+                    return [
+                        { key: '10', fields: { summary: 'Child 10' } },
+                        { key: '11', fields: { summary: 'Child 11' } }
+                    ];
+                }
+                return [
+                    { key: '11', fields: { summary: 'Duplicate 11' } },
+                    { key: '12', fields: { summary: 'Area 12' } },
+                    { key: '13', fields: { summary: 'Area 13' } }
+                ];
+            }
+        };
+        var items = helper.collectFromSearch(tracker, {
+            jql: helper.searchQueryFor(tracker, 'MyProj', 'epic', { EPIC: 'Feature' }, { areaPath: 'MyProj\\Area' }),
+            kind: 'epic',
+            issueTypes: { EPIC: 'Feature' },
+            scope: { ticketKey: '99', project: 'MyProj', areaPath: 'MyProj\\Area', cap: 3 },
+            fields: ['key', 'summary'],
+            map: function (i) { return { key: i.key, summary: i.fields.summary }; }
+        });
+        assert.equal(queries.length, 2);
+        assert.deepEqual(items, [
+            { key: '10', summary: 'Child 10' },
+            { key: '11', summary: 'Child 11' },
+            { key: '12', summary: 'Area 12' }
+        ]);
+    });
+
+    test('resolveAdoScope extracts areaPath from ticket fields or fetches source issue on ADO', function () {
+        var helper = loadEpicIntakeFetch();
+        var adoTracker = { provider: function () { return 'ado'; } };
+        var s1 = helper.resolveAdoScope(adoTracker, '100', { fields: { 'System.AreaPath': 'P\\A1' } }, { tracker: { adoProject: 'P' } });
+        assert.deepEqual(s1, { ticketKey: '100', project: 'P', areaPath: 'P\\A1', cap: 100 });
+
+        var s2 = helper.resolveAdoScope({
+            provider: function () { return 'ado'; },
+            getIssue: function (k) { return { key: k, fields: { areaPath: 'P\\A2' } }; }
+        }, '200', null, {});
+        assert.deepEqual(s2, { ticketKey: '200', project: '', areaPath: 'P\\A2', cap: 100 });
+
+        var s3 = helper.resolveAdoScope({
+            provider: function () { return 'ado'; },
+            getIssue: function () { throw new Error('404'); }
+        }, '300', null, {});
+        assert.deepEqual(s3, { ticketKey: '300', project: '', areaPath: '', cap: 100 });
+    });
+
+    test('isSkipExistingFetch honours customParams and projectConfig flags', function () {
+        var helper = loadEpicIntakeFetch();
+        assert.equal(helper.isSkipExistingFetch({ skipExistingFetch: true }, {}), true);
+        assert.equal(helper.isSkipExistingFetch({ fetchExisting: false }, {}), true);
+        assert.equal(helper.isSkipExistingFetch({}, { jira: { skipExistingFetch: true } }), true);
+        assert.equal(helper.isSkipExistingFetch({}, { tracker: { skipExistingFetch: true } }), true);
+        assert.equal(helper.isSkipExistingFetch({}, {}), false);
+    });
+
+    test('skipExistingFetch writes empty existing_epics.json and existing_stories.json without searching', function () {
+        var loaded = loadFetchEpicsToInput({});
+        var r = loaded.mod.action({
+            inputFolderPath: 'input/PROJ-9',
+            jobParams: { customParams: { skipExistingFetch: true } }
+        });
+        assert.equal(r, undefined);
+        assert.deepEqual(loaded.calls.search, []);
+        assert.equal(loaded.calls.writes.length, 2);
+        assert.deepEqual(JSON.parse(loaded.calls.writes[0].content), { epics: [] });
+        assert.deepEqual(JSON.parse(loaded.calls.writes[1].content), { stories: [] });
+    });
+
+    test('fetchEpicsToInput returns false and posts comment when search fails (gh-1479)', function () {
+        var loaded = loadFetchEpicsToInput({
+            searchResults: (function () {
+                var m = {};
+                m[EPIC_JQL] = { throwOnSearch: true };
+                return m;
+            })()
+        });
+        var r = loaded.mod.action({ inputFolderPath: 'input/PROJ-3' });
+        assert.equal(r, false);
+        assert.equal(loaded.calls.writes.length, 1, 'only stories file written');
+    });
+
+    test('postFetchFailureComment posts comment when tracker.postComment is available', function () {
+        var helper = loadEpicIntakeFetch();
+        var posted = [];
+        helper.postFetchFailureComment({
+            postComment: function (k, b) { posted.push({ key: k, body: b }); }
+        }, 'PROJ-7', 'existing_epics.json');
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].key, 'PROJ-7');
+        assert.contains(posted[0].body, 'existing_epics.json');
+        helper.postFetchFailureComment({}, '', 'x');
+        assert.equal(posted.length, 1);
     });
 
 });

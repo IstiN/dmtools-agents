@@ -63,6 +63,8 @@ _Fetch Epics To Input Pre-CLI Action_
 - Writes:
   - `input/<KEY>/existing_epics.json`
   - `input/<KEY>/existing_stories.json`
+- Side effects:
+  - post ticket comment (via tracker)
 
 
 ### postJSAction: `createIntakeTickets.js`
