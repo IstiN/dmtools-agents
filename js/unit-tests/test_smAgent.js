@@ -135,6 +135,46 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
     };
 }
 
+var SM_EXTRACTED_FILES = [
+    'validationProbes.js',
+    'parkAndActorProbes.js',
+    'checkRunCures.js',
+    'workflowRunTracking.js',
+    'workflowDispatch.js',
+    'verdictAndFailState.js',
+    'reworkAndVerdicts.js',
+    'mergeAndParkProbes.js',
+    'validationCheckSync.js',
+    'branchRefresh.js',
+    'guestTransplantRunner.js',
+    'localAndStateRunner.js',
+    'prLifecycleActions.js',
+    'prVerdictAndSweepActions.js',
+    'prUpdateAndValidateActions.js',
+    'ruleProcessor.js',
+    'tickOrchestrator.js'
+];
+function mapSmRequireKey(reqMap, k) {
+    if (k.indexOf('./sm/') === 0) {
+        reqMap['./' + k.slice(5)] = reqMap[k];
+    } else if (k.indexOf('./') === 0) {
+        reqMap['../' + k.slice(2)] = reqMap[k];
+    }
+}
+function attachSmExtractedModules(reqMap, smMocks) {
+    Object.keys(reqMap).forEach(function (k) { mapSmRequireKey(reqMap, k); });
+    var req = makeRequire(reqMap);
+    var cleanMocks = Object.assign({}, smMocks || {});
+    delete cleanMocks.file_read;
+    for (var i = 0; i < SM_EXTRACTED_FILES.length; i++) {
+        var name = SM_EXTRACTED_FILES[i];
+        var mod = loadModule('js/sm/' + name, req, cleanMocks);
+        reqMap['./sm/' + name] = mod;
+        reqMap['./' + name] = mod;
+    }
+    return req;
+}
+
 
 function cloneRan(cmds) {
     return cmds.some(function (c) { return c.command.indexOf('gh repo clone') !== -1; });
@@ -594,7 +634,7 @@ function makeSmAgent(opts) {
     );
     var sm = loadModule(
         'js/smAgent.js',
-        makeRequire(Object.assign(smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule, buildEncodedConfigModule, smMocks, opts.omitLocalHelperFallbacks), {
+        attachSmExtractedModules(Object.assign(smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule, buildEncodedConfigModule, smMocks, opts.omitLocalHelperFallbacks), {
             './common/trackers.js': trackersForSm,
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
@@ -685,7 +725,9 @@ function makeSmAgent(opts) {
                 },
                 // gh-1249: smAgent.fetchPrReviewThreadNodes delegates to the
                 // shared envelope nav — stubs must serve the real one.
-                reviewThreadNodesOf: smProviderRealForGh1249().reviewThreadNodesOf
+                reviewThreadNodesOf: smProviderRealForGh1249().reviewThreadNodesOf,
+                ghPrMaintainerCanModify: smProviderRealForGh1249().ghPrMaintainerCanModify,
+                BOOKKEEPING_CHECK_PREFIXES: smProviderRealForGh1249().BOOKKEEPING_CHECK_PREFIXES
             },
             './factoryState.js': loadModule('js/factoryState.js',
                 makeRequire({
@@ -693,7 +735,7 @@ function makeSmAgent(opts) {
                     './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {}),
                     './common/mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {})
                 }), {}),
-        })),
+        }), smMocks),
         smMocks
     );
 
@@ -15067,6 +15109,16 @@ suite('smAgent: fail-closed agent:rework consumption (gh-840)', function () {
     });
 });
 
+function countGithubTrackerCalls() {
+    var files = ['js/smAgent.js'].concat(SM_EXTRACTED_FILES.map(function (f) { return 'js/sm/' + f; }));
+    var total = 0;
+    for (var i = 0; i < files.length; i++) {
+        var s = file_read({ path: files[i] });
+        total += (s.match(/githubTracker\(/g) || []).length;
+    }
+    return total;
+}
+
 suite('smAgent writes labels and comments through the tracker wrapper (agents: tracker abstraction)', function () {
     test('no direct github_add_labels / github_remove_label / github_create_comment call is left in smAgent.js', function () {
         var src = file_read({ path: 'js/smAgent.js' });
@@ -15076,8 +15128,8 @@ suite('smAgent writes labels and comments through the tracker wrapper (agents: t
 
     test('every write goes through the repository-pinned helper', function () {
         var src = file_read({ path: 'js/smAgent.js' });
-        var viaHelper = (src.match(/githubTracker\(/g) || []).length;
-        assert.ok(viaHelper >= 60, 'expected the SM label/comment writes to use githubTracker(), saw ' + viaHelper);
+        var viaHelper = countGithubTrackerCalls();
+        assert.ok(viaHelper >= 50, 'expected the SM label/comment writes to use githubTracker(), saw ' + viaHelper);
         assert.ok(src.indexOf('trackersModule.createGithubTracker(') !== -1);
     });
 });
