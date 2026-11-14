@@ -97,13 +97,14 @@ function isAdoTracker(tracker) {
     return Boolean(tracker && typeof tracker.provider === 'function' && tracker.provider() === 'ado');
 }
 
-function wiqlQuote(val) {
-    return "'" + String(val == null ? '' : val).replace(/'/g, "''") + "'";
+function wiqlQuote(text) {
+    var raw = text == null ? '' : String(text);
+    return "'" + raw.split("'").join("''") + "'";
 }
 
-function wiqlIdExpr(key) {
-    var trimmed = String(key == null ? '' : key).trim();
-    return /^\d+$/.test(trimmed) ? trimmed : wiqlQuote(trimmed);
+function wiqlIdExpr(itemKey) {
+    var candidate = itemKey == null ? '' : String(itemKey).trim();
+    return /^[0-9]+$/.test(candidate) ? candidate : wiqlQuote(candidate);
 }
 
 function sectionIssueTypes(section) {
