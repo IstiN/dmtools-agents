@@ -428,6 +428,26 @@ suite('instructionRefs — pack reference integrity', function () {
             assert.ok(content.indexOf('ado_comment_format.md') === -1, file + ' must not reference ado_comment_format.md by path');
             assert.ok(content.indexOf('test_automation_json_output.md') === -1, file + ' must not reference test_automation_json_output.md by path');
         });
+
+        var intakeDesc = readText('instructions/intake/description_template.md') || '';
+        assert.ok(intakeDesc.indexOf('Jira description') === -1 && intakeDesc.indexOf('Jira wiki markup') === -1,
+            'intake/description_template.md must stay tracker-neutral');
+
+        var acQuality = readText('instructions/common/acceptance_criteria_quality.md') || '';
+        assert.ok(acQuality.indexOf('jira_wiki_markup.md') === -1 && acQuality.indexOf('||Header 1||') === -1 && acQuality.indexOf('Jira ticket') === -1,
+            'common/acceptance_criteria_quality.md must stay tracker-neutral');
+
+        var intakeWorkflow = readText('instructions/intake/workflow.md') || '';
+        assert.ok(intakeWorkflow.indexOf('jira_get_ticket') === -1,
+            'intake/workflow.md must not hardcode dmtools jira_get_ticket');
+
+        var storyTaOutput = readText('instructions/story_test_automation/output_rules.md') || '';
+        assert.ok(storyTaOutput.indexOf('Jira wiki') === -1,
+            'story_test_automation/output_rules.md must defer markup format to active tracker');
+
+        var storyQuestionsOutput = readText('instructions/story_questions/output_rules.md') || '';
+        assert.ok(storyQuestionsOutput.indexOf('Jira comment') === -1,
+            'story_questions/output_rules.md must use tracker-neutral comment wording');
     });
 
     test('R9 (gh-1298): prompts and instructions contain no internal issue/PR refs, ISO dates, or live-incident provenance markers', function () {

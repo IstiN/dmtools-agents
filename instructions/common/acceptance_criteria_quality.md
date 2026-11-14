@@ -21,8 +21,7 @@ do not restate it in the AC text.
 ### ❌ Never flatten tables to plain text
 When source material contains a table (columns, file formats, mapping rules,
 validation logic) it must remain a table in the output.
-Use Jira wiki markup table syntax as defined in `jira_wiki_markup.md`:
-`||Header 1||Header 2||` for header rows, `|value 1|value 2|` for data rows.
+Use the table syntax defined by the active tracker's markup transformation rules included in this prompt.
 Never convert a table to a bullet list or prose.
 
 ### ❌ Never silently skip unavailable artifacts
@@ -53,7 +52,7 @@ Do not paraphrase.
 
 ### ✅ Include a Source References section
 Every AC output must end with a *Source References* section listing:
-- The Jira ticket(s) and Confluence page(s) used as source
+- The tracker ticket(s) and wiki/Confluence page(s) used as source
 - Any Figma or design files referenced
 - Any specification documents or attachments read
 If a source was attempted but inaccessible, list it with an ⚠ marker.

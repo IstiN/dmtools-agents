@@ -984,7 +984,9 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': {
                 loadProjectConfig: function() { return baseConfig(opt(opts, 'config')); },
-                resolveInstructions: function() { return { jobParamPatch: {} }; },
+                resolveInstructions: function(role, k, cfg) {
+                    return { jobParamPatch: (cfg && cfg.patch) ? cfg.patch : {} };
+                },
                 formatTemplate: pushReworkFormatTemplate
             },
             './common/scm.js': { createScm: function() { return scm; } },
@@ -3255,6 +3257,9 @@ suite('pushReworkChanges completion-tail helpers (gh-969 CRAP split)', function(
         var loaded = loadTail();
         loaded.mod.cacheCompletionArtifacts({ ticket: { key: 'PROJ-123' } });
         loaded.mod.postCompletionTokenUsage({ initiator: 'u-1' }, 'PROJ-123');
+        assert.deepEqual(loaded.mod.resolveCustomParams({ customParams: { a: 1 } }, null, {}), { a: 1 });
+        assert.deepEqual(loaded.mod.resolveCustomParams({}, null, { patch: { customParams: { b: 2 } } }), { b: 2 });
+        assert.deepEqual(loaded.mod.resolveCustomParams({}, null, {}), {});
     });
 });
 
@@ -3387,8 +3392,14 @@ suite('pushReworkChanges.commitAndPush — squashReworkWip (agents#895)', functi
         assert.ok(has(cmds, 'git push -u --force-with-lease origin bug/PROJ-123'));
     });
 
-    test('default (option off): history untouched, plain push', function() {
+    test('default (option omitted): squashes WIP auto-save commits by default (gh-1472)', function() {
         var cmds = run(['PROJ-123 WIP auto-save a', 'PROJ-123 WIP auto-save b'], {});
+        assert.ok(has(cmds, 'git reset --soft abc1234'));
+        assert.ok(has(cmds, '--force-with-lease'));
+    });
+
+    test('explicitly disabled (squashReworkWip: false): history untouched, plain push', function() {
+        var cmds = run(['PROJ-123 WIP auto-save a', 'PROJ-123 WIP auto-save b'], { squashReworkWip: false });
         assert.ok(!has(cmds, 'git reset --soft'));
         assert.ok(!has(cmds, '--force-with-lease'));
     });
@@ -3399,7 +3410,7 @@ suite('pushReworkChanges.commitAndPush — squashReworkWip (agents#895)', functi
         assert.ok(!has(cmds, '--force-with-lease'));
     });
 
-    test('missing rework base marker or a merge commit: nothing is squashed', function() {
+    test('missing rework base marker or a non-self-heal merge commit: nothing is squashed', function() {
         var a = run(['PROJ-123 WIP auto-save a', 'PROJ-123 WIP auto-save b'], { squashReworkWip: true }, { noBase: true });
         assert.ok(!has(a, 'git reset --soft'));
         var b = run(['PROJ-123 WIP auto-save a', 'PROJ-123 WIP auto-save b'], { squashReworkWip: true }, { merge: true });
@@ -3409,6 +3420,36 @@ suite('pushReworkChanges.commitAndPush — squashReworkWip (agents#895)', functi
     test('a single WIP commit is left as is (nothing to squash)', function() {
         var cmds = run(['PROJ-123 WIP auto-save a'], { squashReworkWip: true });
         assert.ok(!has(cmds, 'git reset --soft'));
+    });
+
+    test('self-heal merge commit + mixed ticket/WIP commits are squashed cleanly (gh-1472)', function() {
+        var commands = [];
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+                if (args.path.indexOf('rework_base_head.txt') !== -1) return 'abc1234\n';
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git rev-list --merges') === 0) return 'mergesha\n';
+                if (args.command.indexOf('git log --merges --format=%s') === 0) {
+                    return "Merge branch 'origin/bug/PROJ-123' into bug/PROJ-123\n";
+                }
+                if (args.command.indexOf('git log --no-merges --format=%s') === 0) {
+                    return 'PROJ-123 WIP auto-save 1\nPROJ-123 address review thread\n';
+                }
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+                }
+                return '';
+            }
+        });
+        mod.commitAndPush('PROJ-123', baseConfig(), {});
+        assert.ok(has(commands, 'git reset --soft abc1234'));
+        assert.ok(has(commands, 'git commit -m "PROJ-123 rework"'));
+        assert.ok(has(commands, 'git push -u --force-with-lease origin bug/PROJ-123'));
     });
 });
 
@@ -4198,9 +4239,10 @@ suite('pushReworkChanges.commitAndPush — branch decisions (gh-1082 characteriz
         assert.equal(mod.hasStagedChanges(' M f'), true);
         assert.equal(mod.hasStagedChanges('   '), false);
         assert.equal(mod.squashEnabled({ squashReworkWip: true }), true);
-        assert.equal(mod.squashEnabled({ squashReworkWip: 'yes' }), false, 'strict boolean opt-in');
-        assert.equal(mod.squashEnabled({}), false);
-        assert.equal(mod.squashEnabled(null), false);
+        assert.equal(mod.squashEnabled({ squashReworkWip: false }), false);
+        assert.equal(mod.squashEnabled({ squashReworkWip: 'yes' }), false, 'non-boolean explicit value disables');
+        assert.equal(mod.squashEnabled({}), true, 'enabled by default (gh-1472)');
+        assert.equal(mod.squashEnabled(null), true, 'enabled by default when customParams is null');
 
         // messages
         assert.equal(
@@ -4219,13 +4261,15 @@ suite('pushReworkChanges.commitAndPush — branch decisions (gh-1082 characteriz
         assert.ok(syncErr);
         assert.equal(syncErr.message, 'Could not sync PR branch with origin/develop before rework push: diverged');
 
+        assert.equal(mod.squashReworkWipIfEnabled(function() {}, 'P-1', baseConfig(), null, { squashReworkWip: false }), false,
+            'explicit false: history untouched');
         assert.equal(mod.squashReworkWipIfEnabled(function() {}, 'P-1', baseConfig(), null, {}), false,
-            'opt-in off: history untouched');
+            'default on, but no rework_base_head.txt -> false');
         assert.equal(mod.squashReworkWipIfEnabled(function() {}, 'P-1', baseConfig(), null, null), false);
         assert.equal(
             mod.squashReworkWipIfEnabled(function() { throw new Error('must not run'); }, 'P-1', baseConfig(), null, { squashReworkWip: 'x' }),
             false,
-            'strict boolean opt-in'
+            'non-boolean explicit value disables'
         );
         var squashCalls = [];
         var squashingCli = function(args) {

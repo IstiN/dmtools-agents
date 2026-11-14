@@ -29,6 +29,7 @@ var needsInputCommon = require('./common/needsInput.js');
 // inert); resolution lives in this one shared module, next to the layer that
 // reads customParams.feedbackLoop, so other legs adopt it without duplication.
 var developmentMode = require('./common/developmentMode.js');
+var wipSquash = require('./common/wipSquash.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 // gh-1250: the lazy-tracker boilerplate lives in the shared trackerSlot module.
@@ -159,17 +160,12 @@ function syncBranchWithBaseUsingRunCmd(branchName, baseBranch) {
 }
 
 /**
- * gh-1308: true when `val` is a 7..40 char hex git object SHA.
+ * gh-1308 / gh-1472: WIP auto-save base resolution and squash helpers
+ * delegated to js/common/wipSquash.js.
  */
-function isValidGitSha(val) {
-    return /^[0-9a-f]{7,40}$/i.test(String(val || '').trim());
-}
+var isValidGitSha = wipSquash.isValidGitSha;
+var canSquashDevWipSubjects = wipSquash.canSquashWipSubjects;
 
-/**
- * gh-1308: read the setup-time HEAD SHA from input/<ticketKey>/dev_base_head.txt
- * when available, or fall back to `git merge-base origin/<baseBranch> HEAD`.
- * Returns null when neither resolves to a valid hex SHA.
- */
 function readRecordedDevBaseHead(ticketKey) {
     if (!ticketKey || typeof file_read !== 'function') return null;
     try {
@@ -192,54 +188,31 @@ function readDevBaseHead(runCommand, ticketKey, baseBranch) {
     }
 }
 
-/**
- * gh-1308 / gh-1398: true when `<base>..HEAD` contains at least one timer
- * `WIP auto-save` commit, or multiple commits produced during this development
- * pass that are not already a single clean target commit. Because `base` is the
- * setup-time `dev_base_head.txt` (or `git merge-base origin/<baseBranch> HEAD`),
- * every commit in `<base>..HEAD` belongs to this development run — mixed
- * histories (WIP auto-save commits plus an agent-authored commit) must also be
- * squashed into the single target development commit.
- */
-function canSquashDevWipSubjects(subjects, safeMessage) {
-    if (!subjects || subjects.length === 0) return false;
-    if (subjects.length === 1 && subjects[0] === safeMessage) return false;
-    for (var i = 0; i < subjects.length; i++) {
-        if (/WIP auto-save/.test(subjects[i])) return true;
-    }
-    return false;
-}
-
-/**
- * gh-1308: non-empty commit subjects in `<range>` (`git log --format=%s`),
- * or `[]` when `<range>` contains a merge commit.
- */
 function readNonMergeSubjects(runCommand, range) {
     var merges = cleanCommandOutput(runCommand('git rev-list --merges ' + range) || '').trim();
     if (merges) return [];
-    return cleanCommandOutput(runCommand('git log --format=%s ' + range) || '').split('\n')
-        .map(function (l) { return l.trim(); }).filter(Boolean);
+    return wipSquash.parseLines(runCommand('git log --format=%s ' + range));
 }
 
-/**
- * gh-1308: squash timer `WIP auto-save` commits made during the development
- * pass into a single descriptive commit before pushing. Returns true only when
- * history was rewritten (caller must push with `--force-with-lease`). Fails
- * closed (returns false, history untouched) when the base is unknown, a merge
- * commit is present in `<base>..HEAD`, or any commit subject is not a WIP
- * auto-save / target message.
- */
 function squashDevelopmentWipCommits(runCommand, ticketKey, baseBranch, commitMessage) {
     if (!commitMessage) return false;
     try {
         var base = readDevBaseHead(runCommand, ticketKey, baseBranch);
-        if (!base) return false;
-        var subjects = readNonMergeSubjects(runCommand, base + '..HEAD');
+        if (!base) {
+            console.warn('squashDevelopmentWipCommits skipped: could not resolve base head for ' + (ticketKey || 'ticket'));
+            return false;
+        }
         var safeMsg = sanitizeCommitMessage(commitMessage);
-        if (!canSquashDevWipSubjects(subjects, safeMsg)) return false;
+        var check = wipSquash.inspectSquashRange(function (cmd) {
+            return cleanCommandOutput(runCommand(cmd) || '');
+        }, base + '..HEAD', ticketKey, safeMsg);
+        if (check.skipReason) {
+            console.warn('squashDevelopmentWipCommits skipped (' + check.skipReason + ')');
+            return false;
+        }
         runCommand('git reset --soft ' + base);
         runCommand('git commit -m "' + safeMsg + '"');
-        console.log('✅ Squashed ' + subjects.length + ' WIP auto-save commit(s) into one: ' + safeMsg);
+        console.log('✅ Squashed ' + check.subjects.length + ' WIP auto-save commit(s) into one: ' + safeMsg);
         return true;
     } catch (e) {
         console.warn('squashDevelopmentWipCommits skipped (history untouched):', String(e));

@@ -41,7 +41,7 @@ flowchart TD
     subgraph STUDY["Study project structure"]
         S1["Read existing_epics.json & existing_stories.json fully"]
         S2{"Ambiguous or closely related?"}
-        S2 -->|yes| S3["dmtools jira_get_ticket KEY"]
+        S2 -->|yes| S3["Fetch full ticket details via the active tracker's dmtools CLI command"]
         S2 -->|no| S4["Build mental map of pages/flows/features & entry points"]
         S3 --> S4
         S0["⚠️ existing_epics.json / existing_stories.json are the SOLE authoritative record of tickets that currently exist in the tracker — freshly fetched live from the tracker THIS run, always more trustworthy than any memory of a prior run"]
@@ -177,7 +177,7 @@ Rules:
 
 ### ❌ Common mistake — do not do this
 
-Writing raw Markdown (e.g. `### Goal`, `**Scope**`, `- item`) straight into a Jira description. Jira wiki markup interprets `#`/`##`/`###` as numbered-list markers, not headings — this silently corrupts the rendered ticket (nested empty numbered lists, mangled bullets). Always run content through the tracker transform table first — the same rule and the same transform table used by the `story_questions` agent.
+Writing raw Markdown (e.g. `### Goal`, `**Scope**`, `- item`) or literal placeholder tags straight into a description without applying the configured tracker transformation rules. Trackers that use non-Markdown dialects (or specialized syntax) can misinterpret raw Markdown headings and bullets, silently corrupting the rendered ticket (nested empty numbered lists, mangled bullets). Always run content through the tracker transform table first — the same rule and the same transform table used by the `story_questions` agent.
 
 
 ---

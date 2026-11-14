@@ -107,10 +107,10 @@ Use the configured formatting rules to write the final output to `outputs/respon
 <bullet> *User Story:*
 <bullet> *Design / Mockups:* — link to Figma or attach mockup images. If design is required but unavailable, add `*⚠ BLOCKER:*` with a description of what is missing.
 <bullet> *Acceptance Criteria:* — numbered list. Each AC must be self-contained: include the rule, the trigger, and the expected outcome in the AC text itself. Do not assume the reader will search Confluence or the spec.
-<bullet> *Existing vs New Behavior:* — table with columns `||Behavior||Existing||New / Changed||`. List every behavior touched by this story. Mark unchanged copied behaviors as `Copied as-is from {source}`.
+<bullet> *Existing vs New Behavior:* — table with columns `Behavior`, `Existing`, `New / Changed` (formatted using the active tracker's table syntax). List every behavior touched by this story. Mark unchanged copied behaviors as `Copied as-is from {source}`.
 <bullet> *Business Rules:*
 <bullet> *Out of Scope:*
-<bullet> *Source References:* — list every source read: Jira tickets, Confluence pages, Figma links, attachments. Mark any source that was inaccessible with ⚠.
+<bullet> *Source References:* — list every source read: tracker tickets, wiki/Confluence pages, Figma links, attachments. Mark any source that was inaccessible with ⚠.
 
 
 ---
@@ -244,8 +244,7 @@ do not restate it in the AC text.
 ### ❌ Never flatten tables to plain text
 When source material contains a table (columns, file formats, mapping rules,
 validation logic) it must remain a table in the output.
-Use Jira wiki markup table syntax as defined in `jira_wiki_markup.md`:
-`||Header 1||Header 2||` for header rows, `|value 1|value 2|` for data rows.
+Use the table syntax defined by the active tracker's markup transformation rules included in this prompt.
 Never convert a table to a bullet list or prose.
 
 ### ❌ Never silently skip unavailable artifacts
@@ -276,7 +275,7 @@ Do not paraphrase.
 
 ### ✅ Include a Source References section
 Every AC output must end with a *Source References* section listing:
-- The Jira ticket(s) and Confluence page(s) used as source
+- The tracker ticket(s) and wiki/Confluence page(s) used as source
 - Any Figma or design files referenced
 - Any specification documents or attachments read
 If a source was attempted but inaccessible, list it with an ⚠ marker.
@@ -311,7 +310,7 @@ The structural template is an **example only**. Tags such as `<bold>`, `<bullet>
 
 - Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
 - Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
-- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
+- Follow the active tracker's markup syntax strictly and do not mix dialects from other trackers.
 - Use the tracker-specific link format when referencing tickets or URLs.
 
 
@@ -435,7 +434,7 @@ The structural template is an **example only**. Tags such as `<bold>`, `<bullet>
 
 - Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
 - Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
-- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
+- Follow the active tracker's markup syntax strictly and do not mix dialects from other trackers.
 - Use the tracker-specific link format when referencing tickets or URLs.
 
 

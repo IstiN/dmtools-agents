@@ -28,4 +28,4 @@ Rules:
 
 ### ❌ Common mistake — do not do this
 
-Writing raw Markdown (e.g. `### Goal`, `**Scope**`, `- item`) straight into a Jira description. Jira wiki markup interprets `#`/`##`/`###` as numbered-list markers, not headings — this silently corrupts the rendered ticket (nested empty numbered lists, mangled bullets). Always run content through the tracker transform table first — the same rule and the same transform table used by the `story_questions` agent.
+Writing raw Markdown (e.g. `### Goal`, `**Scope**`, `- item`) or literal placeholder tags straight into a description without applying the configured tracker transformation rules. Trackers that use non-Markdown dialects (or specialized syntax) can misinterpret raw Markdown headings and bullets, silently corrupting the rendered ticket (nested empty numbered lists, mangled bullets). Always run content through the tracker transform table first — the same rule and the same transform table used by the `story_questions` agent.

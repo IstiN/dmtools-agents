@@ -17,7 +17,7 @@ List the input folder with `ls -la input/*/` and read every file found:
 
 **CRITICAL: MANDATORY OUTPUT FILES — YOU MUST CREATE ALL THREE**
 Do NOT print the solution to stdout. Write it to files:
-1. `outputs/response.md` — the full solution design text (REQUIRED — without this file nothing is saved to Jira)
+1. `outputs/response.md` — the full solution design text (REQUIRED — without this file nothing is saved to the tracker)
 2. `outputs/diagram.md` — the Mermaid architecture diagram
 3. `outputs/affected_repos.json` — affected repositories JSON array
 

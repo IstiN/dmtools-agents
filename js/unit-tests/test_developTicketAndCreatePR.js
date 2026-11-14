@@ -3618,6 +3618,14 @@ suite('developTicketAndCreatePR > WIP auto-save squash (gh-1308)', function () {
         assert.equal(mod.canSquashDevWipSubjects(['AB#42: WIP auto-save 2026-04-19T14:58:58Z'], 'AB#42 Fix login'), true);
         assert.equal(mod.canSquashDevWipSubjects(['AB#42: WIP auto-save 2026-04-19T14:58:58Z', 'AB#42 Fix login'], 'AB#42 Fix login'), true);
         assert.equal(mod.canSquashDevWipSubjects(['AB#42: WIP auto-save 2026-04-19T14:58:58Z', 'Custom agent commit'], 'AB#42 Fix login'), true);
+        assert.deepEqual(mod.readNonMergeSubjects(function (cmd) {
+            if (cmd.indexOf('git rev-list --merges') === 0) return 'mergesha\n';
+            return '';
+        }, 'a..b'), []);
+        assert.deepEqual(mod.readNonMergeSubjects(function (cmd) {
+            if (cmd.indexOf('git log --format=%s') === 0) return 'c1\nc2\n';
+            return '';
+        }, 'a..b'), ['c1', 'c2']);
     });
 
     test('squashDevelopmentWipCommits resets softly to base and creates one clean commit when all commits are WIP', function () {
@@ -3657,6 +3665,17 @@ suite('developTicketAndCreatePR > WIP auto-save squash (gh-1308)', function () {
         assert.equal(mod.squashDevelopmentWipCommits(function () {
             throw new Error('git failed');
         }, '1', 'main', 'msg'), false);
+
+        // gh-1472: squashes across self-heal merge commits when all non-merge commits are WIP / ticket commits
+        var healCmds = [];
+        assert.equal(mod.squashDevelopmentWipCommits(function (cmd) {
+            healCmds.push(cmd);
+            if (cmd.indexOf('git rev-list --merges') === 0) return 'mergesha\n';
+            if (cmd.indexOf('git log --merges --format=%s') === 0) return "Merge remote-tracking branch 'origin/ai/2010283' into ai/2010283\n";
+            if (cmd.indexOf('git log --no-merges --format=%s') === 0) return '2010283 WIP auto-save 1\n2010283 WIP auto-save 2\n';
+            return '';
+        }, '2010283', 'main', '2010283 Implement feature'), true);
+        assert.ok(healCmds.indexOf('git reset --soft deadbeef12345678') !== -1);
     });
 
     test('performPushOnly squashes WIP auto-save commits and pushes with --force-with-lease', function () {
