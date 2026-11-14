@@ -1329,6 +1329,25 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
 
             assert.ok(h.logs.warn.some(function(l) { return l.indexOf('rework_base_head.txt') !== -1; }), JSON.stringify(h.logs.warn));
         });
+
+        test('walks back contiguous WIP auto-save commits on resumed rework run (gh-1472)', function() {
+            var writes = [];
+            var mod = loadPreCliReworkSetup(makeConfigLoaderStub(null, []), {
+                __ghStub: makeGhStub(),
+                file_read: function() { throw new Error('missing'); },
+                file_write: function(args) { writes.push(args); },
+                cli_execute_command: function(opts) {
+                    if (opts.command === 'git log --no-merges --format=%H:%s -50 ccccccc') {
+                        return 'ccccccc:PROJ-123 WIP auto-save 2\nbbbbbbb:PROJ-123 WIP auto-save 1\naaaaaaa:PROJ-123 feature\n';
+                    }
+                    if (opts.command === 'git rev-parse bbbbbbb^') return 'aaaaaaa\n';
+                    return '';
+                }
+            });
+            mod.writeReworkBaseHead('input/PROJ-123', 'ccccccc', '/tmp/work');
+            assert.equal(writes.length, 1);
+            assert.equal(writes[0].content, 'aaaaaaa');
+        });
     });
 
     suite('postReworkStartedCommentStep', function() {

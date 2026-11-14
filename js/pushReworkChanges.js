@@ -40,6 +40,7 @@ var toolchainSummary = require('./common/toolchainSummary.js');
 // terminal-PR guard — a MERGED/CLOSED PR exits the no-op re-arm BEFORE it
 // re-stamps agent:rework on shipped code.
 var prTerminalStateModule = require('./common/prTerminalState.js');
+var wipSquash = require('./common/wipSquash.js');
 
 // ── gh-957: lap audit (loop guard) + audit-resolve support ──────────────────
 //
@@ -555,12 +556,10 @@ function commitStagedReworkChanges(cmd, status, config, ticketKey) {
 }
 
 /**
- * agents#895 opt-in switch: fold WIP auto-save commits only when
- * customParams.squashReworkWip is exactly true.
+ * agents#895 / gh-1472: fold WIP auto-save commits by default unless
+ * customParams.squashReworkWip is explicitly disabled (`false` or non-boolean).
  */
-function squashEnabled(customParams) {
-    return !!(customParams && customParams.squashReworkWip === true);
-}
+var squashEnabled = wipSquash.isReworkWipSquashEnabled;
 
 /**
  * The push ladder for the rework head: a normal push first; when it fails,
@@ -596,11 +595,6 @@ function assertReworkBranchSynced(syncResult, baseBranch) {
     }
 }
 
-/**
- * The agents#895 WIP-squash step, gated by the opt-in switch: folds the
- * timer's WIP auto-save commits only when customParams.squashReworkWip is
- * exactly true; otherwise history is untouched (false).
- */
 function squashReworkWipIfEnabled(cmd, ticketKey, config, workingDir, customParams) {
     if (!squashEnabled(customParams)) return false;
     return squashReworkWipCommits(cmd, ticketKey, config, workingDir);
@@ -716,20 +710,22 @@ function verifyReworkPushed(cmd, branchName, isFork) {
  */
 function squashReworkWipCommits(cmd, ticketKey, config, workingDir) {
     try {
-        var base = String(file_read({ path: inputFolderFor(ticketKey) + '/rework_base_head.txt' }) || '').trim();
-        if (!/^[0-9a-f]{7,40}$/i.test(base)) return false;
-        var range = base + '..HEAD';
-        var merges = cleanCommandOutput(cmd('git rev-list --merges ' + range) || '').trim();
-        if (merges) return false;
-        var subjects = cleanCommandOutput(cmd('git log --format=%s ' + range) || '').split('\n')
-            .map(function (l) { return l.trim(); }).filter(Boolean);
-        if (subjects.length < 2) return false;
-        var reworkMsg = stripCiSkipTokens(configLoader.formatTemplate(config.formats.commitMessage.rework, { ticketKey: ticketKey }));
-        var allOurs = subjects.every(function (sub) { return /WIP auto-save/.test(sub) || sub === reworkMsg; });
-        if (!allOurs) return false;
+        var base = readReworkBaseHead(ticketKey);
+        if (!base) {
+            console.warn('squashReworkWipCommits skipped: missing or invalid rework_base_head.txt');
+            return false;
+        }
+        var reworkMsg = buildReworkCommitMessage(config, ticketKey);
+        var check = wipSquash.inspectReworkSquashRange(function (c) {
+            return cleanCommandOutput(cmd(c) || '');
+        }, base + '..HEAD', ticketKey, reworkMsg);
+        if (check.skipReason) {
+            console.warn('squashReworkWipCommits skipped (' + check.skipReason + ')');
+            return false;
+        }
         cmd('git reset --soft ' + base);
         cmd('git commit -m "' + reworkMsg + '"');
-        console.log('✅ Squashed ' + subjects.length + ' WIP/rework commits into one: ' + reworkMsg);
+        console.log('✅ Squashed ' + check.subjects.length + ' WIP/rework commits into one: ' + reworkMsg);
         return true;
     } catch (e) {
         console.warn('squashReworkWipCommits skipped (history untouched):', e.message || e);
@@ -1894,17 +1890,8 @@ function handleInterruptedRework(tracker, ticketKey, branchName, customParams, s
 }
 
 /**
- * GitHub machine loop, token-burn guard (live pathology 2026-09-21,
- * epam/dmtools-dart #194): a rework run that pushed NO new commits used to
- * clear ai_pr_reviewed and auto-start a fresh LLM review of the SAME head —
- * a full reviewer pass that just restated the standing findings ("round 2,
- * unchanged commit"). The last concluded PR review's commit_id is the
- * durable "what the verdict covered" marker: when it equals the PR head,
- * the rework was a no-op and the verdict still stands.
- *
- * Returns true when a fresh review IS wanted (head moved, no concluded
- * reviews, or the probe failed — fail-open so the review loop can never
- * stall on a broken probe).
+ * GitHub machine loop, token-burn guard: returns true when a fresh review IS
+ * wanted (head moved, no concluded reviews, or probe failed — fail-open).
  */
 function headMovedSinceLastReview(scm, pr) {
     try {

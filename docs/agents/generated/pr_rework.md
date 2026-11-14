@@ -12,7 +12,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `branchSyncFnPath` — path to a JS hook that syncs the base branch before rebasing.
 - `cacheToReleases` — when enabled, caches the workspace into a git release so later runs restore instead of re-cloning.
 - `autoSaveCommitMessage` — optional template for the periodic WIP auto-save commit made by the timer (default `{ticketKey} WIP auto-save {timestamp}`; also `formats.commitMessage.autoSave` in the project config). Use it when the target repo's commit-msg hook requires a tracker key, e.g. `AB#{ticketKey} WIP auto-save {timestamp}`.
-- `squashReworkWip` — set `true` to fold the timer's `WIP auto-save` commits (and the rework commit) since the rework base into ONE commit with the `formats.commitMessage.rework` message before the push, using `--force-with-lease`. Skipped (history untouched) when the base is unknown, a merge or a foreign commit is in the range, or there is only one commit. Default off.
+- `squashReworkWip` — folds the timer's `WIP auto-save` commits (and the rework commit) since the rework base into ONE commit with the `formats.commitMessage.rework` message before the push, using `--force-with-lease`. Skipped (with a warning, history untouched) when the base is unknown, a non-self-heal merge or a foreign commit is in the range, or there is only one commit. Default on (`true`); set `false` to disable.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 - `removeLabels` — list of labels removed from the ticket after a successful run.
@@ -79,6 +79,7 @@ _Pre-CLI Rework Setup Action (preCliJSAction for pr_rework agent)_
   - `restoreFromReleases`
   - `scmProvider`
   - `setupCommands`
+  - `squashReworkWip`
   - `targetRepository`
 
 
@@ -174,6 +175,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `restoreFromReleases` _(used by JS action)_
 - `scmProvider` _(used by JS action)_
 - `setupCommands` _(used by JS action)_
+- `squashReworkWip` _(used by JS action)_
 - `targetRepository` _(used by JS action)_
 - `autoStartReview` _(used by JS action)_
 - `autoStartReviewConfigFile` _(used by JS action)_
@@ -189,7 +191,6 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `pushSubmodules` _(used by JS action)_
 - `removeLabel` _(used by JS action)_
 - `smFallback` _(used by JS action)_
-- `squashReworkWip` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 - `autoSaveCommitMessage` _(used by JS action)_
 - `cacheToReleases.releaseNameTemplate` _(used by JS action)_

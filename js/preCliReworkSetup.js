@@ -31,6 +31,7 @@ const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
 var setupCommands = require('./common/setupCommands.js');
 var baseBranchMarker = require('./common/baseBranchMarker.js');
+var wipSquash = require('./common/wipSquash.js');
 var sessionDelta = null;
 try { sessionDelta = require('./common/sessionDelta.js'); } catch (e) { sessionDelta = null; }
 
@@ -610,9 +611,18 @@ function runSetupCommandsStep(customParams, config, inputFolder, tracker, ticket
  * behind. Optional helper — a write failure leaves the no-fix guard off.
  * (gh-1002) Side-effecting step helper extracted from action().
  */
-function writeReworkBaseHead(inputFolder, headSha) {
+function writeReworkBaseHead(inputFolder, headSha, workingDir) {
     try {
-        if (headSha) file_write({ path: inputFolder + '/rework_base_head.txt', content: String(headSha) });
+        wipSquash.persistBaseHeadFile({
+            folder: inputFolder,
+            fileName: 'rework_base_head.txt',
+            currentSha: headSha,
+            readFn: typeof file_read === 'function' ? file_read : null,
+            writeFn: file_write,
+            runCommand: typeof cli_execute_command === 'function' ? function (cmd) {
+                return cli_execute_command(workingDir ? { command: cmd, workingDirectory: workingDir } : { command: cmd });
+            } : null
+        });
     } catch (e) {
         console.warn('Could not write rework_base_head.txt (no-fix guard stays off):', e.message || e);
     }
@@ -791,38 +801,17 @@ function syncBaseAndDetectConflicts(baseBranch, customParams, config, inputFolde
  * (gh-1220) Extracted from action().
  */
 function writeReworkInputContext(inputFolder, config, scm, pr, prDetails, branchName, baseBranch) {
-    // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed.
-    // gh-1119: the PR diff is fetched FIRST and handed to detectFailedChecks,
-    // which tags every extracted gate violation owned/foreign against the
-    // diff file list (the #433 rework leg missed an owned violation because
-    // it was buried in the raw tails — now it opens ci_failures.md).
     const headSha = (prDetails.head && prDetails.head.sha) || null;
-
-    // Step 5: Diff + discussions (human-readable + raw with IDs)
     const diff = gitOps.getPRDiff(baseBranch, branchName, config.workingDir);
-
     const failedChecks = gh.detectFailedChecks(
         scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath, diff);
-
     console.log('Fetching PR discussions...');
     const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
-
-    // Step 6: Write all context files
     gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
-
-    // agents#827: remember the head this pass starts from, so pushReworkChanges can tell a real fix
-    // from a pass that only left housekeeping (outputs/, WIP auto-saves) behind.
-    writeReworkBaseHead(inputFolder, headSha);
-
+    writeReworkBaseHead(inputFolder, headSha, config.workingDir);
     return { headSha: headSha, failedChecks: failedChecks, discussionData: discussionData };
 }
 
-/**
- * gh-799: pinned input contract — whatever armed this leg, the input folder
- * now ALWAYS carries the complete open-item picture (threads with ids, CI
- * failures, review verdict). Non-fatal: a placeholder write failure must not
- * kill the leg. (gh-1220) Extracted from action().
- */
 function enforceReworkInputContract(inputFolder, scm, prDetails, discussionData, failedChecks, reviewPolicy) {
     try {
         ensureInputContextContract(inputFolder, scm, prDetails.number, discussionData, failedChecks, reviewPolicy);
@@ -831,11 +820,6 @@ function enforceReworkInputContract(inputFolder, scm, prDetails, discussionData,
     }
 }
 
-/**
- * Step 8: the rework-started tracker comment — skipped for PR-anchored
- * reworks (#544): a 'pr-N' key parses to no tracker ticket (the PR comment
- * comes from the post action instead). (gh-1220) Extracted from action().
- */
 function postReworkStartedCommentOrSkip(prAnchor, tracker, ticketKey, customParams, prDetails, branchName, conflictFiles, failedChecks) {
     if (prAnchor) {
         console.log('PR-anchored rework: skipping tracker comment (no ticket, #544)');

@@ -51,6 +51,10 @@ var devDevelopmentModeAdaptiveReal = loadModule('js/common/developmentModeAdapti
     makeRequire({ './developmentMode.js': devDevelopmentModeReal, './developmentModePlan.js': devDevelopmentModePlanReal }));
 
 function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
+    var planMod = loadModule('js/common/developmentModePlan.js',
+        makeRequire({ './developmentMode.js': devDevelopmentModeReal }), mocks || {});
+    var adaptiveMod = loadModule('js/common/developmentModeAdaptive.js',
+        makeRequire({ './developmentMode.js': devDevelopmentModeReal, './developmentModePlan.js': planMod }), mocks || {});
     return loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks || {}),
@@ -69,9 +73,8 @@ function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
             './common/trackers.js': trackersModuleReal,
             './common/developmentMode.js': devDevelopmentModeReal,
-            './common/developmentModePlan.js': devDevelopmentModePlanReal,
-            './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
-            './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal
+            './common/developmentModePlan.js': planMod,
+            './common/developmentModeAdaptive.js': adaptiveMod
         }),
         mocks || {}
     );
@@ -1635,6 +1638,90 @@ suite('preCliDevelopmentSetup.writeDevBaseHead (gh-1308)', function () {
     test('swallows git or file_write errors with a warning', function () {
         var mod = loadWithMocks(function () { throw new Error('git boom'); });
         assert.doesNotThrow(function () { mod.writeDevBaseHead('input/PROJ-1'); });
+    });
+
+    test('preserves existing dev_base_head.txt or walks back contiguous WIP auto-save commits on resume (gh-1472)', function () {
+        var writes = [];
+        var modPreserved = loadPreCliDevelopmentSetup(
+            makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'main', null, []),
+            {
+                file_read: function (args) {
+                    if (args.path === 'input/PROJ-1/dev_base_head.txt') return '1111111\n';
+                    return '';
+                },
+                file_write: function (args) { writes.push(args); },
+                cli_execute_command: function (opts) {
+                    if (opts.command === 'git rev-parse HEAD') return '2222222\n';
+                    if (opts.command === 'git merge-base --is-ancestor 1111111 HEAD') return '';
+                    if (opts.command === 'git log --no-merges --format=%s 1111111..HEAD') {
+                        return 'PROJ-1 WIP auto-save 2026-11-11T10-00-00\nPROJ-1 WIP auto-save 2026-11-11T10-05-00\n';
+                    }
+                    return '';
+                }
+            }
+        );
+        modPreserved.writeDevBaseHead('input/PROJ-1');
+        assert.equal(writes.length, 1);
+        assert.equal(writes[0].content, '1111111', 'must preserve recorded pre-WIP base on resume');
+
+        var writesWalk = [];
+        var modWalk = loadPreCliDevelopmentSetup(
+            makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'main', null, []),
+            {
+                file_read: function () { throw new Error('missing'); },
+                file_write: function (args) { writesWalk.push(args); },
+                cli_execute_command: function (opts) {
+                    if (opts.command === 'git rev-parse HEAD') return 'ccccccc\n';
+                    if (opts.command === 'git log --no-merges --format=%H:%s -50 ccccccc') {
+                        return 'ccccccc:PROJ-1 WIP auto-save 2\nbbbbbbb:PROJ-1 WIP auto-save 1\naaaaaaa:Initial seed\n';
+                    }
+                    if (opts.command === 'git rev-parse bbbbbbb^') return 'aaaaaaa\n';
+                    return '';
+                }
+            }
+        );
+        modWalk.writeDevBaseHead('input/PROJ-1');
+        assert.equal(writesWalk.length, 1);
+        assert.equal(writesWalk[0].content, 'aaaaaaa', 'must walk back across contiguous WIP auto-save commits to their parent');
+
+        // Also cover plan/adaptive appendix steps directly in test_preCliDevelopmentSetup for CRAP coverage
+        var appendixWrites = [];
+        var modAppendix = loadPreCliDevelopmentSetup(
+            makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'main', null, []),
+            {
+                file_read: function (args) {
+                    if (args && args.path === '.git/info/exclude') return '';
+                    throw new Error('missing');
+                },
+                file_write: function (args) { appendixWrites.push(args); },
+                file_delete: function () { return { deleted: true }; },
+                cli_execute_command: function () { return ''; }
+            }
+        );
+        var planRes = modAppendix.runPlanModeAppendixStep({ developmentMode: 'plan' });
+        assert.equal(planRes.ok, true);
+        assert.throws(function () {
+            modAppendix.runPlanModeAppendixStep({
+                developmentMode: 'plan',
+                developmentModeConfig: { plan: { appendixFile: 'missing.md' } }
+            });
+        });
+        var adaptiveDefault = modAppendix.runDevelopmentModeAppendixStep(
+            { developmentMode: 'adaptive' },
+            { key: 'PROJ-1', fields: { summary: 'short', description: 'short' } }
+        );
+        assert.equal(adaptiveDefault.routed, 'default');
+        var adaptivePlan = modAppendix.runDevelopmentModeAppendixStep(
+            { developmentMode: 'adaptive' },
+            { key: 'PROJ-1', fields: { summary: 'big', description: '- m1\n- m2\n\nprose\n\n- m3\n- m4' } }
+        );
+        assert.equal(adaptivePlan.routed, 'plan');
+        assert.throws(function () {
+            modAppendix.runDevelopmentModeAppendixStep(
+                { developmentMode: 'adaptive', developmentModeConfig: { plan: { appendixFile: 'missing.md' } } },
+                { key: 'PROJ-1', fields: { summary: 'big', description: '- m1\n- m2\n\nprose\n\n- m3\n- m4' } }
+            );
+        });
     });
 });
 

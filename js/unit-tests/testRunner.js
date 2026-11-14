@@ -253,7 +253,8 @@ var REAL_COMMON_MODULES = {
     reviewPoolAggregate: 'js/common/reviewPoolAggregate.js',
     reviewPoolLegSetup: 'js/common/reviewPoolLegSetup.js',
     reviewPoolPost: 'js/common/reviewPoolPost.js',
-    gitlabTracker: 'js/common/gitlabTracker.js'
+    gitlabTracker: 'js/common/gitlabTracker.js',
+    wipSquash: 'js/common/wipSquash.js'
 };
 
 function makeRequire(moduleMap) {
