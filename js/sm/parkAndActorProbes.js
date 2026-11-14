@@ -396,18 +396,20 @@ function handleUpdateBranchAction(deps, rule, effectiveConfig, repoInfo, ticket,
     deps.error('  ❌ update_branch failed for ' + key + ': ' + (e.message || e));
   }
 }
-module.exports = {
-  headCommitActor: headCommitActor,
-  parkResetCommit: parkResetCommit,
-  armReviewOnlyMachineMerges: armReviewOnlyMachineMerges,
-  resolveHeadSha: resolveHeadSha,
-  freshHeadSha: freshHeadSha,
-  parkedSince: parkedSince,
-  parkedHeadSha: parkedHeadSha,
-  isMachineParkPush: isMachineParkPush,
-  validationRollupGreen: validationRollupGreen,
-  headChecksRed: headChecksRed,
-  unparkWithComment: unparkWithComment,
-  cancelStaleAfterRefreshUb: cancelStaleAfterRefreshUb,
-  handleUpdateBranchAction: handleUpdateBranchAction
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      headCommitActor: headCommitActor,
+      parkResetCommit: parkResetCommit,
+      armReviewOnlyMachineMerges: armReviewOnlyMachineMerges,
+      resolveHeadSha: resolveHeadSha,
+      freshHeadSha: freshHeadSha,
+      parkedSince: parkedSince,
+      parkedHeadSha: parkedHeadSha,
+      isMachineParkPush: isMachineParkPush,
+      validationRollupGreen: validationRollupGreen,
+      headChecksRed: headChecksRed,
+      unparkWithComment: unparkWithComment,
+      cancelStaleAfterRefreshUb: cancelStaleAfterRefreshUb,
+      handleUpdateBranchAction: handleUpdateBranchAction
+    };
+}

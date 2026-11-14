@@ -419,17 +419,19 @@ function runAction(deps, params) {
   }
   return runTickSetupAndRules(deps, p, init.projectConfig, resolved.rules, resolved.workflowBudget, globalRepoInfo);
 }
-module.exports = {
-  normalizePositiveInt: normalizePositiveInt,
-  resolveWorkflowCap: resolveWorkflowCap,
-  resolveValidationConcurrency: resolveValidationConcurrency,
-  approvedPrs: approvedPrs,
-  approvedQueueDepth: approvedQueueDepth,
-  effectiveValidationConcurrency: effectiveValidationConcurrency,
-  reportValidationCost: reportValidationCost,
-  resolvePriorityLabels: resolvePriorityLabels,
-  applyRuleOverrides: applyRuleOverrides,
-  dispatchRaceGraceMs: dispatchRaceGraceMs,
-  dropOpenPrsCache: dropOpenPrsCache,
-  runAction: runAction
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      normalizePositiveInt: normalizePositiveInt,
+      resolveWorkflowCap: resolveWorkflowCap,
+      resolveValidationConcurrency: resolveValidationConcurrency,
+      approvedPrs: approvedPrs,
+      approvedQueueDepth: approvedQueueDepth,
+      effectiveValidationConcurrency: effectiveValidationConcurrency,
+      reportValidationCost: reportValidationCost,
+      resolvePriorityLabels: resolvePriorityLabels,
+      applyRuleOverrides: applyRuleOverrides,
+      dispatchRaceGraceMs: dispatchRaceGraceMs,
+      dropOpenPrsCache: dropOpenPrsCache,
+      runAction: runAction
+    };
+}

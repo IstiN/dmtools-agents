@@ -482,10 +482,12 @@ function handleValidatePrAction(deps, rule, effectiveConfig, repoInfo, ticket, k
     deps.error('  ❌ validate_pr failed for ' + key + ': ' + (e.message || e));
   }
 }
-module.exports = {
-  PLACEHOLDER_PARK_MARKER: PLACEHOLDER_PARK_MARKER,
-  TERMINAL_PR_SKIP_MSG: TERMINAL_PR_SKIP_MSG,
-  cancelStaleAfterRefreshUb: cancelStaleAfterRefreshUb,
-  handleUpdateBranchAction: handleUpdateBranchAction,
-  handleValidatePrAction: handleValidatePrAction
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      PLACEHOLDER_PARK_MARKER: PLACEHOLDER_PARK_MARKER,
+      TERMINAL_PR_SKIP_MSG: TERMINAL_PR_SKIP_MSG,
+      cancelStaleAfterRefreshUb: cancelStaleAfterRefreshUb,
+      handleUpdateBranchAction: handleUpdateBranchAction,
+      handleValidatePrAction: handleValidatePrAction
+    };
+}
