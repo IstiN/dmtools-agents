@@ -341,18 +341,18 @@ function completeBlockedPath(ticketKey, blocked, hasCodeGraph, tracker, statuses
             tracker.postComment(ticketKey, buildBlockedWithoutCodeGraphComment(ticketKey));
         } catch (e) {
             deliveryErrors.push('postComment failed: ' + e);
-            console.error('❌ gh-1493: CodeGraph-retry comment NOT delivered:', e);
+            console.error('❌ CodeGraph-retry comment NOT delivered:', e);
         }
         try {
             tracker.moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
             console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
         } catch (e) {
             deliveryErrors.push('moveToStatus(' + statuses.READY_FOR_DEVELOPMENT + ') failed: ' + e);
-            console.error('❌ gh-1493: ticket NOT moved to Ready For Development — the CodeGraph retry will not be armed:', e);
+            console.error('❌ ticket NOT moved to Ready For Development — the CodeGraph retry will not be armed:', e);
         }
         removeLabels(ticketKey, params, tracker);
         if (deliveryErrors.length) {
-            console.error('❌ gh-1493: terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
+            console.error('❌ terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
             return { success: false, path: 'blocked_without_codegraph', ticketKey, delivered: false, error: deliveryErrors.join('; ') };
         }
         return { success: true, path: 'blocked_without_codegraph', ticketKey, delivered: true };
@@ -362,7 +362,7 @@ function completeBlockedPath(ticketKey, blocked, hasCodeGraph, tracker, statuses
         tracker.postComment(ticketKey, buildBlockedComment(ticketKey, blocked));
     } catch (e) {
         deliveryErrors.push('postComment failed: ' + e);
-        console.error('❌ gh-1493: blocked comment NOT delivered:', e);
+        console.error('❌ blocked comment NOT delivered:', e);
     }
 
     try {
@@ -370,13 +370,13 @@ function completeBlockedPath(ticketKey, blocked, hasCodeGraph, tracker, statuses
         console.log('✅ Moved', ticketKey, 'to Blocked');
     } catch (e) {
         deliveryErrors.push('moveToStatus(' + jiraConfig.statuses.BLOCKED + ') failed: ' + e);
-        console.error('❌ gh-1493: ticket NOT moved to Blocked — the SM will keep arming dev legs:', e);
+        console.error('❌ ticket NOT moved to Blocked — the SM will keep arming dev legs:', e);
     }
 
     removeLabels(ticketKey, params, tracker);
 
     if (deliveryErrors.length) {
-        console.error('❌ gh-1493: terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
+        console.error('❌ terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
         return { success: false, path: 'blocked', ticketKey, delivered: false, error: deliveryErrors.join('; ') };
     }
     return { success: true, path: 'blocked', ticketKey, delivered: true };
@@ -402,7 +402,7 @@ function completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraph, tracker
         tracker.postComment(ticketKey, buildAlreadyFixedComment(ticketKey, alreadyFixed, hasCodeGraph));
     } catch (e) {
         deliveryErrors.push('postComment failed: ' + e);
-        console.error('❌ gh-1493: already-fixed comment NOT delivered:', e);
+        console.error('❌ already-fixed comment NOT delivered:', e);
     }
 
     try {
@@ -410,7 +410,7 @@ function completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraph, tracker
         console.log('✅ Moved', ticketKey, 'to Done');
     } catch (e) {
         deliveryErrors.push('moveToStatus(' + jiraConfig.statuses.DONE + ') failed: ' + e);
-        console.error('❌ gh-1493: ticket NOT moved to Done — the SM will keep re-arming:', e);
+        console.error('❌ ticket NOT moved to Done — the SM will keep re-arming:', e);
     }
 
     try { tracker.addLabel(ticketKey, LABELS.AI_DEVELOPED); } catch (e) {
@@ -420,7 +420,7 @@ function completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraph, tracker
     removeLabels(ticketKey, params, tracker);
 
     if (deliveryErrors.length) {
-        console.error('❌ gh-1493: terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
+        console.error('❌ terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
         return { success: false, path: 'already_fixed', ticketKey, delivered: false, error: deliveryErrors.join('; ') };
     }
     return { success: true, path: 'already_fixed', ticketKey, delivered: true };
