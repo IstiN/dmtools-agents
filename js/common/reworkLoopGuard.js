@@ -210,7 +210,8 @@ function hasEscalationForHead(escalationMarkers, headSha) {
 }
 
 function escalationMovedPastHead(comments, headSha, opts) {
-    if (!headSha) return false;
+    var allow = authorAllowlist(opts);
+    if (!headSha || !allow) return false;
     var markers = parseEscalationMarkers(comments, opts);
     return markers.length > 0 && !hasEscalationForHead(markers, headSha);
 }

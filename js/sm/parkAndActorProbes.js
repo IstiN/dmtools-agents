@@ -177,14 +177,18 @@ function validationRollupGreen(deps, repoInfo, prNumber) {
 function headChecksRed(deps, repoInfo, prNumber) {
   return checkRollupConclusionEquals(deps, repoInfo, prNumber, 'red', '  ⚠️  red-rollup probe failed: ');
 }
-function unparkHeadChange994(deps, repoInfo, ticket, key, parkLabelVf, parkedHeadVf, uHead) {
-  if (!deps.dry) {
-    try {
-      deps.githubTracker(repoInfo).removeLabel(ticket.prNumber, parkLabelVf);
-    } catch (eUnpark994) {
-      deps.warn('  ⚠️  un-park label failed: ' + (eUnpark994.message || eUnpark994));
-    }
+function removePrLabelSafe(deps, repoInfo, prNumber, labelName, warnPrefix) {
+  if (deps.dry) return true;
+  try {
+    deps.githubTracker(repoInfo).removeLabel(prNumber, labelName);
+    return true;
+  } catch (eRem) {
+    deps.warn(warnPrefix + (eRem.message || eRem));
+    return false;
   }
+}
+function unparkHeadChange994(deps, repoInfo, ticket, key, parkLabelVf, parkedHeadVf, uHead) {
+  removePrLabelSafe(deps, repoInfo, ticket.prNumber, parkLabelVf, '  ⚠️  un-park label failed: ');
   deps.dropOpenPrsCache(repoInfo);
   deps.log('  ▶ park-reset: ' + key + ' head ' + parkedHeadVf + '→' + uHead + ' — validation_failed tracked the old head only; the park resets on ANY head change (gh-994)');
   return true;
@@ -203,10 +207,18 @@ function unparkWithComment(deps, repoInfo, prNumber, parkLabelVf, commentBody) {
     deps.warn('  ⚠️  un-park comment failed: ' + (eComment.message || eComment));
   }
 }
-function evaluateMachineUnpark(deps, repoInfo, ticket, uHead, parkedAtVf, probeHeadVerdictVf) {
-  if ( deps.validationRollupGreen(repoInfo, ticket.prNumber) || probeHeadVerdictVf() === 'success' ) {
+function evaluateMachineGreenUnpark(deps, repoInfo, ticket, probeHeadVerdictVf) {
+  if (deps.validationRollupGreen(repoInfo, ticket.prNumber)) {
     return { unpark: true, why: 'the current head checks are GREEN' };
   }
+  if (probeHeadVerdictVf() === 'success') {
+    return { unpark: true, why: 'the dispatched validation run on the current head concluded SUCCESS' };
+  }
+  return null;
+}
+function evaluateMachineUnpark(deps, repoInfo, ticket, uHead, parkedAtVf, probeHeadVerdictVf) {
+  var greenUnpark = evaluateMachineGreenUnpark(deps, repoInfo, ticket, probeHeadVerdictVf);
+  if (greenUnpark) return greenUnpark;
   var headActorVf = deps.headCommitActor(repoInfo, uHead);
   var headDate = headActorVf && headActorVf.date ? headActorVf.date : '';
   var headMovedCleanVf = !!(headDate && Date.parse(headDate) > Date.parse(parkedAtVf) && probeHeadVerdictVf() !== 'failure');
@@ -366,20 +378,17 @@ function runGuardedSilentRefresh(deps, rule, repoInfo, ticket, key, uHead, forkF
   deps.log('  ✅ ' + key + ' branch silently updated (no CI)');
   cancelStaleAfterRefreshUb(deps, rule, repoInfo, ticket, newHead);
 }
-function tryClearEscalatedOnMovedHead(deps, repoInfo, ticket, key, labelsVf, uHead) {
+function tryClearEscalatedOnMovedHead(deps, repoInfo, ticket, key, labelsVf, uHead, prMachineAuthorU) {
   var escLabel = reworkLoopGuardModule.ESCALATION_LABEL;
   if (labelsVf.indexOf(escLabel) === -1 || !uHead) return false;
+  var subst = deps.parkResetCommit(repoInfo, uHead, prMachineAuthorU);
+  var escSha = subst ? subst.sha : uHead;
+  var escLogins = machineAuthorModule.machineAuthorLogins(prMachineAuthorU);
   var escComments = deps.fetchPrCommentList(repoInfo, ticket.prNumber);
-  if (!reworkLoopGuardModule.escalationMovedPastHead(escComments, uHead)) return false;
-  if (!deps.dry) {
-    try {
-      deps.githubTracker(repoInfo).removeLabel(ticket.prNumber, escLabel);
-    } catch (eUnesc) {
-      deps.warn('  ⚠️  un-escalate label failed: ' + (eUnesc.message || eUnesc));
-    }
-  }
+  if (!reworkLoopGuardModule.escalationMovedPastHead(escComments, escSha, { authorLogins: escLogins })) return false;
+  if (!removePrLabelSafe(deps, repoInfo, ticket.prNumber, escLabel, '  ⚠️  un-escalate label failed: ')) return false;
   deps.dropOpenPrsCache(repoInfo);
-  deps.log('  ▶ park-reset: ' + key + ' head moved to ' + uHead.slice(0, 8) + ' — ' + escLabel + ' cleared (gh-957 budget resets on a new head)');
+  deps.log('  ▶ park-reset: ' + key + ' head moved to ' + escSha.slice(0, 8) + ' — ' + escLabel + ' cleared (gh-957 budget resets on a new head)');
   return true;
 }
 function tryUnparkParkedTicket(deps, rule, repoInfo, ticket, key, parkLabelVf, labelsVf, uHead, prMachineAuthorU, isMachinePrU) {
@@ -401,7 +410,9 @@ function handleUpdateBranchAction(deps, rule, effectiveConfig, repoInfo, ticket,
     var uHead = deps.resolveHeadSha(repoInfo, ticket);
     var prMachineAuthorU = machineAuthorModule.resolveMachineAuthor(deps.jobParams, effectiveConfig);
     var isMachinePrU = machineAuthorModule.isMachineAuthored(ticket, prMachineAuthorU, repoInfo.owner);
-    var unparkedThisPass = tryUnparkParkedTicket(deps, rule, repoInfo, ticket, key, parkLabelVf, labelsVf, uHead, prMachineAuthorU, isMachinePrU) || tryClearEscalatedOnMovedHead(deps, repoInfo, ticket, key, labelsVf, uHead);
+    var unparkedPark = tryUnparkParkedTicket(deps, rule, repoInfo, ticket, key, parkLabelVf, labelsVf, uHead, prMachineAuthorU, isMachinePrU);
+    var clearedEsc = tryClearEscalatedOnMovedHead(deps, repoInfo, ticket, key, labelsVf, uHead, prMachineAuthorU);
+    var unparkedThisPass = unparkedPark || clearedEsc;
     var parkedRedHeadThisPass = maybeParkGuestOnRedHead(deps, repoInfo, ticket, key, parkLabelVf, labelsVf, uHead, isMachinePrU, unparkedThisPass);
     deps.setUpdateBranchPassFlags(unparkedThisPass, parkedRedHeadThisPass);
     var forkGateU = deps.forkSilentUpdateGate();

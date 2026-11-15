@@ -259,8 +259,8 @@ suite('sm github source', function () {
         });
         var ctx = { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' }, machineAuthor: 'ai-teammate' };
         var items = srcMod.query({ source: 'github', query: query }, ctx);
-        assert.deepEqual(queries, ['repo:IstiN/flutter_agent_harness is:issue is:open'],
-            'label-less issue query issues an open-issue search instead of returning 0 descriptors');
+        assert.deepEqual(queries, ['repo:IstiN/flutter_agent_harness is:issue is:open sort:created-asc'],
+            'label-less issue query issues an oldest-first open-issue search instead of returning 0 descriptors');
         assert.equal(items.length, 1, 'only the un-backfilled issue with an open+green machine PR matches');
         assert.equal(items[0].key, 'gh-2103');
         assert.equal(items[0].prNumber, 2183);

@@ -83,7 +83,7 @@ var ISSUE_SEARCH_WORKER_SOURCE = [
     '    }',
     '    var d = args.descriptor;',
     "    var suffix = d.kind === 'label' ? ' label:\"' + d.label + '\"' :" +
-    "        (d.kind === 'assignee' ? ' assignee:' + args.assignee : '');",
+    "        (d.kind === 'assignee' ? ' assignee:' + args.assignee : ' sort:created-asc');",
     "    var query = 'repo:' + args.repo.owner + '/' + args.repo.repo + ' is:issue is:open' + suffix;",
     '    return { descriptor: d, items: asList(parseMcp(github_search_issues({ query: query }))) };',
     '}'
@@ -686,7 +686,7 @@ function _issueSearchDescriptors(q, machineAuthor) {
     var descriptors = (q.labels || []).map(function (ml) { return { kind: 'label', label: ml }; });
     var assigneeQuery = resolveAssigneeQuery(q.assignee, machineAuthor);
     if (assigneeQuery) descriptors.push({ kind: 'assignee' });
-    if (!descriptors.length && !q.assignee && !(q.labels && q.labels.length)) descriptors.push({ kind: 'open' });
+    if (!descriptors.length && !q.assignee) descriptors.push({ kind: 'open' });
     return { descriptors: descriptors, assigneeQuery: assigneeQuery };
 }
 
@@ -695,7 +695,7 @@ function _issueSearchDescriptors(q, machineAuthor) {
 // function is ISSUE_SEARCH_WORKER_SOURCE).
 function issueSearchOneFn(full, assigneeQuery) {
     return function (d) {
-        var suffix = d.kind === 'label' ? ' label:"' + d.label + '"' : (d.kind === 'assignee' ? ' assignee:' + assigneeQuery : '');
+        var suffix = d.kind === 'label' ? ' label:"' + d.label + '"' : (d.kind === 'assignee' ? ' assignee:' + assigneeQuery : ' sort:created-asc');
         var res = parseMcp(github_search_issues({ query: 'repo:' + full + ' is:issue is:open' + suffix }));
         return { descriptor: d, items: asList(res) };
     };

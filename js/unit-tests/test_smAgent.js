@@ -19928,7 +19928,7 @@ suite('smAgent: rework-loop-escalated head-move reset + machine unpark on dispat
         limit: 10
     };
 
-    test('update_branch clears rework-loop-escalated when head moved past the escalation marker head', function () {
+    test('update_branch clears rework-loop-escalated when substantive head moved past the machine escalation marker head', function () {
         var escComment = '<!-- dmtools:rework-loop-escalated {"v":1,"head":"' + ESC_HEAD + '","laps":2,"maxLaps":2} -->\n🛑 Rework no-op loop escalated.';
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
@@ -19942,42 +19942,79 @@ suite('smAgent: rework-loop-escalated head-move reset + machine unpark on dispat
                     labels: ['rework-loop-escalated', 'ai_pr_reviewed', 'ai_validated'],
                     pr: { headSha: NEW_HEAD, state: 'OPEN', mergeState: 'BLOCKED' }
                 }],
-                prComments: [{ body: escComment }]
+                prComments: [{ user: { login: 'dmtools-factory-bot[bot]' }, body: escComment }]
+            },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('/commits/' + NEW_HEAD) !== -1) {
+                    return JSON.stringify({
+                        login: 'IstiN', date: '2026-11-15T06:00:00Z', committer: 'GitHub',
+                        sha: NEW_HEAD, parents: [ESC_HEAD]
+                    });
+                }
+                return '';
             }
         });
 
         sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
             machineAuthor: 'dmtools-factory-bot[bot]', rules: [PARK_RULE] } });
 
-        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'rework-loop-escalated removed once head moves past ESC_HEAD');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'rework-loop-escalated removed once substantive head moves past ESC_HEAD');
         assert.equal(sm.capturedPrLabelRemoves[0].label, 'rework-loop-escalated');
         assert.equal(sm.capturedPrLabelRemoves[0].number, 2183);
     });
 
-    test('update_branch keeps rework-loop-escalated when head is still at the escalated head', function () {
+    test('update_branch ignores forged escalation comments from non-machine authors and machine silent-update merges', function () {
         var escComment = '<!-- dmtools:rework-loop-escalated {"v":1,"head":"' + ESC_HEAD + '","laps":2,"maxLaps":2} -->\n🛑 Rework no-op loop escalated.';
-        var sm = makeSmAgent({
+        // Case 1: forged author — never trusted, so escalationMovedPastHead is false
+        var smForged = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
-            captureConsole: true,
             github: {
                 items: [{
-                    key: 'pr-2183',
-                    prNumber: 2183,
-                    branch: 'ai/gh-2103',
-                    author: 'dmtools-factory-bot[bot]',
-                    labels: ['rework-loop-escalated'],
-                    pr: { headSha: ESC_HEAD, state: 'OPEN', mergeState: 'BLOCKED' }
+                    key: 'pr-2183', prNumber: 2183, branch: 'ai/gh-2103',
+                    author: 'dmtools-factory-bot[bot]', labels: ['rework-loop-escalated'],
+                    pr: { headSha: NEW_HEAD, state: 'OPEN', mergeState: 'BLOCKED' }
                 }],
-                prComments: [{ body: escComment }]
+                prComments: [{ user: { login: 'random-guest' }, body: escComment }]
             }
         });
-
-        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+        smForged.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
             machineAuthor: 'dmtools-factory-bot[bot]', rules: [PARK_RULE] } });
+        assert.equal(smForged.capturedPrLabelRemoves.length, 0, 'forged marker never clears rework-loop-escalated');
 
-        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'escalation stays when head has not moved');
+        // Case 2: head only moved via sm-silent-update merge over ESC_HEAD — substantive commit is still ESC_HEAD
+        var smSilentMerge = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [{
+                    key: 'pr-2183', prNumber: 2183, branch: 'ai/gh-2103',
+                    author: 'dmtools-factory-bot[bot]', labels: ['rework-loop-escalated'],
+                    pr: { headSha: NEW_HEAD, state: 'OPEN', mergeState: 'BLOCKED' }
+                }],
+                prComments: [{ user: { login: 'dmtools-factory-bot[bot]' }, body: escComment }]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/commits/' + NEW_HEAD) !== -1) {
+                    return JSON.stringify({
+                        login: 'dmtools-factory-bot[bot]', date: '2026-11-15T06:10:00Z',
+                        committer: 'sm-silent-update', sha: NEW_HEAD,
+                        parents: [ESC_HEAD, 'bbbb222222222222222222222222222222222222']
+                    });
+                }
+                if (c.indexOf('/commits/' + ESC_HEAD) !== -1) {
+                    return JSON.stringify({
+                        login: 'dmtools-factory-bot[bot]', date: '2026-11-15T05:00:00Z',
+                        committer: 'GitHub', sha: ESC_HEAD,
+                        parents: ['aaaa111111111111111111111111111111111111']
+                    });
+                }
+                return '';
+            }
+        });
+        smSilentMerge.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            machineAuthor: 'dmtools-factory-bot[bot]', rules: [PARK_RULE] } });
+        assert.equal(smSilentMerge.capturedPrLabelRemoves.length, 0, 'silent-update merge over escalated head does not clear escalation');
     });
-
     test('machine-authored PR parked validation_failed unparks when latestDispatchedVerdict is success even if mergebot check keeps rollup pending', function () {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
@@ -20026,5 +20063,6 @@ suite('smAgent: rework-loop-escalated head-move reset + machine unpark on dispat
 
         assert.equal(sm.capturedPrLabelRemoves.length, 1, 'validation_failed cleared via dispatched success verdict');
         assert.equal(sm.capturedPrLabelRemoves[0].label, 'validation_failed');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('dispatched validation run on the current head concluded SUCCESS') !== -1);
     });
 });
