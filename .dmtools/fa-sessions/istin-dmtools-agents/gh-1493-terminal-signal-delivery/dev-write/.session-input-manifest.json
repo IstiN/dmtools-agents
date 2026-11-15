@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-15T06:03:48.987Z",
+  "ticketKey": "pr-1494",
+  "headSha": "c68fd81f5e40abea163584e7ca3ba334c9c23791",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:27aa9e999a96591f",
+      "size": 49657
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:4ac3daec7233f57a",
+      "size": 5040322
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:6d944a4101f37ddd",
+      "size": 2277
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:02359401fa3fcc23",
+      "size": 11265
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:7aad946221c76482",
+      "size": 841
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:458466a12b5735bf",
+      "size": 577
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:89241ec81343ff12",
+      "size": 3092
+    },
+    "request.md": {
+      "hash": "fnv1a64:007fed41e3ee7758",
+      "size": 2743
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:349512ac1497ce62",
+      "size": 1907
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:9a6250ff1c5fb021",
+      "size": 660
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:6e1d41d6c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:e3600d869801540e",
+      "size": 2831
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:007fed41e3ee7758",
+      "size": 2743
+    }
+  },
+  "comments": [
+    {
+      "id": "thread-1",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "",
+      "resolved": false,
+      "body": "Pushed 3a7da070d: removed the `gh-1493: ` prefixes from runtime `console.error` output (owner request — ticket numbers don't belong in production leg logs). Code comments and test titles keep the reference. Suite green: run_developBugAndCreatePR 70 passed / 0 failed."
+    },
+    {
+      "id": "pr_discussions.md:ajaxspace:2026-11-15:d166f08c",
+      "kind": "comment",
+      "author": "ajaxspace",
+      "createdAt": "2026-11-15",
+      "updatedAt": "2026-11-15",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Pushed 3a7da070d: removed the `gh-1493: ` prefixes from runtime `console.error` output (owner request — ticket numbers don't belong in production leg logs). Code comments and test titles keep the reference. Suite green: run_developBugAndCreatePR 70 passed / 0 failed."
+    }
+  ]
+}
