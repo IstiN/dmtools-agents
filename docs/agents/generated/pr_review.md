@@ -86,6 +86,11 @@ _Prepare PR for Review Action (preCliJSAction for pr_review agent)_
 - Source: `agents/js/preparePRForReview.js`
 - Side effects:
   - post ticket comment (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `allowApproveWithSuggestions`
   - `branchCreateFnPath`
@@ -113,6 +118,11 @@ _Post PR Review Comments Action — posts the assembled review._
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
   - assign ticket (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `aiRepository`
   - `allowApproveWithSuggestions`

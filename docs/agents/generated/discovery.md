@@ -53,6 +53,11 @@ _Publish Discovery To Confluence — postJSAction for the discovery agent._
 - Source: `agents/js/publishDiscoveryToConfluence.js`
 - Side effects:
   - post ticket comment (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `contentOutput`
   - `feedbackLoop`

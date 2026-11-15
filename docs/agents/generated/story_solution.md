@@ -91,6 +91,11 @@ _Write Solution and Diagrams Post-Action_
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
   - assign ticket (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `aiRepository`
   - `autoStartDevelopment`

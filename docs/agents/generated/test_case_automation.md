@@ -63,6 +63,11 @@ _Post Test Automation Results Action (postJSAction for test_case_automation)_
   - remove label "sm_test_automation_triggered" (via tracker)
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `aiRepository`
   - `configPath`

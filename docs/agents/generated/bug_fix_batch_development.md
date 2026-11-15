@@ -46,6 +46,11 @@ _Pre-CLI Bug-fix Batch Context Action_
 - Source: `agents/js/prepareBugFixBatchContext.js`
 - Side effects:
   - move ticket to status (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `branchCreateFnPath`
   - `childQuestions`

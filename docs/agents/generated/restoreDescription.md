@@ -25,7 +25,12 @@ Full prompt / instruction set: [`agents/snapshots/restoreDescription.md`](agents
 _Restore Jira ticket description from changelog history._
 
 - Source: `agents/restoreDescription.js`
-- No detected file I/O or side effects.
+- Side effects:
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 
 
 

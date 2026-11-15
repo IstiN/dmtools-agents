@@ -62,6 +62,11 @@ _Pre-CLI Development Setup Action_
   - git push
   - git checkout
   - git merge
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `aiRepository`
   - `artefactRepository`

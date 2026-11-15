@@ -34,6 +34,12 @@ Full prompt / instruction set: [`agents/snapshots/story_solution_e2e.md`](agents
 _E2E Post-Action: Write Solution + Affected Repositories Section + Labels_
 
 - Source: `agents/js/writeSolutionAndLabels.js`
+- Side effects:
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `aiRepository`
   - `autoStartDevelopment`

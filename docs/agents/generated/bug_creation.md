@@ -52,6 +52,11 @@ _Prepare Bug Creation Context (preCliJSAction for bug_creation agent)_
   - `input/<KEY>/ticket.md`
 - Side effects:
   - post ticket comment (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `branchCreateFnPath`
   - `dryRun`
@@ -68,6 +73,11 @@ _Post Bug Creation Action (postJSAction for bug_creation agent)_
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
   - create ticket (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `removeLabel`
   - `trackerProvider`

@@ -48,6 +48,11 @@ _Pre-CLI Test Rework Setup Action (preCliJSAction for pr_test_automation_rework)
   - move ticket to status (via tracker)
   - git checkout
   - git merge
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `allowApproveWithSuggestions`
   - `branchCreateFnPath`
@@ -71,6 +76,11 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
   - git push
   - git checkout
   - git merge
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `aiRepository`
   - `commentMarkup`
