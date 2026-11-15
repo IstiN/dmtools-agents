@@ -379,7 +379,9 @@ function processRule(deps, rule, globalRepoInfo, ruleIndex, workflowBudget, effe
   localAndStateRunnerModule.maybePublishFactoryState(deps.buildStatePublishDeps(effectiveConfig), rule, effectiveConfig, effectiveRepoInfo, res.processedKeys);
   return res;
 }
-module.exports = {
-  checkProcessRuleEarlyExit: checkProcessRuleEarlyExit,
-  processRule: processRule
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      checkProcessRuleEarlyExit: checkProcessRuleEarlyExit,
+      processRule: processRule
+    };
+}

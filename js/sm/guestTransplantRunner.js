@@ -475,17 +475,19 @@ function sweepClosedGuestBranches(deps, repoInfo, cfg, machineLogins) {
     executeGcOrphanStep(deps, repoInfo, cfg, machineLogins, sweep, s);
   });
 }
-module.exports = {
-  guestExec: guestExec,
-  guestBranchExists: guestBranchExists,
-  guestMarker: guestMarker,
-  guestArmEvent: guestArmEvent,
-  guestOpenPrOnBranch: guestOpenPrOnBranch,
-  guestPrDiffText: guestPrDiffText,
-  guestApplyStep: guestApplyStep,
-  guestRunSteps: guestRunSteps,
-  transplantGuestPrAction: transplantGuestPrAction,
-  guestSweepEntry: guestSweepEntry,
-  guestPrLabels: guestPrLabels,
-  sweepClosedGuestBranches: sweepClosedGuestBranches
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      guestExec: guestExec,
+      guestBranchExists: guestBranchExists,
+      guestMarker: guestMarker,
+      guestArmEvent: guestArmEvent,
+      guestOpenPrOnBranch: guestOpenPrOnBranch,
+      guestPrDiffText: guestPrDiffText,
+      guestApplyStep: guestApplyStep,
+      guestRunSteps: guestRunSteps,
+      transplantGuestPrAction: transplantGuestPrAction,
+      guestSweepEntry: guestSweepEntry,
+      guestPrLabels: guestPrLabels,
+      sweepClosedGuestBranches: sweepClosedGuestBranches
+    };
+}

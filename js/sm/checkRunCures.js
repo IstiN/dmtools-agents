@@ -456,21 +456,23 @@ function rerunTargetsForCancelledContexts(deps, repoInfo, headSha, contexts, run
     return [];
   }
 }
-module.exports = {
-  GHOST_FLAP_MARKER: GHOST_FLAP_MARKER,
-  cancelMaterializeTimeoutMs: cancelMaterializeTimeoutMs,
-  cancelMaterializePollMs: cancelMaterializePollMs,
-  waitForRunMaterialized: waitForRunMaterialized,
-  concludeOrphanedCheckRuns: concludeOrphanedCheckRuns,
-  cancelStaleDispatchedRuns: cancelStaleDispatchedRuns,
-  postGhostGuardAudit: postGhostGuardAudit,
-  recordFirstRejection: recordFirstRejection,
-  sweepZombieCheckRunsNeutral: sweepZombieCheckRunsNeutral,
-  greenCoverRun: greenCoverRun,
-  concludePlaceholderCheckRuns: concludePlaceholderCheckRuns,
-  headKeyedComments: headKeyedComments,
-  ghostFlapState: ghostFlapState,
-  ghostFlapEscalate: ghostFlapEscalate,
-  cancelledRequiredContexts: cancelledRequiredContexts,
-  rerunTargetsForCancelledContexts: rerunTargetsForCancelledContexts
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      GHOST_FLAP_MARKER: GHOST_FLAP_MARKER,
+      cancelMaterializeTimeoutMs: cancelMaterializeTimeoutMs,
+      cancelMaterializePollMs: cancelMaterializePollMs,
+      waitForRunMaterialized: waitForRunMaterialized,
+      concludeOrphanedCheckRuns: concludeOrphanedCheckRuns,
+      cancelStaleDispatchedRuns: cancelStaleDispatchedRuns,
+      postGhostGuardAudit: postGhostGuardAudit,
+      recordFirstRejection: recordFirstRejection,
+      sweepZombieCheckRunsNeutral: sweepZombieCheckRunsNeutral,
+      greenCoverRun: greenCoverRun,
+      concludePlaceholderCheckRuns: concludePlaceholderCheckRuns,
+      headKeyedComments: headKeyedComments,
+      ghostFlapState: ghostFlapState,
+      ghostFlapEscalate: ghostFlapEscalate,
+      cancelledRequiredContexts: cancelledRequiredContexts,
+      rerunTargetsForCancelledContexts: rerunTargetsForCancelledContexts
+    };
+}

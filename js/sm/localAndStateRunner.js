@@ -467,14 +467,16 @@ function maybePublishFactoryState(deps, rule, effectiveConfig, effectiveRepoInfo
     deps.warn('  ⚠️  factory state publish failed: ' + (ePub.message || ePub));
   }
 }
-module.exports = {
-  readDualLayoutSource: readDualLayoutSource,
-  readLocalActionSource: readLocalActionSource,
-  buildLocalModuleBlock: buildLocalModuleBlock,
-  runLocalAction: runLocalAction,
-  queryRuleTicketsOrThrow: queryRuleTicketsOrThrow,
-  validateRuleShape: validateRuleShape,
-  processRuleLocally: processRuleLocally,
-  ensureDeadZoneScan: ensureDeadZoneScan,
-  maybePublishFactoryState: maybePublishFactoryState
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      readDualLayoutSource: readDualLayoutSource,
+      readLocalActionSource: readLocalActionSource,
+      buildLocalModuleBlock: buildLocalModuleBlock,
+      runLocalAction: runLocalAction,
+      queryRuleTicketsOrThrow: queryRuleTicketsOrThrow,
+      validateRuleShape: validateRuleShape,
+      processRuleLocally: processRuleLocally,
+      ensureDeadZoneScan: ensureDeadZoneScan,
+      maybePublishFactoryState: maybePublishFactoryState
+    };
+}
