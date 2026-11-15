@@ -209,6 +209,13 @@ function hasEscalationForHead(escalationMarkers, headSha) {
     });
 }
 
+function escalationMovedPastHead(comments, headSha, opts) {
+    var allow = authorAllowlist(opts);
+    if (!headSha || !allow) return false;
+    var markers = parseEscalationMarkers(comments, opts);
+    return markers.length > 0 && !hasEscalationForHead(markers, headSha);
+}
+
 /**
  * gh-990 (2nd live instance, dart #424 ~16:37Z / #419 ~17:2xZ, 2026-10-17):
  * the FALSE-POSITIVE refinement of the escalation. When the no-op budget is
@@ -255,17 +262,20 @@ function shouldWithholdArm(state) {
     };
 }
 
-module.exports = {
-    DEFAULT_NOOP_LAP_MAX: DEFAULT_NOOP_LAP_MAX,
-    LAP_MARKER_PREFIX: LAP_MARKER_PREFIX,
-    ESCALATION_MARKER_PREFIX: ESCALATION_MARKER_PREFIX,
-    ESCALATION_LABEL: ESCALATION_LABEL,
-    buildLapMarker: buildLapMarker,
-    buildEscalationComment: buildEscalationComment,
-    parseLapMarkers: parseLapMarkers,
-    parseEscalationMarkers: parseEscalationMarkers,
-    consecutiveNoopLaps: consecutiveNoopLaps,
-    hasEscalationForHead: hasEscalationForHead,
-    escalationIsFalsePositive: escalationIsFalsePositive,
-    shouldWithholdArm: shouldWithholdArm
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        DEFAULT_NOOP_LAP_MAX: DEFAULT_NOOP_LAP_MAX,
+        LAP_MARKER_PREFIX: LAP_MARKER_PREFIX,
+        ESCALATION_MARKER_PREFIX: ESCALATION_MARKER_PREFIX,
+        ESCALATION_LABEL: ESCALATION_LABEL,
+        buildLapMarker: buildLapMarker,
+        buildEscalationComment: buildEscalationComment,
+        parseLapMarkers: parseLapMarkers,
+        parseEscalationMarkers: parseEscalationMarkers,
+        consecutiveNoopLaps: consecutiveNoopLaps,
+        hasEscalationForHead: hasEscalationForHead,
+        escalationMovedPastHead: escalationMovedPastHead,
+        escalationIsFalsePositive: escalationIsFalsePositive,
+        shouldWithholdArm: shouldWithholdArm
+    };
+}
