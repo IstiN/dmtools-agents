@@ -252,3 +252,14 @@ suite('reworkLoopGuard: [bot]-suffixed machine authors are trusted (gh-1025)', f
             'a different bot stays invisible');
     });
 });
+
+suite('reworkLoopGuard.escalationMovedPastHead', function () {
+    test('returns true when escalation markers exist on old heads and none match current head', function () {
+        var g = loadGuard();
+        var body = g.buildEscalationComment('oldhead111', 2, 2, '2026-10-17T12:00:00Z');
+        assert.equal(g.escalationMovedPastHead([machineComment(body)], 'newhead222'), true);
+        assert.equal(g.escalationMovedPastHead([machineComment(body)], 'oldhead111'), false);
+        assert.equal(g.escalationMovedPastHead([], 'newhead222'), false);
+        assert.equal(g.escalationMovedPastHead([machineComment(body)], ''), false);
+    });
+});

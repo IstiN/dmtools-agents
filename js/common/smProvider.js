@@ -1302,8 +1302,8 @@ function _glOpenIssues(owner, repo) {
 
 function _glSearchOpenIssues(owner, repo, descriptor, assignee) {
     return _glOpenIssues(owner, repo).filter(function (it) {
-        if (descriptor.kind === 'label') return it.labels.indexOf(descriptor.label) !== -1;
-        return it.assignees.some(function (a) { return a.login === assignee; });
+        if (descriptor.kind === 'open') return true;
+        return descriptor.kind === 'label' ? it.labels.indexOf(descriptor.label) !== -1 : it.assignees.some(function (a) { return a.login === assignee; });
     });
 }
 

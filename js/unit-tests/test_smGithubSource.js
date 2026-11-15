@@ -232,6 +232,40 @@ suite('sm github source', function () {
         assert.equal(onlyIssue[0].key, 'gh-1226');
     });
 
+    test('deployed develop-done: label-less issue query scans open issues and matches green machine PR (fa #2103)', function () {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var query = null;
+        rules.forEach(function (r) { if (r.id === 'develop-done') query = r.query; });
+        assert.ok(query, 'deployed develop-done query found');
+
+        var queries = [];
+        var srcMod = load({
+            github_search_issues: function (args) {
+                queries.push(args.query);
+                return { items: [
+                    { number: 2103, labels: [{ name: 'goal' }] },
+                    { number: 2104, labels: [{ name: 'ai_developed' }] }
+                ] };
+            }
+        }, {
+            2103: { number: 2183, state: 'OPEN' },
+            2104: { number: 2184, state: 'OPEN' }
+        }, {
+            2183: { number: 2183, state: 'OPEN', checkConclusion: 'green', mergeState: 'BLOCKED',
+                   mergeable: true, author: 'ai-teammate', branch: 'ai/gh-2103', labels: ['ai_validated'] },
+            2184: { number: 2184, state: 'OPEN', checkConclusion: 'green', mergeState: 'CLEAN',
+                   mergeable: true, author: 'ai-teammate', branch: 'ai/gh-2104', labels: [] }
+        });
+        var ctx = { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' }, machineAuthor: 'ai-teammate' };
+        var items = srcMod.query({ source: 'github', query: query }, ctx);
+        assert.deepEqual(queries, ['repo:IstiN/flutter_agent_harness is:issue is:open'],
+            'label-less issue query issues an open-issue search instead of returning 0 descriptors');
+        assert.equal(items.length, 1, 'only the un-backfilled issue with an open+green machine PR matches');
+        assert.equal(items[0].key, 'gh-2103');
+        assert.equal(items[0].prNumber, 2183);
+    });
+
     test('blocked label: the SM ignores the item on every rule (fa #939)', function () {
         // 'blocked' is owner-controlled parking: label matches the rule,
         // yet the item must not surface from ANY query.
@@ -3794,7 +3828,7 @@ suite('sm github source — gh-1194 query split helpers', function () {
         assert.equal(out.assigneeQuery, null);
 
         out = gt._issueSearchDescriptors({}, 'deploy-bot');
-        assert.deepEqual(out.descriptors, []);
+        assert.deepEqual(out.descriptors, [{ kind: 'open' }]);
     });
 
     test('_runIssueSearch: single descriptor keeps the sequential path (searchOne)', function () {

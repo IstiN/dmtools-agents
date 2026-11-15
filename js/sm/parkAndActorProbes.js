@@ -6,6 +6,7 @@
 
 var guestValidationPathModule = require('../common/guestValidationPath.js');
 var machineAuthorModule = require('../common/machineAuthor.js');
+var reworkLoopGuardModule = require('../common/reworkLoopGuard.js');
 var smProviderModule = require('../common/smProvider.js');
 var validationLivenessModule = require('../common/validationLiveness.js');
 var validationProbesModule = require('./validationProbes.js');
@@ -203,7 +204,7 @@ function unparkWithComment(deps, repoInfo, prNumber, parkLabelVf, commentBody) {
   }
 }
 function evaluateMachineUnpark(deps, repoInfo, ticket, uHead, parkedAtVf, probeHeadVerdictVf) {
-  if ( deps.validationRollupGreen(repoInfo, ticket.prNumber) ) {
+  if ( deps.validationRollupGreen(repoInfo, ticket.prNumber) || probeHeadVerdictVf() === 'success' ) {
     return { unpark: true, why: 'the current head checks are GREEN' };
   }
   var headActorVf = deps.headCommitActor(repoInfo, uHead);
@@ -365,6 +366,22 @@ function runGuardedSilentRefresh(deps, rule, repoInfo, ticket, key, uHead, forkF
   deps.log('  ✅ ' + key + ' branch silently updated (no CI)');
   cancelStaleAfterRefreshUb(deps, rule, repoInfo, ticket, newHead);
 }
+function tryClearEscalatedOnMovedHead(deps, repoInfo, ticket, key, labelsVf, uHead) {
+  var escLabel = reworkLoopGuardModule.ESCALATION_LABEL;
+  if (labelsVf.indexOf(escLabel) === -1 || !uHead) return false;
+  var escComments = deps.fetchPrCommentList(repoInfo, ticket.prNumber);
+  if (!reworkLoopGuardModule.escalationMovedPastHead(escComments, uHead)) return false;
+  if (!deps.dry) {
+    try {
+      deps.githubTracker(repoInfo).removeLabel(ticket.prNumber, escLabel);
+    } catch (eUnesc) {
+      deps.warn('  ⚠️  un-escalate label failed: ' + (eUnesc.message || eUnesc));
+    }
+  }
+  deps.dropOpenPrsCache(repoInfo);
+  deps.log('  ▶ park-reset: ' + key + ' head moved to ' + uHead.slice(0, 8) + ' — ' + escLabel + ' cleared (gh-957 budget resets on a new head)');
+  return true;
+}
 function tryUnparkParkedTicket(deps, rule, repoInfo, ticket, key, parkLabelVf, labelsVf, uHead, prMachineAuthorU, isMachinePrU) {
   if (labelsVf.indexOf(parkLabelVf) === -1) return false;
   var parkedHeadVf = deps.parkedHeadSha(repoInfo, ticket.prNumber);
@@ -384,7 +401,7 @@ function handleUpdateBranchAction(deps, rule, effectiveConfig, repoInfo, ticket,
     var uHead = deps.resolveHeadSha(repoInfo, ticket);
     var prMachineAuthorU = machineAuthorModule.resolveMachineAuthor(deps.jobParams, effectiveConfig);
     var isMachinePrU = machineAuthorModule.isMachineAuthored(ticket, prMachineAuthorU, repoInfo.owner);
-    var unparkedThisPass = tryUnparkParkedTicket(deps, rule, repoInfo, ticket, key, parkLabelVf, labelsVf, uHead, prMachineAuthorU, isMachinePrU);
+    var unparkedThisPass = tryUnparkParkedTicket(deps, rule, repoInfo, ticket, key, parkLabelVf, labelsVf, uHead, prMachineAuthorU, isMachinePrU) || tryClearEscalatedOnMovedHead(deps, repoInfo, ticket, key, labelsVf, uHead);
     var parkedRedHeadThisPass = maybeParkGuestOnRedHead(deps, repoInfo, ticket, key, parkLabelVf, labelsVf, uHead, isMachinePrU, unparkedThisPass);
     deps.setUpdateBranchPassFlags(unparkedThisPass, parkedRedHeadThisPass);
     var forkGateU = deps.forkSilentUpdateGate();

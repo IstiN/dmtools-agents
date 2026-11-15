@@ -173,6 +173,16 @@ suite('sm gitlab source', function () {
         assert.deepEqual(items.map(function (i) { return i.key; }), ['gh-7']);
     });
 
+    test('open-issue rule (develop-done shape): label-less issue query scans cached open issues', function () {
+        var t = fresh();
+        var items = t.query({
+            source: 'gitlab',
+            query: { type: 'issue', notLabels: ['ai_developed', 'agent:rework'],
+                     prState: 'OPEN', prChecks: 'green', prMachineAuthor: true }
+        });
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['gh-5']);
+    });
+
     test('one gitlab_list_issues per tick across rules (ioCache)', function () {
         var t = fresh();
         t.query({ source: 'gitlab', query: { type: 'issue', labels: ['agent:review'] } });
