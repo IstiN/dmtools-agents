@@ -39,6 +39,8 @@ var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
 // gh-1329 review: the shared "load bug bookkeeping" helper (one getIssue,
 // one machine-author resolution) for both legs that read the markers.
 var bugBookkeeping = require('./common/bugBookkeeping.js');
+// gh-1493: terminal-signal delivery contract (attemptDelivery/deliveryOutcome).
+const { attemptDelivery, deliveryOutcome } = require('./common/terminalDelivery.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -327,58 +329,53 @@ function handlePrAlreadyOpen(ticketKey, existingPr, tracker, statuses, params) {
  * CodeGraph usage the blocked claim is rejected and the ticket resets for a
  * retry; otherwise the blocked comment is posted and the ticket moves to
  * Blocked. Tracker call order (comment → move → labels) preserved.
+ * gh-1493: a failed comment/transition fails the leg (terminalDelivery);
+ * label cleanup stays non-fatal.
  */
 function completeBlockedPath(ticketKey, blocked, hasCodeGraph, tracker, statuses, jiraConfig, params) {
+    var deliveryErrors = [];
     if (!hasCodeGraph) {
         console.warn('outputs/blocked.json rejected — no CodeGraph usage was recorded');
-        try {
+        attemptDelivery(deliveryErrors, 'postComment failed', '❌ CodeGraph-retry comment NOT delivered:', null, function() {
             tracker.postComment(ticketKey, buildBlockedWithoutCodeGraphComment(ticketKey));
-        } catch (e) {}
-        try {
+        });
+        attemptDelivery(deliveryErrors, 'moveToStatus(' + statuses.READY_FOR_DEVELOPMENT + ') failed', '❌ Ticket NOT moved to Ready For Development — the CodeGraph retry will not be armed:', '✅ Moved ' + ticketKey + ' to Ready For Development for CodeGraph retry', function() {
             tracker.moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
-            console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
-        } catch (e) {
-            console.warn('Failed to move ticket to Ready For Development:', e);
-        }
+        });
         removeLabels(ticketKey, params, tracker);
-        return { success: true, path: 'blocked_without_codegraph', ticketKey };
+        return deliveryOutcome('blocked_without_codegraph', ticketKey, deliveryErrors);
     }
-
-    try { tracker.postComment(ticketKey, buildBlockedComment(ticketKey, blocked)); } catch (e) {}
-
-    try {
+    attemptDelivery(deliveryErrors, 'postComment failed', '❌ Blocked comment NOT delivered:', null, function() {
+        tracker.postComment(ticketKey, buildBlockedComment(ticketKey, blocked));
+    });
+    attemptDelivery(deliveryErrors, 'moveToStatus(' + jiraConfig.statuses.BLOCKED + ') failed', '❌ Ticket NOT moved to Blocked — the SM will keep arming dev legs:', '✅ Moved ' + ticketKey + ' to Blocked', function() {
         tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED);
-        console.log('✅ Moved', ticketKey, 'to Blocked');
-    } catch (e) {
-        console.warn('Failed to move to Blocked:', e);
-    }
-
+    });
     removeLabels(ticketKey, params, tracker);
-    return { success: true, path: 'blocked', ticketKey };
+    return deliveryOutcome('blocked', ticketKey, deliveryErrors);
 }
 
 /**
  * gh-1003: Path 2 completion extracted from action — posts the
  * already-fixed comment, moves the ticket to Done, stamps the
  * AI_DEVELOPED label, removes SM labels. Tracker call order preserved.
+ * gh-1493: the comment + Done transition ARE the terminal signal — a failed
+ * delivery fails the leg (fah#2182: a false success re-armed 40 legs).
  */
 function completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraph, tracker, jiraConfig, params) {
-    if (!hasCodeGraph) {
-        console.warn('outputs/already_fixed.json accepted without CodeGraph usage');
-    }
-    try { tracker.postComment(ticketKey, buildAlreadyFixedComment(ticketKey, alreadyFixed, hasCodeGraph)); } catch (e) {}
-
-    try {
+    if (!hasCodeGraph) console.warn('outputs/already_fixed.json accepted without CodeGraph usage');
+    var deliveryErrors = [];
+    attemptDelivery(deliveryErrors, 'postComment failed', '❌ Already-fixed comment NOT delivered:', null, function() {
+        tracker.postComment(ticketKey, buildAlreadyFixedComment(ticketKey, alreadyFixed, hasCodeGraph));
+    });
+    attemptDelivery(deliveryErrors, 'moveToStatus(' + jiraConfig.statuses.DONE + ') failed', '❌ Ticket NOT moved to Done — the SM will keep re-arming:', '✅ Moved ' + ticketKey + ' to Done', function() {
         tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
-        console.log('✅ Moved', ticketKey, 'to Done');
-    } catch (e) {
-        console.warn('Failed to move to Done:', e);
+    });
+    try { tracker.addLabel(ticketKey, LABELS.AI_DEVELOPED); } catch (e) {
+        console.warn('Failed to add', LABELS.AI_DEVELOPED, 'label:', e);
     }
-
-    try { tracker.addLabel(ticketKey, LABELS.AI_DEVELOPED); } catch (e) {}
-
     removeLabels(ticketKey, params, tracker);
-    return { success: true, path: 'already_fixed', ticketKey };
+    return deliveryOutcome('already_fixed', ticketKey, deliveryErrors);
 }
 
 /**

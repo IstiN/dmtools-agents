@@ -1813,7 +1813,7 @@ suite('developBugAndCreatePR — gh-1188 extracted step helpers', function() {
         assert.deepEqual(removed, ['bug_development_wip', 'sm_l']);
     });
 
-    test('completeBlockedPath: Blocked-move failure still returns the blocked outcome', function() {
+    test('completeBlockedPath: Blocked-move failure fails the leg (gh-1493)', function() {
         var harness = loadDevelopBugAndCreatePR({});
         var tracker = {
             postComment: function() {},
@@ -1823,10 +1823,13 @@ suite('developBugAndCreatePR — gh-1188 extracted step helpers', function() {
             removeLabel: function() {}
         };
         var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r', tried: ['t'], needs: 'n' }, true, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, false);
+        assert.equal(result.delivered, false);
         assert.equal(result.path, 'blocked');
+        assert.contains(result.error, 'moveToStatus(Blocked) failed');
     });
 
-    test('completeBlockedPath: CodeGraph-retry move failure still returns the reset outcome', function() {
+    test('completeBlockedPath: CodeGraph-retry move failure fails the leg (gh-1493)', function() {
         var harness = loadDevelopBugAndCreatePR({});
         var tracker = {
             postComment: function() {},
@@ -1834,10 +1837,71 @@ suite('developBugAndCreatePR — gh-1188 extracted step helpers', function() {
             removeLabel: function() {}
         };
         var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r' }, false, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, false);
+        assert.equal(result.delivered, false);
         assert.equal(result.path, 'blocked_without_codegraph');
     });
 
-    test('completeAlreadyFixedPath: Done-move failure still returns the outcome', function() {
+    test('completeBlockedPath: comment-delivery failure alone fails the leg (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var tracker = {
+            postComment: function() { throw new Error('empty workspace binding'); },
+            moveToStatus: function() {},
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r', tried: ['t'], needs: 'n' }, true, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, false);
+        assert.equal(result.delivered, false);
+        assert.equal(result.path, 'blocked');
+        assert.contains(result.error, 'postComment failed');
+        assert.contains(result.error, 'empty workspace binding');
+    });
+
+    test('completeBlockedPath: CodeGraph-retry comment failure fails the leg (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var tracker = {
+            postComment: function() { throw new Error('tracker down'); },
+            moveToStatus: function() {},
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r' }, false, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, false);
+        assert.equal(result.delivered, false);
+        assert.equal(result.path, 'blocked_without_codegraph');
+        assert.contains(result.error, 'postComment failed');
+    });
+
+    test('completeBlockedPath: full delivery succeeds (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var calls = [];
+        var tracker = {
+            postComment: function(key) { calls.push(['comment', key]); },
+            moveToStatus: function(key, status) { calls.push(['move', key, status]); },
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r', tried: ['t'], needs: 'n' }, true, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.delivered, true);
+        assert.deepEqual(calls[0], ['comment', 'TS-1']);
+        assert.deepEqual(calls[1], ['move', 'TS-1', 'Blocked']);
+    });
+
+    test('completeBlockedPath: CodeGraph-retry full delivery resets for retry (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var calls = [];
+        var tracker = {
+            postComment: function(key) { calls.push(['comment', key]); },
+            moveToStatus: function(key, status) { calls.push(['move', key, status]); },
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r' }, false, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.delivered, true);
+        assert.deepEqual(calls[0], ['comment', 'TS-1']);
+        assert.deepEqual(calls[1], ['move', 'TS-1', 'Ready For Development']);
+    });
+
+    test('completeAlreadyFixedPath: Done-move failure fails the leg (gh-1493 — fah#2182: a false success re-armed 40 legs)', function() {
         var harness = loadDevelopBugAndCreatePR({});
         var tracker = {
             postComment: function() {},
@@ -1846,7 +1910,53 @@ suite('developBugAndCreatePR — gh-1188 extracted step helpers', function() {
             removeLabel: function() {}
         };
         var result = harness.mod.completeAlreadyFixedPath('TS-1', { commit: 'abc' }, true, tracker, { statuses: { DONE: 'Done' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, false);
+        assert.equal(result.delivered, false);
         assert.equal(result.path, 'already_fixed');
+        assert.contains(result.error, 'moveToStatus(Done) failed');
+    });
+
+    test('completeAlreadyFixedPath: full delivery succeeds (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var calls = [];
+        var tracker = {
+            postComment: function(key, comment) { calls.push(['comment', key]); },
+            moveToStatus: function(key, status) { calls.push(['move', key, status]); },
+            addLabel: function(key, label) { calls.push(['label', key, label]); },
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeAlreadyFixedPath('TS-1', { commit: 'abc' }, true, tracker, { statuses: { DONE: 'Done' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.delivered, true);
+        assert.deepEqual(calls[0], ['comment', 'TS-1']);
+        assert.deepEqual(calls[1], ['move', 'TS-1', 'Done']);
+    });
+
+    test('completeAlreadyFixedPath: comment-delivery failure alone fails the leg (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var tracker = {
+            postComment: function() { throw new Error('empty workspace binding'); },
+            moveToStatus: function() {},
+            addLabel: function() {},
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeAlreadyFixedPath('TS-1', { commit: 'abc' }, true, tracker, { statuses: { DONE: 'Done' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'postComment failed');
+        assert.contains(result.error, 'empty workspace binding');
+    });
+
+    test('completeAlreadyFixedPath: label-cleanup failure stays non-fatal (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var tracker = {
+            postComment: function() {},
+            moveToStatus: function() {},
+            addLabel: function() { throw new Error('label quota'); },
+            removeLabel: function() { throw new Error('label quota'); }
+        };
+        var result = harness.mod.completeAlreadyFixedPath('TS-1', { commit: 'abc' }, true, tracker, { statuses: { DONE: 'Done' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.delivered, true);
     });
 
     test('parkLabelOpenPr: labels the open PR for the development branch; failures swallowed', function() {
