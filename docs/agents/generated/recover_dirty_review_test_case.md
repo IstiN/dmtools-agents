@@ -34,11 +34,6 @@ _recoverDirtyReviewTestCase.js_
   - remove label "sm_test_review_triggered" (via tracker)
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
-  - post Jira comment
-  - create Jira ticket
-  - link Jira issues
-  - assign ticket
-  - attach file to ticket
 
 
 ## LLM step
