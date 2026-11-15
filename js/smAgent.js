@@ -421,31 +421,33 @@ function buildTickOrchestratorDeps() {
 
 function action(params) { return tickOrchestratorModule.runAction(buildTickOrchestratorDeps(), params); }
 
-module.exports = {
-    action: action, processRule: processRule, loadRuleConfig: loadRuleConfig,
-    readLocalActionSource: function (jsPath, readFile) { return localAndStateRunnerModule.readLocalActionSource(readFile || function (p) { return file_read({ path: p }); }, jsPath); },
-    runLocalAction: function (jsPath, ticket, agentParams) { return localAndStateRunnerModule.runLocalAction(buildLocalAndStateDeps(), jsPath, ticket, agentParams); },
-    probeDispatchedState: function (repoInfo, ciWorkflow, headSha) { return mergeAndParkProbesModule.probeDispatchedState(buildProbesDeps(), repoInfo, ciWorkflow, headSha); },
-    hasRecentHeadRun: validationProbesModule.hasRecentHeadRun,
-    recentlyConcludedNonGreen: function (probe, repoInfo, headSha) { return mergeAndParkProbesModule.recentlyConcludedNonGreen(buildProbesDeps(), probe, repoInfo, headSha); },
-    dispatchRaceGraceMs: tickOrchestratorModule.dispatchRaceGraceMs,
-    resolveValidationConcurrency: function (jobParams, projectCfg) { return tickOrchestratorModule.resolveValidationConcurrency(buildIoDeps(), jobParams, projectCfg); },
-    effectiveValidationConcurrency: tickOrchestratorModule.effectiveValidationConcurrency,
-    reportValidationCost: function (repoInfo, cfg, mutexMax) { return tickOrchestratorModule.reportValidationCost(buildTickOrchestratorDeps(), repoInfo, cfg, mutexMax); },
-    resolvePriorityLabels: function (projectCfg) { return tickOrchestratorModule.resolvePriorityLabels(buildIoDeps(), projectCfg); },
-    applyRuleOverridesForTest: function (rules, overrides) { return tickOrchestratorModule.applyRuleOverrides(buildIoDeps(), rules, overrides); },
-    recordDispatchFailure: function (repoInfo, ticketKey, item, err, expandedRef, failClass) { return workflowDispatchModule.recordDispatchFailure(buildWorkflowDispatchDeps(), repoInfo, ticketKey, item, err, expandedRef, failClass); },
-    ruleBudgetRemaining: ruleBudgetRemaining, syncValidationChecks: syncValidationChecks, stampValidationChecksForModule: stampValidationChecksForModule,
-    stampLinkBlock: function (repoInfo, runUrl, conclusion) { return validationCheckSyncModule.stampLinkBlock(buildSyncValidationDeps(), repoInfo, runUrl, conclusion); },
-    dispatchedValidationRuns: function (r, wf) { return validationProbesModule.dispatchedValidationRuns(buildProbesDeps(), r, wf); },
-    failingCheckNames: function (r, sha) { return validationProbesModule.failingCheckNames(buildProbesDeps(), r, sha); },
-    headCheckRunsSafe: function (r, sha) { return validationProbesModule.headCheckRunsSafe(buildProbesDeps(), r, sha); },
-    latestCheckRunConclusions: validationProbesModule.latestCheckRunConclusions,
-    headHasRealFailure: function (r, sha) { return validationProbesModule.headHasRealFailure(buildProbesDeps(), r, sha); },
-    headWorkflowRunsSafe: function (r, sha) { return validationProbesModule.headWorkflowRunsSafe(buildProbesDeps(), r, sha); },
-    headCheckRunZombies: function (r, sha) { return validationProbesModule.headCheckRunZombies(buildProbesDeps(), r, sha); },
-    headPlaceholders: function (r, sha) { return validationProbesModule.headPlaceholders(buildProbesDeps(), r, sha); },
-    headOrphanedRunChecks: function (r, sha) { return validationProbesModule.headOrphanedRunChecks(buildProbesDeps(), r, sha); },
-    fetchPrCommentList: fetchPrCommentList, fetchPrReviewThreadNodes: fetchPrReviewThreadNodes,
-    checksAppToken: checksAppToken, swapToChecksToken: swapToChecksToken, restoreChecksToken: restoreChecksToken
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        action: action, processRule: processRule, loadRuleConfig: loadRuleConfig,
+        readLocalActionSource: function (jsPath, readFile) { return localAndStateRunnerModule.readLocalActionSource(readFile || function (p) { return file_read({ path: p }); }, jsPath); },
+        runLocalAction: function (jsPath, ticket, agentParams) { return localAndStateRunnerModule.runLocalAction(buildLocalAndStateDeps(), jsPath, ticket, agentParams); },
+        probeDispatchedState: function (repoInfo, ciWorkflow, headSha) { return mergeAndParkProbesModule.probeDispatchedState(buildProbesDeps(), repoInfo, ciWorkflow, headSha); },
+        hasRecentHeadRun: validationProbesModule.hasRecentHeadRun,
+        recentlyConcludedNonGreen: function (probe, repoInfo, headSha) { return mergeAndParkProbesModule.recentlyConcludedNonGreen(buildProbesDeps(), probe, repoInfo, headSha); },
+        dispatchRaceGraceMs: tickOrchestratorModule.dispatchRaceGraceMs,
+        resolveValidationConcurrency: function (jobParams, projectCfg) { return tickOrchestratorModule.resolveValidationConcurrency(buildIoDeps(), jobParams, projectCfg); },
+        effectiveValidationConcurrency: tickOrchestratorModule.effectiveValidationConcurrency,
+        reportValidationCost: function (repoInfo, cfg, mutexMax) { return tickOrchestratorModule.reportValidationCost(buildTickOrchestratorDeps(), repoInfo, cfg, mutexMax); },
+        resolvePriorityLabels: function (projectCfg) { return tickOrchestratorModule.resolvePriorityLabels(buildIoDeps(), projectCfg); },
+        applyRuleOverridesForTest: function (rules, overrides) { return tickOrchestratorModule.applyRuleOverrides(buildIoDeps(), rules, overrides); },
+        recordDispatchFailure: function (repoInfo, ticketKey, item, err, expandedRef, failClass) { return workflowDispatchModule.recordDispatchFailure(buildWorkflowDispatchDeps(), repoInfo, ticketKey, item, err, expandedRef, failClass); },
+        ruleBudgetRemaining: ruleBudgetRemaining, syncValidationChecks: syncValidationChecks, stampValidationChecksForModule: stampValidationChecksForModule,
+        stampLinkBlock: function (repoInfo, runUrl, conclusion) { return validationCheckSyncModule.stampLinkBlock(buildSyncValidationDeps(), repoInfo, runUrl, conclusion); },
+        dispatchedValidationRuns: function (r, wf) { return validationProbesModule.dispatchedValidationRuns(buildProbesDeps(), r, wf); },
+        failingCheckNames: function (r, sha) { return validationProbesModule.failingCheckNames(buildProbesDeps(), r, sha); },
+        headCheckRunsSafe: function (r, sha) { return validationProbesModule.headCheckRunsSafe(buildProbesDeps(), r, sha); },
+        latestCheckRunConclusions: validationProbesModule.latestCheckRunConclusions,
+        headHasRealFailure: function (r, sha) { return validationProbesModule.headHasRealFailure(buildProbesDeps(), r, sha); },
+        headWorkflowRunsSafe: function (r, sha) { return validationProbesModule.headWorkflowRunsSafe(buildProbesDeps(), r, sha); },
+        headCheckRunZombies: function (r, sha) { return validationProbesModule.headCheckRunZombies(buildProbesDeps(), r, sha); },
+        headPlaceholders: function (r, sha) { return validationProbesModule.headPlaceholders(buildProbesDeps(), r, sha); },
+        headOrphanedRunChecks: function (r, sha) { return validationProbesModule.headOrphanedRunChecks(buildProbesDeps(), r, sha); },
+        fetchPrCommentList: fetchPrCommentList, fetchPrReviewThreadNodes: fetchPrReviewThreadNodes,
+        checksAppToken: checksAppToken, swapToChecksToken: swapToChecksToken, restoreChecksToken: restoreChecksToken
+    };
+}
