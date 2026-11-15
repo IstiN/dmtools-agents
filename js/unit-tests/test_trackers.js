@@ -492,18 +492,42 @@ suite('trackers.js github provider', function () {
         });
         t.addLabel('acme/widgets#7', 'ai-generated');
         t.removeLabel('acme/widgets#7', 'wip');
+        // gh-1495: the args carry the composite key alongside owner/repo/number
+        // (githubIssueArgs shape, same as moveToStatus/assignTo).
         assert.deepEqual(ghAdd.calls[0], {
+            labels: ['ai-generated'],
+            key: 'acme/widgets#7',
             owner: 'acme',
             repo: 'widgets',
-            number: 7,
-            labels: ['ai-generated']
+            number: 7
         });
         assert.deepEqual(ghRemove.calls[0], {
+            label: 'wip',
+            key: 'acme/widgets#7',
             owner: 'acme',
             repo: 'widgets',
-            number: 7,
-            label: 'wip'
+            number: 7
         });
+    });
+
+    test('gh-1495: empty binding sends absent owner/repo — ambient fallback stays reachable', function () {
+        var ghAdd = recorder('github_add_labels', '{}');
+        var ghGet = recorder('github_get_issue', '{}');
+        var trackers = loadTrackers({
+            github_add_labels: ghAdd,
+            github_get_issue: ghGet
+        });
+        // No repository in config, no composite key — the args must carry
+        // absent owner/repo (never "") so the runtime's ambient fallback
+        // (GITHUB_REPOSITORY) resolves the call.
+        var t = trackers.createTracker({ tracker: { provider: 'github' } });
+        t.addLabel('gh-2182', 'dev-plan-escalated');
+        assert.notOk('owner' in ghAdd.calls[0]);
+        assert.notOk('repo' in ghAdd.calls[0]);
+        assert.equal(ghAdd.calls[0].number, 2182);
+        t.getTicket('gh-2182');
+        assert.notOk('workspace' in ghGet.calls[0]);
+        assert.notOk('repository' in ghGet.calls[0]);
     });
 
     test('postComment / getComments use the issue comment surface', function () {
@@ -2018,13 +2042,13 @@ suite('trackers.js — createGithubTracker: repository-pinned tracker for the SM
     test('addLabel sends owner/repo of the RULE repository, the number and a one-element labels array', function () {
         var x = gh();
         x.t.addLabel(1211, 'agent:rework');
-        assert.deepEqual(x.m.github_add_labels.calls[0], { owner: 'epam', repo: 'dmtools-dart', number: 1211, labels: ['agent:rework'] });
+        assert.deepEqual(x.m.github_add_labels.calls[0], { labels: ['agent:rework'], key: 'epam/dmtools-dart#1211', owner: 'epam', repo: 'dmtools-dart', number: 1211 });
     });
 
     test('removeLabel sends owner/repo/number and the singular label', function () {
         var x = gh();
         x.t.removeLabel(1428, 'pr_approved');
-        assert.deepEqual(x.m.github_remove_label.calls[0], { owner: 'epam', repo: 'dmtools-dart', number: 1428, label: 'pr_approved' });
+        assert.deepEqual(x.m.github_remove_label.calls[0], { label: 'pr_approved', key: 'epam/dmtools-dart#1428', owner: 'epam', repo: 'dmtools-dart', number: 1428 });
     });
 
     test('postComment writes the text to the issue/PR number of that repository', function () {

@@ -1323,10 +1323,11 @@ suite('pushReworkChanges.action — tracker provider dispatch (#414)', function(
             'the setup-failed comment should be posted through the github provider'
         );
         assert.deepEqual(ghRemoveLabelCalls[0], {
+            label: 'sm_rework_triggered',
+            key: 'IstiN/fah-git-test#42',
             owner: 'IstiN',
             repo: 'fah-git-test',
-            number: 42,
-            label: 'sm_rework_triggered'
+            number: 42
         });
     });
 });
