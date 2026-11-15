@@ -416,7 +416,10 @@ suite('trackers.js github provider', function () {
             repository: { owner: 'acme', repo: 'widgets' }
         }).getTicket('41');
         // Dart tool schema (github_get_issue): workspace/repository/issueNumber.
+        // gh-1495: the bag carries the (config-expanded) composite key too,
+        // miroring the label-op shape (githubIssueArgs).
         assert.deepEqual(ghGet.calls[0], {
+            key: 'acme/widgets#41',
             workspace: 'acme',
             repository: 'widgets',
             issueNumber: 41
@@ -510,7 +513,7 @@ suite('trackers.js github provider', function () {
         });
     });
 
-    test('gh-1495: empty binding sends absent owner/repo — ambient fallback stays reachable', function () {
+    test('gh-1495: empty binding sends absent owner/repo — identity from config or composite key', function () {
         var ghAdd = recorder('github_add_labels', '{}');
         var ghGet = recorder('github_get_issue', '{}');
         var trackers = loadTrackers({
@@ -518,8 +521,10 @@ suite('trackers.js github provider', function () {
             github_get_issue: ghGet
         });
         // No repository in config, no composite key — the args must carry
-        // absent owner/repo (never "") so the runtime's ambient fallback
-        // (GITHUB_REPOSITORY) resolves the call.
+        // absent owner/repo (never "") so no explicit empty string defeats
+        // whatever identity resolution the runtime could attempt. On CLI
+        // v0.1.99+ absent bare-key calls reject loudly at the bridge (no
+        // ambient fallback) — that reject IS the desired loud signal.
         var t = trackers.createTracker({ tracker: { provider: 'github' } });
         t.addLabel('gh-2182', 'dev-plan-escalated');
         assert.notOk('owner' in ghAdd.calls[0]);
@@ -528,6 +533,45 @@ suite('trackers.js github provider', function () {
         t.getTicket('gh-2182');
         assert.notOk('workspace' in ghGet.calls[0]);
         assert.notOk('repository' in ghGet.calls[0]);
+        assert.equal(ghGet.calls[0].issueNumber, 2182);
+    });
+
+    test('gh-1495 review: composite keys carry their owner/repo on unbound configs (reads/comments too)', function () {
+        var ghGet = recorder('github_get_issue', '{}');
+        var ghPost = recorder('github_create_comment', '{}');
+        var ghList = recorder('github_get_pr_comments', []);
+        var trackers = loadTrackers({
+            github_get_issue: ghGet,
+            github_create_comment: ghPost,
+            github_get_pr_comments: ghList
+        });
+        // The reviewer's live probe: on an unbound config a composite key
+        // worked for label writes but repo-less reads/comments rejected —
+        // getTicket/postComment/getComments must parse the key the same
+        // way the label ops do (PR #1496 review thread, trackers.js:725).
+        var t = trackers.createTracker({ tracker: { provider: 'github' } });
+        t.getTicket('own/repo#7');
+        assert.deepEqual(ghGet.calls[0], {
+            key: 'own/repo#7',
+            workspace: 'own',
+            repository: 'repo',
+            issueNumber: 7
+        });
+        t.postComment('own/repo#7', 'hello');
+        assert.deepEqual(ghPost.calls[0], {
+            key: 'own/repo#7',
+            workspace: 'own',
+            repository: 'repo',
+            pullRequestId: 7,
+            text: 'hello'
+        });
+        t.getComments('own/repo#7');
+        assert.deepEqual(ghList.calls[0], {
+            key: 'own/repo#7',
+            workspace: 'own',
+            repository: 'repo',
+            pullRequestId: 7
+        });
     });
 
     test('postComment / getComments use the issue comment surface', function () {
@@ -549,13 +593,16 @@ suite('trackers.js github provider', function () {
         // github_create_comment / github_get_pr_comments hit the
         // issues/{n}/comments endpoint (PRs are issues upstream); the
         // number argument keeps the tools' canonical pullRequestId name.
+        // gh-1495: the bag carries the composite key (githubIssueArgs).
         assert.deepEqual(ghPost.calls[0], {
+            key: 'acme/widgets#7',
             workspace: 'acme',
             repository: 'widgets',
             pullRequestId: 7,
             text: 'hello'
         });
         assert.deepEqual(ghList.calls[0], {
+            key: 'acme/widgets#7',
             workspace: 'acme',
             repository: 'widgets',
             pullRequestId: 7
@@ -584,6 +631,24 @@ suite('trackers.js github provider', function () {
             body: 'It broke'
         });
         assert.equal(key, 'acme/widgets#42');
+    });
+
+    test('gh-1495 review: createTicket on unbound config sends absent owner/repo', function () {
+        var ghCreate = recorder('github_create_issue', {
+            number: 42,
+            title: 'New bug',
+            state: 'open',
+            html_url: 'https://github.com/acme/widgets/issues/42'
+        });
+        var trackers = loadTrackers({ github_create_issue: ghCreate });
+        trackers.createTracker({ tracker: { provider: 'github' } })
+            .createTicket(null, 'bug', 'New bug', 'It broke');
+        // Same empty-string class as the read/label boundary — reachable
+        // in production via workflowFailureReporter / postBugCreation.
+        assert.notOk('owner' in ghCreate.calls[0]);
+        assert.notOk('repo' in ghCreate.calls[0]);
+        assert.equal(ghCreate.calls[0].title, 'New bug');
+        assert.equal(ghCreate.calls[0].body, 'It broke');
     });
 
     test('search and assignTo fail with a clear error when the runtime lacks the dedicated tools', function () {
@@ -704,6 +769,7 @@ suite('trackers.js github provider — gh-N router keys (gh-770)', function () {
         var trackers = loadTrackers({ github_create_comment: ghPost });
         trackers.createTracker(GH_CONFIG).postComment('gh-1308', 'hello');
         assert.deepEqual(ghPost.calls[0], {
+            key: 'gh-1308',
             workspace: 'acme',
             repository: 'widgets',
             pullRequestId: 1308,
