@@ -345,12 +345,14 @@ function handle(ctx, deps) {
     return 'failed';
 }
 
-module.exports = {
-    handle: handle,
-    flakeCandidate: flakeCandidate,
-    flakeMarkedHeads: flakeMarkedHeads,
-    flakeMarkerLine: flakeMarkerLine,
-    buildReport: buildReport,
-    emptyLapMaxOf: emptyLapMaxOf,
-    failedRunLinksFromList: failedRunLinksFromList
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        handle: handle,
+        flakeCandidate: flakeCandidate,
+        flakeMarkedHeads: flakeMarkedHeads,
+        flakeMarkerLine: flakeMarkerLine,
+        buildReport: buildReport,
+        emptyLapMaxOf: emptyLapMaxOf,
+        failedRunLinksFromList: failedRunLinksFromList
+    };
+}

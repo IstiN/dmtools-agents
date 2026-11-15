@@ -277,3 +277,174 @@ suite('wiki_publisher.json — generic wiki publisher base agent (gh-1112 UT-cfg
         assert.equal(result.valid, true, 'validation errors: ' + JSON.stringify(result.errors));
     });
 });
+
+// ── Synthetic & Batch & Action coverage tests ────────────────────────────────
+
+suite('agentValidator synthetic edge cases, batch, and action', function() {
+
+    function loadWithVirtualFs(files, cliHandler) {
+        return loadModule(
+            'js/agentValidator.js',
+            null,
+            {
+                file_read: function(p) {
+                    if (Object.prototype.hasOwnProperty.call(files, p.path)) {
+                        var v = files[p.path];
+                        if (v instanceof Error) throw v;
+                        return v;
+                    }
+                    return null;
+                },
+                cli_execute_command: cliHandler || function() { return ''; }
+            }
+        );
+    }
+
+    test('handles unreadable JSON, missing name, missing params', function() {
+        var v = loadWithVirtualFs({
+            'bad.json': '{not json',
+            'throw.json': new Error('io error'),
+            'no_name_no_params.json': JSON.stringify({}),
+            'non_teammate.json': JSON.stringify({ name: 'CustomAgent', params: {} })
+        });
+        var rBad = v.validateAgentJson('bad.json');
+        assert.equal(rBad.valid, false);
+        var rThrow = v.validateAgentJson('throw.json');
+        assert.equal(rThrow.valid, false);
+        var rNoParams = v.validateAgentJson('no_name_no_params.json');
+        assert.equal(rNoParams.valid, false);
+        assert.equal(rNoParams.errors.length, 2);
+
+        var rNonTeammate = v.validateAgentJson('non_teammate.json');
+        assert.equal(rNonTeammate.valid, true);
+        assert.ok(rNonTeammate.info.some(function(i) { return i.indexOf('Non-Teammate') !== -1; }));
+    });
+
+    test('validates cliPrompts, cliPromptsByTracker, legacy agentParams, cliCommands, and JS actions', function() {
+        var longText = new Array(220).join('x');
+        var v = loadWithVirtualFs({
+            'missing_prompts.json': JSON.stringify({
+                name: 'Teammate',
+                params: { cliCommands: ['./run.sh'] }
+            }),
+            'edge_agent.json': JSON.stringify({
+                name: 'Teammate',
+                params: {
+                    cliPrompts: [
+                        123,
+                        './agents/missing_prompt.md',
+                        { id: 'cond', prompt: './agents/gen.md', condition: 'c.js' },
+                        longText
+                    ],
+                    cliPromptsByTracker: {
+                        jira: 'not-an-array',
+                        ado: [456, './agents/missing_ado.md', './agents/ok_ado.md']
+                    },
+                    agentParams: {
+                        instructions: [longText, './agents/short.md']
+                    },
+                    cliCommands: [
+                        789,
+                        longText,
+                        './agents/missing_cmd.sh --flag'
+                    ],
+                    preCliJSAction: 123,
+                    postJSAction: './agents/missing_post.js',
+                    preJSAction: './agents/syntax_err.js',
+                    metadata: { contextId: 'edge_ctx' }
+                }
+            }),
+            'mock_cmd_agent.json': JSON.stringify({
+                name: 'Teammate',
+                params: {
+                    cliPrompts: ['./agents/ok_ado.md'],
+                    cliCommands: ['./agents/missing_cmd.sh --flag'],
+                    postJSAction: './agents/missing_post.js',
+                    preJSAction: './agents/syntax_err.js'
+                }
+            }),
+            'non_array_cmds.json': JSON.stringify({
+                name: 'Teammate',
+                params: { cliCommands: 'invalid' }
+            }),
+            'ok_ado.md': '# ok',
+            'syntax_err.js': 'function action ( { broken syntax'
+        });
+
+        var rMissing = v.validateAgentJson('missing_prompts.json');
+        assert.equal(rMissing.valid, false);
+
+        var rNonArrayCmd = v.validateAgentJson('non_array_cmds.json');
+        assert.equal(rNonArrayCmd.valid, false);
+
+        var rEdge = v.validateAgentJson('edge_agent.json');
+        assert.equal(rEdge.valid, false);
+        assert.ok(rEdge.errors.length >= 6);
+        assert.ok(rEdge.warnings.length >= 4);
+
+        var rMock = v.validateAgentJson('mock_cmd_agent.json', { mockCli: true, mockActions: true });
+        assert.ok(rMock.mockCliResult.warnings.length > 0);
+        assert.ok(rMock.preCliResult && rMock.preCliResult.warnings.length > 0);
+    });
+
+    test('mockJsAction handles missing file, read exception, and module.exports.action', function() {
+        var v = loadWithVirtualFs({
+            'exports_only.js': 'module.exports.action = function() {};',
+            'throw_js.js': new Error('disk fail')
+        });
+        var rMissing = v.mockJsAction('./agents/nope.js', {}, 'pre');
+        assert.equal(rMissing.loaded, false);
+        assert.ok(rMissing.warning.indexOf('Cannot read JS file') !== -1);
+
+        var rThrow = v.mockJsAction('throw_js.js', {}, 'pre');
+        assert.equal(rThrow.loaded, false);
+        assert.ok(rThrow.warning.indexOf('Error reading JS') !== -1);
+
+        var rExports = v.mockJsAction('exports_only.js', {}, 'pre');
+        assert.equal(rExports.loaded, true);
+        assert.equal(rExports.hasActionFunction, true);
+    });
+
+    test('action and validateAllAgents handle validateAgent, validateAll, errors, and unknown mode', function() {
+        var v = loadWithVirtualFs(
+            {
+                './valid_one.json': JSON.stringify({
+                    name: 'Teammate',
+                    params: {
+                        cliPrompts: ['./agents/p.md'],
+                        cliCommands: ['./agents/missing.sh']
+                    }
+                }),
+                './invalid_two.json': JSON.stringify({ name: 'Teammate' }),
+                'p.md': 'hello'
+            },
+            function() {
+                return 'valid_one.json\ninvalid_two.json\n';
+            }
+        );
+
+        var missingPathRes = v.action({ mode: 'validateAgent' });
+        assert.equal(missingPathRes.success, false);
+
+        var singleRes = v.action({ jobParams: { mode: 'validateAgent', agentPath: './valid_one.json' } });
+        assert.equal(singleRes.success, true);
+
+        var singleFailRes = v.action({ mode: 'validateAgent', agentPath: './invalid_two.json' });
+        assert.equal(singleFailRes.success, false);
+
+        var batchRes = v.action({ mode: 'validateAll', agentJsonDir: '.' });
+        assert.equal(batchRes.success, false);
+        assert.equal(batchRes.result.total, 2);
+        assert.equal(batchRes.result.passed, 1);
+        assert.equal(batchRes.result.failed, 1);
+
+        var unknownRes = v.action({ mode: 'other' });
+        assert.equal(unknownRes.success, false);
+
+        var vThrowLs = loadWithVirtualFs({}, function() { throw new Error('git failed'); });
+        var emptyBatch = vThrowLs.validateAllAgents();
+        assert.equal(emptyBatch.total, 0);
+        assert.equal(emptyBatch.allValid, true);
+    });
+
+});

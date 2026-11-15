@@ -419,23 +419,25 @@ function probeDispatchedState(deps, repoInfo, ciWorkflow, headSha) {
     newest: newestRunInList(staleList)
   };
 }
-module.exports = {
-  cliJson: cliJson,
-  armEventActor: armEventActor,
-  guestZeroFailingMergeGate: guestZeroFailingMergeGate,
-  attemptMergeProbe: attemptMergeProbe,
-  validationMutexHeldByAnother: validationMutexHeldByAnother,
-  requiredContextsSafe: requiredContextsSafe,
-  prRequiredRollupSafe: prRequiredRollupSafe,
-  detectInvisibleRequired: detectInvisibleRequired,
-  invisibleRequiredReset: invisibleRequiredReset,
-  prHeadShaSafe: prHeadShaSafe,
-  headMoved: headMoved,
-  freshShaResetOnce: freshShaResetOnce,
-  holdDispatchForPushSuite: holdDispatchForPushSuite,
-  headGateClean: headGateClean,
-  approvedGreenHeadFastPath: approvedGreenHeadFastPath,
-  recentlyConcludedNonGreen: recentlyConcludedNonGreen,
-  latestDispatchedVerdict: latestDispatchedVerdict,
-  probeDispatchedState: probeDispatchedState
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      cliJson: cliJson,
+      armEventActor: armEventActor,
+      guestZeroFailingMergeGate: guestZeroFailingMergeGate,
+      attemptMergeProbe: attemptMergeProbe,
+      validationMutexHeldByAnother: validationMutexHeldByAnother,
+      requiredContextsSafe: requiredContextsSafe,
+      prRequiredRollupSafe: prRequiredRollupSafe,
+      detectInvisibleRequired: detectInvisibleRequired,
+      invisibleRequiredReset: invisibleRequiredReset,
+      prHeadShaSafe: prHeadShaSafe,
+      headMoved: headMoved,
+      freshShaResetOnce: freshShaResetOnce,
+      holdDispatchForPushSuite: holdDispatchForPushSuite,
+      headGateClean: headGateClean,
+      approvedGreenHeadFastPath: approvedGreenHeadFastPath,
+      recentlyConcludedNonGreen: recentlyConcludedNonGreen,
+      latestDispatchedVerdict: latestDispatchedVerdict,
+      probeDispatchedState: probeDispatchedState
+    };
+}

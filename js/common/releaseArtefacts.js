@@ -124,29 +124,40 @@ function unzipTo(zipPath, destFolder) {
  * normalized here to a common shape so uploadArtefact/downloadArtefact/
  * uploadRawFile don't need to branch on provider themselves.
  */
+function _parseReleasePayload(raw) {
+    return typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+}
+
+function _mapNamedItems(items) {
+    return Array.isArray(items) ? items.map(function(item) { return item.name; }) : [];
+}
+
+function _isReleaseNotFoundError(errStr) {
+    return errStr.indexOf('404') !== -1 ||
+           errStr.indexOf('Not Found') !== -1 ||
+           errStr.indexOf('release not found') !== -1;
+}
+
 function _githubReleaseProvider() {
     return {
         name: 'github',
         getOrCreateRelease: function(owner, repo, tag, name, body) {
-            var releaseJson = github_get_or_create_draft_release({
+            var release = _parseReleasePayload(github_get_or_create_draft_release({
                 workspace: owner, repository: repo, tagName: tag, releaseName: name, body: body
-            });
-            var release = typeof releaseJson === 'string' ? JSON.parse(releaseJson) : releaseJson;
-            var assets = (release.assets && Array.isArray(release.assets)) ? release.assets : [];
+            }));
             return {
                 tagName: tag,
                 releaseId: String(release.id),
                 htmlUrl: release.html_url || null,
-                assetNames: assets.map(function(a) { return a.name; })
+                assetNames: _mapNamedItems(release.assets)
             };
         },
         uploadAsset: function(owner, repo, release, filePath, assetName, contentType) {
-            var assetJson = github_upload_release_asset({
+            var result = _parseReleasePayload(github_upload_release_asset({
                 workspace: owner, repository: repo, releaseId: release.releaseId,
                 filePath: filePath, assetName: assetName, contentType: contentType, overwrite: 'true'
-            });
-            var result = typeof assetJson === 'string' ? JSON.parse(assetJson) : assetJson;
-            return { url: (result && result.browser_download_url) || null };
+            }));
+            return { url: result.browser_download_url || null };
         },
         downloadAsset: function(owner, repo, release, assetName, destPath) {
             cli_execute_command({
@@ -164,25 +175,24 @@ function _gitlabReleaseProvider() {
     return {
         name: 'gitlab',
         getOrCreateRelease: function(owner, repo, tag, name, body) {
-            var releaseJson = gitlab_get_or_create_release({
+            var release = _parseReleasePayload(gitlab_get_or_create_release({
                 workspace: owner, repository: repo, tagName: tag, releaseName: name, body: body
-            });
-            var release = typeof releaseJson === 'string' ? JSON.parse(releaseJson) : releaseJson;
-            var links = (release.assets && Array.isArray(release.assets.links)) ? release.assets.links : [];
+            }));
+            var links = release.assets ? release.assets.links : null;
+            var selfUrl = release._links ? release._links.self : null;
             return {
                 tagName: release.tag_name || tag,
                 releaseId: null,
-                htmlUrl: (release._links && release._links.self) || null,
-                assetNames: links.map(function(l) { return l.name; })
+                htmlUrl: selfUrl || null,
+                assetNames: _mapNamedItems(links)
             };
         },
         uploadAsset: function(owner, repo, release, filePath, assetName, contentType) {
-            var linkJson = gitlab_upload_release_asset({
+            var result = _parseReleasePayload(gitlab_upload_release_asset({
                 workspace: owner, repository: repo, tagName: release.tagName,
                 filePath: filePath, assetName: assetName, contentType: contentType, overwrite: 'true'
-            });
-            var result = typeof linkJson === 'string' ? JSON.parse(linkJson) : linkJson;
-            return { url: (result && result.direct_asset_url) || null };
+            }));
+            return { url: result.direct_asset_url || null };
         },
         downloadAsset: function(owner, repo, release, assetName, destPath) {
             gitlab_download_release_asset({
@@ -343,8 +353,7 @@ function downloadArtefact(owner, repo, ticketKey, releaseConfig, asset, provider
 
     } catch (e) {
         var errStr = String(e);
-        if (errStr.indexOf('404') !== -1 || errStr.indexOf('Not Found') !== -1 ||
-            errStr.indexOf('release not found') !== -1) {
+        if (_isReleaseNotFoundError(errStr)) {
             console.log('ℹ️  No existing release "' + tag + '" — skipping restore (first run)');
             return { success: true, restored: false, error: null };
         }
@@ -368,15 +377,19 @@ function resolveArtefactRepository(customParams) {
     return { owner: repo.owner, repo: repo.repo };
 }
 
-module.exports = {
-    buildTag: buildTag,
-    buildReleaseName: buildReleaseName,
-    resolveTemplate: resolveTemplate,
-    zipFolder: zipFolder,
-    unzipTo: unzipTo,
-    uploadArtefact: uploadArtefact,
-    uploadRawFile: uploadRawFile,
-    downloadArtefact: downloadArtefact,
-    resolveArtefactRepository: resolveArtefactRepository
-};
+// ── Export ───────────────────────────────────────────────────────────────────
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        buildTag: buildTag,
+        buildReleaseName: buildReleaseName,
+        resolveTemplate: resolveTemplate,
+        zipFolder: zipFolder,
+        unzipTo: unzipTo,
+        uploadArtefact: uploadArtefact,
+        uploadRawFile: uploadRawFile,
+        downloadArtefact: downloadArtefact,
+        resolveArtefactRepository: resolveArtefactRepository
+    };
+}
 

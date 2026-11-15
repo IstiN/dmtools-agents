@@ -358,26 +358,28 @@ function forkSilentUpdateGate(deps, repoInfo, ticket, key) {
     forkFull: forkFull
   };
 }
-module.exports = {
-  upToDateClause: upToDateClause,
-  silentUpdateCommand: silentUpdateCommand,
-  pushedHeadShaOf: pushedHeadShaOf,
-  silentUpdateDirFor: silentUpdateDirFor,
-  silentUpdateStderrFile: silentUpdateStderrFile,
-  silentUpdateBranch: silentUpdateBranch,
-  readSilentUpdateStderrTail: readSilentUpdateStderrTail,
-  silentUpdateErrorWithTail: silentUpdateErrorWithTail,
-  silentUpdateFailureTrail: silentUpdateFailureTrail,
-  recordSilentUpdateFailure: recordSilentUpdateFailure,
-  silentUpdateBranchTracked: silentUpdateBranchTracked,
-  freshShaReset: freshShaReset,
-  probeForkMaintainerCanModify: probeForkMaintainerCanModify,
-  parkForkGuest: parkForkGuest,
-  forkSilentUpdateBranch: forkSilentUpdateBranch,
-  recordForkSilentUpdateFailure: recordForkSilentUpdateFailure,
-  parkForkWorkflowWrite: parkForkWorkflowWrite,
-  escalateForkSilentUpdate: escalateForkSilentUpdate,
-  forkSilentUpdateBranchTracked: forkSilentUpdateBranchTracked,
-  parkNonEditableFork: parkNonEditableFork,
-  forkSilentUpdateGate: forkSilentUpdateGate
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      upToDateClause: upToDateClause,
+      silentUpdateCommand: silentUpdateCommand,
+      pushedHeadShaOf: pushedHeadShaOf,
+      silentUpdateDirFor: silentUpdateDirFor,
+      silentUpdateStderrFile: silentUpdateStderrFile,
+      silentUpdateBranch: silentUpdateBranch,
+      readSilentUpdateStderrTail: readSilentUpdateStderrTail,
+      silentUpdateErrorWithTail: silentUpdateErrorWithTail,
+      silentUpdateFailureTrail: silentUpdateFailureTrail,
+      recordSilentUpdateFailure: recordSilentUpdateFailure,
+      silentUpdateBranchTracked: silentUpdateBranchTracked,
+      freshShaReset: freshShaReset,
+      probeForkMaintainerCanModify: probeForkMaintainerCanModify,
+      parkForkGuest: parkForkGuest,
+      forkSilentUpdateBranch: forkSilentUpdateBranch,
+      recordForkSilentUpdateFailure: recordForkSilentUpdateFailure,
+      parkForkWorkflowWrite: parkForkWorkflowWrite,
+      escalateForkSilentUpdate: escalateForkSilentUpdate,
+      forkSilentUpdateBranchTracked: forkSilentUpdateBranchTracked,
+      parkNonEditableFork: parkNonEditableFork,
+      forkSilentUpdateGate: forkSilentUpdateGate
+    };
+}

@@ -336,31 +336,33 @@ function ensureWorkflowBudgetActiveCount(deps, workflowBudget, scm, workflowFile
     logBlockingWorkflowRuns(deps, workflowBudget, workflowFile);
   }
 }
-module.exports = {
-  STALE_NON_RUNNING_WORKFLOW_MS: STALE_NON_RUNNING_WORKFLOW_MS,
-  withScmProvider: withScmProvider,
-  applyJobParamsScm: applyJobParamsScm,
-  applyRuleForge: applyRuleForge,
-  resolveSmForge: resolveSmForge,
-  isForgeSource: isForgeSource,
-  firstMatchingLabel: firstMatchingLabel,
-  shouldRecoverStaleTriggerLabel: shouldRecoverStaleTriggerLabel,
-  createTargetScm: createTargetScm,
-  isWorkflowBudgetExhausted: isWorkflowBudgetExhausted,
-  prRawRead: prRawRead,
-  prTerminalStateOf: prTerminalStateOf,
-  ruleTargetSelfManagesLabel: ruleTargetSelfManagesLabel,
-  crossAnchorKeys: crossAnchorKeys,
-  isAnchorKeyChar: isAnchorKeyChar,
-  anchorTokens: anchorTokens,
-  stubAnchorMatches: stubAnchorMatches,
-  isStaleNonRunningWorkflowRun: isStaleNonRunningWorkflowRun,
-  hasActiveTargetWorkflowRun: hasActiveTargetWorkflowRun,
-  hasActiveLegRunOnBranch: hasActiveLegRunOnBranch,
-  hasActiveLegRunForPull: hasActiveLegRunForPull,
-  hasActiveLegRun: hasActiveLegRun,
-  formatWorkflowRunSummary: formatWorkflowRunSummary,
-  collectActiveWorkflowRuns: collectActiveWorkflowRuns,
-  logBlockingWorkflowRuns: logBlockingWorkflowRuns,
-  ensureWorkflowBudgetActiveCount: ensureWorkflowBudgetActiveCount
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      STALE_NON_RUNNING_WORKFLOW_MS: STALE_NON_RUNNING_WORKFLOW_MS,
+      withScmProvider: withScmProvider,
+      applyJobParamsScm: applyJobParamsScm,
+      applyRuleForge: applyRuleForge,
+      resolveSmForge: resolveSmForge,
+      isForgeSource: isForgeSource,
+      firstMatchingLabel: firstMatchingLabel,
+      shouldRecoverStaleTriggerLabel: shouldRecoverStaleTriggerLabel,
+      createTargetScm: createTargetScm,
+      isWorkflowBudgetExhausted: isWorkflowBudgetExhausted,
+      prRawRead: prRawRead,
+      prTerminalStateOf: prTerminalStateOf,
+      ruleTargetSelfManagesLabel: ruleTargetSelfManagesLabel,
+      crossAnchorKeys: crossAnchorKeys,
+      isAnchorKeyChar: isAnchorKeyChar,
+      anchorTokens: anchorTokens,
+      stubAnchorMatches: stubAnchorMatches,
+      isStaleNonRunningWorkflowRun: isStaleNonRunningWorkflowRun,
+      hasActiveTargetWorkflowRun: hasActiveTargetWorkflowRun,
+      hasActiveLegRunOnBranch: hasActiveLegRunOnBranch,
+      hasActiveLegRunForPull: hasActiveLegRunForPull,
+      hasActiveLegRun: hasActiveLegRun,
+      formatWorkflowRunSummary: formatWorkflowRunSummary,
+      collectActiveWorkflowRuns: collectActiveWorkflowRuns,
+      logBlockingWorkflowRuns: logBlockingWorkflowRuns,
+      ensureWorkflowBudgetActiveCount: ensureWorkflowBudgetActiveCount
+    };
+}
