@@ -329,32 +329,57 @@ function handlePrAlreadyOpen(ticketKey, existingPr, tracker, statuses, params) {
  * Blocked. Tracker call order (comment → move → labels) preserved.
  */
 function completeBlockedPath(ticketKey, blocked, hasCodeGraph, tracker, statuses, jiraConfig, params) {
+    // gh-1493: same delivery contract as completeAlreadyFixedPath — a blocked
+    // ticket whose comment/transition silently fails re-enters the dev lane
+    // with no visible breakage. postComment/moveToStatus failures fail the
+    // leg; label cleanup stays non-fatal.
+    var deliveryErrors = [];
+
     if (!hasCodeGraph) {
         console.warn('outputs/blocked.json rejected — no CodeGraph usage was recorded');
         try {
             tracker.postComment(ticketKey, buildBlockedWithoutCodeGraphComment(ticketKey));
-        } catch (e) {}
+        } catch (e) {
+            deliveryErrors.push('postComment failed: ' + e);
+            console.error('❌ gh-1493: CodeGraph-retry comment NOT delivered:', e);
+        }
         try {
             tracker.moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
             console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
         } catch (e) {
-            console.warn('Failed to move ticket to Ready For Development:', e);
+            deliveryErrors.push('moveToStatus(' + statuses.READY_FOR_DEVELOPMENT + ') failed: ' + e);
+            console.error('❌ gh-1493: ticket NOT moved to Ready For Development — the CodeGraph retry will not be armed:', e);
         }
         removeLabels(ticketKey, params, tracker);
-        return { success: true, path: 'blocked_without_codegraph', ticketKey };
+        if (deliveryErrors.length) {
+            console.error('❌ gh-1493: terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
+            return { success: false, path: 'blocked_without_codegraph', ticketKey, delivered: false, error: deliveryErrors.join('; ') };
+        }
+        return { success: true, path: 'blocked_without_codegraph', ticketKey, delivered: true };
     }
 
-    try { tracker.postComment(ticketKey, buildBlockedComment(ticketKey, blocked)); } catch (e) {}
+    try {
+        tracker.postComment(ticketKey, buildBlockedComment(ticketKey, blocked));
+    } catch (e) {
+        deliveryErrors.push('postComment failed: ' + e);
+        console.error('❌ gh-1493: blocked comment NOT delivered:', e);
+    }
 
     try {
         tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED);
         console.log('✅ Moved', ticketKey, 'to Blocked');
     } catch (e) {
-        console.warn('Failed to move to Blocked:', e);
+        deliveryErrors.push('moveToStatus(' + jiraConfig.statuses.BLOCKED + ') failed: ' + e);
+        console.error('❌ gh-1493: ticket NOT moved to Blocked — the SM will keep arming dev legs:', e);
     }
 
     removeLabels(ticketKey, params, tracker);
-    return { success: true, path: 'blocked', ticketKey };
+
+    if (deliveryErrors.length) {
+        console.error('❌ gh-1493: terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
+        return { success: false, path: 'blocked', ticketKey, delivered: false, error: deliveryErrors.join('; ') };
+    }
+    return { success: true, path: 'blocked', ticketKey, delivered: true };
 }
 
 /**
@@ -366,19 +391,39 @@ function completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraph, tracker
     if (!hasCodeGraph) {
         console.warn('outputs/already_fixed.json accepted without CodeGraph usage');
     }
-    try { tracker.postComment(ticketKey, buildAlreadyFixedComment(ticketKey, alreadyFixed, hasCodeGraph)); } catch (e) {}
+    // gh-1493: this path IS the terminal-signal delivery step. The comment
+    // and the Done transition are what stop the SM from re-arming the ticket;
+    // a false success here reproduced the fah#2182 class of loop (40 dev
+    // legs / 12h on an already-fixed issue, first leg had gone green at
+    // minute 41). A failed delivery must fail the leg, not the report.
+    var deliveryErrors = [];
+
+    try {
+        tracker.postComment(ticketKey, buildAlreadyFixedComment(ticketKey, alreadyFixed, hasCodeGraph));
+    } catch (e) {
+        deliveryErrors.push('postComment failed: ' + e);
+        console.error('❌ gh-1493: already-fixed comment NOT delivered:', e);
+    }
 
     try {
         tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
         console.log('✅ Moved', ticketKey, 'to Done');
     } catch (e) {
-        console.warn('Failed to move to Done:', e);
+        deliveryErrors.push('moveToStatus(' + jiraConfig.statuses.DONE + ') failed: ' + e);
+        console.error('❌ gh-1493: ticket NOT moved to Done — the SM will keep re-arming:', e);
     }
 
-    try { tracker.addLabel(ticketKey, LABELS.AI_DEVELOPED); } catch (e) {}
+    try { tracker.addLabel(ticketKey, LABELS.AI_DEVELOPED); } catch (e) {
+        console.warn('Failed to add', LABELS.AI_DEVELOPED, 'label:', e);
+    }
 
     removeLabels(ticketKey, params, tracker);
-    return { success: true, path: 'already_fixed', ticketKey };
+
+    if (deliveryErrors.length) {
+        console.error('❌ gh-1493: terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
+        return { success: false, path: 'already_fixed', ticketKey, delivered: false, error: deliveryErrors.join('; ') };
+    }
+    return { success: true, path: 'already_fixed', ticketKey, delivered: true };
 }
 
 /**
