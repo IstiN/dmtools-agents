@@ -140,6 +140,8 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/machineAuthor.js': machineAuthorModule,
         './common/tcMaintenanceLedger.js': tcLedgerModule,
         './common/bugBookkeeping.js': bugBookkeepingModule,
+        // gh-1493: real terminal-delivery helpers (pure module — no requires).
+        './common/terminalDelivery.js': loadModule('js/common/terminalDelivery.js', makeRequire({})),
         './developTicketAndCreatePR.js': {
             action: function() { return { success: true, path: 'delegated' }; },
             throwInterruptedReset: developTicketRealModule.throwInterruptedReset,

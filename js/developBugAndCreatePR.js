@@ -39,6 +39,8 @@ var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
 // gh-1329 review: the shared "load bug bookkeeping" helper (one getIssue,
 // one machine-author resolution) for both legs that read the markers.
 var bugBookkeeping = require('./common/bugBookkeeping.js');
+// gh-1493: terminal-signal delivery contract (attemptDelivery/deliveryOutcome).
+const { attemptDelivery, deliveryOutcome } = require('./common/terminalDelivery.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -327,103 +329,53 @@ function handlePrAlreadyOpen(ticketKey, existingPr, tracker, statuses, params) {
  * CodeGraph usage the blocked claim is rejected and the ticket resets for a
  * retry; otherwise the blocked comment is posted and the ticket moves to
  * Blocked. Tracker call order (comment → move → labels) preserved.
+ * gh-1493: a failed comment/transition fails the leg (terminalDelivery);
+ * label cleanup stays non-fatal.
  */
 function completeBlockedPath(ticketKey, blocked, hasCodeGraph, tracker, statuses, jiraConfig, params) {
-    // gh-1493: Same delivery contract as completeAlreadyFixedPath — a blocked
-    // ticket whose comment/transition silently fails re-enters the dev lane
-    // with no visible breakage. postComment/moveToStatus failures fail the
-    // leg; label cleanup stays non-fatal.
     var deliveryErrors = [];
-
     if (!hasCodeGraph) {
         console.warn('outputs/blocked.json rejected — no CodeGraph usage was recorded');
-        try {
+        attemptDelivery(deliveryErrors, 'postComment failed', '❌ CodeGraph-retry comment NOT delivered:', null, function() {
             tracker.postComment(ticketKey, buildBlockedWithoutCodeGraphComment(ticketKey));
-        } catch (e) {
-            deliveryErrors.push('postComment failed: ' + e);
-            console.error('❌ CodeGraph-retry comment NOT delivered:', e);
-        }
-        try {
+        });
+        attemptDelivery(deliveryErrors, 'moveToStatus(' + statuses.READY_FOR_DEVELOPMENT + ') failed', '❌ Ticket NOT moved to Ready For Development — the CodeGraph retry will not be armed:', '✅ Moved ' + ticketKey + ' to Ready For Development for CodeGraph retry', function() {
             tracker.moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
-            console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
-        } catch (e) {
-            deliveryErrors.push('moveToStatus(' + statuses.READY_FOR_DEVELOPMENT + ') failed: ' + e);
-            console.error('❌ Ticket NOT moved to Ready For Development — the CodeGraph retry will not be armed:', e);
-        }
+        });
         removeLabels(ticketKey, params, tracker);
-        if (deliveryErrors.length) {
-            console.error('❌ Terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
-            return { success: false, path: 'blocked_without_codegraph', ticketKey, delivered: false, error: deliveryErrors.join('; ') };
-        }
-        return { success: true, path: 'blocked_without_codegraph', ticketKey, delivered: true };
+        return deliveryOutcome('blocked_without_codegraph', ticketKey, deliveryErrors);
     }
-
-    try {
+    attemptDelivery(deliveryErrors, 'postComment failed', '❌ Blocked comment NOT delivered:', null, function() {
         tracker.postComment(ticketKey, buildBlockedComment(ticketKey, blocked));
-    } catch (e) {
-        deliveryErrors.push('postComment failed: ' + e);
-        console.error('❌ Blocked comment NOT delivered:', e);
-    }
-
-    try {
+    });
+    attemptDelivery(deliveryErrors, 'moveToStatus(' + jiraConfig.statuses.BLOCKED + ') failed', '❌ Ticket NOT moved to Blocked — the SM will keep arming dev legs:', '✅ Moved ' + ticketKey + ' to Blocked', function() {
         tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED);
-        console.log('✅ Moved', ticketKey, 'to Blocked');
-    } catch (e) {
-        deliveryErrors.push('moveToStatus(' + jiraConfig.statuses.BLOCKED + ') failed: ' + e);
-        console.error('❌ Ticket NOT moved to Blocked — the SM will keep arming dev legs:', e);
-    }
-
+    });
     removeLabels(ticketKey, params, tracker);
-
-    if (deliveryErrors.length) {
-        console.error('❌ Terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
-        return { success: false, path: 'blocked', ticketKey, delivered: false, error: deliveryErrors.join('; ') };
-    }
-    return { success: true, path: 'blocked', ticketKey, delivered: true };
+    return deliveryOutcome('blocked', ticketKey, deliveryErrors);
 }
 
 /**
  * gh-1003: Path 2 completion extracted from action — posts the
  * already-fixed comment, moves the ticket to Done, stamps the
  * AI_DEVELOPED label, removes SM labels. Tracker call order preserved.
+ * gh-1493: the comment + Done transition ARE the terminal signal — a failed
+ * delivery fails the leg (fah#2182: a false success re-armed 40 legs).
  */
 function completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraph, tracker, jiraConfig, params) {
-    if (!hasCodeGraph) {
-        console.warn('outputs/already_fixed.json accepted without CodeGraph usage');
-    }
-    // gh-1493: This path IS the terminal-signal delivery step. The comment
-    // and the Done transition are what stop the SM from re-arming the ticket;
-    // a false success here reproduced the fah#2182 class of loop (40 dev
-    // legs / 12h on an already-fixed issue, first leg had gone green at
-    // minute 41). A failed delivery must fail the leg, not the report.
+    if (!hasCodeGraph) console.warn('outputs/already_fixed.json accepted without CodeGraph usage');
     var deliveryErrors = [];
-
-    try {
+    attemptDelivery(deliveryErrors, 'postComment failed', '❌ Already-fixed comment NOT delivered:', null, function() {
         tracker.postComment(ticketKey, buildAlreadyFixedComment(ticketKey, alreadyFixed, hasCodeGraph));
-    } catch (e) {
-        deliveryErrors.push('postComment failed: ' + e);
-        console.error('❌ Already-fixed comment NOT delivered:', e);
-    }
-
-    try {
+    });
+    attemptDelivery(deliveryErrors, 'moveToStatus(' + jiraConfig.statuses.DONE + ') failed', '❌ Ticket NOT moved to Done — the SM will keep re-arming:', '✅ Moved ' + ticketKey + ' to Done', function() {
         tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
-        console.log('✅ Moved', ticketKey, 'to Done');
-    } catch (e) {
-        deliveryErrors.push('moveToStatus(' + jiraConfig.statuses.DONE + ') failed: ' + e);
-        console.error('❌ Ticket NOT moved to Done — the SM will keep re-arming:', e);
-    }
-
+    });
     try { tracker.addLabel(ticketKey, LABELS.AI_DEVELOPED); } catch (e) {
         console.warn('Failed to add', LABELS.AI_DEVELOPED, 'label:', e);
     }
-
     removeLabels(ticketKey, params, tracker);
-
-    if (deliveryErrors.length) {
-        console.error('❌ Terminal signal undelivered for', ticketKey, '— failing the leg so the breakage is visible');
-        return { success: false, path: 'already_fixed', ticketKey, delivered: false, error: deliveryErrors.join('; ') };
-    }
-    return { success: true, path: 'already_fixed', ticketKey, delivered: true };
+    return deliveryOutcome('already_fixed', ticketKey, deliveryErrors);
 }
 
 /**
