@@ -706,13 +706,10 @@ function createTracker(config, customParams) {
 
     // ── github provider (canonical github_* issue tools; Dart runtime) ────
 
-    // gh-1495 boundary: empty string fields go out as ABSENT. An explicit ""
-    // overrides the runtime's ambient-repo resolution (GITHUB_REPOSITORY) and
-    // silently no-ops — dmtools CLI v0.1.99–v0.1.101 changed empty-string
-    // handling, and the fah#2182 loop burned 40 legs on undelivered terminal
-    // signals before anyone saw a failure. Call sites keep natural literals
-    // (workspace: owner, repository: repo); the normalization lives here.
-    // githubIssueArgs already does the same for the owner/repo/number family.
+    // gh-1495 boundary: empty string fields go out as ABSENT — an explicit
+    // empty string overrides the ambient GITHUB_REPOSITORY fallback and
+    // silently no-ops (CLI v0.1.99-v0.1.101; fah#2182). Call sites keep
+    // natural literals; githubIssueArgs does the same for owner/repo/number.
     function omitEmptyArgs(args) {
         var clean = {};
         for (var k in args) {
@@ -724,8 +721,7 @@ function createTracker(config, customParams) {
     function githubGetTicket(key) {
         // github_get_issue schema (Dart catalog): workspace/repository/
         // issueNumber — not the REST-style owner/repo/issue_number.
-        // gh-1495: empty strings must go out as absent so the runtime's
-        // ambient-repo fallback stays reachable (omitEmptyArgs below).
+        // gh-1495: empty strings go out as absent so the ambient fallback stays reachable.
         return normalizeTicket(github_get_issue(omitEmptyArgs({
             workspace: owner,
             repository: repo,
@@ -788,8 +784,7 @@ function createTracker(config, customParams) {
     }
 
     function githubAddLabel(key, label) {
-        // gh-1495: githubIssueArgs omits empty owner/repo (the explicit ""
-        // overrides the runtime's ambient fallback and silently no-ops).
+        // gh-1495: githubIssueArgs omits empty owner/repo so the ambient fallback stays reachable.
         return github_add_labels(
             Object.assign({ labels: [label] }, githubIssueArgs(key))
         );
