@@ -399,18 +399,20 @@ function runTeammateLocally(deps, ticketKey, rule, effectiveConfig) {
   var cmd = buildLocalTeammateCmd(rule, resolvedCf, ticketKey, encodedConfigFile, projectKey, effectiveConfig);
   return executeTeammateCommand(deps, ticketKey, cmd, encodedConfigFile);
 }
-module.exports = {
-  TERMINAL_PR_SKIP_MSG: TERMINAL_PR_SKIP_MSG, TAG_ONLY_STAGE_KEYS: TAG_ONLY_STAGE_KEYS,
-  withScmProvider: withScmProvider, applyJobParamsScm: applyJobParamsScm,
-  applyRuleForge: applyRuleForge, resolveSmForge: resolveSmForge,
-  isForgeSource: isForgeSource, firstMatchingLabel: firstMatchingLabel,
-  shouldRecoverStaleTriggerLabel: shouldRecoverStaleTriggerLabel,
-  createTargetScm: createTargetScm, isWorkflowBudgetExhausted: isWorkflowBudgetExhausted,
-  prRawRead: prRawRead, prTerminalStateOf: prTerminalStateOf,
-  ruleTargetSelfManagesLabel: ruleTargetSelfManagesLabel,
-  gitlabRuleLabel: gitlabRuleLabel, addRuleLabels: addRuleLabels,
-  removeRuleLabel: removeRuleLabel, moveStatus: moveStatus,
-  forkPullRefLive: forkPullRefLive, recordNoRefBookkeeping: recordNoRefBookkeeping,
-  recordDispatchFailure: recordDispatchFailure, triggerWorkflow: triggerWorkflow,
-  runTeammateLocally: runTeammateLocally, stageKeyForStatusName: stageKeyForStatusName
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      TERMINAL_PR_SKIP_MSG: TERMINAL_PR_SKIP_MSG, TAG_ONLY_STAGE_KEYS: TAG_ONLY_STAGE_KEYS,
+      withScmProvider: withScmProvider, applyJobParamsScm: applyJobParamsScm,
+      applyRuleForge: applyRuleForge, resolveSmForge: resolveSmForge,
+      isForgeSource: isForgeSource, firstMatchingLabel: firstMatchingLabel,
+      shouldRecoverStaleTriggerLabel: shouldRecoverStaleTriggerLabel,
+      createTargetScm: createTargetScm, isWorkflowBudgetExhausted: isWorkflowBudgetExhausted,
+      prRawRead: prRawRead, prTerminalStateOf: prTerminalStateOf,
+      ruleTargetSelfManagesLabel: ruleTargetSelfManagesLabel,
+      gitlabRuleLabel: gitlabRuleLabel, addRuleLabels: addRuleLabels,
+      removeRuleLabel: removeRuleLabel, moveStatus: moveStatus,
+      forkPullRefLive: forkPullRefLive, recordNoRefBookkeeping: recordNoRefBookkeeping,
+      recordDispatchFailure: recordDispatchFailure, triggerWorkflow: triggerWorkflow,
+      runTeammateLocally: runTeammateLocally, stageKeyForStatusName: stageKeyForStatusName
+    };
+}

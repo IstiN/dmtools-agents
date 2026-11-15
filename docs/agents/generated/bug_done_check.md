@@ -39,6 +39,11 @@ _Check Bug Tests Passed — postJSAction for bug_done_check agent._
   - remove label "sm_bug_rework_attempted" (via tracker)
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `removeLabel`
   - `trackerProvider`

@@ -53,6 +53,11 @@ _Pre-CLI Story Test Automation Setup Action_
 - Side effects:
   - git push
   - git checkout
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `allowApproveWithSuggestions`
   - `branchCreateFnPath`

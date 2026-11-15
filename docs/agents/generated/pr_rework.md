@@ -59,6 +59,11 @@ _Pre-CLI Rework Setup Action (preCliJSAction for pr_rework agent)_
 - Side effects:
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
   - git merge
 - Parameters (customParams):
   - `aiRepository`
@@ -94,6 +99,11 @@ _Push Rework Changes Post-Action_
   - move ticket to status (via tracker)
   - assign ticket (via tracker)
   - git checkout
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
   - git merge
   - git push
 - Parameters (customParams):

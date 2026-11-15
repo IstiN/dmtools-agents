@@ -41,6 +41,12 @@ _Fetch Parent Context To Input_
 - Writes:
   - `input/<KEY>/`
   - `input/<KEY>/parent-`
+- Side effects:
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `childQuestions`
   - `contexts`
@@ -57,6 +63,11 @@ _Close Question Ticket Post-Action_
 - Side effects:
   - move ticket to status (via tracker)
   - post ticket comment (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `trackerProvider`
 

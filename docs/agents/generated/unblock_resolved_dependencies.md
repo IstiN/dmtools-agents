@@ -31,6 +31,11 @@ _Unblock Resolved Dependencies — postJSAction for unblock_resolved_dependencie
 - Side effects:
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `trackerProvider`
 

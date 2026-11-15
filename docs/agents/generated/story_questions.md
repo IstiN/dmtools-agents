@@ -42,6 +42,12 @@ _Fetch Questions To Input Pre-CLI Action_
 - Source: `agents/js/fetchQuestionsToInput.js`
 - Writes:
   - `input/<KEY>/existing_questions.json`
+- Side effects:
+  - post Jira comment
+  - create Jira ticket
+  - link Jira issues
+  - assign ticket
+  - attach file to ticket
 - Parameters (customParams):
   - `childQuestions`
   - `contexts`

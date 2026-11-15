@@ -485,13 +485,15 @@ function handleFailValidationAction(deps, rule, effectiveConfig, repoInfo, ticke
     deps.error('  ❌ fail_validation failed for ' + key + ': ' + (e.message || e));
   }
 }
-module.exports = {
-  resolveConflictHeadSha: resolveConflictHeadSha,
-  resolveConflictLinkedIssue: resolveConflictLinkedIssue,
-  probeLinkedIssueOpenState: probeLinkedIssueOpenState,
-  handleUnarmValidationAction: handleUnarmValidationAction,
-  handleRerunCancelledChecksAction: handleRerunCancelledChecksAction,
-  handleConflictReworkAction: handleConflictReworkAction,
-  handleSweepStaleValidationAction: handleSweepStaleValidationAction,
-  handleFailValidationAction: handleFailValidationAction
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      resolveConflictHeadSha: resolveConflictHeadSha,
+      resolveConflictLinkedIssue: resolveConflictLinkedIssue,
+      probeLinkedIssueOpenState: probeLinkedIssueOpenState,
+      handleUnarmValidationAction: handleUnarmValidationAction,
+      handleRerunCancelledChecksAction: handleRerunCancelledChecksAction,
+      handleConflictReworkAction: handleConflictReworkAction,
+      handleSweepStaleValidationAction: handleSweepStaleValidationAction,
+      handleFailValidationAction: handleFailValidationAction
+    };
+}
