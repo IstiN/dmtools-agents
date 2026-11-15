@@ -258,25 +258,27 @@ function hasRecentHeadRun(runs, graceMs) {
     return isRecentSingleHeadRun(r, now, graceMs);
   });
 }
-module.exports = {
-  PROBE_WORKER_SOURCE: PROBE_WORKER_SOURCE,
-  RULESET_CONTEXTS_JQ: RULESET_CONTEXTS_JQ,
-  PR_ROLLUP_JQ: PR_ROLLUP_JQ,
-  mcpParse: mcpParse,
-  headCheckRunsSafe: headCheckRunsSafe,
-  latestCheckRunConclusions: latestCheckRunConclusions,
-  isBookkeepingCheckName: isBookkeepingCheckName,
-  eachNonBookkeepingConclusion: eachNonBookkeepingConclusion,
-  headHasRealFailure: headHasRealFailure,
-  failingCheckNames: failingCheckNames,
-  dispatchedValidationRuns: dispatchedValidationRuns,
-  failedRunLinksLine: failedRunLinksLine,
-  headWorkflowRunsSafe: headWorkflowRunsSafe,
-  headCheckRunZombies: headCheckRunZombies,
-  headPlaceholders: headPlaceholders,
-  headOrphanedRunChecks: headOrphanedRunChecks,
-  repoPoolFree: repoPoolFree,
-  hasActiveHeadRun: hasActiveHeadRun,
-  isAmbientNonDispatchRun: isAmbientNonDispatchRun,
-  hasRecentHeadRun: hasRecentHeadRun
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      PROBE_WORKER_SOURCE: PROBE_WORKER_SOURCE,
+      RULESET_CONTEXTS_JQ: RULESET_CONTEXTS_JQ,
+      PR_ROLLUP_JQ: PR_ROLLUP_JQ,
+      mcpParse: mcpParse,
+      headCheckRunsSafe: headCheckRunsSafe,
+      latestCheckRunConclusions: latestCheckRunConclusions,
+      isBookkeepingCheckName: isBookkeepingCheckName,
+      eachNonBookkeepingConclusion: eachNonBookkeepingConclusion,
+      headHasRealFailure: headHasRealFailure,
+      failingCheckNames: failingCheckNames,
+      dispatchedValidationRuns: dispatchedValidationRuns,
+      failedRunLinksLine: failedRunLinksLine,
+      headWorkflowRunsSafe: headWorkflowRunsSafe,
+      headCheckRunZombies: headCheckRunZombies,
+      headPlaceholders: headPlaceholders,
+      headOrphanedRunChecks: headOrphanedRunChecks,
+      repoPoolFree: repoPoolFree,
+      hasActiveHeadRun: hasActiveHeadRun,
+      isAmbientNonDispatchRun: isAmbientNonDispatchRun,
+      hasRecentHeadRun: hasRecentHeadRun
+    };
+}

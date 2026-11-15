@@ -277,9 +277,11 @@ function syncValidationChecks(deps, repoInfo, stampFn) {
     runs: runList.length
   }));
 }
-module.exports = {
-  validationCheckNames: validationCheckNames,
-  stampLinkBlock: stampLinkBlock,
-  stampValidationChecksForModule: stampValidationChecksForModule,
-  syncValidationChecks: syncValidationChecks
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      validationCheckNames: validationCheckNames,
+      stampLinkBlock: stampLinkBlock,
+      stampValidationChecksForModule: stampValidationChecksForModule,
+      syncValidationChecks: syncValidationChecks
+    };
+}

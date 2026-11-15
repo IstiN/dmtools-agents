@@ -101,4 +101,37 @@ suite('pack load probe: generated artifacts', function () {
         assert.equal(cfg.name, 'JSRunner');
         assert.equal(cfg.params.jsPath, '__pack_load_probe.js');
     });
+
+    test('js/smAgent.js, js/agentValidator.js, and all js/sm/*.js guard module.exports for JSRunner global scope', function () {
+        var targets = [
+            'js/smAgent.js',
+            'js/agentValidator.js',
+            'js/common/releaseArtefacts.js',
+            'js/sm/branchRefresh.js',
+            'js/sm/checkRunCures.js',
+            'js/sm/guestTransplantRunner.js',
+            'js/sm/localAndStateRunner.js',
+            'js/sm/mergeAndParkProbes.js',
+            'js/sm/parkAndActorProbes.js',
+            'js/sm/prLifecycleActions.js',
+            'js/sm/prUpdateAndValidateActions.js',
+            'js/sm/prVerdictAndSweepActions.js',
+            'js/sm/redVerdict.js',
+            'js/sm/reworkAndVerdicts.js',
+            'js/sm/ruleProcessor.js',
+            'js/sm/tickOrchestrator.js',
+            'js/sm/validationCheckSync.js',
+            'js/sm/validationProbes.js',
+            'js/sm/verdictAndFailState.js',
+            'js/sm/workflowDispatch.js',
+            'js/sm/workflowRunTracking.js'
+        ];
+        targets.forEach(function (relPath) {
+            var src = file_read({ path: relPath });
+            assert.ok(/typeof\s+module\s*!==\s*['"]undefined['"]/.test(src),
+                relPath + ' must guard module.exports with typeof module check');
+            assert.ok(!/^module\.exports\s*=/m.test(src),
+                relPath + ' must not contain bare top-level module.exports =');
+        });
+    });
 });

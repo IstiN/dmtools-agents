@@ -377,15 +377,19 @@ function resolveArtefactRepository(customParams) {
     return { owner: repo.owner, repo: repo.repo };
 }
 
-module.exports = {
-    buildTag: buildTag,
-    buildReleaseName: buildReleaseName,
-    resolveTemplate: resolveTemplate,
-    zipFolder: zipFolder,
-    unzipTo: unzipTo,
-    uploadArtefact: uploadArtefact,
-    uploadRawFile: uploadRawFile,
-    downloadArtefact: downloadArtefact,
-    resolveArtefactRepository: resolveArtefactRepository
-};
+// ── Export ───────────────────────────────────────────────────────────────────
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        buildTag: buildTag,
+        buildReleaseName: buildReleaseName,
+        resolveTemplate: resolveTemplate,
+        zipFolder: zipFolder,
+        unzipTo: unzipTo,
+        uploadArtefact: uploadArtefact,
+        uploadRawFile: uploadRawFile,
+        downloadArtefact: downloadArtefact,
+        resolveArtefactRepository: resolveArtefactRepository
+    };
+}
 

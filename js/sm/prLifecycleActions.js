@@ -427,18 +427,20 @@ function bindRuleProcessorDeps(d, m) {
   d.auditReworkConsumption = m.wdDeps.auditReworkConsumption;
   return d;
 }
-module.exports = {
-  runRedVerdictForTicket: runRedVerdictForTicket,
-  bindActionHandlerDeps: bindActionHandlerDeps,
-  bindRuleProcessorDeps: bindRuleProcessorDeps,
-  handleCloseIssueAction: handleCloseIssueAction,
-  handleAdvancePlanAction: handleAdvancePlanAction,
-  handleMarkDevelopedAction: handleMarkDevelopedAction,
-  handleArmReviewAction: handleArmReviewAction,
-  handleReconcileVerdictsAction: handleReconcileVerdictsAction,
-  handleRestoreReworkArmAction: handleRestoreReworkArmAction,
-  handleArmReworkAction: handleArmReworkAction,
-  handleMergePrAction: handleMergePrAction,
-  handleCompleteValidationAction: handleCompleteValidationAction,
-  handleTransplantGuestPrAction: handleTransplantGuestPrAction
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      runRedVerdictForTicket: runRedVerdictForTicket,
+      bindActionHandlerDeps: bindActionHandlerDeps,
+      bindRuleProcessorDeps: bindRuleProcessorDeps,
+      handleCloseIssueAction: handleCloseIssueAction,
+      handleAdvancePlanAction: handleAdvancePlanAction,
+      handleMarkDevelopedAction: handleMarkDevelopedAction,
+      handleArmReviewAction: handleArmReviewAction,
+      handleReconcileVerdictsAction: handleReconcileVerdictsAction,
+      handleRestoreReworkArmAction: handleRestoreReworkArmAction,
+      handleArmReworkAction: handleArmReworkAction,
+      handleMergePrAction: handleMergePrAction,
+      handleCompleteValidationAction: handleCompleteValidationAction,
+      handleTransplantGuestPrAction: handleTransplantGuestPrAction
+    };
+}
