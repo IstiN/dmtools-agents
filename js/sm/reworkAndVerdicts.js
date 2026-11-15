@@ -339,15 +339,17 @@ function restoreReworkArm(deps, key, ticket, rule, repoInfo, effectiveConfig) {
   }
   return applyRestoredReworkArm(deps, repoInfo, ticket, key, pre.head, evalRes.newestConsume, evalRes.decision, machineThreads, staleMin);
 }
-module.exports = {
-  prCommentList: prCommentList,
-  findingEscalationComment: findingEscalationComment,
-  auditReworkConsumption: auditReworkConsumption,
-  unresolvedThreadCount: unresolvedThreadCount,
-  noopGuardHeadIsRed: noopGuardHeadIsRed,
-  unresolvedMachineThreadCount: unresolvedMachineThreadCount,
-  reworkLatchHeadOf: reworkLatchHeadOf,
-  consultReworkLatch: consultReworkLatch,
-  armReworkLatch: armReworkLatch,
-  restoreReworkArm: restoreReworkArm
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      prCommentList: prCommentList,
+      findingEscalationComment: findingEscalationComment,
+      auditReworkConsumption: auditReworkConsumption,
+      unresolvedThreadCount: unresolvedThreadCount,
+      noopGuardHeadIsRed: noopGuardHeadIsRed,
+      unresolvedMachineThreadCount: unresolvedMachineThreadCount,
+      reworkLatchHeadOf: reworkLatchHeadOf,
+      consultReworkLatch: consultReworkLatch,
+      armReworkLatch: armReworkLatch,
+      restoreReworkArm: restoreReworkArm
+    };
+}

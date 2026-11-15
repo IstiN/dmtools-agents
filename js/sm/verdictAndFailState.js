@@ -285,22 +285,24 @@ function runNakedPrSweep(deps, repoInfo) {
     return [];
   }
 }
-module.exports = {
-  RED_HEAD_MARKER_RE: RED_HEAD_MARKER_RE,
-  EMPTY_LAP_MARKER_RE: EMPTY_LAP_MARKER_RE,
-  PLACEHOLDER_PARK_MARKER: PLACEHOLDER_PARK_MARKER,
-  REWORK_WITHHELD_MARKER_RE: REWORK_WITHHELD_MARKER_RE,
-  redHeadCapOf: redHeadCapOf,
-  redHeadSkipEnabled: redHeadSkipEnabled,
-  redHeadMarkerLine: redHeadMarkerLine,
-  noopLapMaxOf: noopLapMaxOf,
-  failMarkerState: failMarkerState,
-  redHeadBlocked: redHeadBlocked,
-  prHeadAndLabels: prHeadAndLabels,
-  verdictMachineLogins: verdictMachineLogins,
-  readVerdictRecords: readVerdictRecords,
-  linkedIssueLabels: linkedIssueLabels,
-  reworkArmGate: reworkArmGate,
-  reconcileReviewVerdicts: reconcileReviewVerdicts,
-  runNakedPrSweep: runNakedPrSweep
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      RED_HEAD_MARKER_RE: RED_HEAD_MARKER_RE,
+      EMPTY_LAP_MARKER_RE: EMPTY_LAP_MARKER_RE,
+      PLACEHOLDER_PARK_MARKER: PLACEHOLDER_PARK_MARKER,
+      REWORK_WITHHELD_MARKER_RE: REWORK_WITHHELD_MARKER_RE,
+      redHeadCapOf: redHeadCapOf,
+      redHeadSkipEnabled: redHeadSkipEnabled,
+      redHeadMarkerLine: redHeadMarkerLine,
+      noopLapMaxOf: noopLapMaxOf,
+      failMarkerState: failMarkerState,
+      redHeadBlocked: redHeadBlocked,
+      prHeadAndLabels: prHeadAndLabels,
+      verdictMachineLogins: verdictMachineLogins,
+      readVerdictRecords: readVerdictRecords,
+      linkedIssueLabels: linkedIssueLabels,
+      reworkArmGate: reworkArmGate,
+      reconcileReviewVerdicts: reconcileReviewVerdicts,
+      runNakedPrSweep: runNakedPrSweep
+    };
+}
