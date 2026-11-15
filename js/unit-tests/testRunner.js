@@ -254,7 +254,10 @@ var REAL_COMMON_MODULES = {
     reviewPoolLegSetup: 'js/common/reviewPoolLegSetup.js',
     reviewPoolPost: 'js/common/reviewPoolPost.js',
     gitlabTracker: 'js/common/gitlabTracker.js',
-    wipSquash: 'js/common/wipSquash.js'
+    wipSquash: 'js/common/wipSquash.js',
+    // gh-1493: the terminal-signal delivery helpers are pure (no requires);
+    // suites shim developBugAndCreatePR's siblings but resolve these for real.
+    terminalDelivery: 'js/common/terminalDelivery.js'
 };
 
 function makeRequire(moduleMap) {
