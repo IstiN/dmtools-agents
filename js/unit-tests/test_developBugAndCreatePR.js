@@ -140,8 +140,6 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/machineAuthor.js': machineAuthorModule,
         './common/tcMaintenanceLedger.js': tcLedgerModule,
         './common/bugBookkeeping.js': bugBookkeepingModule,
-        // gh-1493: real terminal-delivery helpers (pure module — no requires).
-        './common/terminalDelivery.js': loadModule('js/common/terminalDelivery.js', makeRequire({})),
         './developTicketAndCreatePR.js': {
             action: function() { return { success: true, path: 'delegated' }; },
             throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
@@ -1842,6 +1840,65 @@ suite('developBugAndCreatePR — gh-1188 extracted step helpers', function() {
         assert.equal(result.success, false);
         assert.equal(result.delivered, false);
         assert.equal(result.path, 'blocked_without_codegraph');
+    });
+
+    test('completeBlockedPath: comment-delivery failure alone fails the leg (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var tracker = {
+            postComment: function() { throw new Error('empty workspace binding'); },
+            moveToStatus: function() {},
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r', tried: ['t'], needs: 'n' }, true, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, false);
+        assert.equal(result.delivered, false);
+        assert.equal(result.path, 'blocked');
+        assert.contains(result.error, 'postComment failed');
+        assert.contains(result.error, 'empty workspace binding');
+    });
+
+    test('completeBlockedPath: CodeGraph-retry comment failure fails the leg (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var tracker = {
+            postComment: function() { throw new Error('tracker down'); },
+            moveToStatus: function() {},
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r' }, false, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, false);
+        assert.equal(result.delivered, false);
+        assert.equal(result.path, 'blocked_without_codegraph');
+        assert.contains(result.error, 'postComment failed');
+    });
+
+    test('completeBlockedPath: full delivery succeeds (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var calls = [];
+        var tracker = {
+            postComment: function(key) { calls.push(['comment', key]); },
+            moveToStatus: function(key, status) { calls.push(['move', key, status]); },
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r', tried: ['t'], needs: 'n' }, true, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.delivered, true);
+        assert.deepEqual(calls[0], ['comment', 'TS-1']);
+        assert.deepEqual(calls[1], ['move', 'TS-1', 'Blocked']);
+    });
+
+    test('completeBlockedPath: CodeGraph-retry full delivery resets for retry (gh-1493)', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var calls = [];
+        var tracker = {
+            postComment: function(key) { calls.push(['comment', key]); },
+            moveToStatus: function(key, status) { calls.push(['move', key, status]); },
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r' }, false, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.delivered, true);
+        assert.deepEqual(calls[0], ['comment', 'TS-1']);
+        assert.deepEqual(calls[1], ['move', 'TS-1', 'Ready For Development']);
     });
 
     test('completeAlreadyFixedPath: Done-move failure fails the leg (gh-1493 — fah#2182: a false success re-armed 40 legs)', function() {
