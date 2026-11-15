@@ -162,7 +162,8 @@
           "query": {
             "type": "pr",
             "labels": [
-              "validation_failed"
+              "validation_failed",
+              "rework-loop-escalated"
             ],
             "notLabels": [
               "ai_validating",

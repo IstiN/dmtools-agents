@@ -82,9 +82,9 @@ var ISSUE_SEARCH_WORKER_SOURCE = [
     '        return [];',
     '    }',
     '    var d = args.descriptor;',
-    "    var query = 'repo:' + args.repo.owner + '/' + args.repo.repo +",
-    "        ' is:issue is:open ' +",
-    "        (d.kind === 'label' ? 'label:\"' + d.label + '\"' : 'assignee:' + args.assignee);",
+    "    var suffix = d.kind === 'label' ? ' label:\"' + d.label + '\"' :" +
+    "        (d.kind === 'assignee' ? ' assignee:' + args.assignee : ' sort:created-asc');",
+    "    var query = 'repo:' + args.repo.owner + '/' + args.repo.repo + ' is:issue is:open' + suffix;",
     '    return { descriptor: d, items: asList(parseMcp(github_search_issues({ query: query }))) };',
     '}'
 ].join('\n');
@@ -683,11 +683,10 @@ function resolveAssigneeQuery(assignee, machineAuthor) {
 // assignee scan descriptor (resolveAssigneeQuery; fail-closed when the
 // {machineAuthor} knob is unresolvable).
 function _issueSearchDescriptors(q, machineAuthor) {
-    var descriptors = (q.labels || []).map(function (ml) {
-        return { kind: 'label', label: ml };
-    });
+    var descriptors = (q.labels || []).map(function (ml) { return { kind: 'label', label: ml }; });
     var assigneeQuery = resolveAssigneeQuery(q.assignee, machineAuthor);
     if (assigneeQuery) descriptors.push({ kind: 'assignee' });
+    if (!descriptors.length && !q.assignee) descriptors.push({ kind: 'open' });
     return { descriptors: descriptors, assigneeQuery: assigneeQuery };
 }
 
@@ -696,9 +695,8 @@ function _issueSearchDescriptors(q, machineAuthor) {
 // function is ISSUE_SEARCH_WORKER_SOURCE).
 function issueSearchOneFn(full, assigneeQuery) {
     return function (d) {
-        var queryStr = 'repo:' + full + ' is:issue is:open ' +
-            (d.kind === 'label' ? 'label:"' + d.label + '"' : 'assignee:' + assigneeQuery);
-        var res = parseMcp(github_search_issues({ query: queryStr }));
+        var suffix = d.kind === 'label' ? ' label:"' + d.label + '"' : (d.kind === 'assignee' ? ' assignee:' + assigneeQuery : ' sort:created-asc');
+        var res = parseMcp(github_search_issues({ query: 'repo:' + full + ' is:issue is:open' + suffix }));
         return { descriptor: d, items: asList(res) };
     };
 }
