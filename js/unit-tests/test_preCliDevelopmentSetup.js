@@ -51,7 +51,8 @@ var devDevelopmentModeAdaptiveReal = loadModule('js/common/developmentModeAdapti
     makeRequire({ './developmentMode.js': devDevelopmentModeReal, './developmentModePlan.js': devDevelopmentModePlanReal }));
 // gh-1503: the SP decision module (in-leg story-point routing) — same discipline.
 var devDevelopmentModeAdaptiveSpReal = loadModule('js/common/developmentModeAdaptiveSp.js',
-    makeRequire({ './developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal }));
+    makeRequire({ './developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
+        }));
 
 function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     var planMod = loadModule('js/common/developmentModePlan.js',
@@ -59,7 +60,8 @@ function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     var adaptiveMod = loadModule('js/common/developmentModeAdaptive.js',
         makeRequire({ './developmentMode.js': devDevelopmentModeReal, './developmentModePlan.js': planMod }), mocks || {});
     var spMod = loadModule('js/common/developmentModeAdaptiveSp.js',
-        makeRequire({ './developmentModeAdaptive.js': adaptiveMod }), mocks || {});
+        makeRequire({ './developmentModeAdaptive.js': adaptiveMod,
+        }), mocks || {});
     return loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks || {}),

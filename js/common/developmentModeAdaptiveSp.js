@@ -113,7 +113,7 @@ function parseScopeEstimateRecord(text) {
         return null;
     }
     if (!isPlainObject(record)) return null;
-    if (!isIntegerInRange(record.sp, 1, SP_THRESHOLD_MAX)) return null;
+    if (!isIntegerInRange(record.sp, 1, Number.MAX_SAFE_INTEGER)) return null;
     if (VALID_ESTIMATE_MODES.indexOf(record.mode) === -1) return null;
     var parsed = { sp: record.sp, mode: record.mode };
     if (isIntegerInRange(record.threshold, SP_THRESHOLD_MIN, SP_THRESHOLD_MAX)) {
@@ -142,7 +142,8 @@ function spAppendixText(threshold) {
         'estimate the work in story points and fix your working mode for this leg.',
         '',
         '## Estimate',
-        '- Story points, fibonacci scale: 1 / 2 / 3 / 5 / 8 / 13.',
+        '- Story points, fibonacci scale: 1 / 2 / 3 / 5 / 8 / 13 / 21 / ... — the scale is',
+        '  open-ended: if the work feels bigger than the top value you named, keep going.',
         '- Estimate EFFORT, RISK and UNCERTAINTY — not file count. A sweeping mechanical',
         '  rename is low; a small change into undocumented behavior is high.',
         '- Structural surprises belong in a higher estimate: data/schema migrations,',
@@ -252,6 +253,86 @@ function resolveSpAppendix(customParams) {
     };
 }
 
+// ── preCli step (owned here so the pinned setup module stays complexity-flat) ──
+// Resolve BOTH appendices before committing either write: a failed plan
+// resolution must not leave an orphan SP file behind (fail-fast carries to
+// the caller — the setup step reports it like a plan-mode setup failure).
+// The plan appendix on an adaptive leg is an ESCALATION READ target (the SP
+// block points the agent at the file when it self-selects plan); the plan
+// cliPrompts entry itself stays gated to explicit plan mode.
+
+/**
+ * The adaptive preCli step: materialize the SP appendix + the plan escalation
+ * read, seed the git local excludes for both, flush warnings + log lines.
+ * @param {Object} customParams the leg's customParams
+ * @returns {{ok: boolean, active: boolean, path: string|null, overridden: boolean,
+ *            error: string|null, warnings: string[], logLines: string[]}}
+ * @throws when either appendix cannot be materialized (config-error class).
+ */
+function runPreCliAdaptiveAppendixStep(customParams, planModule, branchSetupMod) {
+    var resolution = resolveSpAppendix(customParams);
+    var planResolved = resolution.active
+        ? planModule.resolveAppendixSource(customParams)
+        : null;
+    if (planResolved && planResolved.error) {
+        (planResolved.warnings || []).forEach(function (w) { console.warn(w); });
+        throw new Error(planResolved.error);
+    }
+    (resolution.warnings || []).forEach(function (w) { console.warn(w); });
+    (resolution.logLines || []).forEach(function (l) { console.log(l); });
+    if (!resolution.active) {
+        return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolution.warnings, logLines: resolution.logLines };
+    }
+    var written = writeSpAppendix(resolution.threshold);
+    if (!written.ok) {
+        throw new Error(written.error);
+    }
+    var planWritten = planModule.writeResolvedAppendix(planResolved);
+    if (!planWritten.ok) {
+        throw new Error(planWritten.error);
+    }
+    branchSetupMod.ensureGitInfoExclude(
+        planModule.PLAN_APPENDIX_FILE_PATH,
+        planModule.PLAN_APPENDIX_EXCLUDE_COMMENT,
+        'Could not exclude the plan-mode appendix from git:'
+    );
+    branchSetupMod.ensureGitInfoExclude(
+        SP_APPENDIX_FILE_PATH,
+        SP_APPENDIX_EXCLUDE_COMMENT,
+        'Could not exclude the scope-estimate appendix from git:'
+    );
+    console.log('📝 developmentMode=adaptive: plan appendix materialized for escalation reads → ' +
+        planModule.PLAN_APPENDIX_FILE_PATH);
+    return {
+        ok: true,
+        active: true,
+        path: written.path,
+        overridden: false,
+        error: null,
+        warnings: resolution.warnings,
+        logLines: resolution.logLines
+    };
+}
+
+// ── escalation visibility (the decision record is the durable signal; the
+// label only makes escalated legs visible to humans) ────────────────────────
+
+var DEV_PLAN_ESCALATED_LABEL = 'dev-plan-escalated';
+
+/**
+ * Stamp the informational label when the record says the leg self-selected
+ * plan. Pure over its arguments — the leg action owns the tracker access and
+ * the degrade-not-fail wrapper.
+ * @param {Object|null} record a parseScopeEstimateRecord result
+ * @param {function(string)} addLabel the tracker add-label call
+ * @returns {boolean} true when the label was due
+ */
+function stampDevPlanEscalatedFromRecord(record, addLabel) {
+    if (!record || record.mode !== 'plan') return false;
+    addLabel(DEV_PLAN_ESCALATED_LABEL);
+    return true;
+}
+
 /** The conditional cliPrompts entry for adaptive legs (see the condition script). */
 function spAppendixCliEntry() {
     return {
@@ -277,6 +358,9 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveSpAppendix: resolveSpAppendix,
         writeSpAppendix: writeSpAppendix,
         materializeSpAppendix: materializeSpAppendix,
-        spAppendixCliEntry: spAppendixCliEntry
+        spAppendixCliEntry: spAppendixCliEntry,
+        runPreCliAdaptiveAppendixStep: runPreCliAdaptiveAppendixStep,
+        stampDevPlanEscalatedFromRecord: stampDevPlanEscalatedFromRecord,
+        DEV_PLAN_ESCALATED_LABEL: DEV_PLAN_ESCALATED_LABEL
     };
 }

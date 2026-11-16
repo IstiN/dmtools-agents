@@ -673,16 +673,8 @@ function appendConcernsToCompletionComment(comment, ticketKey) {
     return comment;
 }
 
-// ─ gh-1503: SP-adaptive escalation visibility (outputs/scope_estimate.json) ─
-// An adaptive leg that self-selected plan stamps the informational
-// dev-plan-escalated label so humans see the routing decision at a glance.
-// Same degrade-not-fail discipline as the concerns label: no record /
-// malformed record / label failure ⇒ warn or no-op, never a leg failure.
-// The durable signal is the decision record itself; the label only makes
-// escalated legs visible.
-
-// Parsed scope-estimate record, or null when the file is absent, unreadable
-// or malformed (parseScopeEstimateRecord already fails safe to null).
+// gh-1503: SP escalation visibility — pure decision in the SP module; this
+// wrapper owns tracker access (degrade-not-fail, same as concerns).
 function readScopeEstimateRecord() {
     try {
         var detailed = outputFiles.readOutputFileDetailed('scope_estimate.json');
@@ -693,15 +685,13 @@ function readScopeEstimateRecord() {
     return null;
 }
 
-// No-op unless the record says the leg self-selected plan mode.
 function stampDevPlanEscalatedLabel(ticketKey) {
-    var record = readScopeEstimateRecord();
-    if (!record || record.mode !== 'plan') return;
     try {
-        getTracker().addLabel(ticketKey, LABELS.DEV_PLAN_ESCALATED);
-        console.log('🧭 Added ' + LABELS.DEV_PLAN_ESCALATED + ' label to', ticketKey);
+        if (developmentModeAdaptiveSp.stampDevPlanEscalatedFromRecord(readScopeEstimateRecord(), function (label) {
+            getTracker().addLabel(ticketKey, label);
+        })) console.log('🧭 Added ' + developmentModeAdaptiveSp.DEV_PLAN_ESCALATED_LABEL + ' label to', ticketKey);
     } catch (e) {
-        console.warn('Could not add ' + LABELS.DEV_PLAN_ESCALATED + ' label:', e);
+        console.warn('Could not add ' + developmentModeAdaptiveSp.DEV_PLAN_ESCALATED_LABEL + ' label:', e);
     }
 }
 
@@ -765,9 +755,7 @@ function postPRCommentToJira(ticketKey, prUrl, branchName) {
         // appendConcernsToCompletionComment).
         comment = appendConcernsToCompletionComment(comment, ticketKey);
 
-        // gh-1503: surface an adaptive leg's plan self-selection (no-op for
-        // direct legs and for non-adaptive modes — the record is absent there).
-        stampDevPlanEscalatedLabel(ticketKey);
+        stampDevPlanEscalatedLabel(ticketKey); // gh-1503: adaptive plan self-selection
 
         getTracker().postComment(ticketKey, comment);
 

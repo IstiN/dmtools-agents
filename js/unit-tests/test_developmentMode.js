@@ -278,12 +278,14 @@ function legRequireMap() {
         './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
         // gh-1503: the SP decision module (the leg action reads scope_estimate.json)
         './common/developmentModeAdaptiveSp.js': loadModule('js/common/developmentModeAdaptiveSp.js',
-            makeRequire({ './developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
-                makeRequire({
-                    './developmentMode.js': loadModule('js/common/developmentMode.js'),
-                    './developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-                        makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') }))
-                })) })),
+            makeRequire({
+                './developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
+                    makeRequire({
+                        './developmentMode.js': loadModule('js/common/developmentMode.js'),
+                        './developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+                            makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') }))
+                    })),
+            })),
         './configLoader.js': legConfigLoader,
         './config.js': configModule,
         './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },

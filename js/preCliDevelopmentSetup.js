@@ -1081,70 +1081,19 @@ function runPlanModeAppendixStepOrReport(customParams, config, ticketKey) {
     }
 }
 
-// ── gh-1437 → gh-1503: adaptive appendix — in-leg SP decision ───────────────
-// When the resolved developmentMode is "adaptive", the AGENT decides
-// plan-vs-default in-leg (story-point estimate after surveying the ticket and
-// the code; js/common/developmentModeAdaptiveSp.js). The preCli step
-// materializes the SP appendix (the agent's decision instructions) plus the
-// plan appendix (the escalation read target — the SP block points the agent
-// at the file when it self-selects plan; the plan cliPrompts entry stays
-// gated to explicit plan mode). The former signal-driven routing
-// (js/common/developmentModeAdaptive.js) is retired from this wiring.
-// A failed resolution is a CONFIG error: the leg fails fast before the agent
-// launch with the offending path named — same class as the plan path.
+// ── adaptive appendix — in-leg SP decision (gh-1503) ────────────────────────
+// The whole step lives in js/common/developmentModeAdaptiveSp.js (this module
+// is size-pinned): resolve+write BOTH appendices (SP + the plan escalation
+// read), seed the excludes, fail fast on resolution errors. The gh-1437
+// signal-driven routing is retired; its extractor stays for legacy consumers.
 
 /**
- * The adaptive step: materialize the SP appendix + the plan escalation read,
- * flush warnings + log lines. A failed resolution throws (the caller reports
- * it like a plan-mode setup failure).
+ * Thin delegate — see developmentModeAdaptiveSp.runPreCliAdaptiveAppendixStep.
  * @returns the SP materialization result.
- * @throws when the SP appendix or the plan escalation read cannot be materialized.
+ * @throws when either appendix cannot be materialized.
  */
 function runAdaptiveModeAppendixStep(customParams) {
-    // Resolve BOTH appendices before committing either write — a failed plan
-    // resolution must not leave an orphan SP file behind.
-    var resolution = developmentModeAdaptiveSp.resolveSpAppendix(customParams);
-    var planResolved = resolution.active
-        ? developmentModePlan.resolveAppendixSource(customParams)
-        : null;
-    if (planResolved && planResolved.error) {
-        (planResolved.warnings || []).forEach(function (w) { console.warn(w); });
-        throw new Error(planResolved.error);
-    }
-    (resolution.warnings || []).forEach(function (w) { console.warn(w); });
-    (resolution.logLines || []).forEach(function (l) { console.log(l); });
-    if (!resolution.active) {
-        return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolution.warnings, logLines: resolution.logLines };
-    }
-    var written = developmentModeAdaptiveSp.writeSpAppendix(resolution.threshold);
-    if (!written.ok) {
-        throw new Error(written.error);
-    }
-    var planWritten = developmentModePlan.writeResolvedAppendix(planResolved);
-    if (!planWritten.ok) {
-        throw new Error(planWritten.error);
-    }
-    branchSetup.ensureGitInfoExclude(
-        developmentModePlan.PLAN_APPENDIX_FILE_PATH,
-        developmentModePlan.PLAN_APPENDIX_EXCLUDE_COMMENT,
-        'Could not exclude the plan-mode appendix from git:'
-    );
-    branchSetup.ensureGitInfoExclude(
-        developmentModeAdaptiveSp.SP_APPENDIX_FILE_PATH,
-        developmentModeAdaptiveSp.SP_APPENDIX_EXCLUDE_COMMENT,
-        'Could not exclude the scope-estimate appendix from git:'
-    );
-    console.log('📝 developmentMode=adaptive: plan appendix materialized for escalation reads → ' +
-        developmentModePlan.PLAN_APPENDIX_FILE_PATH);
-    return {
-        ok: true,
-        active: true,
-        path: written.path,
-        overridden: false,
-        error: null,
-        warnings: resolution.warnings,
-        logLines: resolution.logLines
-    };
+    return developmentModeAdaptiveSp.runPreCliAdaptiveAppendixStep(customParams, developmentModePlan, branchSetup);
 }
 
 /**

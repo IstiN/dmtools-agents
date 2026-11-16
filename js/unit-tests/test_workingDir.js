@@ -36,7 +36,8 @@ var devModePlanModuleShared = loadModule('js/common/developmentModePlan.js',
 var devModeAdaptiveModuleShared = loadModule('js/common/developmentModeAdaptive.js',
     makeRequire({ './developmentMode.js': devModeModuleShared, './developmentModePlan.js': devModePlanModuleShared }));
 var devModeAdaptiveSpModuleShared = loadModule('js/common/developmentModeAdaptiveSp.js',
-    makeRequire({ './developmentModeAdaptive.js': devModeAdaptiveModuleShared }));
+    makeRequire({ './developmentModeAdaptive.js': devModeAdaptiveModuleShared,
+        }));
 
 // Real tracker factory (provider probing is pure config/env reads) —
 // preCliDevelopmentSetup requires it for the dev-leg label assertion.

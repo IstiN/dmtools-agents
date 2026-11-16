@@ -54,15 +54,16 @@ var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 // gh-1503: the SP decision module — one real instance shared by every
 // developTicketAndCreatePR loader map in this file (the SP module only
 // requires developmentModeAdaptive; its file IO comes through globals).
-var gh1503DevelopmentModeReal = loadModule('js/common/developmentMode.js');
-var gh1503DevelopmentModeAdaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
+var developmentModeShared = loadModule('js/common/developmentMode.js');
+var developmentModeAdaptiveShared = loadModule('js/common/developmentModeAdaptive.js',
     makeRequire({
-        './developmentMode.js': gh1503DevelopmentModeReal,
+        './developmentMode.js': developmentModeShared,
         './developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-            makeRequire({ './developmentMode.js': gh1503DevelopmentModeReal }))
+            makeRequire({ './developmentMode.js': developmentModeShared }))
     }));
-var gh1503DevelopmentModeAdaptiveSpReal = loadModule('js/common/developmentModeAdaptiveSp.js',
-    makeRequire({ './developmentModeAdaptive.js': gh1503DevelopmentModeAdaptiveReal }));
+var developmentModeAdaptiveSpShared = loadModule('js/common/developmentModeAdaptiveSp.js',
+    makeRequire({ './developmentModeAdaptive.js': developmentModeAdaptiveShared,
+        }));
 
 
 // gh-1190: shared feedbackLoop stub builder — a named helper so the override
@@ -91,7 +92,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSpShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -129,7 +130,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks, feedbackLoopOverr
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSpShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -478,7 +479,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 // gh-1435: the dev leg now requires the developmentMode resolver — real module,
                 // same loadModule pattern as needsInput above.
                 './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSpShared,
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -560,7 +561,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 // gh-1435: the dev leg now requires the developmentMode resolver — real module,
                 // same loadModule pattern as needsInput above.
                 './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSpShared,
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -642,7 +643,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 // gh-1435: the dev leg now requires the developmentMode resolver — real module,
                 // same loadModule pattern as needsInput above.
                 './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSpShared,
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -795,7 +796,7 @@ function loadForLandingGuard(mocks, opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSpShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1009,7 +1010,7 @@ function loadForPrTail(mocks, opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSpShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1377,7 +1378,7 @@ function loadForMissingResponseResume(opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSpShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1980,7 +1981,7 @@ function loadForOutcomePinning(mocks, opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSpShared,
             './cacheToReleases.js': {
                 action: function () { telemetry.cache++; }
             },
@@ -3444,7 +3445,7 @@ function loadForConcernsSeam(mocks, opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSpShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,

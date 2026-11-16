@@ -60,7 +60,7 @@ session restore path, which remains the primary resume mechanism.
 
 ### 2.3 `adaptive`
 
-An in-leg decision (gh-1503): the agent surveys the ticket and the relevant
+An in-leg decision: the agent surveys the ticket and the relevant
 code, estimates the work in story points, and self-selects its working mode.
 
 - The leg carries the **scope-estimate appendix** (engine text materialized at
@@ -85,8 +85,8 @@ code, estimates the work in story points, and self-selects its working mode.
 - Escalated legs stamp the informational `dev-plan-escalated` label (the
   decision record is the durable signal; a label failure is a warn).
 - `shadowMode: true` ⇒ nothing materializes, nothing routes (the would-act
-  line is logged) — carried over from gh-1437.
-- The gh-1437 pre-leg signal rule (`planIfModulesAtLeast` /
+  line is logged) — carried over from the pre-leg signal era.
+- The retired pre-leg signal rule (`planIfModulesAtLeast` /
   `planIfAcceptanceBulletsAtLeast` / `planIfBodyTokensAtLeast`) is retired
   from this repo's routing: text signals calibrated at ≈0.61 precision on
   closed-issue replays and cannot separate design-bearing work from
@@ -105,9 +105,9 @@ code, estimates the work in story points, and self-selects its working mode.
 "developmentModeConfig": {
   "plan":    { "appendixFile": "optional override path" },
   "adaptive": {
-    "planThresholdSp": 3,               // in-leg SP routing threshold (gh-1503); default 3
+    "planThresholdSp": 3,               // in-leg SP routing threshold; default 3
     "shadowMode": false,                // true = nothing materializes/routes, log only
-    // legacy gh-1437 text-signal knobs — parsed for forward compatibility,
+    // legacy text-signal knobs — parsed for forward compatibility,
     // UNUSED by this repo's routing (kept for legacy pack consumers)
     "planIfModulesAtLeast": 2,
     "planIfAcceptanceBulletsAtLeast": 5,
@@ -123,17 +123,17 @@ wrong types are warned-and-ignored.
 
 ## 4. Calibration (offline)
 
-**gh-1503 (`planThresholdSp`)**: the threshold is re-tuned from the
+**SP routing (`planThresholdSp`)**: the threshold is re-tuned from the
 per-leg decision records (`outputs/<KEY>/scope_estimate.json`) read offline —
 one line per leg carries sp/threshold/mode/outcome; legs-per-ticket and model
 come from the harness usage lines. Model bumps shift SP estimates, so the
 record carries the model via the usage line — drift is visible per model
 generation.
 
-**Legacy (gh-1437 signal thresholds)**:
+**Legacy (signal thresholds)**:
 
 Threshold validity is expert review of a decision table, not a numeric bar
-(owner decision, gh-1437): the harness replays the rule over an
+owner decision: the harness replays the rule over an
 expert-labeled sample and the owner tunes thresholds (config-only) from the
 disagreement cases.
 

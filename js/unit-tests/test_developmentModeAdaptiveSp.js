@@ -40,8 +40,11 @@ var developmentModePlan = loadModule('js/common/developmentModePlan.js',
     makeRequire({ './developmentMode.js': developmentMode }));
 var developmentModeAdaptive = loadModule('js/common/developmentModeAdaptive.js',
     makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }));
+var branchSetupShared = loadModule('js/common/branchSetup.js');
 var developmentModeAdaptiveSp = loadModule('js/common/developmentModeAdaptiveSp.js',
-    makeRequire({ './developmentModeAdaptive.js': developmentModeAdaptive }));
+    makeRequire({
+        './developmentModeAdaptive.js': developmentModeAdaptive
+    }));
 
 // Filesystem recording mocks — every test asserts on the recorded calls, so a
 // real file can never be touched (network-guard discipline for file IO).
@@ -143,7 +146,6 @@ suite('gh-1503 UT — scope-estimate record parsing', function () {
             '{"threshold": 3, "mode": "plan"}',    // sp missing
             '{"sp": "5", "mode": "plan"}',         // sp wrong type
             '{"sp": 0, "mode": "plan"}',           // sp below range
-            '{"sp": 14, "mode": "plan"}',          // sp above range
             '{"sp": 5.5, "mode": "plan"}',         // sp not an integer
             '{"sp": 5}',                           // mode missing
             '{"sp": 5, "mode": "PLAN"}',           // case-sensitive modes
@@ -153,6 +155,13 @@ suite('gh-1503 UT — scope-estimate record parsing', function () {
             assert.equal(developmentModeAdaptiveSp.parseScopeEstimateRecord(text), null,
                 'fail-safe null for: ' + JSON.stringify(text));
         });
+    });
+
+    test('open-ended scale: sp beyond the threshold range still parses (the estimate may exceed 13)', function () {
+        var r = developmentModeAdaptiveSp.parseScopeEstimateRecord(JSON.stringify({ sp: 21, mode: 'plan' }));
+        assert.ok(r && r.sp === 21, 'sp 21 is a legal estimate');
+        var big = developmentModeAdaptiveSp.parseScopeEstimateRecord(JSON.stringify({ sp: 40, mode: 'default' }));
+        assert.ok(big && big.sp === 40, 'the scale keeps going above the last named value');
     });
 
     test('unknown extra fields are ignored, not rejected', function () {
@@ -171,6 +180,11 @@ suite('gh-1503 UT — SP appendix text', function () {
         assert.ok(text.indexOf('(threshold: 3 SP)') !== -1, 'threshold appears in the decide header');
         assert.ok(developmentModeAdaptiveSp.spAppendixText(5).indexOf('(threshold: 5 SP)') !== -1,
             'a different threshold renders differently');
+    });
+
+    test('scale is open-ended in the agent-facing text', function () {
+        assert.contains(text, '21 / ...', 'the scale continues past 13');
+        assert.contains(text, 'open-ended', 'no ceiling implied');
     });
 
     test('carries the record contract', function () {

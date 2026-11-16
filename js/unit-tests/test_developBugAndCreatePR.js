@@ -12,15 +12,17 @@ var stubToolchainLine = function (t) { return t; };
 // bugBookkeeping map and the per-test require maps reference it from nested
 // scopes.
 // gh-1503: SP decision module — real chain shared by every loader map here.
-var gh1503DevMode = loadModule('js/common/developmentMode.js');
-var gh1503DevModeAdaptive = loadModule('js/common/developmentModeAdaptive.js',
+var devModeShared = loadModule('js/common/developmentMode.js');
+var devModeSharedAdaptive = loadModule('js/common/developmentModeAdaptive.js',
     makeRequire({
-        './developmentMode.js': gh1503DevMode,
+        './developmentMode.js': devModeShared,
         './developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-            makeRequire({ './developmentMode.js': gh1503DevMode }))
+            makeRequire({ './developmentMode.js': devModeShared }))
     }));
-var gh1503DevModeSp = loadModule('js/common/developmentModeAdaptiveSp.js',
-    makeRequire({ './developmentModeAdaptive.js': gh1503DevModeAdaptive }));
+var devModeSharedSp = loadModule('js/common/developmentModeAdaptiveSp.js',
+    makeRequire({
+        './developmentModeAdaptive.js': devModeSharedAdaptive,
+    }));
 
 var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
 
@@ -124,7 +126,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         // gh-1435: the dev leg now requires the developmentMode resolver — real module,
         // same loadModule pattern as needsInput above.
         './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-        './common/developmentModeAdaptiveSp.js': gh1503DevModeSp,
+        './common/developmentModeAdaptiveSp.js': devModeSharedSp,
         './cacheToReleases.js': {},
         './common/gitStaging.js': gitStagingModule,
         './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -974,7 +976,7 @@ function loadBugForMissingResponseResume(opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': gh1503DevModeSp,
+            './common/developmentModeAdaptiveSp.js': devModeSharedSp,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModuleLocal,
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
