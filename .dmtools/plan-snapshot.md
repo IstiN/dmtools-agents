@@ -4,7 +4,7 @@ SP estimate: **5** (multi-module wiring: new module + seam + postJSAction label 
 
 ## Tasks
 
-### T1 — SP threshold + record parsing module
+### T1 — SP threshold + record parsing module ✅
 **What**: new `js/common/developmentModeAdaptiveSp.js`:
 - `resolveSpThreshold(customParams)` → `{threshold, source}`; reads
   `developmentModeConfig.adaptive.planThresholdSp`; default `3`; invalid type / out of
@@ -19,6 +19,7 @@ SP estimate: **5** (multi-module wiring: new module + seam + postJSAction label 
 **Verify**: unit tests — threshold valid/default/invalid paths; record parse valid +
 malformed (no sp, sp:"5", truncated JSON) → null; materialized file contains the
 threshold number and both file paths; default mode leaves no appendix files.
+**DONE** 16/16 UT green (d9fd3434d).
 
 ### T2 — Seam: adaptive routes through the SP appendix
 **What**: `js/developTicketAndCreatePR.js` `initDevelopmentContext` — `adaptive`
