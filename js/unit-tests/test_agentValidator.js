@@ -132,13 +132,12 @@ suite('Agent JSON validation', function() {
                     'all cliPrompts referenced files should exist');
             });
 
-            test('all cliPromptsByTracker file references exist', function() {
-                var fileNotFoundErrors = result.errors.filter(function(e) {
-                    return e.indexOf('file not found') !== -1 &&
-                           e.indexOf('cliPromptsByTracker') !== -1;
+            test('cliPromptsByTracker entries are valid and all file references exist', function() {
+                var trackerErrors = result.errors.filter(function(e) {
+                    return e.indexOf('cliPromptsByTracker') !== -1;
                 });
-                assert.deepEqual(fileNotFoundErrors, [],
-                    'all tracker-specific prompt files should exist');
+                assert.deepEqual(trackerErrors, [],
+                    'cliPromptsByTracker should have no validation or file-not-found errors');
             });
 
             test('no long inline text in cliPrompts (warnings only)', function() {
@@ -338,7 +337,7 @@ suite('agentValidator synthetic edge cases, batch, and action', function() {
                     ],
                     cliPromptsByTracker: {
                         jira: 'not-an-array',
-                        ado: [456, './agents/missing_ado.md', './agents/ok_ado.md']
+                        ado: [456, './agents/missing_ado.md', './agents/ok_ado.md', { id: 'cond_ado', prompt: './agents/cond_ado.md', condition: 'c.js' }]
                     },
                     agentParams: {
                         instructions: [longText, './agents/short.md']
