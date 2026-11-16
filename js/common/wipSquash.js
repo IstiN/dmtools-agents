@@ -8,8 +8,7 @@
  */
 
 var SHA_RE = /^[0-9a-f]{7,40}$/i;
-var WIP_RE = /WIP auto-save/;
-
+var WIP_RE = /WIP auto-save|WIP:? partial analysis/;
 function isValidGitSha(val) {
     return SHA_RE.test(String(val || '').trim());
 }
@@ -29,6 +28,11 @@ function readExistingBaseFile(filePath, readFn) {
         return null;
     }
 }
+function readRecordedBaseSha(filePath, readFn) {
+    var raw = readExistingBaseFile(filePath, readFn);
+    return isValidGitSha(raw) ? raw : null;
+}
+
 
 function parseLines(raw) {
     return cleanText(raw)
@@ -129,7 +133,7 @@ function persistBaseHeadFile(options) {
         filePath: filePath,
         readFn: opts.readFn,
         currentSha: opts.currentSha,
-        ticketKey: String(opts.folder).split('/').pop(),
+        ticketKey: opts.ticketKey || String(opts.folder).split('/').pop(),
         runCommand: opts.runCommand
     });
     if (baseSha && typeof opts.writeFn === 'function') {
@@ -238,11 +242,89 @@ function inspectReworkSquashRange(runCommand, range, ticketKey, reworkMsg) {
     return { subjects: subjects, skipReason: null };
 }
 
+function isSafeNonBaseBranch(branch, baseBranch) {
+    if (!branch || branch === 'HEAD') return false;
+    if (branch === 'main' || branch === 'master') return false;
+    return !(baseBranch && branch === baseBranch);
+}
+
+function resolveInPlaceBaseSha(opts) {
+    if (isValidGitSha(opts.baseSha)) return String(opts.baseSha).trim();
+    try {
+        var head = cleanText(opts.runCommand('git rev-parse HEAD'));
+        var walked = walkBackContiguousWipBase(opts.runCommand, head);
+        return (walked && walked !== head) ? walked : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function buildInPlaceMessage(ticketKey, commitMessage) {
+    var msg = commitMessage || ((ticketKey || 'ticket') + ' WIP auto-save (squashed)');
+    return String(msg).replace(/"/g, "'").replace(/[\r\n]+/g, ' ').trim();
+}
+
+function canSquashInPlace(runCommand, baseSha, ticketKey) {
+    var check = inspectSquashRange(runCommand, baseSha + '..HEAD', ticketKey, null);
+    if (check.skipReason) return false;
+    return check.subjects.length >= 2;
+}
+
+/**
+ * Squash multiple WIP auto-save commits in `<baseSha>..HEAD` into a single WIP
+ * commit in-place and `--force-with-lease` push on non-publish / interrupted exits (gh-1501).
+ */
+function squashAndPushInPlace(options) {
+    var opts = options || {};
+    if (typeof opts.runCommand !== 'function') return false;
+    try {
+        var branch = cleanText(opts.runCommand('git rev-parse --abbrev-ref HEAD'));
+        if (!isSafeNonBaseBranch(branch, opts.baseBranch)) return false;
+        var baseSha = resolveInPlaceBaseSha(opts);
+        if (!baseSha || !canSquashInPlace(opts.runCommand, baseSha, opts.ticketKey)) return false;
+        var msg = buildInPlaceMessage(opts.ticketKey, opts.commitMessage);
+        opts.runCommand('git reset --soft ' + baseSha);
+        opts.runCommand('git commit -m "' + msg + '"');
+        opts.runCommand('git push -u origin ' + branch + ' --force-with-lease');
+        return true;
+    } catch (e) {
+        console.warn('squashAndPushInPlace skipped:', e);
+        return false;
+    }
+}
+function resolveContextBaseBranch(ctx) {
+    if (ctx.prTarget) return ctx.prTarget;
+    if (ctx.baseBranch) return ctx.baseBranch;
+    var gitCfg = ctx.config && ctx.config.git;
+    return (gitCfg && gitCfg.baseBranch) || 'main';
+}
+
+function resolveContextRunCommand(ctx, runCommand) {
+    if (typeof runCommand === 'function') return runCommand;
+    if (typeof ctx.cliTool !== 'function') return null;
+    return function (c) { return ctx.cliTool({ command: c }) || ''; };
+}
+
+function squashTicketWipInPlace(ctx, runCommand, readFn) {
+    if (!ctx || !ctx.ticketKey) return false;
+    var fn = resolveContextRunCommand(ctx, runCommand);
+    if (!fn) return false;
+    return squashAndPushInPlace({
+        runCommand: fn,
+        baseSha: readRecordedBaseSha('input/' + ctx.ticketKey + '/dev_base_head.txt', readFn || ctx.readFn),
+        ticketKey: ctx.ticketKey,
+        baseBranch: resolveContextBaseBranch(ctx),
+        commitMessage: ctx.ticketKey + ' WIP auto-save (squashed)'
+    });
+}
+
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         isValidGitSha: isValidGitSha,
         cleanText: cleanText,
         readExistingBaseFile: readExistingBaseFile,
+        readRecordedBaseSha: readRecordedBaseSha,
         parseLines: parseLines,
         matchesTicketOrTarget: matchesTicketOrTarget,
         isWipOrTicketSubject: isWipOrTicketSubject,
@@ -260,6 +342,14 @@ if (typeof module !== 'undefined' && module.exports) {
         canSquashAcrossMerges: canSquashAcrossMerges,
         inspectSquashRange: inspectSquashRange,
         canSquashReworkSubjects: canSquashReworkSubjects,
-        inspectReworkSquashRange: inspectReworkSquashRange
+        inspectReworkSquashRange: inspectReworkSquashRange,
+        isSafeNonBaseBranch: isSafeNonBaseBranch,
+        resolveInPlaceBaseSha: resolveInPlaceBaseSha,
+        buildInPlaceMessage: buildInPlaceMessage,
+        canSquashInPlace: canSquashInPlace,
+        squashAndPushInPlace: squashAndPushInPlace,
+        resolveContextBaseBranch: resolveContextBaseBranch,
+        resolveContextRunCommand: resolveContextRunCommand,
+        squashTicketWipInPlace: squashTicketWipInPlace
     };
 }

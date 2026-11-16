@@ -41,6 +41,7 @@ var tcMaintenanceLedger = require('./common/tcMaintenanceLedger.js');
 var bugBookkeeping = require('./common/bugBookkeeping.js');
 // gh-1493: terminal-signal delivery contract (attemptDelivery/deliveryOutcome).
 const { attemptDelivery, deliveryOutcome } = require('./common/terminalDelivery.js');
+var wipSquash = require('./common/wipSquash.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -471,10 +472,9 @@ function completeInterruptedPath(ticketKey, hasGitChanges, cliTool, config, tick
     developTicket.throwInterruptedReset(ticketKey);
 }
 
-// gh-1003: the partial-work push from the interrupted path — the branch
-// probe + decidePartialPush plan live in executePartialPushPlan.
 function pushPreservedAnalysisWork(hasGitChanges, cliTool, config, ticket, ticketKey) {
     if (!hasGitChanges) {
+        wipSquash.squashTicketWipInPlace({ ticketKey: ticketKey, config: config, cliTool: cliTool, readFn: typeof file_read === 'function' ? file_read : null });
         console.log('No git changes — nothing to push.');
         return;
     }
@@ -490,9 +490,7 @@ function pushPreservedAnalysisWork(hasGitChanges, cliTool, config, ticket, ticke
 }
 
 function executePartialPushPlan(cliTool, config, ticketKey, plan, currentBranch) {
-    if (!plan) {
-        return;
-    }
+    if (!plan) return;
     if (plan.needsCheckout) {
         console.log('Switching partial work from ' + (currentBranch || '(unknown)') +
             ' to development branch: ' + plan.branch);
@@ -500,7 +498,6 @@ function executePartialPushPlan(cliTool, config, ticketKey, plan, currentBranch)
     }
     pushPartialWork(cliTool, config, ticketKey, plan);
 }
-
 /**
  * gh-1087 AC1/AC2: the quota variant of the interrupted-leg completion —
  * when the leg's failure text classifies as quota_exhausted the ticket is
@@ -517,13 +514,6 @@ function parkQuotaInterruptedGate(ticketKey, config, ticket, tracker, params, sc
     removeLabels(ticketKey, params, tracker);
     developTicket.throwQuotaPark(ticketKey, quotaBreaker.parkLabelOf((params && params.jobParams) || {}));
 }
-
-/**
- * gh-1087: the development context the delegated quota gate needs — the park
- * labels the open PR and resolves jobParams (park label / probe cadence
- * config). The CLI outcome signals are classified by the shared text
- * contract so both legs classify byte-identically.
- */
 function quotaGateContextOf(actualParams, params, ticketKey, customParams, expectedBranch) {
     return {
         ticketKey: ticketKey,
@@ -540,28 +530,14 @@ function quotaFailureClassificationOf(actualParams) {
         developTicket.classifyInterruptedText(actualParams.currentCliErrorMessage || null, actualParams.response || ''));
 }
 
-/**
- * gh-1003: the marked-failure rethrow predicate from action's catch block —
- * the deliberate loud failures (fatal CLI environment, git-operations
- * gh-683, PR-creation gh-729, interrupted-reset gh-742) must keep
- * propagating so the RUN is RED.
- */
 function isPropagatingFailure(error) {
     return !!(error && (error.fatalCliEnvironment || error.gitOperationsFailure || error.prCreationFailure || error.interruptedReset || error.quotaPark));
 }
 
-/**
- * gh-1003: the custom-params resolution from action's head — jobParams win,
- * then the actual params' own customParams.
- */
 function resolveCustomParams(params, actualParams) {
     return (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
 }
 
-/**
- * gh-1003: the interrupted-leg partial-work push commands, planned by
- * decidePartialPush — config/commit/push order preserved verbatim.
- */
 function pushPartialWork(cliTool, config, ticketKey, plan) {
     cliTool({ command: 'git config user.name "' + config.git.authorName + '"' });
     cliTool({ command: 'git config user.email "' + config.git.authorEmail + '"' });
@@ -571,14 +547,10 @@ function pushPartialWork(cliTool, config, ticketKey, plan) {
         pushCommand += ' --force-with-lease';
     }
     cliTool({ command: pushCommand });
+    wipSquash.squashTicketWipInPlace({ ticketKey: ticketKey, config: config, cliTool: cliTool, readFn: typeof file_read === 'function' ? file_read : null });
     console.log('✅ Pushed partial analysis to branch:', plan.branch);
 }
 
-/**
- * gh-1003: the interrupted-leg tracker side effects — informational comment
- * first, then the Ready For Development reset (comment → move order
- * preserved).
- */
 function resetTicketForRetry(ticketKey, hasGitChanges, tracker, statuses, outage) {
     try {
         tracker.postComment(ticketKey, buildInterruptedComment(ticketKey, hasGitChanges, outage));
@@ -640,7 +612,6 @@ function resolvePrAlreadyOpenOutcome(ticketKey, scm, expectedBranch, tracker, st
     return null;
 }
 
-/** The ledger marker post (non-fatal, never silent — a dropped marker drifts occurrences). */
 function postLedgerMarker(ticketKey, ledger, tracker) {
     try {
         tracker.postComment(ticketKey, tcMaintenanceLedger.buildLedgerMarker(ledger));
@@ -649,7 +620,6 @@ function postLedgerMarker(ticketKey, ledger, tracker) {
     }
 }
 
-/** The dev-claim owner digest post (non-fatal, never silent). */
 function postDevClaimDigest(ticketKey, ledger, tracker) {
     try {
         tracker.postComment(ticketKey,
@@ -660,7 +630,6 @@ function postDevClaimDigest(ticketKey, ledger, tracker) {
     }
 }
 
-/** The bug returns to the TC-verification lane (verdict stays oracle-gated). */
 function moveBugToTesting(ticketKey, jiraConfig, tracker) {
     try {
         tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_TESTING);
@@ -670,15 +639,6 @@ function moveBugToTesting(ticketKey, jiraConfig, tracker) {
     }
 }
 
-/**
- * gh-1329: the structured dev exit. The agent claims the failing test is
- * wrong (verdict + evidence + TC key in outputs/test_suspected.json); the
- * claim is machine-routed into the TC maintenance ledger (marker on the bug
- * ticket) and the bug returns to the TC-verification lane — its verdict
- * stays gated by its own oracle TC while the TC-rework leg re-checks the
- * suspected test against the AC. The owner surface is the async digest;
- * nothing here asks a human anything.
- */
 function completeTestSuspectedPath(ticketKey, claim, tracker, jiraConfig, params, config) {
     var bookkeeping = bugBookkeeping.loadBugBookkeeping(tracker, ticketKey, params, config);
     var ledger = tcMaintenanceLedger.appendFinding(
@@ -692,48 +652,36 @@ function completeTestSuspectedPath(ticketKey, claim, tracker, jiraConfig, params
     return { success: true, path: 'test_suspected', ticketKey };
 }
 
-/** The claim is machine-usable only with the TC key it suspects (§6 contract). */
 function isValidTestSuspectedClaim(claim) {
     return !!(claim && (claim.tcKey || claim.testCaseKey));
 }
 
-/**
- * gh-1188: Paths 1+2 (blocked / already-fixed outputs) extracted from
- * action — returns the handled outcome, or null when neither file exists.
- * gh-1329: Path 2b — outputs/test_suspected.json (claimed test-side
- * verdict) routes to the maintenance ledger; a malformed claim falls
- * through to the normal fix path.
- */
 function resolveSpecialOutputPath(ticketKey, tracker, statuses, jiraConfig, params, config) {
     const blocked = readJson('outputs/blocked.json');
     if (blocked) {
         console.log('outputs/blocked.json found — bug cannot be fixed automatically');
+        wipSquash.squashTicketWipInPlace({ ticketKey: ticketKey, config: config, cliTool: cli_execute_command, readFn: typeof file_read === 'function' ? file_read : null });
         return completeBlockedPath(ticketKey, blocked, isBlockedClaimVerified(), tracker, statuses, jiraConfig, params);
     }
-
     const alreadyFixed = readJson('outputs/already_fixed.json');
     if (alreadyFixed) {
         console.log('outputs/already_fixed.json found — bug already resolved in codebase');
+        wipSquash.squashTicketWipInPlace({ ticketKey: ticketKey, config: config, cliTool: cli_execute_command, readFn: typeof file_read === 'function' ? file_read : null });
         return completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraphUsage(), tracker, jiraConfig, params);
     }
-
     const testSuspected = readJson('outputs/test_suspected.json');
     if (testSuspected) {
         if (!isValidTestSuspectedClaim(testSuspected)) {
             console.warn('outputs/test_suspected.json rejected — no TC key in the claim; proceeding with the normal fix path');
         } else {
             console.log('outputs/test_suspected.json found — dev claims a test-side cause; routing to the TC maintenance ledger');
+            wipSquash.squashTicketWipInPlace({ ticketKey: ticketKey, config: config, cliTool: cli_execute_command, readFn: typeof file_read === 'function' ? file_read : null });
             return completeTestSuspectedPath(ticketKey, testSuspected, tracker, jiraConfig, params, config);
         }
     }
-
     return null;
 }
 
-/**
- * gh-1188: the gh-775 shared recovery gate extracted from action — returns
- * whether a response.md is present after (at most) ONE bounded resume.
- */
 function recoverResponseMd(ticketKey, actualParams, params, customParams, expectedBranch) {
     const recovered = developTicket.recoverMissingResponse(
         ticketKey,
