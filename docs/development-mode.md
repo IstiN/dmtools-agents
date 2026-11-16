@@ -60,35 +60,42 @@ session restore path, which remains the primary resume mechanism.
 
 ### 2.3 `adaptive`
 
-A deterministic pre-leg rule reads the ticket text and routes:
+An in-leg decision (gh-1503): the agent surveys the ticket and the relevant
+code, estimates the work in story points, and self-selects its working mode.
 
-```
-plan  if  deliverable-modules ≥ planIfModulesAtLeast (2)
-       OR acceptance bullets ≥ planIfAcceptanceBulletsAtLeast (5)
-       OR body tokens ≥ planIfBodyTokensAtLeast (800)
-else  default
-```
-
-- Signal extraction is a pure function over title+body (golden-tested, in
-  `js/common/developmentModeAdaptive.js`): *modules* = max(numbered-list
-  items outside AC sections, highest `module N` mention, contiguous bullet
-  groups outside AC sections); *acceptanceBullets* = list items under
-  Acceptance/AC sections; *bodyTokens* = the chars/4 backstop.
-- A routed-to-plan leg carries the SAME plan appendix as `plan` (the
-  materialized runtime file is the decision record); a routed-to-default leg
-  and any shadow leg remove stale appendix state, so their prompts stay
-  byte-identical to `default`. `plan` itself ignores the rule entirely —
-  the rule exists only for `adaptive`.
-- `developmentModeConfig.adaptive.shadowMode: true` ⇒ decide + log only
-  (`adaptive: would plan (signals: modules=3) but shadow mode`), never act —
-  used to accumulate routing evidence before enabling real routing.
-- Thresholds are config, calibrated offline against closed-issue replays;
-  the rule is deliberately conservative — inconclusive signals route
-  `default`.
-- Adaptive never spawns sub-agents (`developmentModeConfig.spawn` is a later
-  concern, off by default).
-
----
+- The leg carries the **scope-estimate appendix** (engine text materialized at
+  `.dmtools/development-mode-sp-appendix.md`, see
+  `js/common/developmentModeAdaptiveSp.js`). It instructs: estimate
+  effort/risk/uncertainty on the fibonacci scale 1/2/3/5/8/13 — not file
+  count; structural surprises (migrations, second repositories) estimate
+  higher; uncertainty resolves up.
+- The estimate is recorded as one JSON line in the leg's outputs:
+  `outputs/<KEY>/scope_estimate.json` → `{"sp", "threshold", "mode",
+  "reason", "outcome"}`. `outcome` is finalized (`completed` | `blocked`)
+  before the completion report. `model` and legs-per-ticket are NOT
+  agent-written: the harness usage line already carries the model, and the
+  leg count is derived offline from those lines.
+- **Routing**: `sp >= planThresholdSp` (config, default **3** — calibrated by
+  a paired direct/plan run: SP 1–2 neutral, plan net-positive from SP 3)
+  ⇒ the leg reads the plan appendix file (materialized alongside as an
+  escalation read; the plan cliPrompts entry stays gated to explicit `plan`
+  mode) and follows the plan protocol for the rest of the leg. Below the
+  threshold ⇒ direct execution, no plan artifacts. Mid-work re-estimates
+  reaching the threshold escalate the same way — never demote.
+- Escalated legs stamp the informational `dev-plan-escalated` label (the
+  decision record is the durable signal; a label failure is a warn).
+- `shadowMode: true` ⇒ nothing materializes, nothing routes (the would-act
+  line is logged) — carried over from gh-1437.
+- The gh-1437 pre-leg signal rule (`planIfModulesAtLeast` /
+  `planIfAcceptanceBulletsAtLeast` / `planIfBodyTokensAtLeast`) is retired
+  from this repo's routing: text signals calibrated at ≈0.61 precision on
+  closed-issue replays and cannot separate design-bearing work from
+  mechanical sweeps. The extractor + calibration harness stay for legacy
+  pack consumers.
+- The prompt-cost shape differs from `plan`: every adaptive leg carries the
+  SP block (the decision instructions); the full plan appendix enters the
+  prompt only for explicit `plan` legs — an escalated adaptive leg reads it
+  from disk when it escalates.
 
 ## 3. Config surface
 
@@ -98,10 +105,13 @@ else  default
 "developmentModeConfig": {
   "plan":    { "appendixFile": "optional override path" },
   "adaptive": {
+    "planThresholdSp": 3,               // in-leg SP routing threshold (gh-1503); default 3
+    "shadowMode": false,                // true = nothing materializes/routes, log only
+    // legacy gh-1437 text-signal knobs — parsed for forward compatibility,
+    // UNUSED by this repo's routing (kept for legacy pack consumers)
     "planIfModulesAtLeast": 2,
     "planIfAcceptanceBulletsAtLeast": 5,
-    "planIfBodyTokensAtLeast": 800,
-    "shadowMode": false
+    "planIfBodyTokensAtLeast": 800
   },
 }
 ```
@@ -111,7 +121,16 @@ wrong types are warned-and-ignored.
 
 ---
 
-## 4. Calibration (offline — `adaptive` thresholds)
+## 4. Calibration (offline)
+
+**gh-1503 (`planThresholdSp`)**: the threshold is re-tuned from the
+per-leg decision records (`outputs/<KEY>/scope_estimate.json`) read offline —
+one line per leg carries sp/threshold/mode/outcome; legs-per-ticket and model
+come from the harness usage lines. Model bumps shift SP estimates, so the
+record carries the model via the usage line — drift is visible per model
+generation.
+
+**Legacy (gh-1437 signal thresholds)**:
 
 Threshold validity is expert review of a decision table, not a numeric bar
 (owner decision, gh-1437): the harness replays the rule over an
