@@ -722,10 +722,10 @@ function createTracker(config, customParams) {
         // github_get_issue schema (Dart catalog): workspace/repository/
         // issueNumber — it also accepts the composite `key` (probed v0.1.101).
         // gh-1495: identity rides githubIssueArgs — see the boundary note.
-        var issueRef = githubIssueArgs(key);
+        var issueArgs = githubIssueArgs(key);
         return normalizeTicket(github_get_issue(omitEmptyArgs({
-            key: issueRef.key, workspace: issueRef.owner,
-            repository: issueRef.repo, issueNumber: issueRef.number
+            key: issueArgs.key, workspace: issueArgs.owner,
+            repository: issueArgs.repo, issueNumber: issueArgs.number
         })));
     }
 
@@ -801,10 +801,10 @@ function createTracker(config, customParams) {
         // issues upstream), so it serves plain-issue comments too; the
         // number argument keeps the tool's canonical pullRequestId name.
         // gh-1495: identity rides githubIssueArgs — see the boundary note.
-        var issueRef = githubIssueArgs(key);
+        var issueArgs = githubIssueArgs(key);
         return github_create_comment(omitEmptyArgs({
-            key: issueRef.key, workspace: issueRef.owner,
-            repository: issueRef.repo, pullRequestId: issueRef.number,
+            key: issueArgs.key, workspace: issueArgs.owner,
+            repository: issueArgs.repo, pullRequestId: issueArgs.number,
             text: comment
         }));
     }
@@ -813,10 +813,10 @@ function createTracker(config, customParams) {
         // github_get_pr_comments merges the review-comments page (empty
         // for plain issues — the runtime tolerates its 404) with the
         // issue discussion page. gh-1495: identity via githubIssueArgs.
-        var issueRef = githubIssueArgs(key);
+        var issueArgs = githubIssueArgs(key);
         return _commentPage(github_get_pr_comments(omitEmptyArgs({
-            key: issueRef.key, workspace: issueRef.owner,
-            repository: issueRef.repo, pullRequestId: issueRef.number
+            key: issueArgs.key, workspace: issueArgs.owner,
+            repository: issueArgs.repo, pullRequestId: issueArgs.number
         })));
     }
 
