@@ -224,6 +224,18 @@ suite('gh-1503 UT — SP appendix materialization', function () {
         });
     });
 
+    test('shadow adaptive leg → inactive, zero IO, the would-act line returned (gh-1437 carry-over)', function () {
+        var fs = fsRecorder();
+        var r = developmentModeAdaptiveSp.materializeSpAppendix({
+            developmentMode: 'adaptive',
+            developmentModeConfig: { adaptive: { shadowMode: true } }
+        }, { file_write: fs.file_write });
+        assert.equal(r.active, false, 'shadow never materializes (acting = changing the prompt)');
+        assert.equal(r.ok, false, 'nothing materialized');
+        assert.deepEqual(fs.calls.writes, [], 'zero writes in shadow');
+        assert.ok(r.logLines.join('\n').indexOf('shadow mode') !== -1, 'the would-act line rides back to the caller');
+    });
+
     test('write failure → ok:false + an error naming the path (never throws)', function () {
         var throwingIo = { file_write: function () { throw new Error('disk full'); } };
         var r = developmentModeAdaptiveSp.materializeSpAppendix(adaptiveCustomParams(), throwingIo);
@@ -243,5 +255,80 @@ suite('gh-1503 UT — SP conditional entry shape', function () {
             prompt: './.dmtools/development-mode-sp-appendix.md',
             condition: 'agents/js/conditions/isDevelopmentModeAdaptiveSp.js'
         });
+    });
+});
+
+// ── IT: the condition script (self-contained, mirrors isDevelopmentModePlan) ─
+
+function loadSpConditionWith(files) {
+    var fs = fsRecorder(files);
+    var mod = loadModule('js/conditions/isDevelopmentModeAdaptiveSp.js', null, {
+        file_read: fs.file_read,
+        file_write: fs.file_write
+    });
+    return { fs: fs, mod: mod };
+}
+
+suite('gh-1503 IT — SP condition script', function () {
+    test('path parity: the condition reads exactly the runtime path the module writes', function () {
+        var loaded = loadSpConditionWith({});
+        assert.equal(loaded.mod.appendixRuntimePath(),
+            developmentModeAdaptiveSp.SP_APPENDIX_FILE_PATH,
+            'condition and module must agree on the materialization path');
+        var entry = developmentModeAdaptiveSp.spAppendixCliEntry();
+        assert.equal(entry.prompt.replace(/^\.\//, ''), loaded.mod.appendixRuntimePath(),
+            'config prompt path denotes the same file');
+    });
+
+    test('adaptive leg + materialized SP appendix → true', function () {
+        var files = {};
+        files['.dmtools/development-mode-sp-appendix.md'] = 'sp appendix text';
+        var loaded = loadSpConditionWith(files);
+        assert.equal(loaded.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), true,
+            'active on an adaptive leg with the appendix in place');
+    });
+
+    test('shadowMode → false even with the file in place (second line of defense)', function () {
+        var files = {};
+        files['.dmtools/development-mode-sp-appendix.md'] = 'sp appendix text';
+        var loaded = loadSpConditionWith(files);
+        assert.equal(loaded.mod.action({
+            jobParams: { customParams: {
+                developmentMode: 'adaptive',
+                developmentModeConfig: { adaptive: { shadowMode: true } }
+            } }
+        }), false, 'shadow leg never carries the SP block');
+    });
+
+    test('plan / default / missing modes → false without reading anything', function () {
+        var loaded = loadSpConditionWith({});
+        ['', 'default', 'plan', 'PLAN', 'ADAPTIVE'].forEach(function (mode) {
+            var cp = mode === '' ? {} : { developmentMode: mode };
+            assert.equal(loaded.mod.action({ jobParams: { customParams: cp } }), false,
+                'mode ' + JSON.stringify(mode) + ' → excluded');
+        });
+        assert.equal(loaded.fs.calls.reads.length, 0, 'non-adaptive modes never touch the filesystem');
+    });
+
+    test('adaptive but file missing / unreadable → false (no dangling prompt read)', function () {
+        var loaded = loadSpConditionWith({});
+        assert.equal(loaded.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), false,
+            'missing file → excluded');
+        var throwing = loadModule('js/conditions/isDevelopmentModeAdaptiveSp.js', null, {
+            file_read: function () { throw new Error('io error'); }
+        });
+        assert.equal(throwing.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), false,
+            'throwing read → excluded');
+    });
+
+    test('teammate and standalone param shapes both resolve customParams', function () {
+        var files = {};
+        files['.dmtools/development-mode-sp-appendix.md'] = 'text';
+        var loaded = loadSpConditionWith(files);
+        assert.equal(loaded.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), true,
+            'teammate shape');
+        assert.equal(loaded.mod.action({ customParams: { developmentMode: 'adaptive' } }), true,
+            'flat shape');
+        assert.equal(loaded.mod.action({}), false, 'no params → excluded');
     });
 });

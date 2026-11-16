@@ -49,12 +49,17 @@ var devDevelopmentModePlanReal = loadModule('js/common/developmentModePlan.js',
 // module above (real instance, file IO still mockable via `mocks`).
 var devDevelopmentModeAdaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
     makeRequire({ './developmentMode.js': devDevelopmentModeReal, './developmentModePlan.js': devDevelopmentModePlanReal }));
+// gh-1503: the SP decision module (in-leg story-point routing) — same discipline.
+var devDevelopmentModeAdaptiveSpReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+    makeRequire({ './developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal }));
 
 function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     var planMod = loadModule('js/common/developmentModePlan.js',
         makeRequire({ './developmentMode.js': devDevelopmentModeReal }), mocks || {});
     var adaptiveMod = loadModule('js/common/developmentModeAdaptive.js',
         makeRequire({ './developmentMode.js': devDevelopmentModeReal, './developmentModePlan.js': planMod }), mocks || {});
+    var spMod = loadModule('js/common/developmentModeAdaptiveSp.js',
+        makeRequire({ './developmentModeAdaptive.js': adaptiveMod }), mocks || {});
     return loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks || {}),
@@ -74,7 +79,8 @@ function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
             './common/trackers.js': trackersModuleReal,
             './common/developmentMode.js': devDevelopmentModeReal,
             './common/developmentModePlan.js': planMod,
-            './common/developmentModeAdaptive.js': adaptiveMod
+            './common/developmentModeAdaptive.js': adaptiveMod,
+            './common/developmentModeAdaptiveSp.js': spMod
         }),
         mocks || {}
     );
@@ -586,6 +592,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/developmentModePlan.js': devDevelopmentModePlanReal,
                 './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
+                './common/developmentModeAdaptiveSp.js': devDevelopmentModeAdaptiveSpReal,
                 './common/commentMarkup.js': devCommentMarkupModule,
                 './common/legFailureReport.js': legFailureReportModule,
                 './common/legStartSignal.js': legStartSignalReal,
@@ -742,6 +749,7 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/developmentModePlan.js': devDevelopmentModePlanReal,
                 './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
+                './common/developmentModeAdaptiveSp.js': devDevelopmentModeAdaptiveSpReal,
                 './common/trackers.js': {
                     createTracker: function () {
                         return {
@@ -983,6 +991,7 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/developmentModePlan.js': devDevelopmentModePlanReal,
                 './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
+                './common/developmentModeAdaptiveSp.js': devDevelopmentModeAdaptiveSpReal,
                 './common/commentMarkup.js': devCommentMarkupModule,
                 './common/legFailureReport.js': legFailureReportModule,
                 './common/legStartSignal.js': legStartSignalReal,
@@ -1216,6 +1225,7 @@ suite('preCliDevelopmentSetup — extracted helpers (gh-1042)', function() {
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/developmentModePlan.js': devDevelopmentModePlanReal,
                 './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
+                './common/developmentModeAdaptiveSp.js': devDevelopmentModeAdaptiveSpReal,
                 './common/trackers.js': {
                     createTracker: function () {
                         return {
@@ -1706,20 +1716,30 @@ suite('preCliDevelopmentSetup.writeDevBaseHead (gh-1308)', function () {
                 developmentModeConfig: { plan: { appendixFile: 'missing.md' } }
             });
         });
-        var adaptiveDefault = modAppendix.runDevelopmentModeAppendixStep(
+        var adaptiveSp = modAppendix.runDevelopmentModeAppendixStep(
             { developmentMode: 'adaptive' },
             { key: 'PROJ-1', fields: { summary: 'short', description: 'short' } }
         );
-        assert.equal(adaptiveDefault.routed, 'default');
-        var adaptivePlan = modAppendix.runDevelopmentModeAppendixStep(
+        assert.equal(adaptiveSp.active, true, 'adaptive always materializes the SP appendix (in-leg decision)');
+        assert.equal(adaptiveSp.ok, true, 'SP appendix written');
+        var appendixPaths = appendixWrites.map(function (w) { return w.path; });
+        assert.ok(appendixPaths.indexOf('.dmtools/development-mode-sp-appendix.md') !== -1,
+            'SP appendix on disk');
+        assert.ok(appendixPaths.indexOf('.dmtools/development-mode-plan-appendix.md') !== -1,
+            'plan appendix co-materialized for escalation reads');
+        assert.ok(adaptiveSp.logLines.length >= 1 && adaptiveSp.logLines[0].indexOf('threshold 3') !== -1,
+            'SP routing logged with the threshold');
+        // gh-1503: the ticket text no longer pre-routes — the agent decides in-leg
+        var adaptiveSame = modAppendix.runDevelopmentModeAppendixStep(
             { developmentMode: 'adaptive' },
             { key: 'PROJ-1', fields: { summary: 'big', description: '- m1\n- m2\n\nprose\n\n- m3\n- m4' } }
         );
-        assert.equal(adaptivePlan.routed, 'plan');
+        assert.equal(adaptiveSame.active, true, 'ticket text does not change the materialization decision');
+        // an unreadable plan appendix override is a config error → fail fast
         assert.throws(function () {
             modAppendix.runDevelopmentModeAppendixStep(
                 { developmentMode: 'adaptive', developmentModeConfig: { plan: { appendixFile: 'missing.md' } } },
-                { key: 'PROJ-1', fields: { summary: 'big', description: '- m1\n- m2\n\nprose\n\n- m3\n- m4' } }
+                { key: 'PROJ-1', fields: { summary: 'big', description: 'x' } }
             );
         });
     });
@@ -1847,6 +1867,7 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
             './common/legStartSignal.js': legStartSignalReal,
             './common/developmentModePlan.js': devDevelopmentModePlanReal,
             './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
+                './common/developmentModeAdaptiveSp.js': devDevelopmentModeAdaptiveSpReal,
             './common/trackers.js': trackers
         });
     }
@@ -1962,6 +1983,7 @@ suite('preCliDevelopmentSetup.action — dryRun guard (gh-1356)', function() {
                 './common/legStartSignal.js': legStartSignalReal,
                 './common/developmentModePlan.js': devDevelopmentModePlanReal,
                 './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
+                './common/developmentModeAdaptiveSp.js': devDevelopmentModeAdaptiveSpReal,
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function() { throw new Error('baseBranchMarker must not run in dryRun'); } },
                 './common/trackers.js': {
                     createTracker: function() {
@@ -2079,6 +2101,7 @@ function loadForGh1363(globals, trackerStub, configLoaderStub) {
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/developmentModePlan.js': devDevelopmentModePlanReal,
                 './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
+                './common/developmentModeAdaptiveSp.js': devDevelopmentModeAdaptiveSpReal,
             './common/trackers.js': {
                 createTracker: function () { return trackerStub; }
             }
@@ -2540,6 +2563,7 @@ function gh1364RequireMap(trackers, opts) {
         './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/developmentModePlan.js': devDevelopmentModePlanReal,
                 './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
+                './common/developmentModeAdaptiveSp.js': devDevelopmentModeAdaptiveSpReal,
         './common/commentMarkup.js': devCommentMarkupModule,
         './common/legFailureReport.js': legFailureReportModule,
         './common/legStartSignal.js': legStartSignalReal,

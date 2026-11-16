@@ -36,6 +36,8 @@ var SP_APPENDIX_ENTRY_ID = 'developmentModeAdaptiveSp';
 var SP_APPENDIX_FILE_PATH = '.dmtools/development-mode-sp-appendix.md';
 var SP_APPENDIX_PROMPT_PATH = './' + SP_APPENDIX_FILE_PATH;
 var SP_APPENDIX_CONDITION_PATH = 'agents/js/conditions/isDevelopmentModeAdaptiveSp.js';
+var SP_APPENDIX_EXCLUDE_COMMENT =
+    '# Development-mode SP appendix — runtime materialization, never committed';
 
 var DEFAULT_SP_THRESHOLD = 3;
 var SP_THRESHOLD_MIN = 1;
@@ -47,6 +49,19 @@ var VALID_ESTIMATE_MODES = ['plan', 'default'];
 
 function isPlainObject(value) {
     return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+// ── shadowMode (gh-1437 carry-over) ─────────────────────────────────────────
+// Strict boolean true enables it; absent/null/false keep it off; wrong-typed
+// reads as false (mirror of developmentModeAdaptive.resolveShadowMode). A
+// shadow adaptive leg NEVER materializes: shadow means "log the intent, act
+// nothing" — the SP block would change the prompt, and that is an action.
+
+function isShadowMode(customParams) {
+    var config = isPlainObject(customParams) && isPlainObject(customParams.developmentModeConfig)
+        ? customParams.developmentModeConfig.adaptive
+        : null;
+    return !!(isPlainObject(config) && config.shadowMode === true);
 }
 
 // ── Threshold resolution ────────────────────────────────────────────────────
@@ -187,25 +202,53 @@ function writeSpAppendix(threshold, io) {
  *            error: string|null, warnings: string[], logLines: string[]}}
  */
 function materializeSpAppendix(customParams, io) {
-    var mode = developmentModeAdaptive.resolvedDevelopmentMode(customParams);
-    if (mode !== 'adaptive') {
-        return { ok: false, active: false, path: null, overridden: false, error: null, warnings: [], logLines: [] };
+    var resolution = resolveSpAppendix(customParams);
+    if (!resolution.active) {
+        return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolution.warnings, logLines: resolution.logLines };
     }
-    var resolved = resolveSpThreshold(customParams);
-    var warnings = resolved.warning ? [resolved.warning] : [];
-    var written = writeSpAppendix(resolved.threshold, io);
-    var logLines = written.ok
-        ? ['📝 developmentMode=adaptive: SP routing active (threshold ' +
-            resolved.threshold + ') → ' + written.path]
-        : [];
+    if (resolution.error) {
+        return { ok: false, active: true, path: SP_APPENDIX_FILE_PATH, overridden: false, error: resolution.error, warnings: resolution.warnings, logLines: [] };
+    }
+    var written = writeSpAppendix(resolution.threshold, io);
     return {
         ok: written.ok,
         active: true,
         path: written.path,
         overridden: false,
         error: written.error,
-        warnings: warnings,
-        logLines: logLines
+        warnings: resolution.warnings,
+        logLines: written.ok ? resolution.logLines : []
+    };
+}
+
+/**
+ * Resolve the SP appendix WITHOUT writing: mode/shadow gating, threshold
+ * resolution, text build. Lets the preCli caller validate BOTH appendices
+ * before committing either write — a failed plan resolution must not leave
+ * an orphan SP file behind (the old fail-fast invariant, gh-1503).
+ * @returns {{active: boolean, threshold: number|null, text: string|null,
+ *            error: string|null, warnings: string[], logLines: string[]}}
+ */
+function resolveSpAppendix(customParams) {
+    var mode = developmentModeAdaptive.resolvedDevelopmentMode(customParams);
+    if (mode !== 'adaptive') {
+        return { active: false, threshold: null, text: null, error: null, warnings: [], logLines: [] };
+    }
+    if (isShadowMode(customParams)) {
+        return {
+            active: false, threshold: null, text: null, error: null, warnings: [],
+            logLines: ['📝 developmentMode=adaptive: SP routing would be active but shadow mode — nothing materialized']
+        };
+    }
+    var resolved = resolveSpThreshold(customParams);
+    return {
+        active: true,
+        threshold: resolved.threshold,
+        text: spAppendixText(resolved.threshold),
+        error: null,
+        warnings: resolved.warning ? [resolved.warning] : [],
+        logLines: ['📝 developmentMode=adaptive: SP routing active (threshold ' +
+            resolved.threshold + ') → ' + SP_APPENDIX_FILE_PATH]
     };
 }
 
@@ -224,12 +267,15 @@ if (typeof module !== 'undefined' && module.exports) {
         SP_APPENDIX_FILE_PATH: SP_APPENDIX_FILE_PATH,
         SP_APPENDIX_PROMPT_PATH: SP_APPENDIX_PROMPT_PATH,
         SP_APPENDIX_CONDITION_PATH: SP_APPENDIX_CONDITION_PATH,
+        SP_APPENDIX_EXCLUDE_COMMENT: SP_APPENDIX_EXCLUDE_COMMENT,
         PLAN_APPENDIX_RUNTIME_PATH: PLAN_APPENDIX_RUNTIME_PATH,
         SCOPE_ESTIMATE_RELATIVE_PATH: SCOPE_ESTIMATE_RELATIVE_PATH,
         DEFAULT_SP_THRESHOLD: DEFAULT_SP_THRESHOLD,
         resolveSpThreshold: resolveSpThreshold,
         parseScopeEstimateRecord: parseScopeEstimateRecord,
         spAppendixText: spAppendixText,
+        resolveSpAppendix: resolveSpAppendix,
+        writeSpAppendix: writeSpAppendix,
         materializeSpAppendix: materializeSpAppendix,
         spAppendixCliEntry: spAppendixCliEntry
     };

@@ -53,6 +53,8 @@ var developmentModePlan = loadModule('js/common/developmentModePlan.js',
     makeRequire({ './developmentMode.js': developmentMode }));
 var developmentModeAdaptive = loadModule('js/common/developmentModeAdaptive.js',
     makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }));
+var developmentModeAdaptiveSp = loadModule('js/common/developmentModeAdaptiveSp.js',
+    makeRequire({ './developmentModeAdaptive.js': developmentModeAdaptive }));
 
 // Filesystem recording mocks — every test asserts on the recorded calls, so a
 // real file can never be touched (network-guard discipline for file IO).
@@ -636,26 +638,26 @@ function loadConditionWith(files, mocks) {
     return { fs: fs, mod: mod };
 }
 
-suite('gh-1437 UT — condition script adaptive arms', function () {
+suite('gh-1437 UT — condition script adaptive arms (gh-1503: adaptive excluded)', function () {
     var APPENDIX = '.dmtools/development-mode-plan-appendix.md';
 
-    test('adaptive + non-shadow + materialized appendix → true', function () {
+    test('adaptive → false even with a materialized plan appendix (gh-1503 hand-off)', function () {
         var files = {};
         files[APPENDIX] = 'appendix text';
         var loaded = loadConditionWith(files);
         assert.equal(loaded.mod.action(
-            { jobParams: { customParams: { developmentMode: 'adaptive' } } }), true,
-            'routed-to-plan adaptive leg carries the appendix');
+            { jobParams: { customParams: { developmentMode: 'adaptive' } } }), false,
+            'adaptive legs carry the SP appendix, never the plan entry — the plan file is an escalation READ only');
     });
 
-    test('adaptive + non-shadow + no appendix → false (one read attempted)', function () {
+    test('adaptive → false with ZERO reads (no probing of the plan runtime path)', function () {
         var loaded = loadConditionWith({});
         var ok = loaded.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } });
-        assert.equal(ok, false, 'nothing materialized → excluded');
-        assert.deepEqual(loaded.fs.calls.reads, [APPENDIX], 'readability probed');
+        assert.equal(ok, false, 'excluded');
+        assert.deepEqual(loaded.fs.calls.reads, [], 'mode gate short-circuits before any IO');
     });
 
-    test('adaptive + shadowMode → false with ZERO reads (stale file cannot leak)', function () {
+    test('adaptive + shadowMode → false with ZERO reads (unchanged)', function () {
         var files = {};
         files[APPENDIX] = 'STALE appendix from a previous plan leg';
         var loaded = loadConditionWith(files);
@@ -663,7 +665,7 @@ suite('gh-1437 UT — condition script adaptive arms', function () {
             jobParams: { customParams: { developmentMode: 'adaptive', developmentModeConfig: { adaptive: { shadowMode: true } } } }
         });
         assert.equal(ok, false, 'shadow legs never carry the appendix');
-        assert.equal(loaded.fs.calls.reads.length, 0, 'the shadow guard short-circuits before any IO');
+        assert.equal(loaded.fs.calls.reads.length, 0, 'the mode gate short-circuits before any IO');
     });
 
     test('plan / default / missing / wrong-case modes keep the gh-1436 arms', function () {
@@ -679,13 +681,13 @@ suite('gh-1437 UT — condition script adaptive arms', function () {
         });
     });
 
-    test('adaptive with a wrong-typed shadowMode is treated as non-shadow', function () {
+    test('adaptive with a wrong-typed shadowMode → still excluded (the mode gate fires first)', function () {
         var files = {};
         files[APPENDIX] = 'appendix text';
         var loaded = loadConditionWith(files);
         assert.equal(loaded.mod.action({
             jobParams: { customParams: { developmentMode: 'adaptive', developmentModeConfig: { adaptive: { shadowMode: 'yes' } } } }
-        }), true, 'strict === true is the shadow test; anything else is non-shadow');
+        }), false, 'gh-1503: adaptive is excluded regardless of the shadow flag');
     });
 });
 
@@ -724,6 +726,8 @@ function loadDevSetup(fs, extraMocks) {
         makeRequire({ './developmentMode.js': developmentMode }), mocks);
     var adaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
         makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': planReal }), mocks);
+    var spReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+        makeRequire({ './developmentModeAdaptive.js': adaptiveReal }), mocks);
     return loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({
@@ -744,7 +748,8 @@ function loadDevSetup(fs, extraMocks) {
             './common/trackers.js': trackersModuleReal,
             './common/developmentMode.js': developmentMode,
             './common/developmentModePlan.js': planReal,
-            './common/developmentModeAdaptive.js': adaptiveReal
+            './common/developmentModeAdaptive.js': adaptiveReal,
+            './common/developmentModeAdaptiveSp.js': spReal
         }),
         mocks
     );
@@ -757,39 +762,45 @@ function adaptiveTicket(title, body) {
 suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', function () {
     var APPENDIX_PATH = developmentModePlan.PLAN_APPENDIX_FILE_PATH;
 
-    test('adaptive leg with a big ticket → appendix materialized + exclude seeded + routing lines', function () {
+    test('adaptive leg → SP appendix + plan escalation read materialized + excludes seeded', function () {
         var fs = fsRecorder({ '.git/info/exclude': '' });
         var captured = captureConsole(function () {
             var r = loadDevSetup(fs).runDevelopmentModeAppendixStep(
                 { developmentMode: 'adaptive' }, adaptiveTicket(FIX_MODULES_TITLE, FIX_MODULES_BODY));
-            assert.equal(r.materialized, true, 'appendix materialized for the routed-plan leg');
+            assert.equal(r.active, true, 'adaptive materializes the SP appendix');
+            assert.equal(r.ok, true, 'SP appendix written');
         });
         var wrote = fs.calls.writes.filter(function (w) { return w.path === APPENDIX_PATH; });
-        assert.equal(wrote.length, 1, 'appendix written once');
-        assert.equal(wrote[0].content, developmentModePlan.DEFAULT_PLAN_APPENDIX, 'engine default text');
+        assert.equal(wrote.length, 1, 'plan appendix written once (escalation read)');
+        assert.equal(wrote[0].content, developmentModePlan.DEFAULT_PLAN_APPENDIX, 'engine default plan text');
+        var spWrites = fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-sp-appendix.md'; });
+        assert.equal(spWrites.length, 1, 'SP appendix written once');
+        assert.contains(spWrites[0].content, '(threshold: 3 SP)', 'default threshold rendered into the SP block');
         var excludes = fs.calls.writes.filter(function (w) { return w.path === '.git/info/exclude'; });
-        assert.equal(excludes.length, 1, 'local exclude seeded');
-        assert.contains(excludes[0].content, APPENDIX_PATH, 'exclude names the appendix path');
+        assert.equal(excludes.length, 2, 'local exclude seeded for BOTH runtime files');
+        assert.contains(excludes[0].content + excludes[1].content, APPENDIX_PATH, 'exclude names the plan path');
+        assert.contains(excludes[0].content + excludes[1].content, '.dmtools/development-mode-sp-appendix.md',
+            'exclude names the SP path');
         var logs = captured.logs.join('\n');
-        assert.contains(logs, 'adaptive: routing to plan (signals: modules=3)', 'routing line flushed');
-        assert.contains(logs, 'appendix materialized', 'materialization line flushed');
+        assert.contains(logs, 'adaptive: SP routing active (threshold 3)', 'SP routing line flushed');
+        assert.contains(logs, 'plan appendix materialized for escalation reads', 'escalation-read line flushed');
     });
 
-    test('adaptive leg with a small ticket → no appendix, no exclude, routing-to-default line', function () {
-        var fs = fsRecorder({});
+    test('adaptive leg with a small ticket → the SAME materialization (ticket text no longer routes)', function () {
+        var fs = fsRecorder({ '.git/info/exclude': '' });
         var captured = captureConsole(function () {
             var r = loadDevSetup(fs).runDevelopmentModeAppendixStep(
                 { developmentMode: 'adaptive' }, adaptiveTicket(FIX_TYPO_TITLE, FIX_TYPO_BODY));
-            assert.equal(r.materialized, false);
-            assert.equal(r.routed, 'default');
+            assert.equal(r.active, true, 'in-leg decision: preCli materializes regardless of ticket size');
+            assert.equal(r.ok, true, 'SP appendix written for the small ticket too');
         });
-        assert.equal(fs.calls.writes.length, 0, 'no appendix, no exclude write');
-        var logs = captured.logs.join('\n');
-        assert.contains(logs, 'adaptive: routing to default', 'routing line flushed');
-        assert.equal(logs.indexOf('materialized'), -1, 'no materialization line');
+        assert.equal(fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-sp-appendix.md'; }).length, 1,
+            'SP appendix written');
+        assert.contains(captured.logs.join('\n'), 'adaptive: SP routing active (threshold 3)',
+            'the routing decision now belongs to the agent, not the signals');
     });
 
-    test('shadow adaptive leg → zero writes, the would-decision line is the log', function () {
+    test('shadow adaptive leg → zero writes, the would-act line is the log (gh-1437 carry-over)', function () {
         var fs = fsRecorder({});
         var cp = { developmentMode: 'adaptive', developmentModeConfig: { adaptive: { shadowMode: true } } };
         var captured = captureConsole(function () {
@@ -797,40 +808,26 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
         });
         assert.equal(fs.calls.writes.length, 0, 'shadow never materializes');
         assert.contains(captured.logs.join('\n'),
-            'adaptive: would plan (signals: modules=3) but shadow mode',
-            'the log shows the would-decision (AC3)');
+            'SP routing would be active but shadow mode',
+            'the log shows the would-act state');
     });
 
-    test('adaptive leg carries the ticket text through to the decision (fields.summary/description)', function () {
-        var fs = fsRecorder({ '.git/info/exclude': '' });
-        var captured = captureConsole(function () {
-            loadDevSetup(fs).runDevelopmentModeAppendixStep(
-                { developmentMode: 'adaptive' },
-                { key: 'P-1', fields: { summary: 'T', description: '## Acceptance criteria\n' + new Array(7).join('x') } });
+    test('gh-1503: tracker-shaped tickets no longer decide anything pre-leg — Jira and ADO shapes materialize identically', function () {
+        // The signal extractor read tracker-specific fields (gh-1442 parity);
+        // the in-leg SP decision reads the TICKET like the agent does — preCli
+        // is tracker-shape-blind now.
+        var jira = adaptiveTicket('T', '## Acceptance criteria\n- a\n- b\n- c\n- d\n- e\n- f');
+        var ado = { key: 'P-1', fields: { 'System.Title': 'Add export pipeline', 'System.Description': '1. CSV exporter\n2. PDF renderer\n3. Digest builder' } };
+        [jira, ado].forEach(function (ticket, i) {
+            var fs = fsRecorder({ '.git/info/exclude': '' });
+            var captured = captureConsole(function () {
+                loadDevSetup(fs).runDevelopmentModeAppendixStep({ developmentMode: 'adaptive' }, ticket);
+            });
+            assert.equal(fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-sp-appendix.md'; }).length, 1,
+                'shape ' + i + ': SP appendix materialized');
+            assert.contains(captured.logs.join('\n'), 'adaptive: SP routing active (threshold 3)',
+                'shape ' + i + ': same routing line');
         });
-        // 6 bullets → routed to plan regardless of the tiny token count.
-        var sixBullets = ['## Acceptance criteria', '- a', '- b', '- c', '- d', '- e', '- f'].join('\n');
-        fs = fsRecorder({ '.git/info/exclude': '' });
-        captured = captureConsole(function () {
-            loadDevSetup(fs).runDevelopmentModeAppendixStep(
-                { developmentMode: 'adaptive' }, adaptiveTicket('T', sixBullets));
-            var wrote = fs.calls.writes.filter(function (w) { return w.path === APPENDIX_PATH; });
-            assert.equal(wrote.length, 1, '6-bullet ticket routes to plan');
-        });
-        assert.contains(captured.logs.join('\n'), 'adaptive: routing to plan (signals: acceptanceBullets=6)');
-    });
-
-    test('ADO-shaped ticket (System.Title/System.Description) routes on its real text (gh-1442 parity)', function () {
-        var adoThreeModules = ['Delivery plan:', '1. CSV exporter', '2. PDF renderer', '3. Digest builder'].join('\n');
-        var fs = fsRecorder({ '.git/info/exclude': '' });
-        var captured = captureConsole(function () {
-            loadDevSetup(fs).runDevelopmentModeAppendixStep(
-                { developmentMode: 'adaptive' },
-                { key: 'P-1', fields: { 'System.Title': 'Add export pipeline', 'System.Description': adoThreeModules } });
-            assert.equal(fs.calls.writes.filter(function (w) { return w.path === APPENDIX_PATH; }).length, 1,
-                'ADO ticket with 3 numbered deliverables routes to plan');
-        });
-        assert.contains(captured.logs.join('\n'), 'adaptive: routing to plan (signals: modules=3)');
     });
 
     test('adaptive + unreadable appendix override → THROWS naming the path (fail fast)', function () {
@@ -890,6 +887,8 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
             makeRequire({ './developmentMode.js': developmentMode }), mocks);
         var adaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
             makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': planReal }), mocks);
+        var spReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+            makeRequire({ './developmentModeAdaptive.js': adaptiveReal }), mocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
@@ -910,7 +909,8 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
                 './common/trackers.js': trackersStub,
                 './common/developmentMode.js': developmentMode,
                 './common/developmentModePlan.js': planReal,
-                './common/developmentModeAdaptive.js': adaptiveReal
+                './common/developmentModeAdaptive.js': adaptiveReal,
+                './common/developmentModeAdaptiveSp.js': spReal
             }),
             mocks
         );
@@ -947,6 +947,8 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
             makeRequire({ './developmentMode.js': developmentMode }), mocks);
         var adaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
             makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': planReal }), mocks);
+        var spReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+            makeRequire({ './developmentModeAdaptive.js': adaptiveReal }), mocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
@@ -967,7 +969,8 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
                 './common/trackers.js': trackersStub,
                 './common/developmentMode.js': developmentMode,
                 './common/developmentModePlan.js': planReal,
-                './common/developmentModeAdaptive.js': adaptiveReal
+                './common/developmentModeAdaptive.js': adaptiveReal,
+                './common/developmentModeAdaptiveSp.js': spReal
             }),
             mocks
         );
