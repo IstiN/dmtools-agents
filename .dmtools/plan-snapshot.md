@@ -40,20 +40,20 @@ pattern): read `outputs/<KEY>/scope_estimate.json` via `readOutputFileDetailed`;
 **Verify**: unit test — record mode=plan stamps label; record absent → no label;
 malformed → no label, no throw.
 
-### T4 — Enable adaptive for this repo's dev legs
+### T4 — Enable adaptive for this repo's dev legs ✅
 **What**: `story_development.json` (+ `bug_development.json` if it routes through the
 same action): `customParams.developmentMode: "adaptive"`,
 `customParams.developmentModeConfig.adaptive.planThresholdSp: 3`.
 **Verify**: JSON valid; values present; `node -e` load check.
 
-### T5 — Docs
+### T5 — Docs ✅
 **What**: `docs/development-mode.md` — §2.3 rewritten (in-leg SP decision replaces
 pre-leg signals; signals kept for legacy consumers/harness), §3 config surface
 (+`planThresholdSp` default 3), §4 calibration note (offline decision-log replay
 replaces signal-threshold tables for this repo), invariant correction from T2.
 **Verify**: doc self-consistent; no stale claims vs code.
 
-### T6 — Full suite + PR
+### T6 — Full suite + PR ✅ (push/PR in flight)
 **What**: register the new test in `run_all.json`; run the full unit suite; fix
 fallout; commit per-task messages (`gh-1503: …`); push branch; PR
 ("Implements #1503" — no closing keywords per the completion guard).
@@ -69,7 +69,5 @@ fallout; commit per-task messages (`gh-1503: …`); push branch; PR
 - Label `dev-plan-escalated` is informational (same class as `ai_concerns`).
 
 ## Open questions
-- Does `bug_development.json` route through `developTicketAndCreatePR.js`? (check in
-  T4; wire only if same seam)
-- Whether `story_development_dynamic_repo.json` should also carry the knob (it is a
-  template for consumer repos — leave `default` per issue scope).
+- RESOLVED: bug_development delegates to developTicketAndCreatePR.action() — one seam covers both; both configs wired.
+- RESOLVED: dynamic_repo template stays `default` (consumer repos opt in per issue scope).
