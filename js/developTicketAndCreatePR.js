@@ -221,6 +221,9 @@ function squashDevelopmentWipCommits(runCommand, ticketKey, baseBranch, commitMe
     }
 }
 
+var squashNonPublishWipCommits = function (ctx) {
+    return wipSquash.squashTicketWipInPlace(ctx, function (command) { return runCmd({ command: command }); }, typeof file_read === 'function' ? file_read : null);
+};
 /**
  * Push already-committed changes to remote (used when CLI agent committed its own work).
  */
@@ -1523,6 +1526,7 @@ function landingGuardResume(params, ctx, agentResponse) {
 
 function finalizeNoChangesOutcome(ctx, agentResponse) {
     // Case A: agent finished successfully, no code changes needed.
+    squashNonPublishWipCommits(ctx);
     console.log('No git changes detected — agent completed successfully (response.md present). Treating as "no change needed".');
     try {
         getTracker().postComment(ctx.ticketKey, commentMarkup.forTicket(ctx.ticketKey).h(3, 'ℹ️ No Code Changes Needed') + '\n\nThe AI agent completed its analysis and determined no code changes are required (e.g. the fix is already present in the target branch, or the ticket was resolved by a previous change).\n\n' + commentMarkup.forTicket(ctx.ticketKey).bold('Agent analysis:') + '\n\n' + agentResponse);
@@ -1620,6 +1624,7 @@ function parkLabelOpenPr(parkLabel, branchName) {
 }
 
 function parkQuotaExhaustedDevelopment(ctx, classification) {
+    squashNonPublishWipCommits(ctx);
     var jobParams = ctx.jobParams || {};
     var parkLabel = quotaBreaker.parkLabelOf(jobParams);
     var everyN = quotaBreaker.probeEveryOf(jobParams);
@@ -1654,6 +1659,7 @@ function throwQuotaPark(ticketKey, parkLabel) {
 
 function resetInterruptedDevelopment(ctx, commentBody) {
     // gh-1087 AC1/AC2: a hard provider-quota failure parks the lane instead
+    squashNonPublishWipCommits(ctx);
     // of resetting for retry — resetting here would re-dispatch the same leg
     // into the same exhausted provider chain on the next SM tick (per-tick
     // retry burn). Transient/unknown classifications fall through to the
@@ -1707,6 +1713,7 @@ function needsInputOutcomeBody(ctx) {
  */
 function askModeOutcome(ctx) {
     if (!needsInputCommon.hasNeedsInputFile(outputFiles)) return null;
+    squashNonPublishWipCommits(ctx);
     console.log('outputs/needs-input.md present — ask-mode leg: agent asked for missing inputs. No PR, no reset.');
     markNeedsInputTicket(ctx);
     return { result: needsInputOutcomeBody(ctx) };
@@ -1721,6 +1728,7 @@ function askModeOutcome(ctx) {
  */
 function needsInputOutcome(ctx) {
     if (!needsInputCommon.hasNeedsInputFile(outputFiles)) return null;
+    squashNonPublishWipCommits(ctx);
     console.log('outputs/needs-input.md present — agent flagged missing ticket inputs. Skipping gates and PR creation.');
     markNeedsInputTicket(ctx);
     return needsInputOutcomeBody(ctx);
@@ -2179,7 +2187,7 @@ if (typeof module !== 'undefined' && module.exports) {
         // characterization tests.
         isHardPushRejection, retryForcePushAfterRejection, performPushOnly,
         isValidGitSha, readRecordedDevBaseHead, readDevBaseHead,
-        canSquashDevWipSubjects, readNonMergeSubjects, squashDevelopmentWipCommits, squashAndPushOpenPrWipCommits,
+        canSquashDevWipSubjects, readNonMergeSubjects, squashDevelopmentWipCommits, squashAndPushOpenPrWipCommits, squashNonPublishWipCommits,
         logMoveToStatusOutcome,
         prepareDevelopmentGitStage, stageOutcomeOf, runPublishPipeline,
         createDevelopmentPr, finalizeDevelopmentSuccess, concludeActionFailure,

@@ -302,11 +302,25 @@ function stageWorkingTree(workingDir) {
     }
 }
 
-/** Commit the staged tree. False when git refuses (e.g. "nothing to commit" after add). */
-function commitWorkingTree(workingDir, commitMsg) {
+/** True when HEAD is already a non-merge `WIP auto-save` commit (gh-1501). */
+function shouldAmendHeadWipCommit(workingDir) {
     try {
+        var subj = cleanCommandOutput(cli_execute_command({
+            command: 'git log -1 --no-merges --format=%s HEAD',
+            workingDirectory: workingDir
+        }) || '').trim();
+        return /WIP auto-save/.test(subj);
+    } catch (e) {
+        return false;
+    }
+}
+
+/** Commit the staged tree (amending when HEAD is already a WIP auto-save commit). */
+function commitWorkingTree(workingDir, commitMsg, amend) {
+    try {
+        var prefix = amend ? 'git commit --amend -m "' : 'git commit -m "';
         cli_execute_command({
-            command: 'git commit -m "' + commitMsg + '"',
+            command: prefix + commitMsg + '"',
             workingDirectory: workingDir
         });
         return true;
@@ -318,11 +332,11 @@ function commitWorkingTree(workingDir, commitMsg) {
 }
 
 /** Push the WIP commit (with the gh-798 self-heal) and log the outcome. */
-function pushAndLog(workingDir, commitMsg) {
+function pushAndLog(workingDir, commitMsg, amend) {
     try {
         pushBranchWithSelfHeal(function (command) {
             return cli_execute_command({
-                command: command,
+                command: (amend && command === 'git push origin HEAD') ? 'git push --force-with-lease' : command,
                 workingDirectory: workingDir
             });
         }, function () {
@@ -358,8 +372,9 @@ function autoCommitAndPush(customParams, ticketKey, params) {
 
     untrackRuntimeArtifactsSafe(repo.workingDir);
     if (!stageWorkingTree(repo.workingDir)) return false;
-    if (!commitWorkingTree(repo.workingDir, commitMsg)) return false;
-    return pushAndLog(repo.workingDir, commitMsg);
+    var amend = shouldAmendHeadWipCommit(repo.workingDir);
+    if (!commitWorkingTree(repo.workingDir, commitMsg, amend)) return false;
+    return pushAndLog(repo.workingDir, commitMsg, amend);
 }
 
 /**
@@ -475,6 +490,7 @@ if (typeof module !== 'undefined' && module.exports) {
         hasDirtyChanges: hasDirtyChanges,
         autoSaveCommitMessageOverride: autoSaveCommitMessageOverride,
         saveSessionArtefact: saveSessionArtefact,
-        releaseTemplatesOf: releaseTemplatesOf
+        releaseTemplatesOf: releaseTemplatesOf,
+        shouldAmendHeadWipCommit: shouldAmendHeadWipCommit
     };
 }

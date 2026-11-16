@@ -163,6 +163,106 @@ suite('wipSquash (gh-1472)', function () {
         }, 'abc..HEAD', 'PROJ-1', 'PROJ-1 rework');
         assert.ok(reworkBadMerge.skipReason.indexOf('non-self-heal merge') !== -1);
 
+        var baseBranchMerge = wipSquash.inspectReworkSquashRange(function (cmd) {
+            if (cmd.indexOf('git rev-list --merges') === 0) return 'm1\n';
+            if (cmd.indexOf('git log --merges') === 0) return "Merge branch 'main' into ai/PROJ-1\n";
+            if (cmd.indexOf('git log --no-merges') === 0) return 'PROJ-1 WIP auto-save 1\nPROJ-1 WIP auto-save 2\n';
+            return '';
+        }, 'abc..HEAD', 'PROJ-1', 'PROJ-1 rework');
+        assert.equal(baseBranchMerge.skipReason, null);
+        assert.equal(baseBranchMerge.subjects.length, 2);
+
         assert.equal(wipSquash.persistBaseHeadFile({}), null);
+        var writtenBase = null;
+        var persisted = wipSquash.persistBaseHeadFile({
+            folder: 'input/PROJ-1',
+            fileName: 'rework_base_head.txt',
+            currentSha: '2222222',
+            ticketKey: 'PROJ-1',
+            readFn: function () { throw new Error('missing'); },
+            writeFn: function (arg) { writtenBase = arg; },
+            runCommand: function () { return ''; }
+        });
+        assert.equal(persisted, '2222222');
+        assert.deepEqual(writtenBase, { path: 'input/PROJ-1/rework_base_head.txt', content: '2222222' });
+    });
+
+    test('walkBackContiguousWipBase walks across interrupted partial-work commits too (gh-1501)', function () {
+        var walked = wipSquash.walkBackContiguousWipBase(function (cmd) {
+            if (cmd.indexOf('git log') === 0) {
+                return '4444444:PROJ-1 WIP: partial analysis (agent interrupted)\n3333333:PROJ-1: WIP auto-save 2\n2222222:PROJ-1: WIP auto-save 1\n1111111:Initial commit\n';
+            }
+            if (cmd === 'git rev-parse 2222222^') return '1111111\n';
+            return '';
+        }, '4444444');
+        assert.equal(walked, '1111111');
+    });
+
+    test('squashAndPushInPlace squashes multi-WIP range on current branch and skips when invalid/single (gh-1501)', function () {
+        assert.equal(wipSquash.squashAndPushInPlace(null), false);
+        assert.equal(wipSquash.squashAndPushInPlace({ runCommand: function () { return ''; } }), false);
+
+        var singleCmds = [];
+        assert.equal(wipSquash.squashAndPushInPlace({
+            runCommand: function (cmd) {
+                singleCmds.push(cmd);
+                if (cmd === 'git rev-parse --abbrev-ref HEAD') return 'ai/PROJ-1\n';
+                if (cmd.indexOf('git log') === 0) return '2222222:PROJ-1 WIP auto-save 1\n1111111:Base\n';
+                if (cmd === 'git rev-parse 2222222^') return '1111111\n';
+                return '';
+            },
+            ticketKey: 'PROJ-1',
+            baseBranch: 'main'
+        }), false, 'single WIP commit should not trigger in-place squash');
+
+        var cmds = [];
+        var squashed = wipSquash.squashAndPushInPlace({
+            runCommand: function (cmd) {
+                cmds.push(cmd);
+                if (cmd === 'git rev-parse --abbrev-ref HEAD') return 'ai/PROJ-1\n';
+                if (cmd === 'git rev-list --merges 1111111..HEAD') return '';
+                if (cmd === 'git log --format=%s 1111111..HEAD') {
+                    return 'PROJ-1 WIP auto-save 2026-11-15T16-10-00\nPROJ-1 WIP auto-save 2026-11-15T16-05-00\n';
+                }
+                return '';
+            },
+            baseSha: '1111111',
+            ticketKey: 'PROJ-1',
+            baseBranch: 'main',
+            commitMessage: 'PROJ-1 WIP auto-save (squashed)'
+        });
+        assert.equal(squashed, true);
+        assert.ok(cmds.indexOf('git reset --soft 1111111') !== -1);
+        assert.ok(cmds.indexOf('git commit -m "PROJ-1 WIP auto-save (squashed)"') !== -1);
+        assert.ok(cmds.indexOf('git push -u origin ai/PROJ-1 --force-with-lease') !== -1);
+
+        assert.equal(wipSquash.squashAndPushInPlace({
+            runCommand: function (cmd) {
+                if (cmd === 'git rev-parse --abbrev-ref HEAD') return 'main\n';
+                return '';
+            },
+            baseSha: '1111111',
+            ticketKey: 'PROJ-1',
+            baseBranch: 'main'
+        }), false, 'must refuse to squash on baseBranch');
+        assert.equal(wipSquash.readRecordedBaseSha('input/PROJ-1/dev_base_head.txt', function () { return '1111111\n'; }), '1111111');
+        assert.equal(wipSquash.readRecordedBaseSha('input/PROJ-1/dev_base_head.txt', function () { return 'not-a-sha\n'; }), null);
+        assert.equal(wipSquash.squashTicketWipInPlace(null, function () { return ''; }), false);
+        assert.equal(wipSquash.squashTicketWipInPlace({ ticketKey: 'PROJ-1' }), false);
+        assert.equal(wipSquash.squashTicketWipInPlace({ ticketKey: 'PROJ-1', prTarget: 'develop' }, function (cmd) {
+            if (cmd === 'git rev-parse --abbrev-ref HEAD') return 'ai/PROJ-1\n';
+            if (cmd === 'git rev-list --merges 1111111..HEAD') return '';
+            if (cmd === 'git log --format=%s 1111111..HEAD') return 'PROJ-1 WIP auto-save 2\nPROJ-1 WIP auto-save 1\n';
+            return '';
+        }, function () { return '1111111\n'; }), true);
+
+        assert.equal(wipSquash.isSafeNonBaseBranch('HEAD', 'main'), false);
+        assert.equal(wipSquash.isSafeNonBaseBranch('master', 'main'), false);
+        assert.equal(wipSquash.resolveInPlaceBaseSha({ runCommand: function () { throw new Error('boom'); } }), null);
+        assert.equal(wipSquash.buildInPlaceMessage(null, null), 'ticket WIP auto-save (squashed)');
+        assert.equal(wipSquash.squashAndPushInPlace({
+            runCommand: function () { throw new Error('git boom'); },
+            ticketKey: 'PROJ-1'
+        }), false);
     });
 });

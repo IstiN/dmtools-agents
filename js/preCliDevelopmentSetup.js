@@ -966,7 +966,7 @@ function runExistingWorkReportStep(ticketKey, config, actualParams, params, fold
  * development commit (gh-1308). Optional helper — a failure leaves the
  * fallback to origin/<baseBranch> merge-base active.
  */
-function writeDevBaseHead(folder) {
+function writeDevBaseHead(folder, ticketKey) {
     if (!folder) return;
     try {
         var sha = cleanCommandOutput(runCmd({ command: 'git rev-parse HEAD' }) || '').trim();
@@ -975,6 +975,7 @@ function writeDevBaseHead(folder) {
             folder: folder,
             fileName: 'dev_base_head.txt',
             currentSha: sha,
+            ticketKey: ticketKey,
             readFn: typeof file_read === 'function' ? file_read : null,
             writeFn: file_write,
             runCommand: runCommandStr
@@ -1200,7 +1201,7 @@ function action(params) {
         // would be overwritten".
         baseBranchMarker.writeBaseBranchMarker(config.git.baseBranch);
 
-        writeDevBaseHead(folder);
+        writeDevBaseHead(folder, ticketKey);
         // gh-1436/gh-1437: materialize the development-mode appendix (after
         // checkout: .git/info/exclude seeding needs the repo; before the agent
         // launches: the prompt assembly reads it post-setup). Plan legs

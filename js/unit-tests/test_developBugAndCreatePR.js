@@ -1623,6 +1623,43 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
             'no force push when the current branch is not base/main/master');
         assert.deepEqual(loaded.moves, [{ key: 'TS-1401', statusName: 'Ready For Development' }]);
     });
+
+    test('gh-1501: interrupted bug leg with multiple timer WIP auto-save commits squashes them into one commit before pushing', function () {
+        var commands = [];
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function (args) {
+                if (args.path === 'input/TS-1501/dev_base_head.txt') return '1111111111111111\n';
+                throw new Error('missing ' + args.path);
+            },
+            cli_execute_command: function (args) {
+                commands.push(args.command);
+                if (args.command.indexOf('gh pr list --head ') === 0) return '';
+                if (args.command.indexOf('git check-ignore') === 0) throw new Error('Command execution failed (exit code 1)');
+                if (args.command === 'git status --porcelain') return '';
+                if (args.command === 'git branch --show-current' || args.command === 'git rev-parse --abbrev-ref HEAD') return 'ai/TS-1501\n';
+                if (args.command === 'git rev-list --merges 1111111111111111..HEAD') return '';
+                if (args.command === 'git log --format=%s 1111111111111111..HEAD') {
+                    return 'TS-1501 WIP auto-save 2\nTS-1501 WIP auto-save 1\n';
+                }
+                return '';
+            }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-1501', fields: { summary: 'interrupted with timer WIPs', description: '', labels: [] } },
+                metadata: { contextId: 'bug_development' },
+                jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true);
+        assert.ok(commands.indexOf('git reset --soft 1111111111111111') !== -1);
+        assert.ok(commands.indexOf('git push -u origin ai/TS-1501 --force-with-lease') !== -1);
+    });
 });
 
 // ── gh-1188: action decomposition — characterization tests for the extracted

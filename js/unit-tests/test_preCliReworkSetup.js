@@ -476,6 +476,7 @@ function makeActionHarness(overides) {
         }),
         {
             console: consoleRecorder,
+            file_read: function () { throw new Error('File does not exist'); },
             file_write: function(args) {
                 var failPaths = def1002(overides.failFileWritePaths, []);
                 if (failPaths.indexOf(args.path) !== -1) {
@@ -1344,9 +1345,26 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
                     return '';
                 }
             });
-            mod.writeReworkBaseHead('input/PROJ-123', 'ccccccc', '/tmp/work');
+            mod.writeReworkBaseHead('input/PROJ-123', 'ccccccc', '/tmp/work', 'PROJ-123');
             assert.equal(writes.length, 1);
             assert.equal(writes[0].content, 'aaaaaaa');
+        });
+
+        test('writeReworkBaseHead happens BEFORE detectMergeConflicts so a clean base merge does not mask prior WIP commits (gh-1501)', function() {
+            var order = [];
+            var h = makeActionHarness({
+                prDetails: {
+                    number: 7, title: 't', html_url: 'u', state: 'open',
+                    head: { ref: 'ai/gh-123', sha: 'ccccccc' }, base: { ref: 'master' }, user: { login: 'a' }
+                }
+            });
+            var origDetect = h.module.syncBaseAndDetectConflicts;
+            var origWrite = h.module.writeReworkBaseHead;
+            assert.equal(typeof origDetect, 'function');
+            assert.equal(typeof origWrite, 'function');
+            var res = h.module.action({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} } });
+            assert.equal(res.success, true);
+            assert.equal(h.files['input/PROJ-123/rework_base_head.txt'], 'ccccccc');
         });
     });
 

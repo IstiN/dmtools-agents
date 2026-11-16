@@ -3906,4 +3906,33 @@ suite('developTicketAndCreatePR > WIP auto-save squash (gh-1308)', function () {
         assert.equal(prTitle, 'AB#2071862: [DEV] AI Factory: agents skip local Eclipse (ecj) check');
         assert.equal(commitMsg, 'AB#2071862: [DEV] AI Factory: agents skip local Eclipse (ecj) check');
     });
+
+    test('gh-1501: non-publish early exits (ask-mode, plan-mode, interrupted reset) squash multiple WIP auto-save commits in-place before returning', function () {
+        var commands = [];
+        var mod = loadWithRealPrHelper({
+            file_read: function (args) {
+                if (args && args.path === 'input/TS-1501/dev_base_head.txt') return '1111111111111111\n';
+                return '';
+            },
+            cli_execute_command: function (opts) {
+                var c = opts.command;
+                commands.push(c);
+                if (c === 'git rev-parse --abbrev-ref HEAD') return 'ai/TS-1501\n';
+                if (c === 'git rev-list --merges 1111111111111111..HEAD') return '';
+                if (c === 'git log --format=%s 1111111111111111..HEAD') {
+                    return 'TS-1501 WIP auto-save 2\nTS-1501 WIP auto-save 1\n';
+                }
+                return '';
+            }
+        });
+        assert.equal(mod.squashNonPublishWipCommits(null), false);
+        var squashed = mod.squashNonPublishWipCommits({
+            ticketKey: 'TS-1501',
+            baseBranch: 'main',
+            config: { workingDir: null, git: { baseBranch: 'main' } }
+        });
+        assert.equal(squashed, true);
+        assert.ok(commands.indexOf('git reset --soft 1111111111111111') !== -1);
+        assert.ok(commands.indexOf('git push -u origin ai/TS-1501 --force-with-lease') !== -1);
+    });
 });
