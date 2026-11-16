@@ -307,6 +307,19 @@ suite('gh-1503 IT — adaptive condition script', function () {
             'active on an adaptive leg with the appendix in place');
     });
 
+    test('non-shadow variants admit: shadowMode false / wrong-typed / config absent', function () {
+        var files = {};
+        files['.dmtools/development-mode-adaptive-appendix.md'] = 'text';
+        var loaded = loadSpConditionWith(files);
+        var base = { developmentMode: 'adaptive' };
+        assert.equal(loaded.mod.action({ customParams: Object.assign({ developmentModeConfig: { adaptive: { shadowMode: false } } }, base) }), true,
+            'explicit false is non-shadow');
+        assert.equal(loaded.mod.action({ customParams: Object.assign({ developmentModeConfig: { adaptive: { shadowMode: 'no' } } }, base) }), true,
+            'wrong-typed shadowMode is non-shadow');
+        assert.equal(loaded.mod.action({ customParams: Object.assign({ developmentModeConfig: {} }, base) }), true,
+            'empty adaptive config is non-shadow');
+    });
+
     test('shadowMode → false even with the file in place (second line of defense)', function () {
         var files = {};
         files['.dmtools/development-mode-adaptive-appendix.md'] = 'sp appendix text';

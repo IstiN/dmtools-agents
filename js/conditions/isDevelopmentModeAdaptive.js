@@ -27,13 +27,24 @@
  */
 function action(params) {
     var cp = params && (params.jobParams && params.jobParams.customParams || params.customParams) || {};
-    var adaptiveCfg = cp.developmentModeConfig && cp.developmentModeConfig.adaptive;
+    if (!activeNonShadowAdaptiveLeg(cp)) {
+        return false;
+    }
+    return adaptiveAppendixMaterialized();
+}
+
+// Guards 1+2 in one predicate (gh-1435 contract: lowercase "adaptive" only;
+// gh-1437 shadow guard: strict `=== true` excludes, anything else proceeds).
+function activeNonShadowAdaptiveLeg(cp) {
     if (cp.developmentMode !== 'adaptive') {
         return false;
     }
-    if (adaptiveCfg && adaptiveCfg.shadowMode === true) {
-        return false;
-    }
+    var adaptiveCfg = cp.developmentModeConfig && cp.developmentModeConfig.adaptive;
+    return !(adaptiveCfg && adaptiveCfg.shadowMode === true);
+}
+
+// Guard 3: the appendix must have been materialized by the leg's preCli setup.
+function adaptiveAppendixMaterialized() {
     try {
         var content = file_read({ path: '.dmtools/development-mode-adaptive-appendix.md' });
         return typeof content === 'string' && content.length > 0;
