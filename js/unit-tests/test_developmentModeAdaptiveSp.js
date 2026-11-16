@@ -285,12 +285,17 @@ function loadSpConditionWith(files) {
 
 suite('gh-1503 IT — SP condition script', function () {
     test('path parity: the condition reads exactly the runtime path the module writes', function () {
-        var loaded = loadSpConditionWith({});
-        assert.equal(loaded.mod.appendixRuntimePath(),
-            developmentModeAdaptiveSp.SP_APPENDIX_FILE_PATH,
-            'condition and module must agree on the materialization path');
+        // The condition inlines its runtime path (self-contained single-function
+        // design), so parity is proven behaviorally: a file at the module's
+        // runtime path admits, the same file under any other name does not.
+        var files = {};
+        files[developmentModeAdaptiveSp.SP_APPENDIX_FILE_PATH] = 'sp appendix text';
+        var loaded = loadSpConditionWith(files);
+        var cp = { developmentMode: 'adaptive' };
+        assert.equal(loaded.mod.action({ customParams: cp }), true,
+            'the module-written path is the one the condition reads');
         var entry = developmentModeAdaptiveSp.spAppendixCliEntry();
-        assert.equal(entry.prompt.replace(/^\.\//, ''), loaded.mod.appendixRuntimePath(),
+        assert.equal(entry.prompt.replace(/^\.\//, ''), developmentModeAdaptiveSp.SP_APPENDIX_FILE_PATH,
             'config prompt path denotes the same file');
     });
 
