@@ -9,7 +9,7 @@
 //
 // gh-1503 moves the decision AFTER the survey, into the agent that read the
 // code. The adaptive leg carries a scope-estimate appendix (this module's
-// runtime file) that instructs it to estimate the work in story points, write
+// runtime file) that instructs it to estimate the work, write
 // outputs/<KEY>/scope_estimate.json, and self-select: sp >= threshold
 // (config: developmentModeConfig.adaptive.planThreshold, default 3 —
 // calibrated by a paired direct/plan run: crossover at estimate 3) → follow the
@@ -146,16 +146,16 @@ function estimateRecordWithoutExtras(record) {
 // single source of truth. gh-1436's plan contract owns outputs/<KEY>/plan.md
 // + .dmtools/plan-snapshot.md; this block never redefines them.
 
-function spAppendixText(threshold) {
+function adaptiveAppendixText(threshold) {
     return [
         '# Scope estimate & working mode (adaptive dev leg)',
         '',
         'Before your FIRST code edit: survey the ticket and the relevant code, then',
-        'estimate the work in story points and fix your working mode for this leg.',
+        'estimate the work and fix your working mode for this leg.',
         '',
         '## Estimate',
-        '- Story points, fibonacci scale: 1 / 2 / 3 / 5 / 8 / 13 / 21 / ... — the scale is',
-        '  open-ended: if the work feels bigger than the top value you named, keep going.',
+        '- One whole number on an open-ended scale: if the work feels bigger than',
+        '  the value you named, keep going.',
         '- Estimate EFFORT, RISK and UNCERTAINTY — not file count. A sweeping mechanical',
         '  rename is low; a small change into undocumented behavior is high.',
         '- Structural surprises belong in a higher estimate: data/schema migrations,',
@@ -168,7 +168,7 @@ function spAppendixText(threshold) {
         '',
         '    {"sp": <int>, "threshold": <int>, "mode": "plan" | "default", "reason": "<one short sentence>"}',
         '',
-        '## Decide (threshold: ' + threshold + ' SP)',
+        '## Decide (threshold: ' + threshold + ')',
         '- sp >= threshold → work BY A PLAN for the rest of this leg: read',
         '  `' + PLAN_APPENDIX_RUNTIME_PATH + '` now and follow its protocol (numbered',
         '  tasks with what+verify, the committed snapshot, per-task checkpoints).',
@@ -196,7 +196,7 @@ function spAppendixText(threshold) {
 function writeAdaptiveAppendix(threshold, io) {
     var write = (io && io.file_write) || file_write;
     try {
-        write({ path: ADAPTIVE_APPENDIX_FILE_PATH, content: spAppendixText(threshold) });
+        write({ path: ADAPTIVE_APPENDIX_FILE_PATH, content: adaptiveAppendixText(threshold) });
     } catch (e) {
         return {
             ok: false,
@@ -257,7 +257,7 @@ function resolveAdaptiveAppendix(customParams) {
     return {
         active: true,
         threshold: resolved.threshold,
-        text: spAppendixText(resolved.threshold),
+        text: adaptiveAppendixText(resolved.threshold),
         error: null,
         warnings: resolved.warning ? [resolved.warning] : [],
         logLines: ['📝 developmentMode=adaptive: adaptive routing active (threshold ' +
@@ -384,7 +384,7 @@ if (typeof module !== 'undefined' && module.exports) {
         DEFAULT_PLAN_THRESHOLD: DEFAULT_PLAN_THRESHOLD,
         resolvePlanThreshold: resolvePlanThreshold,
         parseScopeEstimateRecord: parseScopeEstimateRecord,
-        spAppendixText: spAppendixText,
+        adaptiveAppendixText: adaptiveAppendixText,
         resolveAdaptiveAppendix: resolveAdaptiveAppendix,
         writeAdaptiveAppendix: writeAdaptiveAppendix,
         materializeAdaptiveAppendix: materializeAdaptiveAppendix,

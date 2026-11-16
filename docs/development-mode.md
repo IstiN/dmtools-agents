@@ -61,13 +61,13 @@ session restore path, which remains the primary resume mechanism.
 ### 2.3 `adaptive`
 
 An in-leg decision: the agent surveys the ticket and the relevant
-code, estimates the work in story points, and self-selects its working mode.
+code, estimates the work as one whole number, and self-selects its working mode.
 
 - The leg carries the **scope-estimate appendix** (engine text materialized at
   `.dmtools/development-mode-adaptive-appendix.md`, see
   `js/common/developmentModeAdaptive.js`). It instructs: estimate
-  effort/risk/uncertainty on the fibonacci scale 1/2/3/5/8/13 — not file
-  count; structural surprises (migrations, second repositories) estimate
+  effort/risk/uncertainty as one whole number on an open-ended scale — not
+  file count; structural surprises (migrations, second repositories) estimate
   higher; uncertainty resolves up.
 - The estimate is recorded as one JSON line in the leg's outputs:
   `outputs/<KEY>/scope_estimate.json` → `{"sp", "threshold", "mode",
@@ -76,7 +76,7 @@ code, estimates the work in story points, and self-selects its working mode.
   agent-written: the harness usage line already carries the model, and the
   leg count is derived offline from those lines.
 - **Routing**: `sp >= planThreshold` (config, default **3** — calibrated by
-  a paired direct/plan run: SP 1–2 neutral, plan net-positive from SP 3)
+  a paired direct/plan run: estimate 1–2 neutral, plan net-positive from 3)
   ⇒ the leg reads the plan appendix file (materialized alongside as an
   escalation read; the plan cliPrompts entry stays gated to explicit `plan`
   mode) and follows the plan protocol for the rest of the leg. Below the
@@ -88,12 +88,9 @@ code, estimates the work in story points, and self-selects its working mode.
   durable signal; a label failure is a warn, never a leg failure).
 - `shadowMode: true` ⇒ nothing materializes, nothing routes (the would-act
   line is logged) — carried over from the pre-leg signal era.
-- The retired pre-leg signal rule (`planIfModulesAtLeast` /
-  `planIfAcceptanceBulletsAtLeast` / `planIfBodyTokensAtLeast`) is retired
-  from this repo's routing: text signals calibrated at ≈0.61 precision on
-  closed-issue replays and cannot separate design-bearing work from
-  mechanical sweeps. The extractor + calibration harness stay for legacy
-  pack consumers.
+- The pre-leg signal routing era (text-signal knobs deciding plan mode
+  before the leg started) is gone from this repo entirely — the routing
+  decision belongs to the agent, in-leg.
 - The prompt-cost shape differs from `plan`: every adaptive leg carries the
   adaptive block (the decision instructions); the full plan appendix enters the
   prompt only for explicit `plan` legs — an escalated adaptive leg reads it
@@ -107,13 +104,8 @@ code, estimates the work in story points, and self-selects its working mode.
 "developmentModeConfig": {
   "plan":    { "appendixFile": "optional override path" },
   "adaptive": {
-    "planThreshold": 3,               // in-leg SP routing threshold; default 3
-    "shadowMode": false,                // true = nothing materializes/routes, log only
-    // legacy text-signal knobs — parsed for forward compatibility,
-    // UNUSED by this repo's routing (kept for legacy pack consumers)
-    "planIfModulesAtLeast": 2,
-    "planIfAcceptanceBulletsAtLeast": 5,
-    "planIfBodyTokensAtLeast": 800
+    "planThreshold": 3,                 // in-leg estimate routing threshold; default 3
+    "shadowMode": false                 // true = nothing materializes/routes, log only
   },
 }
 ```
@@ -125,36 +117,13 @@ wrong types are warned-and-ignored.
 
 ## 4. Calibration (offline)
 
-**SP routing (`planThreshold`)**: the threshold is re-tuned from the
+**Estimate routing (`planThreshold`)**: the threshold is re-tuned from the
 per-leg decision records (`outputs/<KEY>/scope_estimate.json`) read offline —
 one line per leg carries sp/threshold/mode/outcome; legs-per-ticket and model
-come from the harness usage lines. Model bumps shift SP estimates, so the
+come from the harness usage lines. Model bumps shift estimates, so the
 record carries the model via the usage line — drift is visible per model
 generation.
 
-**Legacy (signal thresholds)**:
-
-Threshold validity is expert review of a decision table, not a numeric bar
-owner decision: the harness replays the rule over an
-expert-labeled sample and the owner tunes thresholds (config-only) from the
-disagreement cases.
-
-```bash
-node js/adaptiveCalibrationHarness.js <sample.json> \
-  [--out adaptive-decision-table.md] \
-  [--planIfModulesAtLeast 2] [--planIfAcceptanceBulletsAtLeast 5] [--planIfBodyTokensAtLeast 800]
-```
-
-- Sample format: `{ "issues": [ { "key", "title", "body", "label" } ] }` —
-  `label` is the expert verdict, exactly `plan` or `default` (anything else
-  is flagged invalid and excluded from the stats). A documented example
-  sample lives in `examples/adaptive-calibration-sample.example.json`.
-- The artifact (markdown, deterministic — no timestamps) lists, per issue:
-  signals, would-decide, expert label, agree/disagree, plus a disagreements
-  section and agreement/precision/recall numbers (informational only).
-- The replay uses the SAME extractor and decision the legs run, so a table
-  is faithful to production routing; re-running with different thresholds is
-  a config-only diff of the artifact.
 
 ---
 

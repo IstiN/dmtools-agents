@@ -1,5 +1,5 @@
 /**
- * Unit tests for gh-1503 — SP-based adaptive mode selection: the in-leg
+ * Unit tests for gh-1503 — estimate-based adaptive mode selection: the in-leg
  * story-point estimate replaces the gh-1437 pre-leg signal routing.
  *
  * Layers:
@@ -11,7 +11,7 @@
  *        canonical conditional-entry shape.
  *  IT  — (T2) preCli wiring: adaptive materializes the adaptive appendix, stale
  *        state cleanup, plan appendix co-materialized for escalation reads.
- *  IT  — (T4) agent config wiring: story/bug dev configs carry the SP
+ *  IT  — (T4) agent config wiring: story/bug dev configs carry the estimate
  *        conditional entry + the knob value.
  */
 
@@ -73,7 +73,7 @@ function adaptiveCustomParams(threshold) {
 
 // ── UT: threshold resolution ─────────────────────────────────────────────────
 
-suite('gh-1503 UT — SP threshold resolution', function () {
+suite('gh-1503 UT — estimate threshold resolution', function () {
     test('absent key → default silently (absence is the steady state)', function () {
         var r = developmentModeAdaptive.resolvePlanThreshold({ developmentMode: 'adaptive' });
         assert.equal(r.threshold, 3, 'default threshold is 3 (paired-run crossover)');
@@ -174,16 +174,16 @@ suite('gh-1503 UT — scope-estimate record parsing', function () {
 // ── UT: appendix text pins ───────────────────────────────────────────────────
 
 suite('gh-1503 UT — adaptive appendix text', function () {
-    var text = developmentModeAdaptive.spAppendixText(3);
+    var text = developmentModeAdaptive.adaptiveAppendixText(3);
 
     test('interpolates the threshold into the decision rule', function () {
-        assert.ok(text.indexOf('(threshold: 3 SP)') !== -1, 'threshold appears in the decide header');
-        assert.ok(developmentModeAdaptive.spAppendixText(5).indexOf('(threshold: 5 SP)') !== -1,
+        assert.ok(text.indexOf('(threshold: 3)') !== -1, 'threshold appears in the decide header');
+        assert.ok(developmentModeAdaptive.adaptiveAppendixText(5).indexOf('(threshold: 5)') !== -1,
             'a different threshold renders differently');
     });
 
     test('scale is open-ended in the agent-facing text', function () {
-        assert.contains(text, '21 / ...', 'the scale continues past 13');
+        assert.contains(text, 'open-ended scale', 'the scale is open-ended');
         assert.contains(text, 'open-ended', 'no ceiling implied');
     });
 
@@ -210,7 +210,7 @@ suite('gh-1503 UT — adaptive appendix materialization', function () {
         assert.equal(r.ok, true, 'write succeeds');
         assert.equal(r.path, '.dmtools/development-mode-adaptive-appendix.md', 'runtime path');
         assert.equal(fs.calls.writes.length, 1, 'exactly one write');
-        assert.ok(fs.calls.writes[0].content.indexOf('(threshold: 3 SP)') !== -1, 'default threshold rendered');
+        assert.ok(fs.calls.writes[0].content.indexOf('(threshold: 3)') !== -1, 'default threshold rendered');
         assert.ok(r.logLines.length === 1 && r.logLines[0].indexOf('threshold 3') !== -1, 'log line names the threshold');
         assert.deepEqual(r.warnings, [], 'silent for a valid/absent config');
     });
@@ -220,7 +220,7 @@ suite('gh-1503 UT — adaptive appendix materialization', function () {
         var r = developmentModeAdaptive.materializeAdaptiveAppendix(adaptiveCustomParams('9'), { file_write: fs.file_write });
         assert.equal(r.ok, true, 'still materializes');
         assert.equal(r.warnings.length, 1, 'one warning');
-        assert.ok(fs.calls.writes[0].content.indexOf('(threshold: 3 SP)') !== -1, 'default threshold in the file');
+        assert.ok(fs.calls.writes[0].content.indexOf('(threshold: 3)') !== -1, 'default threshold in the file');
     });
 
     test('non-adaptive modes → inactive, zero IO, zero output', function () {
@@ -261,7 +261,7 @@ suite('gh-1503 UT — adaptive appendix materialization', function () {
 
 // ── UT: canonical cliPrompts entry ───────────────────────────────────────────
 
-suite('gh-1503 UT — SP conditional entry shape', function () {
+suite('gh-1503 UT — adaptive conditional entry shape', function () {
     test('entry matches the canonical conditional shape', function () {
         var entry = developmentModeAdaptive.adaptiveAppendixCliEntry();
         assert.deepEqual(entry, {
@@ -274,7 +274,7 @@ suite('gh-1503 UT — SP conditional entry shape', function () {
 
 // ── IT: the condition script (self-contained, mirrors isDevelopmentModePlan) ─
 
-function loadSpConditionWith(files) {
+function loadAdaptiveConditionWith(files) {
     var fs = fsRecorder(files);
     var mod = loadModule('js/conditions/isDevelopmentModeAdaptive.js', null, {
         file_read: fs.file_read,
@@ -290,7 +290,7 @@ suite('gh-1503 IT — adaptive condition script', function () {
         // runtime path admits, the same file under any other name does not.
         var files = {};
         files[developmentModeAdaptive.ADAPTIVE_APPENDIX_FILE_PATH] = 'sp appendix text';
-        var loaded = loadSpConditionWith(files);
+        var loaded = loadAdaptiveConditionWith(files);
         var cp = { developmentMode: 'adaptive' };
         assert.equal(loaded.mod.action({ customParams: cp }), true,
             'the module-written path is the one the condition reads');
@@ -302,7 +302,7 @@ suite('gh-1503 IT — adaptive condition script', function () {
     test('adaptive leg + materialized adaptive appendix → true', function () {
         var files = {};
         files['.dmtools/development-mode-adaptive-appendix.md'] = 'sp appendix text';
-        var loaded = loadSpConditionWith(files);
+        var loaded = loadAdaptiveConditionWith(files);
         assert.equal(loaded.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), true,
             'active on an adaptive leg with the appendix in place');
     });
@@ -310,7 +310,7 @@ suite('gh-1503 IT — adaptive condition script', function () {
     test('non-shadow variants admit: shadowMode false / wrong-typed / config absent', function () {
         var files = {};
         files['.dmtools/development-mode-adaptive-appendix.md'] = 'text';
-        var loaded = loadSpConditionWith(files);
+        var loaded = loadAdaptiveConditionWith(files);
         var base = { developmentMode: 'adaptive' };
         assert.equal(loaded.mod.action({ customParams: Object.assign({ developmentModeConfig: { adaptive: { shadowMode: false } } }, base) }), true,
             'explicit false is non-shadow');
@@ -323,7 +323,7 @@ suite('gh-1503 IT — adaptive condition script', function () {
     test('shadowMode → false even with the file in place (second line of defense)', function () {
         var files = {};
         files['.dmtools/development-mode-adaptive-appendix.md'] = 'sp appendix text';
-        var loaded = loadSpConditionWith(files);
+        var loaded = loadAdaptiveConditionWith(files);
         assert.equal(loaded.mod.action({
             jobParams: { customParams: {
                 developmentMode: 'adaptive',
@@ -333,7 +333,7 @@ suite('gh-1503 IT — adaptive condition script', function () {
     });
 
     test('plan / default / missing modes → false without reading anything', function () {
-        var loaded = loadSpConditionWith({});
+        var loaded = loadAdaptiveConditionWith({});
         ['', 'default', 'plan', 'PLAN', 'ADAPTIVE'].forEach(function (mode) {
             var cp = mode === '' ? {} : { developmentMode: mode };
             assert.equal(loaded.mod.action({ jobParams: { customParams: cp } }), false,
@@ -343,7 +343,7 @@ suite('gh-1503 IT — adaptive condition script', function () {
     });
 
     test('adaptive but file missing / unreadable → false (no dangling prompt read)', function () {
-        var loaded = loadSpConditionWith({});
+        var loaded = loadAdaptiveConditionWith({});
         assert.equal(loaded.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), false,
             'missing file → excluded');
         var throwing = loadModule('js/conditions/isDevelopmentModeAdaptive.js', null, {
@@ -356,7 +356,7 @@ suite('gh-1503 IT — adaptive condition script', function () {
     test('teammate and standalone param shapes both resolve customParams', function () {
         var files = {};
         files['.dmtools/development-mode-adaptive-appendix.md'] = 'text';
-        var loaded = loadSpConditionWith(files);
+        var loaded = loadAdaptiveConditionWith(files);
         assert.equal(loaded.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), true,
             'teammate shape');
         assert.equal(loaded.mod.action({ customParams: { developmentMode: 'adaptive' } }), true,
@@ -367,7 +367,7 @@ suite('gh-1503 IT — adaptive condition script', function () {
 
 
 // ── Moved from the retired signal-routing suite (the dispatcher ITs now pin
-// the in-leg SP behavior; the signal extractor itself is deleted). ──────────
+// the in-leg estimate behavior; the signal extractor itself is deleted). ──────────
 
 // ── IT: the dev leg preCli dispatcher wiring ─────────────────────────────────
 
@@ -462,12 +462,12 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
         assert.equal(wrote[0].content, developmentModePlan.DEFAULT_PLAN_APPENDIX, 'engine default plan text');
         var spWrites = fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-adaptive-appendix.md'; });
         assert.equal(spWrites.length, 1, 'adaptive appendix written once');
-        assert.contains(spWrites[0].content, '(threshold: 3 SP)', 'default threshold rendered into the adaptive block');
+        assert.contains(spWrites[0].content, '(threshold: 3)', 'default threshold rendered into the adaptive block');
         var excludes = fs.calls.writes.filter(function (w) { return w.path === '.git/info/exclude'; });
         assert.equal(excludes.length, 2, 'local exclude seeded for BOTH runtime files');
         assert.contains(excludes[0].content + excludes[1].content, APPENDIX_PATH, 'exclude names the plan path');
         assert.contains(excludes[0].content + excludes[1].content, '.dmtools/development-mode-adaptive-appendix.md',
-            'exclude names the SP path');
+            'exclude names the adaptive appendix path');
         var logs = captured.logs.join('\n');
         assert.contains(logs, 'adaptive: adaptive routing active (threshold 3)', 'adaptive routing line flushed');
         assert.contains(logs, 'plan appendix materialized for escalation reads', 'escalation-read line flushed');
