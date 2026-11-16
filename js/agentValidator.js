@@ -152,12 +152,14 @@ function _validateCliPrompts(result, agentJson, params) {
     });
 }
 
-function _validateTrackerPromptEntry(result, tracker, prompt, idx) {
+function _validateTrackerPromptEntry(result, tracker, entry, idx) {
+    var extracted = _extractPromptEntry(entry);
+    var prompt = extracted.prompt;
     if (typeof prompt !== 'string') {
         addError(result, 'cliPromptsByTracker.' + tracker + '[' + idx + '] is not a string');
         return;
     }
-    if (_isAgentFilePath(prompt) && !fileExists(prompt)) {
+    if (!extracted.conditional && _isAgentFilePath(prompt) && !fileExists(prompt)) {
         addError(result, 'cliPromptsByTracker.' + tracker + '[' + idx + '] file not found: ' + prompt);
     }
 }
