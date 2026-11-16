@@ -312,6 +312,38 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         assert.ok(cliCalls.some(function(c) { return c.indexOf('git push') === 0; }), 'push command present');
     });
 
+    test('gh-1501: amends in-place and force-with-lease pushes when HEAD is already a WIP auto-save commit', function() {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
+                if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
+                if (args.command === 'git log -1 --no-merges --format=%s HEAD') {
+                    return 'PROJ-123 WIP auto-save 2026-11-15T15-55-00\n';
+                }
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir' }
+                },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: ''
+        });
+        var commitCall = cliCalls.filter(function(c) { return c.indexOf('git commit') === 0; })[0];
+        assert.ok(commitCall && commitCall.indexOf('git commit --amend -m ') === 0,
+            'must amend existing WIP auto-save commit instead of stacking a new one: ' + commitCall);
+        assert.ok(cliCalls.indexOf('git push --force-with-lease') !== -1,
+            'amended WIP auto-save must push with --force-with-lease');
+    });
+
     test('never stages machine-local .dmtools runtime logs — credential-helper.log leaked onto ai/gh-628 (gh-628)', function() {
         // Live 2026-10-03 (ai/gh-628 dev legs): the machine's runtime files
         // live INSIDE the committed .dmtools/ directory (config.js,

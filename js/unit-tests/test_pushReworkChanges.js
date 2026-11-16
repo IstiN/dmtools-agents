@@ -3452,6 +3452,42 @@ suite('pushReworkChanges.commitAndPush — squashReworkWip (agents#895)', functi
         assert.ok(has(commands, 'git commit -m "PROJ-123 rework"'));
         assert.ok(has(commands, 'git push -u --force-with-lease origin bug/PROJ-123'));
     });
+
+    test('gh-1501: clean working tree + local commits ahead of origin still squashes prior WIP auto-save + agent commits and force-pushes', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+                if (args.path.indexOf('rework_base_head.txt') !== -1) return 'abc1234\n';
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git rev-list --merges') === 0) return '';
+                if (args.command.indexOf('git log --format=%s') === 0) {
+                    return 'PROJ-123: fix review thread\nPROJ-123 WIP auto-save 2026-11-15T16-00-00\n';
+                }
+                if (args.command.indexOf('git log origin/bug/PROJ-123..HEAD --oneline') === 0) {
+                    return 'deadbee PROJ-123: fix review thread\n';
+                }
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+                }
+                return '';
+            }
+        }, {
+            './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
+                readStagedDiffStat: function() { return ''; },
+                syncBranchWithBase: function() { return { success: true, updated: false }; }
+            })
+        });
+        var res = mod.commitAndPush('PROJ-123', baseConfig(), {});
+        assert.equal(res.hasChanges, true);
+        assert.ok(has(commands, 'git reset --soft abc1234'));
+        assert.ok(has(commands, 'git commit -m "PROJ-123 rework"'));
+        assert.ok(has(commands, 'git push -u --force-with-lease origin bug/PROJ-123'));
+    });
 });
 
 // ── gh-1011: action stage helpers (pre/post-push gates, commit recovery) ────

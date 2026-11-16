@@ -611,12 +611,13 @@ function runSetupCommandsStep(customParams, config, inputFolder, tracker, ticket
  * behind. Optional helper — a write failure leaves the no-fix guard off.
  * (gh-1002) Side-effecting step helper extracted from action().
  */
-function writeReworkBaseHead(inputFolder, headSha, workingDir) {
+function writeReworkBaseHead(inputFolder, headSha, workingDir, ticketKey) {
     try {
         wipSquash.persistBaseHeadFile({
             folder: inputFolder,
             fileName: 'rework_base_head.txt',
             currentSha: headSha,
+            ticketKey: ticketKey,
             readFn: typeof file_read === 'function' ? file_read : null,
             writeFn: file_write,
             runCommand: typeof cli_execute_command === 'function' ? function (cmd) {
@@ -808,7 +809,6 @@ function writeReworkInputContext(inputFolder, config, scm, pr, prDetails, branch
     console.log('Fetching PR discussions...');
     const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
     gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
-    writeReworkBaseHead(inputFolder, headSha, config.workingDir);
     return { headSha: headSha, failedChecks: failedChecks, discussionData: discussionData };
 }
 
@@ -917,10 +917,13 @@ function action(params) {
         // js/common/baseBranchMarker.js docblock for the full rationale.
         baseBranchMarker.writeBaseBranchMarker(baseBranch);
 
+        // Record rework_base_head.txt BEFORE detectMergeConflicts so a clean merge of
+        // origin/<baseBranch> cannot mask contiguous WIP auto-save commits on HEAD (gh-1501).
+        writeReworkBaseHead(inputFolder, (prDetails.head && prDetails.head.sha) || null, config.workingDir, ticketKey);
+
         // Steps 4.4-4.5: optionally sync the base branch, then merge it and
         // detect conflicts (see syncBaseAndDetectConflicts for the ordering rule).
         const conflictFiles = syncBaseAndDetectConflicts(baseBranch, customParams, config, inputFolder);
-
         // Step 4.6: Run project-specific prerequisite/setup commands (e.g. install
         // JDK/Maven, verify build credentials) before the CLI agent starts fixing code.
         runSetupCommandsStep(customParams, config, inputFolder, tracker, ticketKey);

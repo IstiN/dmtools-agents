@@ -662,7 +662,7 @@ function commitAndPush(ticketKey, config, customParams) {
     // commit since the rework base is a WIP auto-save (or the commit just made) and none is a merge, fold
     // them into one commit with the rework message and push it with --force-with-lease.
     var squashed = squashReworkWipIfEnabled(cmd, ticketKey, config, workingDir, customParams);
-
+    if (squashed) hasChanges = true;
     var syncResult = prHelper.syncBranchWithBase({
         branchName: branchName,
         baseBranch: baseBranch,
