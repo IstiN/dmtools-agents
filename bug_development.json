@@ -25,7 +25,7 @@
       "developmentMode": "adaptive",
       "developmentModeConfig": {
         "adaptive": {
-          "planThresholdSp": 3
+          "planThreshold": 3
         }
       }
     },
@@ -59,9 +59,9 @@
         "condition": "agents/js/conditions/isDevelopmentModePlan.js"
       },
       {
-        "id": "developmentModeAdaptiveSp",
-        "prompt": "./.dmtools/development-mode-sp-appendix.md",
-        "condition": "agents/js/conditions/isDevelopmentModeAdaptiveSp.js"
+        "id": "developmentModeAdaptive",
+        "prompt": "./.dmtools/development-mode-adaptive-appendix.md",
+        "condition": "agents/js/conditions/isDevelopmentModeAdaptive.js"
       }
     ],
     "cliPromptsByTracker": {

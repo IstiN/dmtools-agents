@@ -3,7 +3,7 @@
   "params": {
     "jsPath": "js/unit-tests/testRunner.js",
     "jobParams": {
-      "testFiles": ["js/unit-tests/test_developmentModeAdaptiveSp.js"]
+      "testFiles": ["js/unit-tests/test_developmentModeAdaptive.js"]
     }
   }
 }

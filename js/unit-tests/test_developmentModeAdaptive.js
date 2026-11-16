@@ -3,13 +3,13 @@
  * story-point estimate replaces the gh-1437 pre-leg signal routing.
  *
  * Layers:
- *  UT  — js/common/developmentModeAdaptiveSp.js pure table: threshold
+ *  UT  — js/common/developmentModeAdaptive.js pure table: threshold
  *        resolution (absent → default silently, invalid → warn + default),
  *        decision-record parsing (strict on sp/mode, fail-safe null),
  *        appendix text pins (threshold interpolation, escalation hand-off,
  *        record contract), materialization write-through + inactive zero-IO,
  *        canonical conditional-entry shape.
- *  IT  — (T2) preCli wiring: adaptive materializes the SP appendix, stale
+ *  IT  — (T2) preCli wiring: adaptive materializes the adaptive appendix, stale
  *        state cleanup, plan appendix co-materialized for escalation reads.
  *  IT  — (T4) agent config wiring: story/bug dev configs carry the SP
  *        conditional entry + the knob value.
@@ -39,7 +39,7 @@ var developmentMode = loadModule('js/common/developmentMode.js');
 var developmentModePlan = loadModule('js/common/developmentModePlan.js',
     makeRequire({ './developmentMode.js': developmentMode }));
 var branchSetupShared = loadModule('js/common/branchSetup.js');
-var developmentModeAdaptiveSp = loadModule('js/common/developmentModeAdaptiveSp.js',
+var developmentModeAdaptive = loadModule('js/common/developmentModeAdaptive.js',
     makeRequire({ './developmentMode.js': developmentMode }));
 
 // Filesystem recording mocks — every test asserts on the recorded calls, so a
@@ -66,7 +66,7 @@ function fsRecorder(files) {
 function adaptiveCustomParams(threshold) {
     var cp = { developmentMode: 'adaptive' };
     if (threshold !== undefined) {
-        cp.developmentModeConfig = { adaptive: { planThresholdSp: threshold } };
+        cp.developmentModeConfig = { adaptive: { planThreshold: threshold } };
     }
     return cp;
 }
@@ -75,12 +75,12 @@ function adaptiveCustomParams(threshold) {
 
 suite('gh-1503 UT — SP threshold resolution', function () {
     test('absent key → default silently (absence is the steady state)', function () {
-        var r = developmentModeAdaptiveSp.resolveSpThreshold({ developmentMode: 'adaptive' });
+        var r = developmentModeAdaptive.resolvePlanThreshold({ developmentMode: 'adaptive' });
         assert.equal(r.threshold, 3, 'default threshold is 3 (paired-run crossover)');
         assert.equal(r.warning, null, 'absence warns nothing');
-        assert.equal(developmentModeAdaptiveSp.resolveSpThreshold(null).warning, null, 'null customParams → silent default');
-        assert.equal(developmentModeAdaptiveSp.resolveSpThreshold({}).threshold, 3, 'empty customParams → default');
-        var noKey = developmentModeAdaptiveSp.resolveSpThreshold({
+        assert.equal(developmentModeAdaptive.resolvePlanThreshold(null).warning, null, 'null customParams → silent default');
+        assert.equal(developmentModeAdaptive.resolvePlanThreshold({}).threshold, 3, 'empty customParams → default');
+        var noKey = developmentModeAdaptive.resolvePlanThreshold({
             developmentMode: 'adaptive',
             developmentModeConfig: { adaptive: {} }
         });
@@ -89,24 +89,24 @@ suite('gh-1503 UT — SP threshold resolution', function () {
     });
 
     test('valid integers pass through, including the boundaries', function () {
-        assert.equal(developmentModeAdaptiveSp.resolveSpThreshold(adaptiveCustomParams(5)).threshold, 5, 'valid value honored');
-        assert.equal(developmentModeAdaptiveSp.resolveSpThreshold(adaptiveCustomParams(5)).warning, null, 'valid value warns nothing');
-        assert.equal(developmentModeAdaptiveSp.resolveSpThreshold(adaptiveCustomParams(1)).threshold, 1, 'min boundary honored');
-        assert.equal(developmentModeAdaptiveSp.resolveSpThreshold(adaptiveCustomParams(13)).threshold, 13, 'max boundary honored');
+        assert.equal(developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(5)).threshold, 5, 'valid value honored');
+        assert.equal(developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(5)).warning, null, 'valid value warns nothing');
+        assert.equal(developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(1)).threshold, 1, 'min boundary honored');
+        assert.equal(developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(13)).threshold, 13, 'max boundary honored');
     });
 
     test('invalid values → default + one warning naming the value', function () {
         var cases = [null, '5', 3.5, 0, -2, 14, true];
         cases.forEach(function (raw) {
-            var r = developmentModeAdaptiveSp.resolveSpThreshold(adaptiveCustomParams(raw));
+            var r = developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(raw));
             assert.equal(r.threshold, 3, 'invalid ' + JSON.stringify(raw) + ' → default');
-            assert.ok(r.warning && r.warning.indexOf('planThresholdSp') !== -1,
+            assert.ok(r.warning && r.warning.indexOf('planThreshold') !== -1,
                 'invalid ' + JSON.stringify(raw) + ' → warning names the key');
         });
     });
 
     test('a wrong-typed adaptive config block reads as absent (permissive)', function () {
-        var r = developmentModeAdaptiveSp.resolveSpThreshold({
+        var r = developmentModeAdaptive.resolvePlanThreshold({
             developmentMode: 'adaptive',
             developmentModeConfig: { adaptive: 'oops' }
         });
@@ -121,7 +121,7 @@ suite('gh-1503 UT — scope-estimate record parsing', function () {
     var full = JSON.stringify({ sp: 5, threshold: 3, mode: 'plan', reason: 'undocumented integration', outcome: 'completed' });
 
     test('full record parses with every field', function () {
-        var r = developmentModeAdaptiveSp.parseScopeEstimateRecord(full);
+        var r = developmentModeAdaptive.parseScopeEstimateRecord(full);
         assert.equal(r.sp, 5, 'sp');
         assert.equal(r.threshold, 3, 'threshold');
         assert.equal(r.mode, 'plan', 'mode');
@@ -130,7 +130,7 @@ suite('gh-1503 UT — scope-estimate record parsing', function () {
     });
 
     test('minimal record (sp + mode only) parses; optional fields stay absent', function () {
-        var r = developmentModeAdaptiveSp.parseScopeEstimateRecord(JSON.stringify({ sp: 2, mode: 'default' }));
+        var r = developmentModeAdaptive.parseScopeEstimateRecord(JSON.stringify({ sp: 2, mode: 'default' }));
         assert.deepEqual(r, { sp: 2, mode: 'default' }, 'no invented fields');
     });
 
@@ -152,20 +152,20 @@ suite('gh-1503 UT — scope-estimate record parsing', function () {
             '{"sp": 5, "mode": "adaptive"}'        // mode is the WORKING mode, not the knob value
         ];
         bad.forEach(function (text) {
-            assert.equal(developmentModeAdaptiveSp.parseScopeEstimateRecord(text), null,
+            assert.equal(developmentModeAdaptive.parseScopeEstimateRecord(text), null,
                 'fail-safe null for: ' + JSON.stringify(text));
         });
     });
 
     test('open-ended scale: sp beyond the threshold range still parses (the estimate may exceed 13)', function () {
-        var r = developmentModeAdaptiveSp.parseScopeEstimateRecord(JSON.stringify({ sp: 21, mode: 'plan' }));
+        var r = developmentModeAdaptive.parseScopeEstimateRecord(JSON.stringify({ sp: 21, mode: 'plan' }));
         assert.ok(r && r.sp === 21, 'sp 21 is a legal estimate');
-        var big = developmentModeAdaptiveSp.parseScopeEstimateRecord(JSON.stringify({ sp: 40, mode: 'default' }));
+        var big = developmentModeAdaptive.parseScopeEstimateRecord(JSON.stringify({ sp: 40, mode: 'default' }));
         assert.ok(big && big.sp === 40, 'the scale keeps going above the last named value');
     });
 
     test('unknown extra fields are ignored, not rejected', function () {
-        var r = developmentModeAdaptiveSp.parseScopeEstimateRecord(
+        var r = developmentModeAdaptive.parseScopeEstimateRecord(
             JSON.stringify({ sp: 3, mode: 'default', extra: 'future-proof' }));
         assert.ok(r && r.sp === 3, 'forward-compatible parse');
     });
@@ -173,12 +173,12 @@ suite('gh-1503 UT — scope-estimate record parsing', function () {
 
 // ── UT: appendix text pins ───────────────────────────────────────────────────
 
-suite('gh-1503 UT — SP appendix text', function () {
-    var text = developmentModeAdaptiveSp.spAppendixText(3);
+suite('gh-1503 UT — adaptive appendix text', function () {
+    var text = developmentModeAdaptive.spAppendixText(3);
 
     test('interpolates the threshold into the decision rule', function () {
         assert.ok(text.indexOf('(threshold: 3 SP)') !== -1, 'threshold appears in the decide header');
-        assert.ok(developmentModeAdaptiveSp.spAppendixText(5).indexOf('(threshold: 5 SP)') !== -1,
+        assert.ok(developmentModeAdaptive.spAppendixText(5).indexOf('(threshold: 5 SP)') !== -1,
             'a different threshold renders differently');
     });
 
@@ -202,13 +202,13 @@ suite('gh-1503 UT — SP appendix text', function () {
 
 // ── UT: materialization ──────────────────────────────────────────────────────
 
-suite('gh-1503 UT — SP appendix materialization', function () {
+suite('gh-1503 UT — adaptive appendix materialization', function () {
     test('adaptive leg → writes the appendix, logs the threshold, zero warnings', function () {
         var fs = fsRecorder();
-        var r = developmentModeAdaptiveSp.materializeSpAppendix(adaptiveCustomParams(), { file_write: fs.file_write });
+        var r = developmentModeAdaptive.materializeAdaptiveAppendix(adaptiveCustomParams(), { file_write: fs.file_write });
         assert.equal(r.active, true, 'active for adaptive');
         assert.equal(r.ok, true, 'write succeeds');
-        assert.equal(r.path, '.dmtools/development-mode-sp-appendix.md', 'runtime path');
+        assert.equal(r.path, '.dmtools/development-mode-adaptive-appendix.md', 'runtime path');
         assert.equal(fs.calls.writes.length, 1, 'exactly one write');
         assert.ok(fs.calls.writes[0].content.indexOf('(threshold: 3 SP)') !== -1, 'default threshold rendered');
         assert.ok(r.logLines.length === 1 && r.logLines[0].indexOf('threshold 3') !== -1, 'log line names the threshold');
@@ -217,7 +217,7 @@ suite('gh-1503 UT — SP appendix materialization', function () {
 
     test('invalid threshold → warning flushed + the default text written', function () {
         var fs = fsRecorder();
-        var r = developmentModeAdaptiveSp.materializeSpAppendix(adaptiveCustomParams('9'), { file_write: fs.file_write });
+        var r = developmentModeAdaptive.materializeAdaptiveAppendix(adaptiveCustomParams('9'), { file_write: fs.file_write });
         assert.equal(r.ok, true, 'still materializes');
         assert.equal(r.warnings.length, 1, 'one warning');
         assert.ok(fs.calls.writes[0].content.indexOf('(threshold: 3 SP)') !== -1, 'default threshold in the file');
@@ -227,7 +227,7 @@ suite('gh-1503 UT — SP appendix materialization', function () {
         ['default', 'plan', undefined].forEach(function (mode) {
             var fs = fsRecorder();
             var captured = captureConsole(function () {
-                var r = developmentModeAdaptiveSp.materializeSpAppendix(
+                var r = developmentModeAdaptive.materializeAdaptiveAppendix(
                     mode === undefined ? {} : { developmentMode: mode }, { file_write: fs.file_write });
                 assert.equal(r.active, false, mode + ' → inactive');
                 assert.equal(r.ok, false, 'inactive reads as "nothing materialized"');
@@ -240,7 +240,7 @@ suite('gh-1503 UT — SP appendix materialization', function () {
 
     test('shadow adaptive leg → inactive, zero IO, the would-act line returned (gh-1437 carry-over)', function () {
         var fs = fsRecorder();
-        var r = developmentModeAdaptiveSp.materializeSpAppendix({
+        var r = developmentModeAdaptive.materializeAdaptiveAppendix({
             developmentMode: 'adaptive',
             developmentModeConfig: { adaptive: { shadowMode: true } }
         }, { file_write: fs.file_write });
@@ -252,10 +252,10 @@ suite('gh-1503 UT — SP appendix materialization', function () {
 
     test('write failure → ok:false + an error naming the path (never throws)', function () {
         var throwingIo = { file_write: function () { throw new Error('disk full'); } };
-        var r = developmentModeAdaptiveSp.materializeSpAppendix(adaptiveCustomParams(), throwingIo);
+        var r = developmentModeAdaptive.materializeAdaptiveAppendix(adaptiveCustomParams(), throwingIo);
         assert.equal(r.ok, false, 'write failure surfaces');
         assert.equal(r.active, true, 'adaptive is active even when the write failed');
-        assert.ok(r.error && r.error.indexOf('development-mode-sp-appendix.md') !== -1, 'error names the path');
+        assert.ok(r.error && r.error.indexOf('development-mode-adaptive-appendix.md') !== -1, 'error names the path');
     });
 });
 
@@ -263,11 +263,11 @@ suite('gh-1503 UT — SP appendix materialization', function () {
 
 suite('gh-1503 UT — SP conditional entry shape', function () {
     test('entry matches the canonical conditional shape', function () {
-        var entry = developmentModeAdaptiveSp.spAppendixCliEntry();
+        var entry = developmentModeAdaptive.adaptiveAppendixCliEntry();
         assert.deepEqual(entry, {
-            id: 'developmentModeAdaptiveSp',
-            prompt: './.dmtools/development-mode-sp-appendix.md',
-            condition: 'agents/js/conditions/isDevelopmentModeAdaptiveSp.js'
+            id: 'developmentModeAdaptive',
+            prompt: './.dmtools/development-mode-adaptive-appendix.md',
+            condition: 'agents/js/conditions/isDevelopmentModeAdaptive.js'
         });
     });
 });
@@ -276,32 +276,32 @@ suite('gh-1503 UT — SP conditional entry shape', function () {
 
 function loadSpConditionWith(files) {
     var fs = fsRecorder(files);
-    var mod = loadModule('js/conditions/isDevelopmentModeAdaptiveSp.js', null, {
+    var mod = loadModule('js/conditions/isDevelopmentModeAdaptive.js', null, {
         file_read: fs.file_read,
         file_write: fs.file_write
     });
     return { fs: fs, mod: mod };
 }
 
-suite('gh-1503 IT — SP condition script', function () {
+suite('gh-1503 IT — adaptive condition script', function () {
     test('path parity: the condition reads exactly the runtime path the module writes', function () {
         // The condition inlines its runtime path (self-contained single-function
         // design), so parity is proven behaviorally: a file at the module's
         // runtime path admits, the same file under any other name does not.
         var files = {};
-        files[developmentModeAdaptiveSp.SP_APPENDIX_FILE_PATH] = 'sp appendix text';
+        files[developmentModeAdaptive.ADAPTIVE_APPENDIX_FILE_PATH] = 'sp appendix text';
         var loaded = loadSpConditionWith(files);
         var cp = { developmentMode: 'adaptive' };
         assert.equal(loaded.mod.action({ customParams: cp }), true,
             'the module-written path is the one the condition reads');
-        var entry = developmentModeAdaptiveSp.spAppendixCliEntry();
-        assert.equal(entry.prompt.replace(/^\.\//, ''), developmentModeAdaptiveSp.SP_APPENDIX_FILE_PATH,
+        var entry = developmentModeAdaptive.adaptiveAppendixCliEntry();
+        assert.equal(entry.prompt.replace(/^\.\//, ''), developmentModeAdaptive.ADAPTIVE_APPENDIX_FILE_PATH,
             'config prompt path denotes the same file');
     });
 
-    test('adaptive leg + materialized SP appendix → true', function () {
+    test('adaptive leg + materialized adaptive appendix → true', function () {
         var files = {};
-        files['.dmtools/development-mode-sp-appendix.md'] = 'sp appendix text';
+        files['.dmtools/development-mode-adaptive-appendix.md'] = 'sp appendix text';
         var loaded = loadSpConditionWith(files);
         assert.equal(loaded.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), true,
             'active on an adaptive leg with the appendix in place');
@@ -309,14 +309,14 @@ suite('gh-1503 IT — SP condition script', function () {
 
     test('shadowMode → false even with the file in place (second line of defense)', function () {
         var files = {};
-        files['.dmtools/development-mode-sp-appendix.md'] = 'sp appendix text';
+        files['.dmtools/development-mode-adaptive-appendix.md'] = 'sp appendix text';
         var loaded = loadSpConditionWith(files);
         assert.equal(loaded.mod.action({
             jobParams: { customParams: {
                 developmentMode: 'adaptive',
                 developmentModeConfig: { adaptive: { shadowMode: true } }
             } }
-        }), false, 'shadow leg never carries the SP block');
+        }), false, 'shadow leg never carries the adaptive block');
     });
 
     test('plan / default / missing modes → false without reading anything', function () {
@@ -333,7 +333,7 @@ suite('gh-1503 IT — SP condition script', function () {
         var loaded = loadSpConditionWith({});
         assert.equal(loaded.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), false,
             'missing file → excluded');
-        var throwing = loadModule('js/conditions/isDevelopmentModeAdaptiveSp.js', null, {
+        var throwing = loadModule('js/conditions/isDevelopmentModeAdaptive.js', null, {
             file_read: function () { throw new Error('io error'); }
         });
         assert.equal(throwing.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), false,
@@ -342,7 +342,7 @@ suite('gh-1503 IT — SP condition script', function () {
 
     test('teammate and standalone param shapes both resolve customParams', function () {
         var files = {};
-        files['.dmtools/development-mode-sp-appendix.md'] = 'text';
+        files['.dmtools/development-mode-adaptive-appendix.md'] = 'text';
         var loaded = loadSpConditionWith(files);
         assert.equal(loaded.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), true,
             'teammate shape');
@@ -387,7 +387,7 @@ function loadDevSetup(fs, extraMocks) {
     // fall back to the real file_read/file_write/file_delete globals.
     var planReal = loadModule('js/common/developmentModePlan.js',
         makeRequire({ './developmentMode.js': developmentMode }), mocks);
-    var spReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+    var spReal = loadModule('js/common/developmentModeAdaptive.js',
         makeRequire({
             './developmentMode.js': developmentMode,
             './developmentModePlan.js': planReal,
@@ -413,7 +413,7 @@ function loadDevSetup(fs, extraMocks) {
             './common/trackers.js': trackersModuleReal,
             './common/developmentMode.js': developmentMode,
             './common/developmentModePlan.js': planReal,
-            './common/developmentModeAdaptiveSp.js': spReal
+            './common/developmentModeAdaptive.js': spReal
         }),
         mocks
     );
@@ -436,27 +436,27 @@ var FIX_MODULES_BODY = [
 suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', function () {
     var APPENDIX_PATH = developmentModePlan.PLAN_APPENDIX_FILE_PATH;
 
-    test('adaptive leg → SP appendix + plan escalation read materialized + excludes seeded', function () {
+    test('adaptive leg → adaptive appendix + plan escalation read materialized + excludes seeded', function () {
         var fs = fsRecorder({ '.git/info/exclude': '' });
         var captured = captureConsole(function () {
             var r = loadDevSetup(fs).runDevelopmentModeAppendixStep(
                 { developmentMode: 'adaptive' }, adaptiveTicket(FIX_MODULES_TITLE, FIX_MODULES_BODY));
-            assert.equal(r.active, true, 'adaptive materializes the SP appendix');
-            assert.equal(r.ok, true, 'SP appendix written');
+            assert.equal(r.active, true, 'adaptive materializes the adaptive appendix');
+            assert.equal(r.ok, true, 'adaptive appendix written');
         });
         var wrote = fs.calls.writes.filter(function (w) { return w.path === APPENDIX_PATH; });
         assert.equal(wrote.length, 1, 'plan appendix written once (escalation read)');
         assert.equal(wrote[0].content, developmentModePlan.DEFAULT_PLAN_APPENDIX, 'engine default plan text');
-        var spWrites = fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-sp-appendix.md'; });
-        assert.equal(spWrites.length, 1, 'SP appendix written once');
-        assert.contains(spWrites[0].content, '(threshold: 3 SP)', 'default threshold rendered into the SP block');
+        var spWrites = fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-adaptive-appendix.md'; });
+        assert.equal(spWrites.length, 1, 'adaptive appendix written once');
+        assert.contains(spWrites[0].content, '(threshold: 3 SP)', 'default threshold rendered into the adaptive block');
         var excludes = fs.calls.writes.filter(function (w) { return w.path === '.git/info/exclude'; });
         assert.equal(excludes.length, 2, 'local exclude seeded for BOTH runtime files');
         assert.contains(excludes[0].content + excludes[1].content, APPENDIX_PATH, 'exclude names the plan path');
-        assert.contains(excludes[0].content + excludes[1].content, '.dmtools/development-mode-sp-appendix.md',
+        assert.contains(excludes[0].content + excludes[1].content, '.dmtools/development-mode-adaptive-appendix.md',
             'exclude names the SP path');
         var logs = captured.logs.join('\n');
-        assert.contains(logs, 'adaptive: SP routing active (threshold 3)', 'SP routing line flushed');
+        assert.contains(logs, 'adaptive: adaptive routing active (threshold 3)', 'adaptive routing line flushed');
         assert.contains(logs, 'plan appendix materialized for escalation reads', 'escalation-read line flushed');
     });
 
@@ -466,11 +466,11 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
             var r = loadDevSetup(fs).runDevelopmentModeAppendixStep(
                 { developmentMode: 'adaptive' }, adaptiveTicket(FIX_TYPO_TITLE, FIX_TYPO_BODY));
             assert.equal(r.active, true, 'in-leg decision: preCli materializes regardless of ticket size');
-            assert.equal(r.ok, true, 'SP appendix written for the small ticket too');
+            assert.equal(r.ok, true, 'adaptive appendix written for the small ticket too');
         });
-        assert.equal(fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-sp-appendix.md'; }).length, 1,
-            'SP appendix written');
-        assert.contains(captured.logs.join('\n'), 'adaptive: SP routing active (threshold 3)',
+        assert.equal(fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-adaptive-appendix.md'; }).length, 1,
+            'adaptive appendix written');
+        assert.contains(captured.logs.join('\n'), 'adaptive: adaptive routing active (threshold 3)',
             'the routing decision now belongs to the agent, not the signals');
     });
 
@@ -482,13 +482,13 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
         });
         assert.equal(fs.calls.writes.length, 0, 'shadow never materializes');
         assert.contains(captured.logs.join('\n'),
-            'SP routing would be active but shadow mode',
+            'adaptive routing would be active but shadow mode',
             'the log shows the would-act state');
     });
 
     test('gh-1503: tracker-shaped tickets no longer decide anything pre-leg — Jira and ADO shapes materialize identically', function () {
         // The signal extractor read tracker-specific fields (gh-1442 parity);
-        // the in-leg SP decision reads the TICKET like the agent does — preCli
+        // the in-leg adaptive decision reads the TICKET like the agent does — preCli
         // is tracker-shape-blind now.
         var jira = adaptiveTicket('T', '## Acceptance criteria\n- a\n- b\n- c\n- d\n- e\n- f');
         var ado = { key: 'P-1', fields: { 'System.Title': 'Add export pipeline', 'System.Description': '1. CSV exporter\n2. PDF renderer\n3. Digest builder' } };
@@ -497,9 +497,9 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
             var captured = captureConsole(function () {
                 loadDevSetup(fs).runDevelopmentModeAppendixStep({ developmentMode: 'adaptive' }, ticket);
             });
-            assert.equal(fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-sp-appendix.md'; }).length, 1,
-                'shape ' + i + ': SP appendix materialized');
-            assert.contains(captured.logs.join('\n'), 'adaptive: SP routing active (threshold 3)',
+            assert.equal(fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-adaptive-appendix.md'; }).length, 1,
+                'shape ' + i + ': adaptive appendix materialized');
+            assert.contains(captured.logs.join('\n'), 'adaptive: adaptive routing active (threshold 3)',
                 'shape ' + i + ': same routing line');
         });
     });
@@ -559,7 +559,7 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
         };
         var planReal = loadModule('js/common/developmentModePlan.js',
             makeRequire({ './developmentMode.js': developmentMode }), mocks);
-        var spReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+        var spReal = loadModule('js/common/developmentModeAdaptive.js',
             makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': planReal, './branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks) }), mocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
@@ -581,7 +581,7 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
                 './common/trackers.js': trackersStub,
                 './common/developmentMode.js': developmentMode,
                 './common/developmentModePlan.js': planReal,
-                './common/developmentModeAdaptiveSp.js': spReal
+                './common/developmentModeAdaptive.js': spReal
             }),
             mocks
         );
@@ -616,7 +616,7 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
         };
         var planReal = loadModule('js/common/developmentModePlan.js',
             makeRequire({ './developmentMode.js': developmentMode }), mocks);
-        var spReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+        var spReal = loadModule('js/common/developmentModeAdaptive.js',
             makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': planReal, './branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks) }), mocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
@@ -638,7 +638,7 @@ suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', func
                 './common/trackers.js': trackersStub,
                 './common/developmentMode.js': developmentMode,
                 './common/developmentModePlan.js': planReal,
-                './common/developmentModeAdaptiveSp.js': spReal
+                './common/developmentModeAdaptive.js': spReal
             }),
             mocks
         );
@@ -689,7 +689,7 @@ suite('gh-1503 REG — mode semantics preserved (resolver surface)', function ()
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
             './common/developmentMode.js': developmentMode,
             './common/developmentModePlan.js': developmentModePlan,
-            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSp,
+            './common/developmentModeAdaptive.js': developmentModeAdaptive,
             './common/trackerSlot.js': trackerSlot,
             './configLoader.js': Object.assign({}, configLoaderModule, {
                 loadProjectConfig: function () {

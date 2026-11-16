@@ -11,9 +11,9 @@ var stubToolchainLine = function (t) { return t; };
 // gh-1352 scope 4a: the shared ledger core, loaded once at file scope — the
 // bugBookkeeping map and the per-test require maps reference it from nested
 // scopes.
-// gh-1503: SP decision module — real chain shared by every loader map here.
+// gh-1503: adaptive decision module — real chain shared by every loader map here.
 var devModeShared = loadModule('js/common/developmentMode.js');
-var devModeSharedSp = loadModule('js/common/developmentModeAdaptiveSp.js',
+var devModeSharedAdaptive = loadModule('js/common/developmentModeAdaptive.js',
     makeRequire({ './developmentMode.js': devModeShared }));
 
 var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
@@ -118,7 +118,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         // gh-1435: the dev leg now requires the developmentMode resolver — real module,
         // same loadModule pattern as needsInput above.
         './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-        './common/developmentModeAdaptiveSp.js': devModeSharedSp,
+        './common/developmentModeAdaptive.js': devModeSharedAdaptive,
         './cacheToReleases.js': {},
         './common/gitStaging.js': gitStagingModule,
         './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -968,7 +968,7 @@ function loadBugForMissingResponseResume(opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-            './common/developmentModeAdaptiveSp.js': devModeSharedSp,
+            './common/developmentModeAdaptive.js': devModeSharedAdaptive,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModuleLocal,
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),

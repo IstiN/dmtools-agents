@@ -480,9 +480,9 @@ flowchart TD
 
 ---
 
-### [20] `./.dmtools/development-mode-sp-appendix.md` _(conditional: `agents/js/conditions/isDevelopmentModeAdaptiveSp.js`)_
+### [20] `./.dmtools/development-mode-adaptive-appendix.md` _(conditional: `agents/js/conditions/isDevelopmentModeAdaptive.js`)_
 
-<!-- MISSING FILE: ./.dmtools/development-mode-sp-appendix.md (tried ./.dmtools/development-mode-sp-appendix.md) -->
+<!-- MISSING FILE: ./.dmtools/development-mode-adaptive-appendix.md (tried ./.dmtools/development-mode-adaptive-appendix.md) -->
 
 
 ---

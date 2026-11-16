@@ -29,7 +29,7 @@ var needsInputCommon = require('./common/needsInput.js');
 // inert); resolution lives in this one shared module, next to the layer that
 // reads customParams.feedbackLoop, so other legs adopt it without duplication.
 var developmentMode = require('./common/developmentMode.js');
-var developmentModeAdaptiveSp = require('./common/developmentModeAdaptiveSp.js');
+var developmentModeAdaptive = require('./common/developmentModeAdaptive.js');
 var wipSquash = require('./common/wipSquash.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
@@ -676,13 +676,13 @@ function appendConcernsToCompletionComment(comment, ticketKey) {
     return comment;
 }
 
-// gh-1503: SP escalation visibility (degrade-not-fail, same as concerns).
+// gh-1503: adaptive escalation visibility (degrade-not-fail, same as concerns).
 // ticketKey REQUIRED: the agent writes outputs/<KEY>/scope_estimate.json and
 // the candidate expansion probes the ticket-scoped path only when keyed.
 function readScopeEstimateRecord(ticketKey) {
     try {
         var detailed = outputFiles.readOutputFileDetailed('scope_estimate.json', { ticketKey: ticketKey });
-        return detailed ? developmentModeAdaptiveSp.parseScopeEstimateRecord(detailed.content) : null;
+        return detailed ? developmentModeAdaptive.parseScopeEstimateRecord(detailed.content) : null;
     } catch (e) {
         console.warn('Could not read outputs/scope_estimate.json:', e);
     }
@@ -691,11 +691,11 @@ function readScopeEstimateRecord(ticketKey) {
 
 function stampDevPlanEscalatedLabel(ticketKey) {
     try {
-        if (developmentModeAdaptiveSp.stampDevPlanEscalatedFromRecord(readScopeEstimateRecord(ticketKey), function (label) {
+        if (developmentModeAdaptive.stampDevPlanEscalatedFromRecord(readScopeEstimateRecord(ticketKey), function (label) {
             getTracker().addLabel(ticketKey, label);
-        })) console.log('🧭 Added ' + developmentModeAdaptiveSp.DEV_PLAN_ESCALATED_LABEL + ' label to', ticketKey);
+        })) console.log('🧭 Added ' + developmentModeAdaptive.DEV_PLAN_ESCALATED_LABEL + ' label to', ticketKey);
     } catch (e) {
-        console.warn('Could not add ' + developmentModeAdaptiveSp.DEV_PLAN_ESCALATED_LABEL + ' label:', e);
+        console.warn('Could not add ' + developmentModeAdaptive.DEV_PLAN_ESCALATED_LABEL + ' label:', e);
     }
 }
 

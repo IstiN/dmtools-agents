@@ -276,8 +276,8 @@ function legRequireMap() {
         './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
         // REAL developmentMode module — the IT path must exercise the actual resolver.
         './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
-        // gh-1503: the SP decision module (the leg action reads scope_estimate.json)
-        './common/developmentModeAdaptiveSp.js': loadModule('js/common/developmentModeAdaptiveSp.js',
+        // gh-1503: the adaptive decision module (the leg action reads scope_estimate.json)
+        './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
             makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
         './configLoader.js': legConfigLoader,
         './config.js': configModule,
@@ -411,7 +411,7 @@ suite('gh-1435 REG — all repo workflow configs resolve default + stay silent',
                     assert.equal(applied.warnings.length, 0, f + ' resolves silently');
                     var threshold = cp.developmentModeConfig &&
                         cp.developmentModeConfig.adaptive &&
-                        cp.developmentModeConfig.adaptive.planThresholdSp;
+                        cp.developmentModeConfig.adaptive.planThreshold;
                     assert.equal(threshold, 3, f + ' carries the calibrated default threshold');
                 } else {
                     assert.equal(applied.mode, 'default', f + ' must resolve default');

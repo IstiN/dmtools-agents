@@ -9,7 +9,7 @@
  * Admission chain, strictest guard first:
  * 1) mode "adaptive" — the gh-1435 resolver contract, case-sensitive
  *    lowercase only; anything else (plan/default/absent) exits false. The
- *    plan appendix on adaptive legs is an ESCALATION READ target (the SP
+ *    plan appendix on adaptive legs is an ESCALATION READ target (the adaptive
  *    block points the agent at the file when it self-selects plan), not a
  *    prompt entry — isDevelopmentModePlan.js no longer admits adaptive legs.
  * 2) shadowMode guard: a leg with adaptive.shadowMode strictly `=== true`
@@ -20,7 +20,7 @@
  *    only an adaptive leg ever reads the path, and every adaptive preCli run
  *    overwrites it with fresh text before the prompt assembles.
  * 3) the appendix must have been materialized at the runtime path by the
- *    leg's preCli setup (js/common/developmentModeAdaptiveSp.js). The
+ *    leg's preCli setup (js/common/developmentModeAdaptive.js). The
  *    existence check keeps a degraded materialization from leaking the
  *    runtime path into the assembled prompt — the leg fails in preCli
  *    instead.
@@ -35,7 +35,7 @@ function action(params) {
         return false;
     }
     try {
-        var content = file_read({ path: '.dmtools/development-mode-sp-appendix.md' });
+        var content = file_read({ path: '.dmtools/development-mode-adaptive-appendix.md' });
         return typeof content === 'string' && content.length > 0;
     } catch (e) {
         return false;

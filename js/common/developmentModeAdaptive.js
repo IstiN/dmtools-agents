@@ -11,8 +11,8 @@
 // code. The adaptive leg carries a scope-estimate appendix (this module's
 // runtime file) that instructs it to estimate the work in story points, write
 // outputs/<KEY>/scope_estimate.json, and self-select: sp >= threshold
-// (config: developmentModeConfig.adaptive.planThresholdSp, default 3 —
-// calibrated by a paired direct/plan run: crossover at SP 3) → follow the
+// (config: developmentModeConfig.adaptive.planThreshold, default 3 —
+// calibrated by a paired direct/plan run: crossover at estimate 3) → follow the
 // plan protocol (the plan appendix file, materialized alongside); below it →
 // direct execution, no plan artifacts.
 //
@@ -20,8 +20,8 @@
 // (js/common/developmentModePlan.js — the appendix text is materialized for
 // adaptive legs too, for on-demand escalation reads; its cliPrompts entry
 // stays gated to explicit plan mode so an adaptive leg's base prompt carries
-// only the SP block). The signal extractor + its calibration harness are
-// deleted outright — SP replaced them everywhere (owner decision).
+// only the adaptive block). The signal extractor + its calibration harness are
+// deleted outright — the in-leg estimate replaced them everywhere (owner decision).
 //
 // The decision record is one JSON line in the leg's outputs (the established
 // per-leg outputs convention, like response.md/concerns.md): the agent writes
@@ -32,16 +32,16 @@
 
 var developmentMode = require('./developmentMode.js');
 
-var SP_APPENDIX_ENTRY_ID = 'developmentModeAdaptiveSp';
-var SP_APPENDIX_FILE_PATH = '.dmtools/development-mode-sp-appendix.md';
-var SP_APPENDIX_PROMPT_PATH = './' + SP_APPENDIX_FILE_PATH;
-var SP_APPENDIX_CONDITION_PATH = 'agents/js/conditions/isDevelopmentModeAdaptiveSp.js';
-var SP_APPENDIX_EXCLUDE_COMMENT =
-    '# Development-mode SP appendix — runtime materialization, never committed';
+var ADAPTIVE_APPENDIX_ENTRY_ID = 'developmentModeAdaptive';
+var ADAPTIVE_APPENDIX_FILE_PATH = '.dmtools/development-mode-adaptive-appendix.md';
+var ADAPTIVE_APPENDIX_PROMPT_PATH = './' + ADAPTIVE_APPENDIX_FILE_PATH;
+var ADAPTIVE_APPENDIX_CONDITION_PATH = 'agents/js/conditions/isDevelopmentModeAdaptive.js';
+var ADAPTIVE_APPENDIX_EXCLUDE_COMMENT =
+    '# Development-mode adaptive appendix — runtime materialization, never committed';
 
-var DEFAULT_SP_THRESHOLD = 3;
-var SP_THRESHOLD_MIN = 1;
-var SP_THRESHOLD_MAX = 13;
+var DEFAULT_PLAN_THRESHOLD = 3;
+var ESTIMATE_SCALE_MIN = 1;
+var ESTIMATE_SCALE_MAX = 13;
 
 var PLAN_APPENDIX_RUNTIME_PATH = '.dmtools/development-mode-plan-appendix.md';
 var SCOPE_ESTIMATE_RELATIVE_PATH = 'outputs/<KEY>/scope_estimate.json';
@@ -55,7 +55,7 @@ function isPlainObject(value) {
 // Strict boolean true enables it; absent/null/false keep it off; wrong-typed
 // reads as false (strict boolean true is the shadow test). A
 // shadow adaptive leg NEVER materializes: shadow means "log the intent, act
-// nothing" — the SP block would change the prompt, and that is an action.
+// nothing" — the adaptive block would change the prompt, and that is an action.
 
 function isShadowMode(customParams) {
     var config = isPlainObject(customParams) && isPlainObject(customParams.developmentModeConfig)
@@ -65,7 +65,7 @@ function isShadowMode(customParams) {
 }
 
 // ── Threshold resolution ────────────────────────────────────────────────────
-// developmentModeConfig.adaptive.planThresholdSp: absent ⇒ default (silent —
+// developmentModeConfig.adaptive.planThreshold: absent ⇒ default (silent —
 // absence is the supported steady state, same philosophy as the gh-1435 knob).
 // Present-but-invalid (wrong type, non-integer, out of 1..13) ⇒ warn + default.
 // Nothing throws; the leg never fails because of this field.
@@ -76,26 +76,26 @@ function isIntegerInRange(value, min, max) {
 }
 
 /**
- * Resolve the SP routing threshold from customParams.
+ * Resolve the adaptive routing threshold from customParams.
  * @returns {{threshold: number, warning: string|null}} warning is null for the
  * silent paths (absent key, valid value) and a one-line log message otherwise.
  */
-function resolveSpThreshold(customParams) {
+function resolvePlanThreshold(customParams) {
     var config = isPlainObject(customParams) && isPlainObject(customParams.developmentModeConfig)
         ? customParams.developmentModeConfig.adaptive
         : null;
-    if (!isPlainObject(config) || !('planThresholdSp' in config)) {
-        return { threshold: DEFAULT_SP_THRESHOLD, warning: null };
+    if (!isPlainObject(config) || !('planThreshold' in config)) {
+        return { threshold: DEFAULT_PLAN_THRESHOLD, warning: null };
     }
-    var raw = config.planThresholdSp;
-    if (isIntegerInRange(raw, SP_THRESHOLD_MIN, SP_THRESHOLD_MAX)) {
+    var raw = config.planThreshold;
+    if (isIntegerInRange(raw, ESTIMATE_SCALE_MIN, ESTIMATE_SCALE_MAX)) {
         return { threshold: raw, warning: null };
     }
     var shown = raw === null ? 'null' : (typeof raw === 'string' ? '"' + raw + '"' : String(raw));
     return {
-        threshold: DEFAULT_SP_THRESHOLD,
-        warning: 'developmentModeConfig.adaptive.planThresholdSp invalid (' + shown +
-            ') — using the default ' + DEFAULT_SP_THRESHOLD
+        threshold: DEFAULT_PLAN_THRESHOLD,
+        warning: 'developmentModeConfig.adaptive.planThreshold invalid (' + shown +
+            ') — using the default ' + DEFAULT_PLAN_THRESHOLD
     };
 }
 
@@ -128,7 +128,7 @@ function hasRequiredEstimateFields(record) {
 // The lenient half: optional fields ride along only when well-typed.
 function estimateRecordWithoutExtras(record) {
     var parsed = { sp: record.sp, mode: record.mode };
-    if (isIntegerInRange(record.threshold, SP_THRESHOLD_MIN, SP_THRESHOLD_MAX)) {
+    if (isIntegerInRange(record.threshold, ESTIMATE_SCALE_MIN, ESTIMATE_SCALE_MAX)) {
         parsed.threshold = record.threshold;
     }
     if (typeof record.reason === 'string' && record.reason.trim()) {
@@ -190,23 +190,23 @@ function spAppendixText(threshold) {
 // error, warnings}. Inactive (non-adaptive) modes are a zero-IO no-op; a write
 // failure is ok:false + an honest error naming the path (the preCli caller
 // turns it into the leg's fail-fast setup error). `overridden` is always false
-// — the SP appendix is engine text only (the threshold is interpolated, the
-// workflow tunes it via planThresholdSp, not by shipping prose).
+// — the adaptive appendix is engine text only (the threshold is interpolated, the
+// workflow tunes it via planThreshold, not by shipping prose).
 
-function writeSpAppendix(threshold, io) {
+function writeAdaptiveAppendix(threshold, io) {
     var write = (io && io.file_write) || file_write;
     try {
-        write({ path: SP_APPENDIX_FILE_PATH, content: spAppendixText(threshold) });
+        write({ path: ADAPTIVE_APPENDIX_FILE_PATH, content: spAppendixText(threshold) });
     } catch (e) {
         return {
             ok: false,
-            path: SP_APPENDIX_FILE_PATH,
+            path: ADAPTIVE_APPENDIX_FILE_PATH,
             overridden: false,
             error: 'developmentMode=adaptive: could not write the scope-estimate appendix to "' +
-                SP_APPENDIX_FILE_PATH + '": ' + e
+                ADAPTIVE_APPENDIX_FILE_PATH + '": ' + e
         };
     }
-    return { ok: true, path: SP_APPENDIX_FILE_PATH, overridden: false, error: null };
+    return { ok: true, path: ADAPTIVE_APPENDIX_FILE_PATH, overridden: false, error: null };
 }
 
 /**
@@ -214,15 +214,15 @@ function writeSpAppendix(threshold, io) {
  * @returns {{ok: boolean, active: boolean, path: string|null, overridden: boolean,
  *            error: string|null, warnings: string[], logLines: string[]}}
  */
-function materializeSpAppendix(customParams, io) {
-    var resolution = resolveSpAppendix(customParams);
+function materializeAdaptiveAppendix(customParams, io) {
+    var resolution = resolveAdaptiveAppendix(customParams);
     if (!resolution.active) {
         return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolution.warnings, logLines: resolution.logLines };
     }
     if (resolution.error) {
-        return { ok: false, active: true, path: SP_APPENDIX_FILE_PATH, overridden: false, error: resolution.error, warnings: resolution.warnings, logLines: [] };
+        return { ok: false, active: true, path: ADAPTIVE_APPENDIX_FILE_PATH, overridden: false, error: resolution.error, warnings: resolution.warnings, logLines: [] };
     }
-    var written = writeSpAppendix(resolution.threshold, io);
+    var written = writeAdaptiveAppendix(resolution.threshold, io);
     return {
         ok: written.ok,
         active: true,
@@ -235,14 +235,14 @@ function materializeSpAppendix(customParams, io) {
 }
 
 /**
- * Resolve the SP appendix WITHOUT writing: mode/shadow gating, threshold
+ * Resolve the adaptive appendix WITHOUT writing: mode/shadow gating, threshold
  * resolution, text build. Lets the preCli caller validate BOTH appendices
  * before committing either write — a failed plan resolution must not leave
- * an orphan SP file behind (the old fail-fast invariant, gh-1503).
+ * an orphan adaptive appendix behind (the old fail-fast invariant, gh-1503).
  * @returns {{active: boolean, threshold: number|null, text: string|null,
  *            error: string|null, warnings: string[], logLines: string[]}}
  */
-function resolveSpAppendix(customParams) {
+function resolveAdaptiveAppendix(customParams) {
     var mode = developmentMode.resolveDevelopmentMode(customParams).mode;
     if (mode !== 'adaptive') {
         return { active: false, threshold: null, text: null, error: null, warnings: [], logLines: [] };
@@ -250,31 +250,31 @@ function resolveSpAppendix(customParams) {
     if (isShadowMode(customParams)) {
         return {
             active: false, threshold: null, text: null, error: null, warnings: [],
-            logLines: ['📝 developmentMode=adaptive: SP routing would be active but shadow mode — nothing materialized']
+            logLines: ['📝 developmentMode=adaptive: adaptive routing would be active but shadow mode — nothing materialized']
         };
     }
-    var resolved = resolveSpThreshold(customParams);
+    var resolved = resolvePlanThreshold(customParams);
     return {
         active: true,
         threshold: resolved.threshold,
         text: spAppendixText(resolved.threshold),
         error: null,
         warnings: resolved.warning ? [resolved.warning] : [],
-        logLines: ['📝 developmentMode=adaptive: SP routing active (threshold ' +
-            resolved.threshold + ') → ' + SP_APPENDIX_FILE_PATH]
+        logLines: ['📝 developmentMode=adaptive: adaptive routing active (threshold ' +
+            resolved.threshold + ') → ' + ADAPTIVE_APPENDIX_FILE_PATH]
     };
 }
 
 // ── preCli step (owned here so the pinned setup module stays complexity-flat) ──
 // Resolve BOTH appendices before committing either write: a failed plan
-// resolution must not leave an orphan SP file behind (fail-fast carries to
+// resolution must not leave an orphan adaptive appendix behind (fail-fast carries to
 // the caller — the setup step reports it like a plan-mode setup failure).
-// The plan appendix on an adaptive leg is an ESCALATION READ target (the SP
+// The plan appendix on an adaptive leg is an ESCALATION READ target (the adaptive
 // block points the agent at the file when it self-selects plan); the plan
 // cliPrompts entry itself stays gated to explicit plan mode.
 
 /**
- * The adaptive preCli step: materialize the SP appendix + the plan escalation
+ * The adaptive preCli step: materialize the adaptive appendix + the plan escalation
  * read, seed the git local excludes for both, flush warnings + log lines.
  * @param {Object} customParams the leg's customParams
  * @returns {{ok: boolean, active: boolean, path: string|null, overridden: boolean,
@@ -282,20 +282,20 @@ function resolveSpAppendix(customParams) {
  * @throws when either appendix cannot be materialized (config-error class).
  */
 function runPreCliAdaptiveAppendixStep(customParams, planModule, branchSetupMod) {
-    var resolution = resolveSpAppendix(customParams);
+    var resolution = resolveAdaptiveAppendix(customParams);
     logResolutionEvents(resolution);
     if (!resolution.active) {
         return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolution.warnings, logLines: resolution.logLines };
     }
-    // resolve-both-before-write: a failed plan override must not strand an SP file
+    // resolve-both-before-write: a failed plan override must not strand an adaptive appendix
     var planResolved = resolvePlanOverrideOrThrow(customParams, planModule);
-    var spPath = commitAppendixWrite(function () { return writeSpAppendix(resolution.threshold); });
+    var appendixPath = commitAppendixWrite(function () { return writeAdaptiveAppendix(resolution.threshold); });
     var planPath = commitAppendixWrite(function () { return planModule.writeResolvedAppendix(planResolved); });
     seedAppendixExcludes(planModule, branchSetupMod);
     return {
         ok: true,
         active: true,
-        path: spPath,
+        path: appendixPath,
         overridden: false,
         error: null,
         warnings: resolution.warnings,
@@ -336,8 +336,8 @@ function seedAppendixExcludes(planModule, branchSetupMod) {
         'Could not exclude the plan-mode appendix from git:'
     );
     branchSetupMod.ensureGitInfoExclude(
-        SP_APPENDIX_FILE_PATH,
-        SP_APPENDIX_EXCLUDE_COMMENT,
+        ADAPTIVE_APPENDIX_FILE_PATH,
+        ADAPTIVE_APPENDIX_EXCLUDE_COMMENT,
         'Could not exclude the scope-estimate appendix from git:'
     );
     console.log('📝 developmentMode=adaptive: plan appendix materialized for escalation reads → ' +
@@ -364,31 +364,31 @@ function stampDevPlanEscalatedFromRecord(record, addLabel) {
 }
 
 /** The conditional cliPrompts entry for adaptive legs (see the condition script). */
-function spAppendixCliEntry() {
+function adaptiveAppendixCliEntry() {
     return {
-        id: SP_APPENDIX_ENTRY_ID,
-        prompt: SP_APPENDIX_PROMPT_PATH,
-        condition: SP_APPENDIX_CONDITION_PATH
+        id: ADAPTIVE_APPENDIX_ENTRY_ID,
+        prompt: ADAPTIVE_APPENDIX_PROMPT_PATH,
+        condition: ADAPTIVE_APPENDIX_CONDITION_PATH
     };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        SP_APPENDIX_ENTRY_ID: SP_APPENDIX_ENTRY_ID,
-        SP_APPENDIX_FILE_PATH: SP_APPENDIX_FILE_PATH,
-        SP_APPENDIX_PROMPT_PATH: SP_APPENDIX_PROMPT_PATH,
-        SP_APPENDIX_CONDITION_PATH: SP_APPENDIX_CONDITION_PATH,
-        SP_APPENDIX_EXCLUDE_COMMENT: SP_APPENDIX_EXCLUDE_COMMENT,
+        ADAPTIVE_APPENDIX_ENTRY_ID: ADAPTIVE_APPENDIX_ENTRY_ID,
+        ADAPTIVE_APPENDIX_FILE_PATH: ADAPTIVE_APPENDIX_FILE_PATH,
+        ADAPTIVE_APPENDIX_PROMPT_PATH: ADAPTIVE_APPENDIX_PROMPT_PATH,
+        ADAPTIVE_APPENDIX_CONDITION_PATH: ADAPTIVE_APPENDIX_CONDITION_PATH,
+        ADAPTIVE_APPENDIX_EXCLUDE_COMMENT: ADAPTIVE_APPENDIX_EXCLUDE_COMMENT,
         PLAN_APPENDIX_RUNTIME_PATH: PLAN_APPENDIX_RUNTIME_PATH,
         SCOPE_ESTIMATE_RELATIVE_PATH: SCOPE_ESTIMATE_RELATIVE_PATH,
-        DEFAULT_SP_THRESHOLD: DEFAULT_SP_THRESHOLD,
-        resolveSpThreshold: resolveSpThreshold,
+        DEFAULT_PLAN_THRESHOLD: DEFAULT_PLAN_THRESHOLD,
+        resolvePlanThreshold: resolvePlanThreshold,
         parseScopeEstimateRecord: parseScopeEstimateRecord,
         spAppendixText: spAppendixText,
-        resolveSpAppendix: resolveSpAppendix,
-        writeSpAppendix: writeSpAppendix,
-        materializeSpAppendix: materializeSpAppendix,
-        spAppendixCliEntry: spAppendixCliEntry,
+        resolveAdaptiveAppendix: resolveAdaptiveAppendix,
+        writeAdaptiveAppendix: writeAdaptiveAppendix,
+        materializeAdaptiveAppendix: materializeAdaptiveAppendix,
+        adaptiveAppendixCliEntry: adaptiveAppendixCliEntry,
         runPreCliAdaptiveAppendixStep: runPreCliAdaptiveAppendixStep,
         stampDevPlanEscalatedFromRecord: stampDevPlanEscalatedFromRecord,
         DEV_PLAN_ESCALATED_LABEL: DEV_PLAN_ESCALATED_LABEL

@@ -8,8 +8,8 @@
  * prompt — the leg fails in preCli instead.
  *
  * gh-1503: adaptive legs no longer route through this entry. Adaptive mode is
- * an in-leg SP decision — the adaptive leg carries the scope-estimate appendix
- * (isDevelopmentModeAdaptiveSp.js) and, when it escalates, reads the plan
+ * an in-leg adaptive decision — the adaptive leg carries the scope-estimate appendix
+ * (isDevelopmentModeAdaptive.js) and, when it escalates, reads the plan
  * appendix FILE that the adaptive preCli step materializes for exactly that
  * purpose. The former gh-1437 signal-routed adaptive→plan admission is gone.
  *
@@ -55,10 +55,10 @@ function action(params) {
         return appendixFileReadable(appendixRuntimePath());
     }
     // gh-1503: adaptive legs NEVER carry the plan prompt entry. Their
-    // escalation path is the SP appendix (isDevelopmentModeAdaptiveSp.js),
+    // escalation path is the adaptive appendix (isDevelopmentModeAdaptive.js),
     // which points the agent at the plan appendix FILE for an on-demand
     // read when it self-selects plan — the file is materialized by the
-    // adaptive preCli step, but the prompt carries only the SP block.
+    // adaptive preCli step, but the prompt carries only the adaptive block.
     return false;
 }
 

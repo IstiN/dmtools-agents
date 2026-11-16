@@ -28,14 +28,14 @@ var legStartSignal = require('./common/legStartSignal.js');
 // the dev leg configs' conditional cliPrompts entry points at.
 // gh-1437 routed adaptive legs pre-leg through a signal-driven decision; the
 // appendix carrier was the runtime file's existence. Superseded by gh-1503:
-// adaptive legs now carry the scope-estimate appendix (in-leg SP decision,
-// js/common/developmentModeAdaptiveSp.js) and the plan appendix is
+// adaptive legs now carry the scope-estimate appendix (in-leg adaptive decision,
+// js/common/developmentModeAdaptive.js) and the plan appendix is
 // co-materialized only as an escalation READ target — the plan cliPrompts
 // entry stays gated to explicit plan mode (isDevelopmentModePlan.js).
-// The retired signal routing is deleted outright — SP replaced it everywhere.
+// The retired signal routing is deleted outright — the in-leg estimate routing replaced it everywhere.
 var developmentMode = require('./common/developmentMode.js');
 var developmentModePlan = require('./common/developmentModePlan.js');
-var developmentModeAdaptiveSp = require('./common/developmentModeAdaptiveSp.js');
+var developmentModeAdaptive = require('./common/developmentModeAdaptive.js');
 var wipSquash = require('./common/wipSquash.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
@@ -1080,26 +1080,26 @@ function runPlanModeAppendixStepOrReport(customParams, config, ticketKey) {
     }
 }
 
-// ── adaptive appendix — in-leg SP decision (gh-1503) ────────────────────────
-// The whole step lives in js/common/developmentModeAdaptiveSp.js (this module
-// is size-pinned): resolve+write BOTH appendices (SP + the plan escalation
+// ── adaptive appendix — in-leg adaptive decision (gh-1503) ────────────────────────
+// The whole step lives in js/common/developmentModeAdaptive.js (this module
+// is size-pinned): resolve+write BOTH appendices (the adaptive one + the plan escalation
 // read), seed the excludes, fail fast on resolution errors. The gh-1437
 // signal-driven routing is retired; its extractor stays for legacy consumers.
 
 /**
- * Thin delegate — see developmentModeAdaptiveSp.runPreCliAdaptiveAppendixStep.
- * @returns the SP materialization result.
+ * Thin delegate — see developmentModeAdaptive.runPreCliAdaptiveAppendixStep.
+ * @returns the adaptive-appendix materialization result.
  * @throws when either appendix cannot be materialized.
  */
 function runAdaptiveModeAppendixStep(customParams) {
-    return developmentModeAdaptiveSp.runPreCliAdaptiveAppendixStep(customParams, developmentModePlan, branchSetup);
+    return developmentModeAdaptive.runPreCliAdaptiveAppendixStep(customParams, developmentModePlan, branchSetup);
 }
 
 /**
  * The development-mode appendix dispatcher: plan legs take the unchanged
- * gh-1436 plan path, adaptive legs take the SP materialization, every other
+ * gh-1436 plan path, adaptive legs take the adaptive-appendix materialization, every other
  * mode stays on the zero-IO plan path (which no-ops for non-plan).
- * The ticket argument is retained for call compatibility; the SP decision
+ * The ticket argument is retained for call compatibility; the adaptive decision
  * no longer reads ticket text in preCli — the agent surveys it in-leg.
  */
 function runDevelopmentModeAppendixStep(customParams, ticket) {

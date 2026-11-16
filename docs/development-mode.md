@@ -64,8 +64,8 @@ An in-leg decision: the agent surveys the ticket and the relevant
 code, estimates the work in story points, and self-selects its working mode.
 
 - The leg carries the **scope-estimate appendix** (engine text materialized at
-  `.dmtools/development-mode-sp-appendix.md`, see
-  `js/common/developmentModeAdaptiveSp.js`). It instructs: estimate
+  `.dmtools/development-mode-adaptive-appendix.md`, see
+  `js/common/developmentModeAdaptive.js`). It instructs: estimate
   effort/risk/uncertainty on the fibonacci scale 1/2/3/5/8/13 — not file
   count; structural surprises (migrations, second repositories) estimate
   higher; uncertainty resolves up.
@@ -75,7 +75,7 @@ code, estimates the work in story points, and self-selects its working mode.
   before the completion report. `model` and legs-per-ticket are NOT
   agent-written: the harness usage line already carries the model, and the
   leg count is derived offline from those lines.
-- **Routing**: `sp >= planThresholdSp` (config, default **3** — calibrated by
+- **Routing**: `sp >= planThreshold` (config, default **3** — calibrated by
   a paired direct/plan run: SP 1–2 neutral, plan net-positive from SP 3)
   ⇒ the leg reads the plan appendix file (materialized alongside as an
   escalation read; the plan cliPrompts entry stays gated to explicit `plan`
@@ -95,7 +95,7 @@ code, estimates the work in story points, and self-selects its working mode.
   mechanical sweeps. The extractor + calibration harness stay for legacy
   pack consumers.
 - The prompt-cost shape differs from `plan`: every adaptive leg carries the
-  SP block (the decision instructions); the full plan appendix enters the
+  adaptive block (the decision instructions); the full plan appendix enters the
   prompt only for explicit `plan` legs — an escalated adaptive leg reads it
   from disk when it escalates.
 
@@ -107,7 +107,7 @@ code, estimates the work in story points, and self-selects its working mode.
 "developmentModeConfig": {
   "plan":    { "appendixFile": "optional override path" },
   "adaptive": {
-    "planThresholdSp": 3,               // in-leg SP routing threshold; default 3
+    "planThreshold": 3,               // in-leg SP routing threshold; default 3
     "shadowMode": false,                // true = nothing materializes/routes, log only
     // legacy text-signal knobs — parsed for forward compatibility,
     // UNUSED by this repo's routing (kept for legacy pack consumers)
@@ -125,7 +125,7 @@ wrong types are warned-and-ignored.
 
 ## 4. Calibration (offline)
 
-**SP routing (`planThresholdSp`)**: the threshold is re-tuned from the
+**SP routing (`planThreshold`)**: the threshold is re-tuned from the
 per-leg decision records (`outputs/<KEY>/scope_estimate.json`) read offline —
 one line per leg carries sp/threshold/mode/outcome; legs-per-ticket and model
 come from the harness usage lines. Model bumps shift SP estimates, so the
