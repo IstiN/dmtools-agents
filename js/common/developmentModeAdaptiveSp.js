@@ -283,18 +283,12 @@ function resolveSpAppendix(customParams) {
  */
 function runPreCliAdaptiveAppendixStep(customParams, planModule, branchSetupMod) {
     var resolution = resolveSpAppendix(customParams);
-    var planResolved = resolution.active
-        ? planModule.resolveAppendixSource(customParams)
-        : null;
-    if (planResolved && planResolved.error) {
-        (planResolved.warnings || []).forEach(function (w) { console.warn(w); });
-        throw new Error(planResolved.error);
-    }
-    (resolution.warnings || []).forEach(function (w) { console.warn(w); });
-    (resolution.logLines || []).forEach(function (l) { console.log(l); });
+    logResolutionEvents(resolution);
     if (!resolution.active) {
         return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolution.warnings, logLines: resolution.logLines };
     }
+    // resolve-both-before-write: a failed plan override must not strand an SP file
+    var planResolved = resolvePlanOverrideOrThrow(customParams, planModule);
     var spPath = commitAppendixWrite(function () { return writeSpAppendix(resolution.threshold); });
     var planPath = commitAppendixWrite(function () { return planModule.writeResolvedAppendix(planResolved); });
     seedAppendixExcludes(planModule, branchSetupMod);
@@ -307,6 +301,22 @@ function runPreCliAdaptiveAppendixStep(customParams, planModule, branchSetupMod)
         warnings: resolution.warnings,
         logLines: resolution.logLines
     };
+}
+
+function logResolutionEvents(resolution) {
+    (resolution.warnings || []).forEach(function (w) { console.warn(w); });
+    (resolution.logLines || []).forEach(function (l) { console.log(l); });
+}
+
+// gh-1435 override semantics: an unresolvable plan appendix aborts the leg
+// BEFORE any materialization (its warnings still surface first).
+function resolvePlanOverrideOrThrow(customParams, planModule) {
+    var planResolved = planModule.resolveAppendixSource(customParams);
+    if (planResolved && planResolved.error) {
+        (planResolved.warnings || []).forEach(function (w) { console.warn(w); });
+        throw new Error(planResolved.error);
+    }
+    return planResolved;
 }
 
 // One appendix write with its fail-fast error translation (the caller turns
