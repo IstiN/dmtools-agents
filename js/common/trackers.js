@@ -706,14 +706,10 @@ function createTracker(config, customParams) {
 
     // ── github provider (canonical github_* issue tools; Dart runtime) ────
 
-    // gh-1495 boundary: empty string fields go out as ABSENT — an explicit
-    // empty string reaches the tool as a value and defeats any repository
-    // resolution the runtime could attempt (fah#2182). Absent params are
-    // NOT ambient-resolved on CLI v0.1.99+ (probed live on v0.1.101:
-    // github_get_issue rejects even with GITHUB_REPOSITORY set) — identity
-    // comes from the composite key (githubIssueArgs) or the bound config,
-    // and unbound bare-key calls fail loudly at the bridge. Call sites
-    // keep natural literals.
+    // gh-1495 boundary: empty strings go out as ABSENT — an explicit "" reaches
+    // the tool as a value and defeats runtime identity resolution (fah#2182).
+    // Absent is NOT ambient-resolved on CLI v0.1.99+ (probed on v0.1.101) —
+    // identity = composite key (githubIssueArgs) or bound config.
     function omitEmptyArgs(args) {
         var clean = {};
         for (var k in args) {
@@ -724,17 +720,12 @@ function createTracker(config, customParams) {
 
     function githubGetTicket(key) {
         // github_get_issue schema (Dart catalog): workspace/repository/
-        // issueNumber — not the REST-style owner/repo/issue_number — and it
-        // also accepts the composite `key` (probed on v0.1.101). gh-1495:
-        // identity rides githubIssueArgs — composite keys carry their own
-        // owner/repo, bare keys fall back to the bound config; empty
-        // strings never go out (omitEmptyArgs).
+        // issueNumber — it also accepts the composite `key` (probed v0.1.101).
+        // gh-1495: identity rides githubIssueArgs — see the boundary note.
         var issueRef = githubIssueArgs(key);
         return normalizeTicket(github_get_issue(omitEmptyArgs({
-            key: issueRef.key,
-            workspace: issueRef.owner,
-            repository: issueRef.repo,
-            issueNumber: issueRef.number
+            key: issueRef.key, workspace: issueRef.owner,
+            repository: issueRef.repo, issueNumber: issueRef.number
         })));
     }
 
@@ -793,9 +784,7 @@ function createTracker(config, customParams) {
     }
 
     function githubAddLabel(key, label) {
-        // gh-1495: identity rides githubIssueArgs — composite keys carry
-        // their own owner/repo; unbound configs send absent owner/repo
-        // (never "") instead of empty strings.
+        // gh-1495: identity rides githubIssueArgs — see the boundary note.
         return github_add_labels(
             Object.assign({ labels: [label] }, githubIssueArgs(key))
         );
@@ -811,15 +800,11 @@ function createTracker(config, customParams) {
         // github_create_comment POSTs to issues/{n}/comments (PRs are
         // issues upstream), so it serves plain-issue comments too; the
         // number argument keeps the tool's canonical pullRequestId name.
-        // gh-1495: identity via githubIssueArgs (see githubGetTicket) —
-        // repo-less reads/comments reject on unbound configs, so composite
-        // keys must carry their owner/repo here the same as label writes.
+        // gh-1495: identity rides githubIssueArgs — see the boundary note.
         var issueRef = githubIssueArgs(key);
         return github_create_comment(omitEmptyArgs({
-            key: issueRef.key,
-            workspace: issueRef.owner,
-            repository: issueRef.repo,
-            pullRequestId: issueRef.number,
+            key: issueRef.key, workspace: issueRef.owner,
+            repository: issueRef.repo, pullRequestId: issueRef.number,
             text: comment
         }));
     }
@@ -827,14 +812,11 @@ function createTracker(config, customParams) {
     function githubGetComments(key) {
         // github_get_pr_comments merges the review-comments page (empty
         // for plain issues — the runtime tolerates its 404) with the
-        // issue discussion page and returns a flat array.
-        // gh-1495: identity via githubIssueArgs (see githubGetTicket).
+        // issue discussion page. gh-1495: identity via githubIssueArgs.
         var issueRef = githubIssueArgs(key);
         return _commentPage(github_get_pr_comments(omitEmptyArgs({
-            key: issueRef.key,
-            workspace: issueRef.owner,
-            repository: issueRef.repo,
-            pullRequestId: issueRef.number
+            key: issueRef.key, workspace: issueRef.owner,
+            repository: issueRef.repo, pullRequestId: issueRef.number
         })));
     }
 
