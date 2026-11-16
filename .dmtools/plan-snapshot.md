@@ -21,7 +21,7 @@ malformed (no sp, sp:"5", truncated JSON) → null; materialized file contains t
 threshold number and both file paths; default mode leaves no appendix files.
 **DONE** 16/16 UT green (d9fd3434d).
 
-### T2 — Seam: adaptive routes through the SP appendix
+### T2 — Seam: adaptive routes through the SP appendix ✅
 **What**: `js/developTicketAndCreatePR.js` `initDevelopmentContext` — `adaptive`
 materializes the SP appendix (in-leg decision) instead of running the pre-leg signal
 rule; `developmentMode.js` logs the resolved sub-mode (`adaptive:sp`); the signal
@@ -32,7 +32,7 @@ this repo's routing); docs invariant updated (byte-identical promise applies to
 `adaptive` → SP appendix exists, no pre-leg routing decision logged; `plan` → plan
 appendix only; `default` → neither; stale-file cleanup across mode switches.
 
-### T3 — Label stamping on escalation
+### T3 — Label stamping on escalation ✅
 **What**: `developTicketAndCreatePR.js` post-processing (mirrors the ai_concerns
 pattern): read `outputs/<KEY>/scope_estimate.json` via `readOutputFileDetailed`;
 `mode === "plan"` ⇒ add informational label `dev-plan-escalated`; absent/unparsable
