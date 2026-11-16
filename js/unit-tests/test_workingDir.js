@@ -33,11 +33,8 @@ var commentMarkupModule = loadModule('js/common/commentMarkup.js',
 var devModeModuleShared = loadModule('js/common/developmentMode.js');
 var devModePlanModuleShared = loadModule('js/common/developmentModePlan.js',
     makeRequire({ './developmentMode.js': devModeModuleShared }));
-var devModeAdaptiveModuleShared = loadModule('js/common/developmentModeAdaptive.js',
-    makeRequire({ './developmentMode.js': devModeModuleShared, './developmentModePlan.js': devModePlanModuleShared }));
 var devModeAdaptiveSpModuleShared = loadModule('js/common/developmentModeAdaptiveSp.js',
-    makeRequire({ './developmentModeAdaptive.js': devModeAdaptiveModuleShared,
-        }));
+    makeRequire({ './developmentMode.js': devModeModuleShared }));
 
 // Real tracker factory (provider probing is pure config/env reads) —
 // preCliDevelopmentSetup requires it for the dev-leg label assertion.
@@ -153,7 +150,6 @@ function loadPreCli(workingDir) {
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
             './common/developmentModePlan.js': devModePlanModuleShared,
-            './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared,
             './common/developmentModeAdaptiveSp.js': devModeAdaptiveSpModuleShared,
             './common/trackers.js': trackersModuleReal
         }),
@@ -279,7 +275,6 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
             './common/developmentModePlan.js': devModePlanModuleShared,
-            './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared,
             './common/developmentModeAdaptiveSp.js': devModeAdaptiveSpModuleShared
         }),
             modMocks
@@ -356,7 +351,6 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
             './common/developmentModePlan.js': devModePlanModuleShared,
-            './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared,
             './common/developmentModeAdaptiveSp.js': devModeAdaptiveSpModuleShared
         }),
             modMocks
@@ -437,7 +431,6 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             './common/legFailureReport.js': loadModule('js/common/legFailureReport.js'),
             './common/legStartSignal.js': loadModule('js/common/legStartSignal.js'),
             './common/developmentModePlan.js': devModePlanModuleShared,
-            './common/developmentModeAdaptive.js': devModeAdaptiveModuleShared,
             './common/developmentModeAdaptiveSp.js': devModeAdaptiveSpModuleShared
         }),
             modMocks

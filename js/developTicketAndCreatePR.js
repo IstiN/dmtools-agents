@@ -673,11 +673,12 @@ function appendConcernsToCompletionComment(comment, ticketKey) {
     return comment;
 }
 
-// gh-1503: SP escalation visibility — pure decision in the SP module; this
-// wrapper owns tracker access (degrade-not-fail, same as concerns).
-function readScopeEstimateRecord() {
+// gh-1503: SP escalation visibility (degrade-not-fail, same as concerns).
+// ticketKey REQUIRED: the agent writes outputs/<KEY>/scope_estimate.json and
+// the candidate expansion probes the ticket-scoped path only when keyed.
+function readScopeEstimateRecord(ticketKey) {
     try {
-        var detailed = outputFiles.readOutputFileDetailed('scope_estimate.json');
+        var detailed = outputFiles.readOutputFileDetailed('scope_estimate.json', { ticketKey: ticketKey });
         return detailed ? developmentModeAdaptiveSp.parseScopeEstimateRecord(detailed.content) : null;
     } catch (e) {
         console.warn('Could not read outputs/scope_estimate.json:', e);
@@ -687,7 +688,7 @@ function readScopeEstimateRecord() {
 
 function stampDevPlanEscalatedLabel(ticketKey) {
     try {
-        if (developmentModeAdaptiveSp.stampDevPlanEscalatedFromRecord(readScopeEstimateRecord(), function (label) {
+        if (developmentModeAdaptiveSp.stampDevPlanEscalatedFromRecord(readScopeEstimateRecord(ticketKey), function (label) {
             getTracker().addLabel(ticketKey, label);
         })) console.log('🧭 Added ' + developmentModeAdaptiveSp.DEV_PLAN_ESCALATED_LABEL + ' label to', ticketKey);
     } catch (e) {

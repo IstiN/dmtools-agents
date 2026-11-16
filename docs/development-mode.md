@@ -82,8 +82,10 @@ code, estimates the work in story points, and self-selects its working mode.
   mode) and follows the plan protocol for the rest of the leg. Below the
   threshold ⇒ direct execution, no plan artifacts. Mid-work re-estimates
   reaching the threshold escalate the same way — never demote.
-- Escalated legs stamp the informational `dev-plan-escalated` label (the
-  decision record is the durable signal; a label failure is a warn).
+- A leg that self-selected plan and completes through the PR-comment path
+  stamps the informational `dev-plan-escalated` label (legs ending on the
+  blocked/already-fixed/interrupted exits leave the decision record as the
+  durable signal; a label failure is a warn, never a leg failure).
 - `shadowMode: true` ⇒ nothing materializes, nothing routes (the would-act
   line is logged) — carried over from the pre-leg signal era.
 - The retired pre-leg signal rule (`planIfModulesAtLeast` /

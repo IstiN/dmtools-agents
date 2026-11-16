@@ -38,18 +38,14 @@ function captureConsole(fn) {
 var developmentMode = loadModule('js/common/developmentMode.js');
 var developmentModePlan = loadModule('js/common/developmentModePlan.js',
     makeRequire({ './developmentMode.js': developmentMode }));
-var developmentModeAdaptive = loadModule('js/common/developmentModeAdaptive.js',
-    makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }));
 var branchSetupShared = loadModule('js/common/branchSetup.js');
 var developmentModeAdaptiveSp = loadModule('js/common/developmentModeAdaptiveSp.js',
-    makeRequire({
-        './developmentModeAdaptive.js': developmentModeAdaptive
-    }));
+    makeRequire({ './developmentMode.js': developmentMode }));
 
 // Filesystem recording mocks — every test asserts on the recorded calls, so a
 // real file can never be touched (network-guard discipline for file IO).
 function fsRecorder(files) {
-    var calls = { reads: [], writes: [] };
+    var calls = { reads: [], writes: [], deletes: [] };
     var read = function (opts) {
         var p = opts && (opts.path || opts);
         calls.reads.push(String(p));
@@ -60,7 +56,11 @@ function fsRecorder(files) {
         calls.writes.push({ path: String(opts && opts.path), content: String(opts && opts.content) });
         return true;
     };
-    return { calls: calls, file_read: read, file_write: write };
+    var del = function (opts) {
+        calls.deletes.push(String(opts && opts.path));
+        return { deleted: true };
+    };
+    return { calls: calls, file_read: read, file_write: write, file_delete: del };
 }
 
 function adaptiveCustomParams(threshold) {
@@ -344,5 +344,369 @@ suite('gh-1503 IT — SP condition script', function () {
         assert.equal(loaded.mod.action({ customParams: { developmentMode: 'adaptive' } }), true,
             'flat shape');
         assert.equal(loaded.mod.action({}), false, 'no params → excluded');
+    });
+});
+
+
+// ── Moved from the retired signal-routing suite (the dispatcher ITs now pin
+// the in-leg SP behavior; the signal extractor itself is deleted). ──────────
+
+// ── IT: the dev leg preCli dispatcher wiring ─────────────────────────────────
+
+// Loader mirroring test_developmentModePlan.js's IT harness — the REAL setup
+// module with the REAL development-mode modules and fs/CLI mocks on top.
+var devSetupCommandsReal = loadModule('js/common/setupCommands.js');
+var devCommentMarkupModule = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+var legFailureReportModule = loadModule('js/common/legFailureReport.js');
+var legStartSignalReal = loadModule('js/common/legStartSignal.js');
+var trackersModuleReal = loadModule(
+    'js/common/trackers.js',
+    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        '../config.js': loadModule('js/config.js'),
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }),
+    {}
+);
+var PR_HELPER_REAL = loadModule('js/common/pullRequest.js',
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
+
+function loadDevSetup(fs, extraMocks) {
+    var mocks = Object.assign({
+        file_read: fs.file_read,
+        file_write: fs.file_write,
+        file_delete: fs.file_delete,
+        cli_execute_command: function () { return ''; }
+    }, extraMocks || {});
+    // FRESH instances sharing THIS test's fs mocks — a shared instance would
+    // fall back to the real file_read/file_write/file_delete globals.
+    var planReal = loadModule('js/common/developmentModePlan.js',
+        makeRequire({ './developmentMode.js': developmentMode }), mocks);
+    var spReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+        makeRequire({
+            './developmentMode.js': developmentMode,
+            './developmentModePlan.js': planReal,
+            './branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks)
+        }), mocks);
+    return loadModule(
+        'js/preCliDevelopmentSetup.js',
+        makeRequire({
+            'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks),
+            'gitStaging.js': loadModule('js/common/gitStaging.js'),
+            './configLoader.js': { resolveBranchName: function () { return 'ai/P-1'; }, resolvePRTargetBranch: function () { return 'main'; } },
+            './common/pullRequest.js': PR_HELPER_REAL,
+            './config.js': { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function () { return {}; } },
+            './fetchQuestionsToInput.js': {},
+            './fetchLinkedTestsToInput.js': {},
+            './fetchParentContextToInput.js': {},
+            './restoreFromReleases.js': {},
+            './common/setupCommands.js': devSetupCommandsReal,
+            './common/commentMarkup.js': devCommentMarkupModule,
+            './common/legFailureReport.js': legFailureReportModule,
+            './common/legStartSignal.js': legStartSignalReal,
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function () { } },
+            './common/trackers.js': trackersModuleReal,
+            './common/developmentMode.js': developmentMode,
+            './common/developmentModePlan.js': planReal,
+            './common/developmentModeAdaptiveSp.js': spReal
+        }),
+        mocks
+    );
+}
+
+function adaptiveTicket(title, body) {
+    return { key: 'P-1', fields: { summary: title, description: body } };
+}
+// ── AC1 fixtures — ticket shapes used by the dispatcher ITs ──────────────────
+var FIX_TYPO_TITLE = 'Fix typo in README';
+var FIX_TYPO_BODY = "Change 'recieve' to 'receive' in the installation section.";
+var FIX_MODULES_TITLE = 'Add export pipeline';
+var FIX_MODULES_BODY = [
+    'Delivery plan:',
+    '1. CSV exporter',
+    '2. PDF renderer',
+    '3. Digest builder'
+].join('\n');
+
+suite('gh-1437 IT — dev leg preCli development-mode appendix dispatcher', function () {
+    var APPENDIX_PATH = developmentModePlan.PLAN_APPENDIX_FILE_PATH;
+
+    test('adaptive leg → SP appendix + plan escalation read materialized + excludes seeded', function () {
+        var fs = fsRecorder({ '.git/info/exclude': '' });
+        var captured = captureConsole(function () {
+            var r = loadDevSetup(fs).runDevelopmentModeAppendixStep(
+                { developmentMode: 'adaptive' }, adaptiveTicket(FIX_MODULES_TITLE, FIX_MODULES_BODY));
+            assert.equal(r.active, true, 'adaptive materializes the SP appendix');
+            assert.equal(r.ok, true, 'SP appendix written');
+        });
+        var wrote = fs.calls.writes.filter(function (w) { return w.path === APPENDIX_PATH; });
+        assert.equal(wrote.length, 1, 'plan appendix written once (escalation read)');
+        assert.equal(wrote[0].content, developmentModePlan.DEFAULT_PLAN_APPENDIX, 'engine default plan text');
+        var spWrites = fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-sp-appendix.md'; });
+        assert.equal(spWrites.length, 1, 'SP appendix written once');
+        assert.contains(spWrites[0].content, '(threshold: 3 SP)', 'default threshold rendered into the SP block');
+        var excludes = fs.calls.writes.filter(function (w) { return w.path === '.git/info/exclude'; });
+        assert.equal(excludes.length, 2, 'local exclude seeded for BOTH runtime files');
+        assert.contains(excludes[0].content + excludes[1].content, APPENDIX_PATH, 'exclude names the plan path');
+        assert.contains(excludes[0].content + excludes[1].content, '.dmtools/development-mode-sp-appendix.md',
+            'exclude names the SP path');
+        var logs = captured.logs.join('\n');
+        assert.contains(logs, 'adaptive: SP routing active (threshold 3)', 'SP routing line flushed');
+        assert.contains(logs, 'plan appendix materialized for escalation reads', 'escalation-read line flushed');
+    });
+
+    test('adaptive leg with a small ticket → the SAME materialization (ticket text no longer routes)', function () {
+        var fs = fsRecorder({ '.git/info/exclude': '' });
+        var captured = captureConsole(function () {
+            var r = loadDevSetup(fs).runDevelopmentModeAppendixStep(
+                { developmentMode: 'adaptive' }, adaptiveTicket(FIX_TYPO_TITLE, FIX_TYPO_BODY));
+            assert.equal(r.active, true, 'in-leg decision: preCli materializes regardless of ticket size');
+            assert.equal(r.ok, true, 'SP appendix written for the small ticket too');
+        });
+        assert.equal(fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-sp-appendix.md'; }).length, 1,
+            'SP appendix written');
+        assert.contains(captured.logs.join('\n'), 'adaptive: SP routing active (threshold 3)',
+            'the routing decision now belongs to the agent, not the signals');
+    });
+
+    test('shadow adaptive leg → zero writes, the would-act line is the log (gh-1437 carry-over)', function () {
+        var fs = fsRecorder({});
+        var cp = { developmentMode: 'adaptive', developmentModeConfig: { adaptive: { shadowMode: true } } };
+        var captured = captureConsole(function () {
+            loadDevSetup(fs).runDevelopmentModeAppendixStep(cp, adaptiveTicket(FIX_MODULES_TITLE, FIX_MODULES_BODY));
+        });
+        assert.equal(fs.calls.writes.length, 0, 'shadow never materializes');
+        assert.contains(captured.logs.join('\n'),
+            'SP routing would be active but shadow mode',
+            'the log shows the would-act state');
+    });
+
+    test('gh-1503: tracker-shaped tickets no longer decide anything pre-leg — Jira and ADO shapes materialize identically', function () {
+        // The signal extractor read tracker-specific fields (gh-1442 parity);
+        // the in-leg SP decision reads the TICKET like the agent does — preCli
+        // is tracker-shape-blind now.
+        var jira = adaptiveTicket('T', '## Acceptance criteria\n- a\n- b\n- c\n- d\n- e\n- f');
+        var ado = { key: 'P-1', fields: { 'System.Title': 'Add export pipeline', 'System.Description': '1. CSV exporter\n2. PDF renderer\n3. Digest builder' } };
+        [jira, ado].forEach(function (ticket, i) {
+            var fs = fsRecorder({ '.git/info/exclude': '' });
+            var captured = captureConsole(function () {
+                loadDevSetup(fs).runDevelopmentModeAppendixStep({ developmentMode: 'adaptive' }, ticket);
+            });
+            assert.equal(fs.calls.writes.filter(function (w) { return w.path === '.dmtools/development-mode-sp-appendix.md'; }).length, 1,
+                'shape ' + i + ': SP appendix materialized');
+            assert.contains(captured.logs.join('\n'), 'adaptive: SP routing active (threshold 3)',
+                'shape ' + i + ': same routing line');
+        });
+    });
+
+    test('adaptive + unreadable appendix override → THROWS naming the path (fail fast)', function () {
+        var fs = fsRecorder({});
+        var cp = { developmentMode: 'adaptive', developmentModeConfig: { plan: { appendixFile: 'missing.md' } } };
+        var threw = null;
+        captureConsole(function () {
+            try {
+                loadDevSetup(fs).runDevelopmentModeAppendixStep(cp, adaptiveTicket(FIX_MODULES_TITLE, FIX_MODULES_BODY));
+            } catch (e) {
+                threw = e;
+            }
+        });
+        assert.ok(threw, 'the step fails the leg');
+        assert.contains(String(threw), 'missing.md', 'error names the override path');
+        assert.equal(fs.calls.writes.length, 0, 'nothing materialized from a failed resolution');
+    });
+
+    test('plan leg through the dispatcher behaves exactly like the plan step (REG)', function () {
+        var fs = fsRecorder({ '.git/info/exclude': '' });
+        var captured = captureConsole(function () {
+            var r = loadDevSetup(fs).runDevelopmentModeAppendixStep({ developmentMode: 'plan' }, adaptiveTicket('T', 'x'));
+            assert.equal(r.ok, true);
+            assert.equal(r.active, true);
+        });
+        var wrote = fs.calls.writes.filter(function (w) { return w.path === APPENDIX_PATH; });
+        assert.equal(wrote.length, 1, 'appendix materialized on the plan path');
+        var excludes = fs.calls.writes.filter(function (w) { return w.path === '.git/info/exclude'; });
+        assert.equal(excludes.length, 1, 'exclude seeded on the plan path');
+        assert.equal(fs.calls.deletes.length, 0, 'no cleanup on a plan leg');
+        assert.contains(captured.logs.join('\n'), 'developmentMode=plan', 'the gh-1436 plan log line, unchanged');
+    });
+
+    test('default leg through the dispatcher → ZERO IO, ZERO output (P1 golden)', function () {
+        var fs = fsRecorder({});
+        var captured = captureConsole(function () {
+            loadDevSetup(fs).runDevelopmentModeAppendixStep({ removeLabel: 'x' }, adaptiveTicket('T', 'x'));
+        });
+        assert.equal(fs.calls.reads.length + fs.calls.writes.length + fs.calls.deletes.length, 0, 'zero file IO');
+        assert.equal(captured.logs.length + captured.warns.length, 0, 'zero output');
+    });
+
+    test('the dispatcher wrapper posts the setup error and rethrows on an adaptive failure', function () {
+        var fs = fsRecorder({});
+        var posted = [];
+        var trackerStub = {
+            provider: function () { return 'github'; },
+            postComment: function (key, body) { posted.push({ key: key, body: body }); },
+            moveToStatus: function () { }
+        };
+        var trackersStub = { createTracker: function () { return trackerStub; }, ticketSummaryOf: function (t) { return (t && t.fields && t.fields.summary) || ''; }, ticketDescriptionOf: function (t) { return (t && t.fields && t.fields.description) || ''; } };
+        var mocks = {
+            file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete,
+            cli_execute_command: function () { return ''; }
+        };
+        var planReal = loadModule('js/common/developmentModePlan.js',
+            makeRequire({ './developmentMode.js': developmentMode }), mocks);
+        var spReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': planReal, './branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks) }), mocks);
+        var mod = loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
+                './configLoader.js': { resolveBranchName: function () { return 'ai/P-1'; }, resolvePRTargetBranch: function () { return 'main'; } },
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './config.js': { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function () { return {}; } },
+                './fetchQuestionsToInput.js': {},
+                './fetchLinkedTestsToInput.js': {},
+                './fetchParentContextToInput.js': {},
+                './restoreFromReleases.js': {},
+                './common/setupCommands.js': devSetupCommandsReal,
+                './common/commentMarkup.js': devCommentMarkupModule,
+                './common/legFailureReport.js': legFailureReportModule,
+                './common/legStartSignal.js': legStartSignalReal,
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function () { } },
+                './common/trackers.js': trackersStub,
+                './common/developmentMode.js': developmentMode,
+                './common/developmentModePlan.js': planReal,
+                './common/developmentModeAdaptiveSp.js': spReal
+            }),
+            mocks
+        );
+        var cp = { developmentMode: 'adaptive', developmentModeConfig: { plan: { appendixFile: 'gone.md' } } };
+        var threw = null;
+        captureConsole(function () {
+            try {
+                mod.runDevelopmentModeAppendixStepOrReport(cp, { git: {} }, 'P-1', adaptiveTicket(FIX_MODULES_TITLE, FIX_MODULES_BODY));
+            } catch (e) {
+                threw = e;
+            }
+        });
+        assert.ok(threw, 'wrapper rethrows (red leg)');
+        assert.contains(String(threw), 'gone.md', 'names the path');
+        assert.equal(posted.length, 1, 'one setup-error comment posted');
+        assert.contains(posted[0].body, 'Plan Mode Setup', 'comment names the failing stage');
+        assert.contains(posted[0].body, 'gone.md', 'comment carries the path');
+    });
+
+    test('the wrapper materializes + seeds the exclude on a healthy adaptive leg', function () {
+        var fs = fsRecorder({ '.git/info/exclude': '' });
+        var posted = [];
+        var trackerStub = {
+            provider: function () { return 'github'; },
+            postComment: function (key, body) { posted.push({ key: key, body: body }); },
+            moveToStatus: function () { }
+        };
+        var trackersStub = { createTracker: function () { return trackerStub; }, ticketSummaryOf: function (t) { return (t && t.fields && t.fields.summary) || ''; }, ticketDescriptionOf: function (t) { return (t && t.fields && t.fields.description) || ''; } };
+        var mocks = {
+            file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete,
+            cli_execute_command: function () { return ''; }
+        };
+        var planReal = loadModule('js/common/developmentModePlan.js',
+            makeRequire({ './developmentMode.js': developmentMode }), mocks);
+        var spReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': planReal, './branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks) }), mocks);
+        var mod = loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks),
+                'gitStaging.js': loadModule('js/common/gitStaging.js'),
+                './configLoader.js': { resolveBranchName: function () { return 'ai/P-1'; }, resolvePRTargetBranch: function () { return 'main'; } },
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './config.js': { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function () { return {}; } },
+                './fetchQuestionsToInput.js': {},
+                './fetchLinkedTestsToInput.js': {},
+                './fetchParentContextToInput.js': {},
+                './restoreFromReleases.js': {},
+                './common/setupCommands.js': devSetupCommandsReal,
+                './common/commentMarkup.js': devCommentMarkupModule,
+                './common/legFailureReport.js': legFailureReportModule,
+                './common/legStartSignal.js': legStartSignalReal,
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function () { } },
+                './common/trackers.js': trackersStub,
+                './common/developmentMode.js': developmentMode,
+                './common/developmentModePlan.js': planReal,
+                './common/developmentModeAdaptiveSp.js': spReal
+            }),
+            mocks
+        );
+        var threw = null;
+        captureConsole(function () {
+            try {
+                mod.runDevelopmentModeAppendixStepOrReport(
+                    { developmentMode: 'adaptive' }, { git: {} }, 'P-1', adaptiveTicket(FIX_MODULES_TITLE, FIX_MODULES_BODY));
+            } catch (e) {
+                threw = e;
+            }
+        });
+        assert.notOk(threw, 'healthy adaptive leg: no throw');
+        assert.equal(posted.length, 0, 'no error comment');
+        var wrote = fs.calls.writes.filter(function (w) { return w.path === APPENDIX_PATH; });
+        assert.equal(wrote.length, 1, 'appendix materialized through the wrapper');
+    });
+});
+
+suite('gh-1503 REG — mode semantics preserved (resolver surface)', function () {
+    test('the resolved mode surface stays "adaptive" on adaptive legs (routing is preCli-local)', function () {
+        var resolved = developmentMode.resolveDevelopmentMode({ developmentMode: 'adaptive' });
+        assert.equal(resolved.mode, 'adaptive', 'resolver untouched by this issue');
+        var noopFeedback = {
+            runQualityGates: function () { return { success: true }; },
+            runPolicyGates: function () { return { success: true }; },
+            runPostPublishGates: function () { return { success: true }; },
+            resumeAgent: function () { return { attempted: false }; },
+            resumeOnceForMissingResponse: function () { return { attempted: false }; }
+        };
+        var cm = loadModule('js/common/commentMarkup.js',
+            makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+        var trackers = loadModule('js/common/trackers.js',
+            makeRequire({ '../config.js': loadModule('js/config.js'), './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), {});
+        var trackerSlot = loadModule('js/common/trackerSlot.js',
+            makeRequire({ './trackers.js': trackers }), {});
+        var leg = loadModule('js/developTicketAndCreatePR.js', makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: function (t) { return t; } },
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+            './common/pullRequest.js': { cleanCommandOutput: function (o) { return (o || '').trim(); } },
+            './common/submodules.js': {},
+            './common/feedbackLoop.js': noopFeedback,
+            './common/autoStart.js': { triggerSmIfIdle: function () { } },
+            './common/outputFiles.js': { readOutputFile: function () { return null; }, hasOutputFile: function () { return false; } },
+            './common/needsInput.js': loadModule('js/common/needsInput.js'),
+            './cacheToReleases.js': {},
+            './common/gitStaging.js': loadModule('js/common/gitStaging.js'),
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
+            './common/developmentMode.js': developmentMode,
+            './common/developmentModePlan.js': developmentModePlan,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSp,
+            './common/trackerSlot.js': trackerSlot,
+            './configLoader.js': Object.assign({}, configLoaderModule, {
+                loadProjectConfig: function () {
+                    return { git: { baseBranch: 'main', branchPrefix: { development: 'ai/' } } };
+                }
+            }),
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+            './common/commentMarkup.js': cm
+        }), {
+            cli_execute_command: function () { return ''; },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        });
+        var ctx = leg.initDevelopmentContext({
+            jobParams: {
+                customParams: { developmentMode: 'adaptive', developmentModeConfig: { adaptive: { shadowMode: true } } },
+                inputFolderPath: 'input/P-1'
+            },
+            ticket: { key: 'P-1', fields: { summary: 'S', description: 'D' } }
+        });
+        assert.equal(ctx.developmentMode.mode, 'adaptive', 'ctx carries the resolved CONFIG mode, not the routing outcome');
     });
 });

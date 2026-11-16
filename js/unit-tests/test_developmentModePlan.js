@@ -49,10 +49,8 @@ function captureConsole(fn) {
 var developmentMode = loadModule('js/common/developmentMode.js');
 var developmentModePlan = loadModule('js/common/developmentModePlan.js',
     makeRequire({ './developmentMode.js': developmentMode }));
-var developmentModeAdaptive = loadModule('js/common/developmentModeAdaptive.js',
-    makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }));
 var developmentModeAdaptiveSp = loadModule('js/common/developmentModeAdaptiveSp.js',
-    makeRequire({ './developmentModeAdaptive.js': developmentModeAdaptive }));
+    makeRequire({ './developmentMode.js': developmentMode }));
 
 // Filesystem recording mocks — every test asserts on the recorded calls, so a
 // real file can never be touched (network-guard discipline for file IO).
@@ -479,11 +477,8 @@ function loadDevSetup(fs, extraMocks) {
             // would fall back to the real file_read/file_write globals.
             './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
                 makeRequire({ './developmentMode.js': developmentMode }), mocks),
-            './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
-                makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks),
             './common/developmentModeAdaptiveSp.js': loadModule('js/common/developmentModeAdaptiveSp.js',
-                makeRequire({ './developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
-                    makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks) }), mocks)
+                makeRequire({ './developmentMode.js': developmentMode }), mocks)
         }),
         mocks
     );
@@ -569,15 +564,9 @@ suite('gh-1436 IT — dev leg preCli plan-mode appendix step', function () {
                 './common/trackers.js': trackersStub,
                 './common/developmentMode.js': developmentMode,
                 './common/developmentModePlan.js': developmentModePlan,
-                './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
-                    makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }),
-                    { file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete, cli_execute_command: function () { return ''; } }),
                 './common/developmentModeAdaptiveSp.js': loadModule('js/common/developmentModeAdaptiveSp.js',
-                    makeRequire({
-                        './developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
-                            makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }),
-                            { file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete, cli_execute_command: function () { return ''; } }),
-                    }, { file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete, cli_execute_command: function () { return ''; } }))
+                    makeRequire({ './developmentMode.js': developmentMode },
+                        { file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete, cli_execute_command: function () { return ''; } }))
             }),
             { file_read: fs.file_read, file_write: fs.file_write, cli_execute_command: function () { return ''; } }
         );
@@ -627,11 +616,8 @@ suite('gh-1436 IT — dev leg preCli plan-mode appendix step', function () {
                 './common/developmentMode.js': developmentMode,
                 './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
                     makeRequire({ './developmentMode.js': developmentMode }), mocks),
-                './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
-                    makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks),
                 './common/developmentModeAdaptiveSp.js': loadModule('js/common/developmentModeAdaptiveSp.js',
-                    makeRequire({ './developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
-                        makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks) }), mocks)
+                    makeRequire({ './developmentMode.js': developmentMode }), mocks)
             }),
             mocks
         );

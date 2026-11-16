@@ -454,6 +454,13 @@ flowchart TD
 
 ---
 
+### [20] `./.dmtools/development-mode-sp-appendix.md` _(conditional: `agents/js/conditions/isDevelopmentModeAdaptiveSp.js`)_
+
+<!-- MISSING FILE: ./.dmtools/development-mode-sp-appendix.md (tried ./.dmtools/development-mode-sp-appendix.md) -->
+
+
+---
+
 ## cliPromptsByTracker
 
 ### Tracker: `jira`

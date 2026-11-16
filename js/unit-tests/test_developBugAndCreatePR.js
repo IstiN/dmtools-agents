@@ -13,16 +13,8 @@ var stubToolchainLine = function (t) { return t; };
 // scopes.
 // gh-1503: SP decision module — real chain shared by every loader map here.
 var devModeShared = loadModule('js/common/developmentMode.js');
-var devModeSharedAdaptive = loadModule('js/common/developmentModeAdaptive.js',
-    makeRequire({
-        './developmentMode.js': devModeShared,
-        './developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-            makeRequire({ './developmentMode.js': devModeShared }))
-    }));
 var devModeSharedSp = loadModule('js/common/developmentModeAdaptiveSp.js',
-    makeRequire({
-        './developmentModeAdaptive.js': devModeSharedAdaptive,
-    }));
+    makeRequire({ './developmentMode.js': devModeShared }));
 
 var LEDGERCORE = loadModule('js/common/ledgerCore.js', makeRequire({}));
 

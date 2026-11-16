@@ -9,8 +9,10 @@
  *
  * Adaptive shadowMode guard: strict `=== true` — anything else (absent, null,
  * wrong-typed) is non-shadow. Shadow legs never carry the appendix (gh-1437
- * guard carried over; the SP preCli step also removes stale state — this is
- * the second line of defense).
+ * guard carried over). Stale-file hygiene: a stale runtime file cannot leak
+ * into a non-adaptive prompt — this condition is mode-gated, so only an
+ * adaptive leg ever reads the path, and every adaptive preCli run overwrites
+ * it with fresh text before the prompt assembles.
  *
  * gh-1503 note: the plan appendix on adaptive legs is an ESCALATION READ
  * target (the SP block points the agent at the file when it self-selects

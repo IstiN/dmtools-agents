@@ -52,18 +52,11 @@ var gitStagingModule = loadModule('js/common/gitStaging.js');
 var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 
 // gh-1503: the SP decision module — one real instance shared by every
-// developTicketAndCreatePR loader map in this file (the SP module only
-// requires developmentModeAdaptive; its file IO comes through globals).
+// developTicketAndCreatePR loader map in this file (the SP module requires
+// only the developmentMode knob; its file IO comes through globals).
 var developmentModeShared = loadModule('js/common/developmentMode.js');
-var developmentModeAdaptiveShared = loadModule('js/common/developmentModeAdaptive.js',
-    makeRequire({
-        './developmentMode.js': developmentModeShared,
-        './developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
-            makeRequire({ './developmentMode.js': developmentModeShared }))
-    }));
 var developmentModeAdaptiveSpShared = loadModule('js/common/developmentModeAdaptiveSp.js',
-    makeRequire({ './developmentModeAdaptive.js': developmentModeAdaptiveShared,
-        }));
+    makeRequire({ './developmentMode.js': developmentModeShared }));
 
 
 // gh-1190: shared feedbackLoop stub builder — a named helper so the override
@@ -3454,7 +3447,7 @@ function loadForConcernsSeam(mocks, opts) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
             ,
             './common/commentMarkup.js': commentMarkupModule,
-        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })(Object.assign({
+        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m), './common/outputFiles.js': opts.realOutputFiles ? loadModule('js/common/outputFiles.js') : concernsSeamOutputFilesStub(opts) })), _m); })(Object.assign({
             cli_execute_command: function () { return ''; },
             jira_post_comment: function () { },
             jira_move_to_status: function () { },

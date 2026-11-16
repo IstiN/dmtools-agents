@@ -16,12 +16,12 @@
 // plan protocol (the plan appendix file, materialized alongside); below it →
 // direct execution, no plan artifacts.
 //
-// What stays from gh-1437: the plan-protocol contract itself
+// What stays from the pre-leg era: the plan-protocol contract itself
 // (js/common/developmentModePlan.js — the appendix text is materialized for
 // adaptive legs too, for on-demand escalation reads; its cliPrompts entry
 // stays gated to explicit plan mode so an adaptive leg's base prompt carries
-// only the SP block). The signal extractor + calibration harness stay for
-// legacy consumers; THIS repo's adaptive routing no longer uses them.
+// only the SP block). The signal extractor + its calibration harness are
+// deleted outright — SP replaced them everywhere (owner decision).
 //
 // The decision record is one JSON line in the leg's outputs (the established
 // per-leg outputs convention, like response.md/concerns.md): the agent writes
@@ -30,7 +30,7 @@
 // harness emits the model in its per-leg usage line and the leg count is
 // derived offline by counting those lines.
 
-var developmentModeAdaptive = require('./developmentModeAdaptive.js');
+var developmentMode = require('./developmentMode.js');
 
 var SP_APPENDIX_ENTRY_ID = 'developmentModeAdaptiveSp';
 var SP_APPENDIX_FILE_PATH = '.dmtools/development-mode-sp-appendix.md';
@@ -53,7 +53,7 @@ function isPlainObject(value) {
 
 // ── shadowMode (gh-1437 carry-over) ─────────────────────────────────────────
 // Strict boolean true enables it; absent/null/false keep it off; wrong-typed
-// reads as false (mirror of developmentModeAdaptive.resolveShadowMode). A
+// reads as false (strict boolean true is the shadow test). A
 // shadow adaptive leg NEVER materializes: shadow means "log the intent, act
 // nothing" — the SP block would change the prompt, and that is an action.
 
@@ -112,9 +112,21 @@ function parseScopeEstimateRecord(text) {
     } catch (e) {
         return null;
     }
-    if (!isPlainObject(record)) return null;
-    if (!isIntegerInRange(record.sp, 1, Number.MAX_SAFE_INTEGER)) return null;
-    if (VALID_ESTIMATE_MODES.indexOf(record.mode) === -1) return null;
+    if (!hasRequiredEstimateFields(record)) return null;
+    return estimateRecordWithoutExtras(record);
+}
+
+// The strict half of the parse: sp and mode are load-bearing (the label
+// decision reads mode; the threshold comparison reads sp) — any violation
+// here voids the whole record.
+function hasRequiredEstimateFields(record) {
+    return isPlainObject(record)
+        && isIntegerInRange(record.sp, 1, Number.MAX_SAFE_INTEGER)
+        && VALID_ESTIMATE_MODES.indexOf(record.mode) !== -1;
+}
+
+// The lenient half: optional fields ride along only when well-typed.
+function estimateRecordWithoutExtras(record) {
     var parsed = { sp: record.sp, mode: record.mode };
     if (isIntegerInRange(record.threshold, SP_THRESHOLD_MIN, SP_THRESHOLD_MAX)) {
         parsed.threshold = record.threshold;
@@ -231,7 +243,7 @@ function materializeSpAppendix(customParams, io) {
  *            error: string|null, warnings: string[], logLines: string[]}}
  */
 function resolveSpAppendix(customParams) {
-    var mode = developmentModeAdaptive.resolvedDevelopmentMode(customParams);
+    var mode = developmentMode.resolveDevelopmentMode(customParams).mode;
     if (mode !== 'adaptive') {
         return { active: false, threshold: null, text: null, error: null, warnings: [], logLines: [] };
     }
@@ -283,14 +295,31 @@ function runPreCliAdaptiveAppendixStep(customParams, planModule, branchSetupMod)
     if (!resolution.active) {
         return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolution.warnings, logLines: resolution.logLines };
     }
-    var written = writeSpAppendix(resolution.threshold);
+    var spPath = commitAppendixWrite(function () { return writeSpAppendix(resolution.threshold); });
+    var planPath = commitAppendixWrite(function () { return planModule.writeResolvedAppendix(planResolved); });
+    seedAppendixExcludes(planModule, branchSetupMod);
+    return {
+        ok: true,
+        active: true,
+        path: spPath,
+        overridden: false,
+        error: null,
+        warnings: resolution.warnings,
+        logLines: resolution.logLines
+    };
+}
+
+// One appendix write with its fail-fast error translation (the caller turns
+// the throw into the leg's setup error, naming the offending path).
+function commitAppendixWrite(write) {
+    var written = write();
     if (!written.ok) {
         throw new Error(written.error);
     }
-    var planWritten = planModule.writeResolvedAppendix(planResolved);
-    if (!planWritten.ok) {
-        throw new Error(planWritten.error);
-    }
+    return written.path;
+}
+
+function seedAppendixExcludes(planModule, branchSetupMod) {
     branchSetupMod.ensureGitInfoExclude(
         planModule.PLAN_APPENDIX_FILE_PATH,
         planModule.PLAN_APPENDIX_EXCLUDE_COMMENT,
@@ -303,15 +332,6 @@ function runPreCliAdaptiveAppendixStep(customParams, planModule, branchSetupMod)
     );
     console.log('📝 developmentMode=adaptive: plan appendix materialized for escalation reads → ' +
         planModule.PLAN_APPENDIX_FILE_PATH);
-    return {
-        ok: true,
-        active: true,
-        path: written.path,
-        overridden: false,
-        error: null,
-        warnings: resolution.warnings,
-        logLines: resolution.logLines
-    };
 }
 
 // ── escalation visibility (the decision record is the durable signal; the

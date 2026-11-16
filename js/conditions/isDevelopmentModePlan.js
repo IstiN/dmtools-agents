@@ -40,17 +40,6 @@ function resolvedModeIsPlan(customParams) {
     return !!customParams && customParams.developmentMode === 'plan';
 }
 
-/**
- * Adaptive shadowMode guard (gh-1437): strict `=== true` — anything else
- * (absent, null, wrong-typed) is non-shadow, mirroring the resolver's
- * permissive read in js/common/developmentModeAdaptive.js.
- */
-function adaptiveShadowMode(customParams) {
-    var config = customParams && customParams.developmentModeConfig;
-    var adaptive = config && typeof config === 'object' ? config.adaptive : null;
-    return !!(adaptive && typeof adaptive === 'object' && adaptive.shadowMode === true);
-}
-
 function appendixFileReadable(path) {
     try {
         var content = file_read({ path: path });
@@ -77,7 +66,6 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         appendixRuntimePath: appendixRuntimePath,
-        resolveCustomParams: resolveCustomParams,
-        adaptiveShadowMode: adaptiveShadowMode
+        resolveCustomParams: resolveCustomParams
     };
 }

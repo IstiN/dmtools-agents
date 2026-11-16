@@ -32,11 +32,9 @@ var legStartSignal = require('./common/legStartSignal.js');
 // js/common/developmentModeAdaptiveSp.js) and the plan appendix is
 // co-materialized only as an escalation READ target — the plan cliPrompts
 // entry stays gated to explicit plan mode (isDevelopmentModePlan.js).
-// The signal extractor (js/common/developmentModeAdaptive.js) stays for
-// legacy consumers and the calibration harness; this repo's routing no
-// longer uses it.
+// The retired signal routing is deleted outright — SP replaced it everywhere.
+var developmentMode = require('./common/developmentMode.js');
 var developmentModePlan = require('./common/developmentModePlan.js');
-var developmentModeAdaptive = require('./common/developmentModeAdaptive.js');
 var developmentModeAdaptiveSp = require('./common/developmentModeAdaptiveSp.js');
 var wipSquash = require('./common/wipSquash.js');
 
@@ -1104,7 +1102,7 @@ function runAdaptiveModeAppendixStep(customParams) {
  * no longer reads ticket text in preCli — the agent surveys it in-leg.
  */
 function runDevelopmentModeAppendixStep(customParams, ticket) {
-    var mode = developmentModeAdaptive.resolvedDevelopmentMode(customParams);
+    var mode = developmentMode.resolveDevelopmentMode(customParams).mode;
     if (mode === 'adaptive') {
         return runAdaptiveModeAppendixStep(customParams);
     }

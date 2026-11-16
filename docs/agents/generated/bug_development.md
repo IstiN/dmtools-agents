@@ -109,7 +109,6 @@ _Develop Bug and Create PR Post-Action_
   - `developmentMode`
   - `developmentModeConfig`
   - `developmentModeConfig.adaptive`
-  - `developmentModeConfig.plan`
   - `dryRun`
   - `feedbackLoop`
   - `localTeammate`
