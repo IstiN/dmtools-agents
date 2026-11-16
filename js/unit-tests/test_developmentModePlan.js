@@ -49,6 +49,10 @@ function captureConsole(fn) {
 var developmentMode = loadModule('js/common/developmentMode.js');
 var developmentModePlan = loadModule('js/common/developmentModePlan.js',
     makeRequire({ './developmentMode.js': developmentMode }));
+var developmentModeAdaptive = loadModule('js/common/developmentModeAdaptive.js',
+    makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }));
+var developmentModeAdaptiveSp = loadModule('js/common/developmentModeAdaptiveSp.js',
+    makeRequire({ './developmentModeAdaptive.js': developmentModeAdaptive }));
 
 // Filesystem recording mocks — every test asserts on the recorded calls, so a
 // real file can never be touched (network-guard discipline for file IO).
@@ -657,7 +661,7 @@ suite('gh-1436 IT — dev leg configs carry the conditional appendix entry', fun
     var DEV_CONFIGS = ['story_development.json', 'bug_development.json'];
 
     DEV_CONFIGS.forEach(function (name) {
-        test(name + ': the canonical entry appears EXACTLY ONCE, as the LAST base cliPrompts entry (AC1 position)', function () {
+        test(name + ': the canonical entry appears EXACTLY ONCE, second-to-last base entry; the gh-1503 SP entry is last', function () {
             var cfg = readRootConfig(name);
             var prompts = cfg.params.cliPrompts;
             assert.ok(Array.isArray(prompts) && prompts.length > 0, 'cliPrompts present');
@@ -666,11 +670,20 @@ suite('gh-1436 IT — dev leg configs carry the conditional appendix entry', fun
                 if (p && typeof p === 'object' && p.id === 'developmentModePlan') hits.push(i);
             });
             assert.equal(hits.length, 1, 'exactly one appendix entry (AC1: appendix exactly once)');
-            assert.equal(hits[0], prompts.length - 1, 'entry is the LAST base cliPrompts item — ' +
-                'assembly appends cliPromptsByTracker AFTER the base array, so the appendix lands ' +
+            assert.equal(hits[0], prompts.length - 2, 'entry is the second-to-last base cliPrompts item — ' +
+                'assembly appends cliPromptsByTracker AFTER the base array, so the appendices land ' +
                 'after the instruction pack and before the tracker-specific parts');
             assert.deepEqual(prompts[hits[0]], developmentModePlan.planAppendixCliEntry(),
                 'entry is byte-identical to the canonical builder output');
+            // gh-1503: the SP entry rides last — an adaptive leg's prompt ends with its decision block
+            var spHits = [];
+            prompts.forEach(function (p, i) {
+                if (p && typeof p === 'object' && p.id === 'developmentModeAdaptiveSp') spHits.push(i);
+            });
+            assert.equal(spHits.length, 1, 'exactly one SP entry');
+            assert.equal(spHits[0], prompts.length - 1, 'SP entry is the LAST base cliPrompts item');
+            assert.deepEqual(prompts[spHits[0]], developmentModeAdaptiveSp.spAppendixCliEntry(),
+                'SP entry byte-identical to the canonical builder output');
         });
     });
 
@@ -821,6 +834,7 @@ suite('gh-1436 REG — plan protocol coexists with the existing leg machinery', 
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
             './common/developmentMode.js': developmentMode,
             './common/developmentModePlan.js': developmentModePlan,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSp,
             './common/trackerSlot.js': trackerSlot,
             './configLoader.js': Object.assign({}, configLoaderModule, {
                 loadProjectConfig: function () { return { git: { baseBranch: 'main' } }; }

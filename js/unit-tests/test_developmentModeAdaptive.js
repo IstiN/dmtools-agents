@@ -1049,6 +1049,8 @@ suite('gh-1437 REG — plan/default modes unaffected; mode semantics preserved',
             './common/developmentMode.js': developmentMode,
             './common/developmentModePlan.js': developmentModePlan,
             './common/developmentModeAdaptive.js': developmentModeAdaptive,
+            './common/developmentModeAdaptiveSp.js': developmentModeAdaptiveSp,
+            './common/developmentModeAdaptive.js': developmentModeAdaptive,
             './common/trackerSlot.js': trackerSlot,
             './configLoader.js': Object.assign({}, configLoaderModule, {
                 loadProjectConfig: function () {
