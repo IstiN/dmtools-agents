@@ -706,14 +706,27 @@ function createTracker(config, customParams) {
 
     // ── github provider (canonical github_* issue tools; Dart runtime) ────
 
+    // gh-1495 boundary: empty strings go out as ABSENT — an explicit "" reaches
+    // the tool as a value and defeats runtime identity resolution (fah#2182).
+    // Absent is NOT ambient-resolved on CLI v0.1.99+ (probed on v0.1.101) —
+    // identity = composite key (githubIssueArgs) or bound config.
+    function omitEmptyArgs(args) {
+        var clean = {};
+        for (var k in args) {
+            if (args[k] !== '' && args[k] != null) clean[k] = args[k];
+        }
+        return clean;
+    }
+
     function githubGetTicket(key) {
         // github_get_issue schema (Dart catalog): workspace/repository/
-        // issueNumber — not the REST-style owner/repo/issue_number.
-        return normalizeTicket(github_get_issue({
-            workspace: owner,
-            repository: repo,
-            issueNumber: githubIssueNumber(key)
-        }));
+        // issueNumber — it also accepts the composite `key` (probed v0.1.101).
+        // gh-1495: identity rides githubIssueArgs — see the boundary note.
+        var issueArgs = githubIssueArgs(key);
+        return normalizeTicket(github_get_issue(omitEmptyArgs({
+            key: issueArgs.key, workspace: issueArgs.owner,
+            repository: issueArgs.repo, issueNumber: issueArgs.number
+        })));
     }
 
     function githubMoveToStatus(key, status) {
@@ -736,25 +749,25 @@ function createTracker(config, customParams) {
         var n = githubIssueNumber(key);
         var sl = s.toLowerCase();
         if (sl === 'done' || sl === 'closed') {
-            return github_close_issue({ owner: owner, repo: repo, number: n });
+            return github_close_issue(omitEmptyArgs({ owner: owner, repo: repo, number: n }));
         }
-        return github_add_labels({
+        return github_add_labels(omitEmptyArgs({
             owner: owner,
             repo: repo,
             number: n,
             labels: [s]
-        });
+        }));
     }
 
     function githubSearch(query) {
         // github_search_issues (Java runtime) scopes the query to the
         // configured repo automatically when it lacks a repo: qualifier.
         if (typeof github_search_issues === 'function') {
-            return _ticketPage(github_search_issues({
+            return _ticketPage(github_search_issues(omitEmptyArgs({
                 query: query,
-                workspace: owner || undefined,
-                repository: repo || undefined
-            }), 'items');
+                workspace: owner,
+                repository: repo
+            })), 'items');
         }
         unsupported('search');
     }
@@ -771,55 +784,52 @@ function createTracker(config, customParams) {
     }
 
     function githubAddLabel(key, label) {
-        return github_add_labels({
-            owner: owner,
-            repo: repo,
-            number: githubIssueNumber(key),
-            labels: [label]
-        });
+        // gh-1495: identity rides githubIssueArgs — see the boundary note.
+        return github_add_labels(
+            Object.assign({ labels: [label] }, githubIssueArgs(key))
+        );
     }
 
     function githubRemoveLabel(key, label) {
-        return github_remove_label({
-            owner: owner,
-            repo: repo,
-            number: githubIssueNumber(key),
-            label: label
-        });
+        return github_remove_label(
+            Object.assign({ label: label }, githubIssueArgs(key))
+        );
     }
 
     function githubPostComment(key, comment) {
         // github_create_comment POSTs to issues/{n}/comments (PRs are
         // issues upstream), so it serves plain-issue comments too; the
         // number argument keeps the tool's canonical pullRequestId name.
-        return github_create_comment({
-            workspace: owner,
-            repository: repo,
-            pullRequestId: githubIssueNumber(key),
+        // gh-1495: identity rides githubIssueArgs — see the boundary note.
+        var issueArgs = githubIssueArgs(key);
+        return github_create_comment(omitEmptyArgs({
+            key: issueArgs.key, workspace: issueArgs.owner,
+            repository: issueArgs.repo, pullRequestId: issueArgs.number,
             text: comment
-        });
+        }));
     }
 
     function githubGetComments(key) {
         // github_get_pr_comments merges the review-comments page (empty
         // for plain issues — the runtime tolerates its 404) with the
-        // issue discussion page and returns a flat array.
-        return _commentPage(github_get_pr_comments({
-            workspace: owner,
-            repository: repo,
-            pullRequestId: githubIssueNumber(key)
-        }));
+        // issue discussion page. gh-1495: identity via githubIssueArgs.
+        var issueArgs = githubIssueArgs(key);
+        return _commentPage(github_get_pr_comments(omitEmptyArgs({
+            key: issueArgs.key, workspace: issueArgs.owner,
+            repository: issueArgs.repo, pullRequestId: issueArgs.number
+        })));
     }
 
     function githubCreateTicket(project, type, title, description) {
         // project/type are Jira/ADO concepts — GitHub issues only have a
-        // title and a markdown body.
-        var t = normalizeTicket(github_create_issue({
+        // title and a markdown body. gh-1495: unbound configs send absent
+        // owner/repo (never ""), miroring the read/label boundary.
+        var t = normalizeTicket(github_create_issue(omitEmptyArgs({
             owner: owner,
             repo: repo,
             title: title,
             body: description
-        }));
+        })));
         return t ? t.key : null;
     }
 
