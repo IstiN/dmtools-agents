@@ -51,6 +51,20 @@ var gitStagingModule = loadModule('js/common/gitStaging.js');
 // gh-1087: real quota circuit-breaker (pure module — no requires of its own).
 var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 
+// gh-1503: the SP decision module — one real instance shared by every
+// developTicketAndCreatePR loader map in this file (the SP module only
+// requires developmentModeAdaptive; its file IO comes through globals).
+var gh1503DevelopmentModeReal = loadModule('js/common/developmentMode.js');
+var gh1503DevelopmentModeAdaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
+    makeRequire({
+        './developmentMode.js': gh1503DevelopmentModeReal,
+        './developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+            makeRequire({ './developmentMode.js': gh1503DevelopmentModeReal }))
+    }));
+var gh1503DevelopmentModeAdaptiveSpReal = loadModule('js/common/developmentModeAdaptiveSp.js',
+    makeRequire({ './developmentModeAdaptive.js': gh1503DevelopmentModeAdaptiveReal }));
+
+
 // gh-1190: shared feedbackLoop stub builder — a named helper so the override
 // merge adds no cyclomatic complexity to the loaders themselves (the CRAP
 // ratchet never lets an existing function's score grow).
@@ -77,6 +91,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -114,6 +129,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks, feedbackLoopOverr
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -462,6 +478,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 // gh-1435: the dev leg now requires the developmentMode resolver — real module,
                 // same loadModule pattern as needsInput above.
                 './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -543,6 +560,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 // gh-1435: the dev leg now requires the developmentMode resolver — real module,
                 // same loadModule pattern as needsInput above.
                 './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -624,6 +642,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 // gh-1435: the dev leg now requires the developmentMode resolver — real module,
                 // same loadModule pattern as needsInput above.
                 './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -776,6 +795,7 @@ function loadForLandingGuard(mocks, opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -989,6 +1009,7 @@ function loadForPrTail(mocks, opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1356,6 +1377,7 @@ function loadForMissingResponseResume(opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1958,6 +1980,7 @@ function loadForOutcomePinning(mocks, opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
             './cacheToReleases.js': {
                 action: function () { telemetry.cache++; }
             },
@@ -3421,6 +3444,7 @@ function loadForConcernsSeam(mocks, opts) {
             // gh-1435: the dev leg now requires the developmentMode resolver — real module,
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+            './common/developmentModeAdaptiveSp.js': gh1503DevelopmentModeAdaptiveSpReal,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -3436,6 +3460,74 @@ function loadForConcernsSeam(mocks, opts) {
             jira_remove_label: function () { }
         }, mocks || {}));
 }
+
+// ─ gh-1503: dev-plan-escalated label seam (stampDevPlanEscalatedLabel) ─
+// The scope-estimate record decides: mode "plan" stamps the informational
+// label; absent / malformed / default records are no-ops; a label failure
+// is a warn, never a leg failure. Same loader as the concerns seam — the
+// record rides readOutputFileDetailed('scope_estimate.json').
+
+function scopeRecordStub(jsonText) {
+    return function () {
+        return jsonText === undefined ? null : { content: jsonText, path: 'outputs/scope_estimate.json' };
+    };
+}
+
+suite('developTicketAndCreatePR > gh-1503: dev-plan-escalated label seam', function () {
+
+    test('record mode=plan → dev-plan-escalated stamped', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        }, { concernsReader: scopeRecordStub(JSON.stringify({ sp: 5, threshold: 3, mode: 'plan', reason: 'r' })) });
+        mod.stampDevPlanEscalatedLabel('TS-21');
+        assert.equal(labels.length, 1, 'one addLabel call');
+        assert.equal(labels[0].label, 'dev-plan-escalated', 'the informational label');
+        assert.equal(labels[0].issueKey || labels[0].key || labels[0].issue, 'TS-21', 'the ticket key rides the call');
+    });
+
+    test('record mode=default → no label', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        }, { concernsReader: scopeRecordStub(JSON.stringify({ sp: 2, threshold: 3, mode: 'default', reason: 'tiny' })) });
+        mod.stampDevPlanEscalatedLabel('TS-21');
+        assert.deepEqual(labels, [], 'direct legs are not labeled');
+    });
+
+    test('absent record → no label, no throw', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        }, { concernsReader: scopeRecordStub(undefined) });
+        mod.stampDevPlanEscalatedLabel('TS-21');
+        assert.deepEqual(labels, [], 'absent file is a silent no-op');
+    });
+
+    test('malformed record → no label, no throw (fail safe)', function () {
+        var labels = [];
+        var mod = loadForConcernsSeam({
+            jira_add_label: function (args) { labels.push(args); }
+        }, { concernsReader: scopeRecordStub('{"sp": "five", "mode": }') });
+        mod.stampDevPlanEscalatedLabel('TS-21');
+        assert.deepEqual(labels, [], 'unparsable record is a silent no-op');
+    });
+
+    test('label failure → warn, never a leg failure', function () {
+        var mod = loadForConcernsSeam({
+            jira_add_label: function () { throw new Error('tracker down'); }
+        }, { concernsReader: scopeRecordStub(JSON.stringify({ sp: 5, threshold: 3, mode: 'plan', reason: 'r' })) });
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function (m) { warns.push(String(m)); };
+        try {
+            mod.stampDevPlanEscalatedLabel('TS-21');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.join(' ').indexOf('dev-plan-escalated') !== -1, 'warn names the label');
+    });
+});
 
 suite('developTicketAndCreatePR > completion post-check: concerns seam', function () {
 

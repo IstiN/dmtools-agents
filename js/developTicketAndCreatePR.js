@@ -29,6 +29,7 @@ var needsInputCommon = require('./common/needsInput.js');
 // inert); resolution lives in this one shared module, next to the layer that
 // reads customParams.feedbackLoop, so other legs adopt it without duplication.
 var developmentMode = require('./common/developmentMode.js');
+var developmentModeAdaptiveSp = require('./common/developmentModeAdaptiveSp.js');
 var wipSquash = require('./common/wipSquash.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
@@ -672,6 +673,38 @@ function appendConcernsToCompletionComment(comment, ticketKey) {
     return comment;
 }
 
+// ─ gh-1503: SP-adaptive escalation visibility (outputs/scope_estimate.json) ─
+// An adaptive leg that self-selected plan stamps the informational
+// dev-plan-escalated label so humans see the routing decision at a glance.
+// Same degrade-not-fail discipline as the concerns label: no record /
+// malformed record / label failure ⇒ warn or no-op, never a leg failure.
+// The durable signal is the decision record itself; the label only makes
+// escalated legs visible.
+
+// Parsed scope-estimate record, or null when the file is absent, unreadable
+// or malformed (parseScopeEstimateRecord already fails safe to null).
+function readScopeEstimateRecord() {
+    try {
+        var detailed = outputFiles.readOutputFileDetailed('scope_estimate.json');
+        return detailed ? developmentModeAdaptiveSp.parseScopeEstimateRecord(detailed.content) : null;
+    } catch (e) {
+        console.warn('Could not read outputs/scope_estimate.json:', e);
+    }
+    return null;
+}
+
+// No-op unless the record says the leg self-selected plan mode.
+function stampDevPlanEscalatedLabel(ticketKey) {
+    var record = readScopeEstimateRecord();
+    if (!record || record.mode !== 'plan') return;
+    try {
+        getTracker().addLabel(ticketKey, LABELS.DEV_PLAN_ESCALATED);
+        console.log('🧭 Added ' + LABELS.DEV_PLAN_ESCALATED + ' label to', ticketKey);
+    } catch (e) {
+        console.warn('Could not add ' + LABELS.DEV_PLAN_ESCALATED + ' label:', e);
+    }
+}
+
 // Mirrors the concerns into the PR body SOURCE. The PR body is assembled from
 // the outputs/response.md FILE (see bodyFileCandidates in createPullRequest),
 // so the concerns are appended to that file rather than to the in-memory
@@ -731,6 +764,10 @@ function postPRCommentToJira(ticketKey, prUrl, branchName) {
         // label — a no-op when the agent raised none (see
         // appendConcernsToCompletionComment).
         comment = appendConcernsToCompletionComment(comment, ticketKey);
+
+        // gh-1503: surface an adaptive leg's plan self-selection (no-op for
+        // direct legs and for non-adaptive modes — the record is absent there).
+        stampDevPlanEscalatedLabel(ticketKey);
 
         getTracker().postComment(ticketKey, comment);
 
@@ -2168,6 +2205,7 @@ if (typeof module !== 'undefined' && module.exports) {
         // post-processors + the read seam, exported for direct
         // characterization tests.
         readConcernsMd, appendConcernsToCompletionComment, mirrorConcernsIntoResponseBody,
+        readScopeEstimateRecord, stampDevPlanEscalatedLabel,
         // gh-1435: config-context seam — exported so the developmentMode IT
         // suites drive the leg's real config-reading path directly.
         initDevelopmentContext, ticketDescriptorOf, openPrDevCommitMessage
