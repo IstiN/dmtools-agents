@@ -8,7 +8,7 @@
  */
 
 var SHA_RE = /^[0-9a-f]{7,40}$/i;
-var WIP_RE = /WIP auto-save|WIP partial analysis \(interrupted run\)/;
+var WIP_RE = /WIP auto-save|WIP:? partial analysis/;
 function isValidGitSha(val) {
     return SHA_RE.test(String(val || '').trim());
 }

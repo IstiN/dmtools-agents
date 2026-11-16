@@ -1632,6 +1632,7 @@ function throwQuotaPark(ticketKey, parkLabel) {
 }
 
 function resetInterruptedDevelopment(ctx, commentBody) {
+    // gh-1087 AC1/AC2: a hard provider-quota failure parks the lane instead
     squashNonPublishWipCommits(ctx);
     // of resetting for retry — resetting here would re-dispatch the same leg
     // into the same exhausted provider chain on the next SM tick (per-tick

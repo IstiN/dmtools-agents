@@ -173,12 +173,24 @@ suite('wipSquash (gh-1472)', function () {
         assert.equal(baseBranchMerge.subjects.length, 2);
 
         assert.equal(wipSquash.persistBaseHeadFile({}), null);
+        var writtenBase = null;
+        var persisted = wipSquash.persistBaseHeadFile({
+            folder: 'input/PROJ-1',
+            fileName: 'rework_base_head.txt',
+            currentSha: '2222222',
+            ticketKey: 'PROJ-1',
+            readFn: function () { throw new Error('missing'); },
+            writeFn: function (arg) { writtenBase = arg; },
+            runCommand: function () { return ''; }
+        });
+        assert.equal(persisted, '2222222');
+        assert.deepEqual(writtenBase, { path: 'input/PROJ-1/rework_base_head.txt', content: '2222222' });
     });
 
     test('walkBackContiguousWipBase walks across interrupted partial-work commits too (gh-1501)', function () {
         var walked = wipSquash.walkBackContiguousWipBase(function (cmd) {
             if (cmd.indexOf('git log') === 0) {
-                return '4444444:PROJ-1: WIP partial analysis (interrupted run)\n3333333:PROJ-1: WIP auto-save 2\n2222222:PROJ-1: WIP auto-save 1\n1111111:Initial commit\n';
+                return '4444444:PROJ-1 WIP: partial analysis (agent interrupted)\n3333333:PROJ-1: WIP auto-save 2\n2222222:PROJ-1: WIP auto-save 1\n1111111:Initial commit\n';
             }
             if (cmd === 'git rev-parse 2222222^') return '1111111\n';
             return '';
