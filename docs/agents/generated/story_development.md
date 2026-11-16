@@ -112,6 +112,8 @@ _Develop Ticket and Create PR Action_
   - `customStatuses`
   - `developmentMode`
   - `developmentModeConfig`
+  - `developmentModeConfig.adaptive`
+  - `developmentModeConfig.plan`
   - `dryRun`
   - `feedbackLoop`
   - `localTeammate`
@@ -156,6 +158,16 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 
 - `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_story_development_triggered"`
+- `developmentMode`: `"adaptive"`
+- `developmentModeConfig`:
+
+  ```json
+  {
+    "adaptive": {
+      "planThresholdSp": 3
+    }
+  }
+  ```
 - `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
 - `dryRun` _(used by JS action)_
@@ -164,10 +176,6 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `childQuestions` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
 - `contexts` _(used by JS action)_
-- `developmentMode` _(used by JS action)_
-- `developmentModeConfig` _(used by JS action)_
-- `developmentModeConfig.adaptive` _(used by JS action)_
-- `developmentModeConfig.plan` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `feedbackLoop.qualityGates.gates` _(used by JS action)_
 - `fields` _(used by JS action)_

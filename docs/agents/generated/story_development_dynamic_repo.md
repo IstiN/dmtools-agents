@@ -83,6 +83,8 @@ _Post-Action Development — Dynamic Repository variant_
   - `dependenciesDir`
   - `developmentMode`
   - `developmentModeConfig`
+  - `developmentModeConfig.adaptive`
+  - `developmentModeConfig.plan`
   - `dryRun`
   - `feedbackLoop`
   - `localTeammate`
