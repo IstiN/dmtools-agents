@@ -336,3 +336,13 @@ suite('reviewPoolAggregate — inlineEntryFromMerged (synthesized attribution)',
         assert.equal(list.entries[0].severity, 'BLOCKING');
     });
 });
+
+// ── suite registration (gh-1507: the dormant-suites silent-skip closes) ──────
+
+suite('reviewPoolAggregate — suite registration', function() {
+    test('the suite is wired into run_all.json', function() {
+        var all = file_read({ path: 'js/unit-tests/run_all.json' }) || '';
+        assert.ok(all.indexOf('test_reviewPoolAggregate.js') !== -1,
+            'test_reviewPoolAggregate.js must be registered in run_all.json');
+    });
+});

@@ -78,3 +78,11 @@ test('CLAIM_MAX: the canonical claim-length cap is exported for the prose paths'
     assert.ok(mod.CLAIM_MAX > 0);
 });
 
+// ── suite registration (gh-1507: the dormant-suites silent-skip closes) ──────
+
+test('the suite is wired into run_all.json', function() {
+    var all = file_read({ path: 'js/unit-tests/run_all.json' }) || '';
+    assert.ok(all.indexOf('test_reviewPoolCandidates.js') !== -1,
+        'test_reviewPoolCandidates.js must be registered in run_all.json');
+});
+

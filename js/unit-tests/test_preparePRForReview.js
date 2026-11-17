@@ -1401,4 +1401,36 @@ suite('preparePRForReview — gh-1471 reviewer-pool in-job round', function() {
         assert.equal(outcome, null);
         assert.equal(run.record.cliCalls.length, 0);
     });
+
+    test('a pool CONFIG error fails the leg loudly (gh-1507 AC6 — fail-fast, never silent skip)', function() {
+        var run = dispatcherLoad({});
+        var ctx = dispatcherCtx();
+        ctx.config.reviewPolicy = { reviewers: { legal: { isEnabled: true } } }; // 'legal' is not defined
+        var threw = null;
+        try {
+            run.loaded.module.reviewerPoolRoundSetup(ctx, dispatcherPrDetails(), []);
+        } catch (e) {
+            threw = e;
+        }
+        assert.ok(threw, 'the unknown-reviewer config error must propagate — the leg fails at start');
+        assert.ok(String(threw.message).indexOf('legal') !== -1,
+            'the error names the unknown reviewer: ' + (threw && threw.message));
+        assert.equal(run.record.cliCalls.length, 0, 'nothing dispatched on a misconfigured pool');
+    });
+
+    test('an unknown required-gate name fails the leg loudly too (a misspelled gate silently gates nothing)', function() {
+        var run = dispatcherLoad({});
+        var ctx = dispatcherCtx();
+        ctx.config.reviewPolicy = { required: ['secuirty'] };
+        var threw = null;
+        try {
+            run.loaded.module.reviewerPoolRoundSetup(ctx, dispatcherPrDetails(), []);
+        } catch (e) {
+            threw = e;
+        }
+        assert.ok(threw, 'the unresolved-gate config error must propagate');
+        assert.ok(String(threw.message).indexOf('reviewPolicy.required') !== -1,
+            'the error names the gate key: ' + (threw && threw.message));
+        assert.equal(run.record.cliCalls.length, 0, 'nothing dispatched on a misconfigured gate');
+    });
 });

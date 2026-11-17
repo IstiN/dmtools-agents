@@ -123,8 +123,11 @@ function resolvePoolOrNull(deps, ctx) {
 /**
  * The dispatcher's gh-1471 step: resolve the pool, materialize the round
  * context (head, hunks) and execute the specialists IN-JOB. Returns
- * { round, roundCtx } or null (dry runs, no pool, any failure — the
- * single-reviewer round is the fail-open floor).
+ * { round, roundCtx } or null (dry runs, no pool, operational failure —
+ * the single-reviewer round is the fail-open floor). A pool CONFIG error
+ * (the ReviewSkillValidationError family: unknown tuning names, unresolved
+ * required gates, malformed skill files) is RE-THROWN — gh-1507 AC6: the
+ * misconfiguration fails the leg at start, never a silent skip.
  */
 function reviewerPoolRoundSetup(deps, ctx, prDetails, prComments) {
     if (ctx.dryRun || branchSetup.isDryRunParams(ctx.params)) return null;
@@ -137,6 +140,13 @@ function reviewerPoolRoundSetup(deps, ctx, prDetails, prComments) {
         logInJobRoundOutcome(round);
         return { round: round, roundCtx: roundCtx };
     } catch (e) {
+        // gh-1507 (AC6): a pool CONFIG error is never a silent skip — the
+        // misconfiguration must fail the leg at start (the reviewPool
+        // doctrine "fail loud at config load"; the gh-1351 failure model
+        // posts the message on the ticket). Operational failures (spawn /
+        // transport / round context) stay fail-open: the single-reviewer
+        // round remains the floor.
+        if (reviewPoolModule.isReviewSkillError(e)) throw e;
         console.warn('reviewer pool round setup failed (non-fatal, single-reviewer round):', e.message || e);
         return null;
     }
