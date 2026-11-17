@@ -87,6 +87,38 @@ function ioCacheStats() {
     };
 }
 
+// [fix/io-cache-ttl] Live-probe cache: scan-time live reads (mutex phantom
+// probes gh-1000, run-jobs polls in stampLinkBlock) fire per rule today —
+// 84 identical actions/runs/<id>/jobs calls for 3 run ids measured in ONE
+// dry tick (fa, 2026-11-17). A SHORT TTL bounds the fan-out: scans see a
+// <=liveProbeTtlMs-stale layer; ACTION-time re-verifies keep true live
+// reads ("scan cached, act live") — separate holder from _cache because
+// the staleness contract differs.
+var SM_LIVE_PROBE_TTL_MS = 30 * 1000;
+var _probeCache = { entries: {} };
+function probeCacheGet(key, ttlMs) {
+    var e = _probeCache.entries[key];
+    if (!e) return undefined;
+    if (Date.now() - e.at > ttlMs) {
+        delete _probeCache.entries[key];
+        _stats.miss++;
+        return undefined;
+    }
+    _stats.hit++;
+    return e.data;
+}
+function probeCachePut(key, data) {
+    _probeCache.entries[key] = { at: Date.now(), data: data };
+    _stats.puts++;
+}
+function probeTtlMs() { return SM_LIVE_PROBE_TTL_MS; }
+// jobParams tuning (smAgent.initTickState): ioCacheTtlMs / liveProbeTtlMs.
+function applyIoCacheTuning(jobParams) {
+    var p = jobParams || {};
+    if (typeof p.ioCacheTtlMs === 'number' && p.ioCacheTtlMs >= 0) _cache.ttlMs = p.ioCacheTtlMs;
+    if (typeof p.liveProbeTtlMs === 'number' && p.liveProbeTtlMs >= 0) SM_LIVE_PROBE_TTL_MS = p.liveProbeTtlMs;
+}
+
 function ioCacheKey(owner, repo, kind, id) {
     return owner + '/' + repo + ':' + kind + (id ? ':' + id : '');
 }
@@ -1643,6 +1675,10 @@ if (typeof module !== 'undefined' && module.exports) {
         createSmProvider: createSmProvider,
         ioCacheDrop: ioCacheDrop,
         ioCacheStats: ioCacheStats,
+        probeCacheGet: probeCacheGet,
+        probeCachePut: probeCachePut,
+        probeTtlMs: probeTtlMs,
+        applyIoCacheTuning: applyIoCacheTuning,
         BOOKKEEPING_CHECK_PREFIXES: BOOKKEEPING_CHECK_PREFIXES,
         // gh-1059: ONE head-repo resolver shared with githubSource.js (the
         // PR-list and prStatus payload dialects must never drift apart).

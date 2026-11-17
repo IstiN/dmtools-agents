@@ -9,6 +9,7 @@
 'use strict';
 
 var checkRunStampModule = require('../common/checkRunStamp.js');
+var smProviderModule = require('../common/smProvider.js');
 var FAILING_JOB_CONCLUSIONS = ['failure', 'timed_out', 'action_required', 'startup_failure', 'stale'];
 var ACTIVE_SYNC_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
 var stampTempSeq = 0;
@@ -64,10 +65,24 @@ function parseJobsResponse(res) {
 }
 function fetchRunJobsSafe(deps, repoInfo, runId) {
   try {
+    // [fix/io-cache-ttl] run-jobs table rides the 30s live-probe layer —
+    // one poll per run per 30s instead of one per stamp attempt per rule
+    // (measured: 84 identical polls for 3 run ids in ONE dry tick). The
+    // table is informational (summary body); the stamp POST itself is not
+    // affected. TTL 0 via liveProbeTtlMs jobParam restores live polls.
+    var probeKey = 'runJobs:' + repoInfo.owner + '/' + repoInfo.repo + ':' + runId;
+    if (smProviderModule && typeof smProviderModule.probeCacheGet === 'function') {
+      var cachedJobs = smProviderModule.probeCacheGet(probeKey, smProviderModule.probeTtlMs());
+      if (cachedJobs) return cachedJobs;
+    }
     var res = deps.exec({
       command: 'gh api repos/' + repoInfo.owner + '/' + repoInfo.repo + '/actions/runs/' + runId + '/jobs?per_page=100'
     });
-    return parseJobsResponse(res);
+    var jobs = parseJobsResponse(res);
+    if (jobs.length && smProviderModule && typeof smProviderModule.probeCachePut === 'function') {
+      smProviderModule.probeCachePut(probeKey, jobs);
+    }
+    return jobs;
   } catch (e) {
     deps.warn('  ⚠️  stamp job-table probe failed: ' + e);
     return [];
