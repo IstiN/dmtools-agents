@@ -200,64 +200,6 @@ suite('gh-1503 UT — adaptive appendix text', function () {
     });
 });
 
-// ── UT: materialization ──────────────────────────────────────────────────────
-
-suite('gh-1503 UT — adaptive appendix materialization', function () {
-    test('adaptive leg → writes the appendix, logs the threshold, zero warnings', function () {
-        var fs = fsRecorder();
-        var r = developmentModeAdaptive.materializeAdaptiveAppendix(adaptiveCustomParams(), { file_write: fs.file_write });
-        assert.equal(r.active, true, 'active for adaptive');
-        assert.equal(r.ok, true, 'write succeeds');
-        assert.equal(r.path, '.dmtools/development-mode-adaptive-appendix.md', 'runtime path');
-        assert.equal(fs.calls.writes.length, 1, 'exactly one write');
-        assert.ok(fs.calls.writes[0].content.indexOf('(threshold: 3)') !== -1, 'default threshold rendered');
-        assert.ok(r.logLines.length === 1 && r.logLines[0].indexOf('threshold 3') !== -1, 'log line names the threshold');
-        assert.deepEqual(r.warnings, [], 'silent for a valid/absent config');
-    });
-
-    test('invalid threshold → warning flushed + the default text written', function () {
-        var fs = fsRecorder();
-        var r = developmentModeAdaptive.materializeAdaptiveAppendix(adaptiveCustomParams('9'), { file_write: fs.file_write });
-        assert.equal(r.ok, true, 'still materializes');
-        assert.equal(r.warnings.length, 1, 'one warning');
-        assert.ok(fs.calls.writes[0].content.indexOf('(threshold: 3)') !== -1, 'default threshold in the file');
-    });
-
-    test('non-adaptive modes → inactive, zero IO, zero output', function () {
-        ['default', 'plan', undefined].forEach(function (mode) {
-            var fs = fsRecorder();
-            var captured = captureConsole(function () {
-                var r = developmentModeAdaptive.materializeAdaptiveAppendix(
-                    mode === undefined ? {} : { developmentMode: mode }, { file_write: fs.file_write });
-                assert.equal(r.active, false, mode + ' → inactive');
-                assert.equal(r.ok, false, 'inactive reads as "nothing materialized"');
-                assert.deepEqual(fs.calls.writes, [], mode + ' → zero writes');
-            });
-            assert.deepEqual(captured.logs, [], mode + ' → zero log lines');
-            assert.deepEqual(captured.warns, [], mode + ' → zero warnings');
-        });
-    });
-
-    test('shadow adaptive leg → inactive, zero IO, the would-act line returned (gh-1437 carry-over)', function () {
-        var fs = fsRecorder();
-        var r = developmentModeAdaptive.materializeAdaptiveAppendix({
-            developmentMode: 'adaptive',
-            developmentModeConfig: { adaptive: { shadowMode: true } }
-        }, { file_write: fs.file_write });
-        assert.equal(r.active, false, 'shadow never materializes (acting = changing the prompt)');
-        assert.equal(r.ok, false, 'nothing materialized');
-        assert.deepEqual(fs.calls.writes, [], 'zero writes in shadow');
-        assert.ok(r.logLines.join('\n').indexOf('shadow mode') !== -1, 'the would-act line rides back to the caller');
-    });
-
-    test('write failure → ok:false + an error naming the path (never throws)', function () {
-        var throwingIo = { file_write: function () { throw new Error('disk full'); } };
-        var r = developmentModeAdaptive.materializeAdaptiveAppendix(adaptiveCustomParams(), throwingIo);
-        assert.equal(r.ok, false, 'write failure surfaces');
-        assert.equal(r.active, true, 'adaptive is active even when the write failed');
-        assert.ok(r.error && r.error.indexOf('development-mode-adaptive-appendix.md') !== -1, 'error names the path');
-    });
-});
 
 // ── UT: canonical cliPrompts entry ───────────────────────────────────────────
 

@@ -3,10 +3,6 @@
   "maxLines": 800,
   "maxFunctions": 40,
   "modules": {
-    "js/adaptiveCalibrationHarness.js": {
-      "lines": 456,
-      "functions": 45
-    },
     "js/agentDocGenerator.js": {
       "lines": 826,
       "functions": 47

@@ -1,4 +1,4 @@
-// ── gh-1503: adaptive mode selection — in-leg story-point estimate ──────────
+// ── gh-1503: adaptive mode selection — in-leg estimate ──────────
 //
 // gh-1437 routed adaptive legs pre-leg: a deterministic rule over ticket text
 // (js/common/developmentModeAdaptive.js) decided plan-vs-default before the
@@ -214,25 +214,6 @@ function writeAdaptiveAppendix(threshold, io) {
  * @returns {{ok: boolean, active: boolean, path: string|null, overridden: boolean,
  *            error: string|null, warnings: string[], logLines: string[]}}
  */
-function materializeAdaptiveAppendix(customParams, io) {
-    var resolution = resolveAdaptiveAppendix(customParams);
-    if (!resolution.active) {
-        return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolution.warnings, logLines: resolution.logLines };
-    }
-    if (resolution.error) {
-        return { ok: false, active: true, path: ADAPTIVE_APPENDIX_FILE_PATH, overridden: false, error: resolution.error, warnings: resolution.warnings, logLines: [] };
-    }
-    var written = writeAdaptiveAppendix(resolution.threshold, io);
-    return {
-        ok: written.ok,
-        active: true,
-        path: written.path,
-        overridden: false,
-        error: written.error,
-        warnings: resolution.warnings,
-        logLines: written.ok ? resolution.logLines : []
-    };
-}
 
 /**
  * Resolve the adaptive appendix WITHOUT writing: mode/shadow gating, threshold
@@ -387,7 +368,6 @@ if (typeof module !== 'undefined' && module.exports) {
         adaptiveAppendixText: adaptiveAppendixText,
         resolveAdaptiveAppendix: resolveAdaptiveAppendix,
         writeAdaptiveAppendix: writeAdaptiveAppendix,
-        materializeAdaptiveAppendix: materializeAdaptiveAppendix,
         adaptiveAppendixCliEntry: adaptiveAppendixCliEntry,
         runPreCliAdaptiveAppendixStep: runPreCliAdaptiveAppendixStep,
         stampDevPlanEscalatedFromRecord: stampDevPlanEscalatedFromRecord,
