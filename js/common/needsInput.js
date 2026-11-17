@@ -5,9 +5,9 @@
  * (developBugAndCreatePR) and bug-fix batch (developBugFixBatchAndCreatePR) —
  * share one bookkeeping cluster: the needs-input.md probe, the
  * ai_questions_asked label (add on the ask-mode exit, strip once a leg
- * proceeds past ask-mode), and the green needsInput outcome body. One module
- * means the ask-mode contract (label + green outcome, no PR, no reset) can
- * never drift between the legs.
+ * proceeds past ask-mode), and the green needsInput outcome body. The story
+ * leg also reuses this module for the cooperative interrupted-development
+ * outcome (`"path": "interrupted"`, gh-1484).
  *
  * Pure functions with injected dependencies: each leg passes its own
  * outputFiles module, tracker and label name, so the legs keep their
@@ -82,8 +82,16 @@ function hasInterruptedPathMarker(text) {
         s.indexOf('"path": "interrupted"') !== -1;
 }
 
+function hasInterruptedTrailerInFile(fileText) {
+    var trimmed = String(fileText || '').trim();
+    if (!trimmed) return false;
+    var lines = trimmed.split(/\r?\n/);
+    var lastLine = lines[lines.length - 1].trim();
+    return /^`?\{\s*"path"\s*:\s*"interrupted"[\s\S]*\}`?$/.test(lastLine);
+}
+
 function isInterruptedDevelopmentResponse(responseText, fileResponseText) {
-    return hasInterruptedPathMarker(responseText) || hasInterruptedPathMarker(fileResponseText);
+    return hasInterruptedPathMarker(responseText) || hasInterruptedTrailerInFile(fileResponseText);
 }
 
 function interruptedDevelopmentOutcomeBody(ticketKey, branchName) {
@@ -116,6 +124,7 @@ if (typeof module !== 'undefined' && module.exports) {
         clearNeedsInputTicket: clearNeedsInputTicket,
         needsInputOutcomeBody: needsInputOutcomeBody,
         hasInterruptedPathMarker: hasInterruptedPathMarker,
+        hasInterruptedTrailerInFile: hasInterruptedTrailerInFile,
         isInterruptedDevelopmentResponse: isInterruptedDevelopmentResponse,
         interruptedDevelopmentOutcomeBody: interruptedDevelopmentOutcomeBody,
         evaluateInterruptedDevelopment: evaluateInterruptedDevelopment

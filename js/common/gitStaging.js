@@ -49,15 +49,7 @@ var RUNTIME_ARTIFACT_PATHS = [
     // ~/.dmtools/cache (plus any custom cache*Client / cacheTestRail dirs).
     'cache*Client',
     'cacheTestRail',
-    'cacheBasicOpenAI',
-    'cacheBasicDialAI',
-    'cacheBasicAnthropicAI',
-    'cacheBasicBedrockAI',
-    'cacheBasicOllamaAI',
-    'cacheBasicGitLab',
-    'cacheBasicGithub',
-    'cacheBasicConfluence',
-    'cacheBasicBitbucket'
+    'cacheBasic*'
 ];
 
 /**
@@ -82,7 +74,16 @@ var LEG_CONTEXT_ARTIFACT_PATHS = ['input', 'outputs'];
  * `ls-files | while read … git rm` form was rejected there on every run).
  */
 function buildTrackedPathsCommand(paths) {
-    return 'git ls-files -- ' + (paths || []).join(' ');
+    var expanded = [];
+    var list = paths || [];
+    for (var i = 0; i < list.length; i++) {
+        var p = list[i];
+        expanded.push(p);
+        if (p.indexOf('*') !== -1 && p.slice(-3) !== '/**') {
+            expanded.push('"' + p + '/**"');
+        }
+    }
+    return 'git ls-files -- ' + expanded.join(' ');
 }
 
 function buildTrackedArtifactsCommand() {

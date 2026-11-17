@@ -1708,12 +1708,8 @@ function needsInputOutcomeBody(ctx) {
 
 /**
  * Ask-mode (no-assumptions rule) — the agent flagged missing ticket inputs
- * and stopped WITHOUT writing response.md (the question comment is already
- * posted; outputs/needs-input.md marks the leg). This check MUST precede the
- * interrupted classification in recoverNoChangesOutcome: a response.md-less
- * ask leg is exactly where the ticket should be — waiting on the reporter —
- * never an interrupted reset, and the reviewer hand-off skips ask-mode via
- * the same label. Returns null when the leg is not an ask-mode leg.
+ * and stopped WITHOUT writing response.md (outputs/needs-input.md marks the
+ * leg); precedes the interrupted classification in recoverNoChangesOutcome.
  */
 function askModeOutcome(ctx) {
     if (needsInputCommon.hasNeedsInputFile(outputFiles)) {
@@ -1726,6 +1722,10 @@ function askModeOutcome(ctx) {
     return coopInterrupted ? { result: coopInterrupted } : null;
 }
 
+/**
+ * runPublishPipeline seam: outputs/needs-input.md → label + green outcome;
+ * cooperative interrupted marker ("path":"interrupted", gh-1484) → release WIP label + development-interrupted.
+ */
 function needsInputOutcome(ctx) {
     if (needsInputCommon.hasNeedsInputFile(outputFiles)) {
         squashNonPublishWipCommits(ctx);

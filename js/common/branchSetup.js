@@ -260,9 +260,19 @@ function ensureLegContextLocalExcludes() {
         'Could not add ' + INPUT_STASH_DIR + '/ to .git/info/exclude:'
     );
     ensureGitInfoExclude(
-        'cache*/',
+        'cache*Client/',
         '# DMTools REST client caches (gh-1505 / epam/dm.ai#868) - must never be committed',
-        'Could not add cache*/ to .git/info/exclude:'
+        'Could not add cache*Client/ to .git/info/exclude:'
+    );
+    ensureGitInfoExclude(
+        'cacheTestRail/',
+        '# DMTools TestRail client cache (gh-1505 / epam/dm.ai#868) - must never be committed',
+        'Could not add cacheTestRail/ to .git/info/exclude:'
+    );
+    ensureGitInfoExclude(
+        'cacheBasic*/',
+        '# DMTools Basic* client caches (gh-1505 / epam/dm.ai#868) - must never be committed',
+        'Could not add cacheBasic*/ to .git/info/exclude:'
     );
 }
 

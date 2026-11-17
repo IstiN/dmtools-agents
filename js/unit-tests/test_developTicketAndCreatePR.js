@@ -3569,6 +3569,23 @@ suite('developTicketAndCreatePR > inputs pre-flight (needs-input seams)', functi
         assert.equal(result.ticketKey, 'TS-1485');
     });
 
+    test('interruptedDevelopmentOutcome (gh-1484): mid-document quote of "path": "interrupted" in response.md is NOT treated as cooperative interruption', function () {
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-1486', ''),
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_add_label: function () { }
+        }, {
+            responseMd: '### Summary\nImplemented support for `{"path": "interrupted"}` trailer in dev legs.\nAll tests pass.\n'
+        });
+
+        assert.equal(loaded.mod.needsInputOutcome({
+            ticketKey: 'TS-1486',
+            developmentSummary: 'Done',
+            metadata: { contextId: 'story_development' }
+        }), null, 'a quote mid-document must not trigger cooperative interruption');
+    });
+
 });
 
 // ─ Completion post-check: concerns seam (appendConcernsToCompletionComment /
