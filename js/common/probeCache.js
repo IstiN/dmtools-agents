@@ -19,7 +19,7 @@
  * separate from smProvider's per-tick ioCache and bounded by its own TTL.
  *
  * Also carries the tick counters: tickOrchestrator prints
- * `probe[hit=… miss=… expired=… puts=… drops=…]` in the SM Agent complete
+ * `iocache[hit=… miss=… expired=… puts=… drops=…]` in the SM Agent complete
  * line (production telemetry for the cache health).
  *
  * Pure module — no requires, no globals: IO enters through arguments
@@ -100,24 +100,37 @@ function cachedProbe(key, fetch) {
 
 // validationCheckSync.run-jobs poll (the 84-identical-calls site): one poll
 // per run per probe TTL. The jobs table is informational (stamp summary
-// body); empty payloads stay uncached so a failed listing retries next rule.
+// body). Contract (pr #1514 review round 1): a FAILED or EMPTY listing
+// stays UNCACHED — the caller gets [] but the next rule re-executes, so a
+// transient gh api failure self-retries instead of sticking for the TTL.
 function cachedRunJobs(deps, repoInfo, runId, parse) {
-    return cachedProbe(
-        'runJobs:' + repoInfo.owner + '/' + repoInfo.repo + ':' + runId,
-        function () {
-            try {
-                var res = deps.exec({
-                    command: 'gh api repos/' + repoInfo.owner + '/' +
-                        repoInfo.repo + '/actions/runs/' + runId +
-                        '/jobs?per_page=100'
-                });
-                return parse(res) || [];
-            } catch (e) {
-                deps.warn('  ⚠️  stamp job-table probe failed: ' + e);
-                return [];
-            }
-        }
-    );
+    var key = 'runJobs:' + repoInfo.owner + '/' + repoInfo.repo + ':' + runId;
+    var cached = probeGet(key, probeTtlMs());
+    if (cached !== undefined) return cached;
+    var jobs;
+    try {
+        jobs = parse(deps.exec({
+            command: 'gh api repos/' + repoInfo.owner + '/' +
+                repoInfo.repo + '/actions/runs/' + runId +
+                '/jobs?per_page=100'
+        })) || [];
+    } catch (e) {
+        deps.warn('  ⚠️  stamp job-table probe failed: ' + e);
+        return [];
+    }
+    if (!jobs.length) return [];
+    probePut(key, jobs);
+    return jobs;
+}
+
+// Self-heal companion (gh-1000): when the io-cache entry is dropped the
+// probe layer must not keep serving the pre-heal list for the rest of its
+// TTL — drop it too and count the drop (production telemetry).
+function probeDrop(key) {
+    if (key in _probes) {
+        delete _probes[key];
+        _stats.drops++;
+    }
 }
 
 // githubSource.livePrItems (gh-1000 live re-read), probeCache-aware.
@@ -170,6 +183,7 @@ if (typeof module !== 'undefined' && module.exports) {
         applyProbeTuning: applyProbeTuning,
         cachedProbe: cachedProbe,
         cachedRunJobs: cachedRunJobs,
+        probeDrop: probeDrop,
         livePrItems: livePrItems,
         normalizeLive: normalizeLive,
         ioCacheStats: ioCacheStats,

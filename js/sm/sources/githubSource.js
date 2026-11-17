@@ -1011,6 +1011,12 @@ function rederiveHoldersLive(holders, items, provider, repoInfo, q, opts) {
     var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
     if (divergent.selfHealed) {
         dropOpenPrsCache(repoInfo);
+        // The probe layer must not keep serving the pre-heal open-PR list
+        // for the rest of its TTL — drop it with the io-cache entry and
+        // count the drop (the next scan re-reads live).
+        if (probeCacheModule && typeof probeCacheModule.probeDrop === 'function') {
+            probeCacheModule.probeDrop('livePrs:' + repoInfo.owner + '/' + repoInfo.repo);
+        }
         logPhantomHeal(divergent.alarm, cachedHolders, liveHolderSet.holders);
         recordMutexTickEvent({
             mutexSelfHeals: 1,

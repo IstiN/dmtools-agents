@@ -209,6 +209,11 @@ var REAL_COMMON_MODULES = {
     // gh-1471: the reviewer-pool execution chain (pure end-to-end) — the
     // post action and the pre-cli dispatcher require it; suites shim the
     // collaborators and resolve these for real (same map as testRunner.js).
+    // fa #224 probe layer (pure module): smAgent/githubSource/tickOrchestrator/
+    // validationCheckSync suites load it for real (pr #1514 review round 1 —
+    // the mapping was testRunner.js-only, so the node mirror failed ~725
+    // tests with 'module not found: ../common/probeCache.js').
+    probeCache: 'js/common/probeCache.js',
     reviewPolicy: 'js/common/reviewPolicy.js',
     findingRegistry: 'js/common/findingRegistry.js',
     reviewSpecClaims: 'js/common/reviewSpecClaims.js',

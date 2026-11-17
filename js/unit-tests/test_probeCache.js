@@ -148,9 +148,9 @@ test('one poll per run per TTL; the jobs table rides the layer', function () {
 
 test('exec failure warns and returns [] without caching the failure', function () {
     probeCache._reset();
-    var warns = [];
+    var execCount = 0, warns = [];
     var deps = {
-        exec: function () { throw new Error('boom'); },
+        exec: function () { execCount++; throw new Error('boom'); },
         warn: function (m) { warns.push(m); }
     };
     var out = probeCache.cachedRunJobs(deps, { owner: 'o', repo: 'r' }, 7, function () {
@@ -159,6 +159,45 @@ test('exec failure warns and returns [] without caching the failure', function (
     assert.deepEqual(out, []);
     assert.equal(warns.length, 1);
     assert.ok(warns[0].indexOf('stamp job-table probe failed') !== -1);
+    // pr #1514 review round 1: the contract is the SECOND call re-executes —
+    // a failed listing must not stick for the TTL. Assert the retry, not
+    // just the warning.
+    probeCache.cachedRunJobs(deps, { owner: 'o', repo: 'r' }, 7, function () {
+        return [];
+    });
+    assert.equal(execCount, 2, 'failed poll stays uncached — next rule re-executes');
+    assert.equal(probeCache.ioCacheStats().puts, 0, 'failure never lands in the layer');
+});
+
+test('empty jobs payload returns [] and stays uncached (retry next rule)', function () {
+    probeCache._reset();
+    var execCount = 0;
+    var deps = {
+        exec: function () { execCount++; return { jobs: [] }; },
+        warn: function () {}
+    };
+    var repoInfo = { owner: 'o', repo: 'r' };
+    var out = probeCache.cachedRunJobs(deps, repoInfo, 9, function (res) {
+        return res.jobs;
+    });
+    assert.deepEqual(out, []);
+    probeCache.cachedRunJobs(deps, repoInfo, 9, function (res) { return res.jobs; });
+    assert.equal(execCount, 2, 'empty payload stays uncached');
+    assert.equal(probeCache.ioCacheStats().puts, 0);
+});
+
+test('probeDrop removes the entry and counts the drop (gh-1000 self-heal)', function () {
+    probeCache._reset();
+    probeCache.probePut('livePrs:o/r', [{ number: 1 }]);
+    assert.deepEqual(probeCache.probeGet('livePrs:o/r', 30000), [{ number: 1 }]);
+    probeCache.probeDrop('livePrs:o/r');
+    assert.equal(probeCache.probeGet('livePrs:o/r', 30000), undefined);
+    var st = probeCache.ioCacheStats();
+    assert.equal(st.drops, 1, 'self-heal drops surface in production telemetry');
+    assert.equal(st.entries, 0);
+    // dropping an absent key is a no-op (no phantom drop counts)
+    probeCache.probeDrop('livePrs:o/r');
+    assert.equal(probeCache.ioCacheStats().drops, 1);
 });
 
 });
