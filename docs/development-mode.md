@@ -110,8 +110,9 @@ code, estimates the work as one whole number, and self-selects its working mode.
 }
 ```
 
-`adaptive.planThreshold` is an integer; values outside the estimate scale
-(1..13) warn and fall back to the default (`3`).
+`adaptive.planThreshold` is a positive integer of any size — the estimate
+scale is open-ended, so `21` is as valid as `5`. Zero, negative and
+non-integer values warn and fall back to the default (`3`).
 
 Unknown `developmentModeConfig` keys are ignored (forward compatibility);
 wrong types are warned-and-ignored.

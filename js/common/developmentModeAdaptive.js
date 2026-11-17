@@ -40,8 +40,9 @@ var ADAPTIVE_APPENDIX_EXCLUDE_COMMENT =
     '# Development-mode adaptive appendix — runtime materialization, never committed';
 
 var DEFAULT_PLAN_THRESHOLD = 3;
-var ESTIMATE_SCALE_MIN = 1;
-var ESTIMATE_SCALE_MAX = 13;
+// The estimate scale is open-ended (the appendix tells the agent to keep
+// going past any value it named) — the knob and the record accept any
+// positive integer; only positivity and integrality are enforced.
 
 var PLAN_APPENDIX_RUNTIME_PATH = '.dmtools/development-mode-plan-appendix.md';
 var SCOPE_ESTIMATE_RELATIVE_PATH = 'outputs/<KEY>/scope_estimate.json';
@@ -88,7 +89,7 @@ function resolvePlanThreshold(customParams) {
         return { threshold: DEFAULT_PLAN_THRESHOLD, warning: null };
     }
     var raw = config.planThreshold;
-    if (isIntegerInRange(raw, ESTIMATE_SCALE_MIN, ESTIMATE_SCALE_MAX)) {
+    if (isIntegerInRange(raw, 1, Number.MAX_SAFE_INTEGER)) {
         return { threshold: raw, warning: null };
     }
     var shown = raw === null ? 'null' : (typeof raw === 'string' ? '"' + raw + '"' : String(raw));
@@ -128,7 +129,7 @@ function hasRequiredEstimateFields(record) {
 // The lenient half: optional fields ride along only when well-typed.
 function estimateRecordWithoutExtras(record) {
     var parsed = { sp: record.sp, mode: record.mode };
-    if (isIntegerInRange(record.threshold, ESTIMATE_SCALE_MIN, ESTIMATE_SCALE_MAX)) {
+    if (isIntegerInRange(record.threshold, 1, Number.MAX_SAFE_INTEGER)) {
         parsed.threshold = record.threshold;
     }
     if (typeof record.reason === 'string' && record.reason.trim()) {

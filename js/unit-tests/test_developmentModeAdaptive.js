@@ -88,15 +88,17 @@ suite('gh-1503 UT — estimate threshold resolution', function () {
         assert.equal(noKey.warning, null, 'adaptive block without the key → silent');
     });
 
-    test('valid integers pass through, including the boundaries', function () {
+    test('valid integers pass through — the scale is open-ended', function () {
         assert.equal(developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(5)).threshold, 5, 'valid value honored');
         assert.equal(developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(5)).warning, null, 'valid value warns nothing');
         assert.equal(developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(1)).threshold, 1, 'min boundary honored');
-        assert.equal(developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(13)).threshold, 13, 'max boundary honored');
+        assert.equal(developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(21)).threshold, 21,
+            '21 is as legal as 5 — no artificial ceiling');
+        assert.equal(developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(21)).warning, null, '21 warns nothing');
     });
 
     test('invalid values → default + one warning naming the value', function () {
-        var cases = [null, '5', 3.5, 0, -2, 14, true];
+        var cases = [null, '5', 3.5, 0, -2, true];
         cases.forEach(function (raw) {
             var r = developmentModeAdaptive.resolvePlanThreshold(adaptiveCustomParams(raw));
             assert.equal(r.threshold, 3, 'invalid ' + JSON.stringify(raw) + ' → default');
@@ -157,9 +159,9 @@ suite('gh-1503 UT — scope-estimate record parsing', function () {
         });
     });
 
-    test('open-ended scale: sp beyond the threshold range still parses (the estimate may exceed 13)', function () {
-        var r = developmentModeAdaptive.parseScopeEstimateRecord(JSON.stringify({ sp: 21, mode: 'plan' }));
-        assert.ok(r && r.sp === 21, 'sp 21 is a legal estimate');
+    test('open-ended scale: sp and threshold beyond 13 still parse', function () {
+        var r = developmentModeAdaptive.parseScopeEstimateRecord(JSON.stringify({ sp: 21, mode: 'plan', threshold: 21 }));
+        assert.ok(r && r.sp === 21 && r.threshold === 21, 'sp 21 with threshold 21 is a legal record');
         var big = developmentModeAdaptive.parseScopeEstimateRecord(JSON.stringify({ sp: 40, mode: 'default' }));
         assert.ok(big && big.sp === 40, 'the scale keeps going above the last named value');
     });
