@@ -11,6 +11,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `autoSaveCommitMessage` — optional template for the periodic WIP auto-save commit made by the timer (default `{ticketKey} WIP auto-save {timestamp}`; also `formats.commitMessage.autoSave` in the project config). Use it when the target repo's commit-msg hook requires a tracker key, e.g. `AB#{ticketKey} WIP auto-save {timestamp}`.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 - `scmProvider` — SCM provider override (`github`, `gitlab`, …) for this run (autocommit timer and release snapshots route through it).
+- `developmentMode` / `developmentModeConfig` — `default` | `plan` | `adaptive` (missing/unknown ⇒ `default`); `adaptive` = estimates in-leg, self-selects plan at `developmentModeConfig.adaptive.planThreshold` (default `3`), stamps `dev-plan-escalated`, records `outputs/<KEY>/scope_estimate.json`. Details: `docs/development-mode.md` §2.3.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 - `providerTransientBackoffSec` — backoff seconds before the one bounded resume of the persisted fa session when the leg died in a whole-provider-chain outage (HTTP 5xx/429 "Provider chain exhausted"; default `90`). The outage resume fires even with the feedback loop disabled globally; `feedbackLoop.missingResponse.enabled: false` opts out. When the resume fails, the reset comment names the failing models and codes instead of guessing a rate limit.
 - `targetRepository` — repository override block (`owner`, `repo`, `baseBranch`, `workingDir`) — run the work against this repository instead of the project default.
@@ -106,6 +107,7 @@ _Develop Bug and Create PR Post-Action_
   - `customStatuses`
   - `developmentMode`
   - `developmentModeConfig`
+  - `developmentModeConfig.adaptive`
   - `dryRun`
   - `feedbackLoop`
   - `localTeammate`
@@ -150,6 +152,16 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 
 - `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_bug_development_triggered"`
+- `developmentMode`: `"adaptive"`
+- `developmentModeConfig`:
+
+  ```json
+  {
+    "adaptive": {
+      "planThreshold": 3
+    }
+  }
+  ```
 - `branchCreateFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
 - `dryRun` _(used by JS action)_
@@ -158,10 +170,6 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `childQuestions` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
 - `contexts` _(used by JS action)_
-- `developmentMode` _(used by JS action)_
-- `developmentModeConfig` _(used by JS action)_
-- `developmentModeConfig.adaptive` _(used by JS action)_
-- `developmentModeConfig.plan` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `feedbackLoop.qualityGates.gates` _(used by JS action)_
 - `fields` _(used by JS action)_

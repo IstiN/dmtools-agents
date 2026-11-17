@@ -3,10 +3,6 @@
   "maxLines": 800,
   "maxFunctions": 40,
   "modules": {
-    "js/adaptiveCalibrationHarness.js": {
-      "lines": 456,
-      "functions": 45
-    },
     "js/agentDocGenerator.js": {
       "lines": 826,
       "functions": 47
@@ -88,8 +84,8 @@
       "functions": 46
     },
     "js/developTicketAndCreatePR.js": {
-      "lines": 2202,
-      "functions": 112
+      "lines": 2210,
+      "functions": 113
     },
     "js/dfManager.js": {
       "lines": 774,

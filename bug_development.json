@@ -21,7 +21,13 @@
     "postJSAction": "agents/js/developBugAndCreatePR.js",
     "customParams": {
       "responseTarget": "scm",
-      "removeLabel": "sm_bug_development_triggered"
+      "removeLabel": "sm_bug_development_triggered",
+      "developmentMode": "adaptive",
+      "developmentModeConfig": {
+        "adaptive": {
+          "planThreshold": 3
+        }
+      }
     },
     "inputJql": "key = PROJ-74",
     "cliPrompts": [
@@ -51,6 +57,11 @@
         "id": "developmentModePlan",
         "prompt": "./.dmtools/development-mode-plan-appendix.md",
         "condition": "agents/js/conditions/isDevelopmentModePlan.js"
+      },
+      {
+        "id": "developmentModeAdaptive",
+        "prompt": "./.dmtools/development-mode-adaptive-appendix.md",
+        "condition": "agents/js/conditions/isDevelopmentModeAdaptive.js"
       }
     ],
     "cliPromptsByTracker": {

@@ -47,14 +47,15 @@ var devDevelopmentModePlanReal = loadModule('js/common/developmentModePlan.js',
     makeRequire({ './developmentMode.js': devDevelopmentModeReal }));
 // gh-1437: the adaptive routing module — same wiring discipline as the plan
 // module above (real instance, file IO still mockable via `mocks`).
+// gh-1503: the adaptive decision module (in-leg story-point routing) — same discipline.
 var devDevelopmentModeAdaptiveReal = loadModule('js/common/developmentModeAdaptive.js',
-    makeRequire({ './developmentMode.js': devDevelopmentModeReal, './developmentModePlan.js': devDevelopmentModePlanReal }));
+    makeRequire({ './developmentMode.js': devDevelopmentModeReal }));
 
 function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     var planMod = loadModule('js/common/developmentModePlan.js',
         makeRequire({ './developmentMode.js': devDevelopmentModeReal }), mocks || {});
     var adaptiveMod = loadModule('js/common/developmentModeAdaptive.js',
-        makeRequire({ './developmentMode.js': devDevelopmentModeReal, './developmentModePlan.js': planMod }), mocks || {});
+        makeRequire({ './developmentMode.js': devDevelopmentModeReal }), mocks || {});
     return loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks || {}),
@@ -1706,20 +1707,30 @@ suite('preCliDevelopmentSetup.writeDevBaseHead (gh-1308)', function () {
                 developmentModeConfig: { plan: { appendixFile: 'missing.md' } }
             });
         });
-        var adaptiveDefault = modAppendix.runDevelopmentModeAppendixStep(
+        var adaptive = modAppendix.runDevelopmentModeAppendixStep(
             { developmentMode: 'adaptive' },
             { key: 'PROJ-1', fields: { summary: 'short', description: 'short' } }
         );
-        assert.equal(adaptiveDefault.routed, 'default');
-        var adaptivePlan = modAppendix.runDevelopmentModeAppendixStep(
+        assert.equal(adaptive.active, true, 'adaptive always materializes the adaptive appendix (in-leg decision)');
+        assert.equal(adaptive.ok, true, 'adaptive appendix written');
+        var appendixPaths = appendixWrites.map(function (w) { return w.path; });
+        assert.ok(appendixPaths.indexOf('.dmtools/development-mode-adaptive-appendix.md') !== -1,
+            'adaptive appendix on disk');
+        assert.ok(appendixPaths.indexOf('.dmtools/development-mode-plan-appendix.md') !== -1,
+            'plan appendix co-materialized for escalation reads');
+        assert.ok(adaptive.logLines.length >= 1 && adaptive.logLines[0].indexOf('threshold 3') !== -1,
+            'SP routing logged with the threshold');
+        // gh-1503: the ticket text no longer pre-routes — the agent decides in-leg
+        var adaptiveSame = modAppendix.runDevelopmentModeAppendixStep(
             { developmentMode: 'adaptive' },
             { key: 'PROJ-1', fields: { summary: 'big', description: '- m1\n- m2\n\nprose\n\n- m3\n- m4' } }
         );
-        assert.equal(adaptivePlan.routed, 'plan');
+        assert.equal(adaptiveSame.active, true, 'ticket text does not change the materialization decision');
+        // an unreadable plan appendix override is a config error → fail fast
         assert.throws(function () {
             modAppendix.runDevelopmentModeAppendixStep(
                 { developmentMode: 'adaptive', developmentModeConfig: { plan: { appendixFile: 'missing.md' } } },
-                { key: 'PROJ-1', fields: { summary: 'big', description: '- m1\n- m2\n\nprose\n\n- m3\n- m4' } }
+                { key: 'PROJ-1', fields: { summary: 'big', description: 'x' } }
             );
         });
     });
@@ -1846,7 +1857,7 @@ suite('preCliDevelopmentSetup — fresh leg input survives branch setup (gh-1318
             './common/legFailureReport.js': legFailureReportModule,
             './common/legStartSignal.js': legStartSignalReal,
             './common/developmentModePlan.js': devDevelopmentModePlanReal,
-            './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
+                './common/developmentModeAdaptive.js': devDevelopmentModeAdaptiveReal,
             './common/trackers.js': trackers
         });
     }

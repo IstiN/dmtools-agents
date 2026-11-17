@@ -49,6 +49,8 @@ function captureConsole(fn) {
 var developmentMode = loadModule('js/common/developmentMode.js');
 var developmentModePlan = loadModule('js/common/developmentModePlan.js',
     makeRequire({ './developmentMode.js': developmentMode }));
+var developmentModeAdaptive = loadModule('js/common/developmentModeAdaptive.js',
+    makeRequire({ './developmentMode.js': developmentMode }));
 
 // Filesystem recording mocks — every test asserts on the recorded calls, so a
 // real file can never be touched (network-guard discipline for file IO).
@@ -393,13 +395,14 @@ suite('gh-1436 UT — condition script', function () {
             assert.equal(ok, false, 'mode ' + JSON.stringify(mode) + ' → excluded');
         });
         assert.equal(loaded.fs.calls.reads.length, 0, 'non-plan/non-adaptive modes never touch the filesystem');
-        // gh-1437: adaptive legs DO probe the file (the materialization is the
-        // decision record) — pinned here so the surface stays explicit.
+        // gh-1503: adaptive legs NEVER carry the plan entry — their prompt is
+        // owned by the adaptive appendix; the plan appendix file is an escalation
+        // READ target only (materialized by the adaptive preCli step).
         var adaptive = loadConditionWith({});
         assert.equal(adaptive.mod.action({ jobParams: { customParams: { developmentMode: 'adaptive' } } }), false,
-            'adaptive without a materialized appendix → excluded');
-        assert.deepEqual(adaptive.fs.calls.reads, ['.dmtools/development-mode-plan-appendix.md'],
-            'adaptive probes exactly the runtime path');
+            'adaptive → excluded (adaptive appendix owns the adaptive prompt)');
+        assert.deepEqual(adaptive.fs.calls.reads, [],
+            'adaptive never probes the plan runtime path');
     });
 
     test('plan mode but file missing/unreadable → false (no dangling prompt read)', function () {
@@ -475,7 +478,7 @@ function loadDevSetup(fs, extraMocks) {
             './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
                 makeRequire({ './developmentMode.js': developmentMode }), mocks),
             './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
-                makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks)
+                makeRequire({ './developmentMode.js': developmentMode }), mocks)
         }),
         mocks
     );
@@ -562,8 +565,8 @@ suite('gh-1436 IT — dev leg preCli plan-mode appendix step', function () {
                 './common/developmentMode.js': developmentMode,
                 './common/developmentModePlan.js': developmentModePlan,
                 './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
-                    makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }),
-                    { file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete, cli_execute_command: function () { return ''; } })
+                    makeRequire({ './developmentMode.js': developmentMode },
+                        { file_read: fs.file_read, file_write: fs.file_write, file_delete: fs.file_delete, cli_execute_command: function () { return ''; } }))
             }),
             { file_read: fs.file_read, file_write: fs.file_write, cli_execute_command: function () { return ''; } }
         );
@@ -614,7 +617,7 @@ suite('gh-1436 IT — dev leg preCli plan-mode appendix step', function () {
                 './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
                     makeRequire({ './developmentMode.js': developmentMode }), mocks),
                 './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
-                    makeRequire({ './developmentMode.js': developmentMode, './developmentModePlan.js': developmentModePlan }), mocks)
+                    makeRequire({ './developmentMode.js': developmentMode }), mocks)
             }),
             mocks
         );
@@ -645,7 +648,7 @@ suite('gh-1436 IT — dev leg configs carry the conditional appendix entry', fun
     var DEV_CONFIGS = ['story_development.json', 'bug_development.json'];
 
     DEV_CONFIGS.forEach(function (name) {
-        test(name + ': the canonical entry appears EXACTLY ONCE, as the LAST base cliPrompts entry (AC1 position)', function () {
+        test(name + ': the canonical entry appears EXACTLY ONCE, second-to-last base entry; the gh-1503 SP entry is last', function () {
             var cfg = readRootConfig(name);
             var prompts = cfg.params.cliPrompts;
             assert.ok(Array.isArray(prompts) && prompts.length > 0, 'cliPrompts present');
@@ -654,11 +657,20 @@ suite('gh-1436 IT — dev leg configs carry the conditional appendix entry', fun
                 if (p && typeof p === 'object' && p.id === 'developmentModePlan') hits.push(i);
             });
             assert.equal(hits.length, 1, 'exactly one appendix entry (AC1: appendix exactly once)');
-            assert.equal(hits[0], prompts.length - 1, 'entry is the LAST base cliPrompts item — ' +
-                'assembly appends cliPromptsByTracker AFTER the base array, so the appendix lands ' +
+            assert.equal(hits[0], prompts.length - 2, 'entry is the second-to-last base cliPrompts item — ' +
+                'assembly appends cliPromptsByTracker AFTER the base array, so the appendices land ' +
                 'after the instruction pack and before the tracker-specific parts');
             assert.deepEqual(prompts[hits[0]], developmentModePlan.planAppendixCliEntry(),
                 'entry is byte-identical to the canonical builder output');
+            // gh-1503: the SP entry rides last — an adaptive leg's prompt ends with its decision block
+            var spHits = [];
+            prompts.forEach(function (p, i) {
+                if (p && typeof p === 'object' && p.id === 'developmentModeAdaptive') spHits.push(i);
+            });
+            assert.equal(spHits.length, 1, 'exactly one SP entry');
+            assert.equal(spHits[0], prompts.length - 1, 'SP entry is the LAST base cliPrompts item');
+            assert.deepEqual(prompts[spHits[0]], developmentModeAdaptive.adaptiveAppendixCliEntry(),
+                'SP entry byte-identical to the canonical builder output');
         });
     });
 
@@ -809,6 +821,7 @@ suite('gh-1436 REG — plan protocol coexists with the existing leg machinery', 
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
             './common/developmentMode.js': developmentMode,
             './common/developmentModePlan.js': developmentModePlan,
+            './common/developmentModeAdaptive.js': developmentModeAdaptive,
             './common/trackerSlot.js': trackerSlot,
             './configLoader.js': Object.assign({}, configLoaderModule, {
                 loadProjectConfig: function () { return { git: { baseBranch: 'main' } }; }

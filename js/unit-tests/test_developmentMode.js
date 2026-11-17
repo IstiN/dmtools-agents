@@ -276,6 +276,9 @@ function legRequireMap() {
         './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
         // REAL developmentMode module — the IT path must exercise the actual resolver.
         './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
+        // gh-1503: the adaptive decision module (the leg action reads scope_estimate.json)
+        './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
+            makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
         './configLoader.js': legConfigLoader,
         './config.js': configModule,
         './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -384,12 +387,13 @@ suite('gh-1435 IT — dev leg config-reading path (initDevelopmentContext)', fun
 // ── REG: every repo workflow config through the resolver ─────────────────────
 
 suite('gh-1435 REG — all repo workflow configs resolve default + stay silent', function () {
-    test('golden: no existing workflow config sets developmentMode → zero drift', function () {
+    test('golden (gh-1503): only the two dev legs carry adaptive (threshold 3, silent); everything else stays default', function () {
         var listing = cli_execute_command({ command: 'git ls-files "*.json"' }) || '';
         var files = listing.split('\n').map(function (l) { return String(l).trim(); }).filter(function (l) {
             return /^[A-Za-z0-9._-]+\.json$/.test(l);
         });
         assert.ok(files.length >= 30, 'expected the full root config set, got ' + files.length + ': ' + JSON.stringify(files));
+        var ADAPTIVE_CONFIGS = ['story_development.json', 'bug_development.json'];
 
         var checked = 0;
         files.forEach(function (f) {
@@ -402,12 +406,26 @@ suite('gh-1435 REG — all repo workflow configs resolve default + stay silent',
             checked++;
             var captured = captureConsole(function () {
                 var applied = developmentMode.applyDevelopmentMode(cp);
-                assert.equal(applied.mode, 'default', f + ' must resolve default');
-                assert.equal(applied.warnings.length, 0, f + ' must produce zero warnings');
-                assert.notOk(applied.present, f + ' must not carry a developmentMode key');
+                if (ADAPTIVE_CONFIGS.indexOf(f) !== -1) {
+                    assert.equal(applied.mode, 'adaptive', f + ' routes adaptive (gh-1503)');
+                    assert.equal(applied.warnings.length, 0, f + ' resolves silently');
+                    var threshold = cp.developmentModeConfig &&
+                        cp.developmentModeConfig.adaptive &&
+                        cp.developmentModeConfig.adaptive.planThreshold;
+                    assert.equal(threshold, 3, f + ' carries the calibrated default threshold');
+                } else {
+                    assert.equal(applied.mode, 'default', f + ' must resolve default');
+                    assert.equal(applied.warnings.length, 0, f + ' must produce zero warnings');
+                    assert.notOk(applied.present, f + ' must not carry a developmentMode key');
+                }
             });
             assert.equal(captured.warns.length, 0, f + ' must stay silent');
-            assert.equal(captured.logs.length, 0, f + ' must add zero log lines (byte-identical logs)');
+            if (ADAPTIVE_CONFIGS.indexOf(f) !== -1) {
+                assert.equal(captured.logs.length, 1, f + ' logs exactly the resolved-mode line');
+                assert.contains(captured.logs.join('\n'), 'adaptive', 'the resolved mode is visible');
+            } else {
+                assert.equal(captured.logs.length, 0, f + ' must add zero log lines');
+            }
         });
         assert.ok(checked >= 10, 'walked ' + checked + ' configs with customParams — expected the full set');
     });

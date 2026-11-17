@@ -26,10 +26,14 @@ var legStartSignal = require('./common/legStartSignal.js');
 // gh-1436: plan-mode execution path — the plan-protocol prompt appendix is
 // materialized here (preCli, before the agent launches) at the runtime path
 // the dev leg configs' conditional cliPrompts entry points at.
-// gh-1437: adaptive legs route through the same appendix (the decision
-// carrier is the runtime file's existence) — the dispatcher below sends
-// plan legs down the unchanged plan path and adaptive legs through the
-// signal-driven decision (js/common/developmentModeAdaptive.js).
+// gh-1437 routed adaptive legs pre-leg through a signal-driven decision; the
+// appendix carrier was the runtime file's existence. Superseded by gh-1503:
+// adaptive legs now carry the scope-estimate appendix (in-leg adaptive decision,
+// js/common/developmentModeAdaptive.js) and the plan appendix is
+// co-materialized only as an escalation READ target — the plan cliPrompts
+// entry stays gated to explicit plan mode (isDevelopmentModePlan.js).
+// The retired signal routing is deleted outright — the in-leg estimate routing replaced it everywhere.
+var developmentMode = require('./common/developmentMode.js');
 var developmentModePlan = require('./common/developmentModePlan.js');
 var developmentModeAdaptive = require('./common/developmentModeAdaptive.js');
 var wipSquash = require('./common/wipSquash.js');
@@ -1076,56 +1080,32 @@ function runPlanModeAppendixStepOrReport(customParams, config, ticketKey) {
     }
 }
 
-// ── gh-1437: adaptive routing — same appendix, signal-driven decision ───────
-// When the resolved developmentMode is "adaptive", the ENGINE decides
-// plan-vs-default from ticket signals (js/common/developmentModeAdaptive.js):
-// routed-to-plan materializes the appendix exactly like a plan leg,
-// routed-to-default and shadowMode legs remove stale appendix state instead.
-// The decision itself never fails the leg (permissive config philosophy);
-// only a failed appendix RESOLUTION (unreadable override, unwritable path)
-// does — the same config-error class the plan path reports.
-
-/** Ticket title+body for the signal extractor — tracker-agnostic (gh-1442
- *  resolvers: Jira fields.summary/description, ADO System.Title/System.
- *  Description, GitHub top-level title/body), so adaptive routing reads the
- *  real text on every tracker instead of silently routing default on ADO. */
-function ticketTextForAdaptive(ticket) {
-    return trackersModule.ticketSummaryOf(ticket) + '\n' + trackersModule.ticketDescriptionOf(ticket);
-}
+// ── adaptive appendix — in-leg adaptive decision (gh-1503) ────────────────────────
+// The whole step lives in js/common/developmentModeAdaptive.js (this module
+// is size-pinned): resolve+write BOTH appendices (the adaptive one + the plan escalation
+// read), seed the excludes, fail fast on resolution errors. The gh-1437
+// signal-driven routing is retired; its extractor stays for legacy consumers.
 
 /**
- * The adaptive step: evaluate, flush warnings + log lines, materialize or
- * clean up. A failed appendix resolution throws (the caller reports it like
- * a plan-mode setup failure).
- * @returns the adaptive materialization result.
- * @throws when the leg routed to plan but the appendix cannot be materialized.
+ * Thin delegate — see developmentModeAdaptive.runPreCliAdaptiveAppendixStep.
+ * @returns the adaptive-appendix materialization result.
+ * @throws when either appendix cannot be materialized.
  */
-function runAdaptiveModeAppendixStep(customParams, ticket) {
-    var result = developmentModeAdaptive.materializeAdaptiveAppendix(customParams, ticketTextForAdaptive(ticket));
-    (result.warnings || []).forEach(function (w) { console.warn(w); });
-    (result.logLines || []).forEach(function (l) { console.log(l); });
-    if (result.error) {
-        throw new Error(result.error);
-    }
-    if (result.materialized) {
-        branchSetup.ensureGitInfoExclude(
-            developmentModePlan.PLAN_APPENDIX_FILE_PATH,
-            developmentModePlan.PLAN_APPENDIX_EXCLUDE_COMMENT,
-            'Could not exclude the plan-mode appendix from git:'
-        );
-    }
-    return result;
+function runAdaptiveModeAppendixStep(customParams) {
+    return developmentModeAdaptive.runPreCliAdaptiveAppendixStep(customParams, developmentModePlan, branchSetup);
 }
 
 /**
  * The development-mode appendix dispatcher: plan legs take the unchanged
- * gh-1436 plan path, adaptive legs take the signal-driven decision, every
- * other mode stays on the zero-IO plan path (which no-ops for non-plan).
+ * gh-1436 plan path, adaptive legs take the adaptive-appendix materialization, every other
+ * mode stays on the zero-IO plan path (which no-ops for non-plan).
+ * The ticket argument is retained for call compatibility; the adaptive decision
+ * no longer reads ticket text in preCli — the agent surveys it in-leg.
  */
 function runDevelopmentModeAppendixStep(customParams, ticket) {
-    var mode = developmentModeAdaptive.resolvedDevelopmentMode(customParams);
+    var mode = developmentMode.resolveDevelopmentMode(customParams).mode;
     if (mode === 'adaptive') {
-        return runAdaptiveModeAppendixStep(customParams, ticket);
+        return runAdaptiveModeAppendixStep(customParams);
     }
     return runPlanModeAppendixStep(customParams);
 }
@@ -1300,7 +1280,6 @@ if (typeof module !== 'undefined' && module.exports) {
         runDevelopmentModeAppendixStep,
         runDevelopmentModeAppendixStepOrReport,
         runAdaptiveModeAppendixStep,
-        ticketTextForAdaptive,
         // gh-1363: leg-failure report wiring — exported for direct unit testing.
         collectPreflightStateStep,
         currentPreflightLine,

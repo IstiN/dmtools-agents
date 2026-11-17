@@ -29,6 +29,7 @@ var needsInputCommon = require('./common/needsInput.js');
 // inert); resolution lives in this one shared module, next to the layer that
 // reads customParams.feedbackLoop, so other legs adopt it without duplication.
 var developmentMode = require('./common/developmentMode.js');
+var developmentModeAdaptive = require('./common/developmentModeAdaptive.js');
 var wipSquash = require('./common/wipSquash.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
@@ -675,6 +676,29 @@ function appendConcernsToCompletionComment(comment, ticketKey) {
     return comment;
 }
 
+// gh-1503: adaptive escalation visibility (degrade-not-fail, same as concerns).
+// ticketKey REQUIRED: the agent writes outputs/<KEY>/scope_estimate.json and
+// the candidate expansion probes the ticket-scoped path only when keyed.
+function readScopeEstimateRecord(ticketKey) {
+    try {
+        var detailed = outputFiles.readOutputFileDetailed('scope_estimate.json', { ticketKey: ticketKey });
+        return detailed ? developmentModeAdaptive.parseScopeEstimateRecord(detailed.content) : null;
+    } catch (e) {
+        console.warn('Could not read outputs/scope_estimate.json:', e);
+    }
+    return null;
+}
+
+function stampDevPlanEscalatedLabel(ticketKey) {
+    try {
+        if (developmentModeAdaptive.stampDevPlanEscalatedFromRecord(readScopeEstimateRecord(ticketKey), function (label) {
+            getTracker().addLabel(ticketKey, label);
+        })) console.log('🧭 Added ' + developmentModeAdaptive.DEV_PLAN_ESCALATED_LABEL + ' label to', ticketKey);
+    } catch (e) {
+        console.warn('Could not add ' + developmentModeAdaptive.DEV_PLAN_ESCALATED_LABEL + ' label:', e);
+    }
+}
+
 // Mirrors the concerns into the PR body SOURCE. The PR body is assembled from
 // the outputs/response.md FILE (see bodyFileCandidates in createPullRequest),
 // so the concerns are appended to that file rather than to the in-memory
@@ -734,6 +758,8 @@ function postPRCommentToJira(ticketKey, prUrl, branchName) {
         // label — a no-op when the agent raised none (see
         // appendConcernsToCompletionComment).
         comment = appendConcernsToCompletionComment(comment, ticketKey);
+
+        stampDevPlanEscalatedLabel(ticketKey); // gh-1503: adaptive plan self-selection
 
         getTracker().postComment(ticketKey, comment);
 
@@ -2176,6 +2202,7 @@ if (typeof module !== 'undefined' && module.exports) {
         // post-processors + the read seam, exported for direct
         // characterization tests.
         readConcernsMd, appendConcernsToCompletionComment, mirrorConcernsIntoResponseBody,
+        readScopeEstimateRecord, stampDevPlanEscalatedLabel,
         // gh-1435: config-context seam — exported so the developmentMode IT
         // suites drive the leg's real config-reading path directly.
         initDevelopmentContext, ticketDescriptorOf, openPrDevCommitMessage

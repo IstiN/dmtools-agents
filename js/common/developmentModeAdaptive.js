@@ -1,521 +1,377 @@
-// ── gh-1437: developmentMode=adaptive — signal-driven plan/default routing ───
+// ── gh-1503: adaptive mode selection — in-leg estimate ──────────
 //
-// When the resolved development mode is "adaptive" (the gh-1435 knob), the
-// dev leg does not hand-pick plan mode: the ENGINE decides plan-vs-default
-// from measurable ticket signals, with thresholds that are configurable,
-// calibrated offline (js/adaptiveCalibrationHarness.js) and verified in
-// shadow mode before ever acting.
+// gh-1437 routed adaptive legs pre-leg: a deterministic rule over ticket text
+// (js/common/developmentModeAdaptive.js) decided plan-vs-default before the
+// agent launched. Calibration against closed-issue replays pinned a precision
+// ceiling for text signals (~0.61): verbose-small tickets inflate, under-
+// specified tickets are invisible, and text cannot separate design-bearing
+// work from mechanical sweeps — the exact distinction where planning helps.
 //
-// Decision rule (v1, adaptive-only — owner-approved, 2026-11-10):
-//   plan  if  modules             >= planIfModulesAtLeast             (default 2)
-//         OR acceptanceBullets    >= planIfAcceptanceBulletsAtLeast   (default 5)
-//         OR bodyTokens           >= planIfBodyTokensAtLeast          (default 800)
-//   else default
+// gh-1503 moves the decision AFTER the survey, into the agent that read the
+// code. The adaptive leg carries a scope-estimate appendix (this module's
+// runtime file) that instructs it to estimate the work, write
+// outputs/<KEY>/scope_estimate.json, and self-select: sp >= threshold
+// (config: developmentModeConfig.adaptive.planThreshold, default 3 —
+// calibrated by a paired direct/plan run: crossover at estimate 3) → follow the
+// plan protocol (the plan appendix file, materialized alongside); below it →
+// direct execution, no plan artifacts.
 //
-// Config surface (params.customParams.developmentModeConfig.adaptive):
-//   { "planIfModulesAtLeast": 2, "planIfAcceptanceBulletsAtLeast": 5,
-//     "planIfBodyTokensAtLeast": 800, "shadowMode": false }
-// Resolved permissively (same philosophy as the plan appendixFile): absent /
-// null values read as defaults, wrong-typed values yield ONE warning and the
-// default — never a throw. The gh-1435 aggregated validator already warns on
-// a non-object adaptive slice at applyDevelopmentMode time, so this module
-// stays silent for a garbled block (no duplicate warnings).
+// What stays from the pre-leg era: the plan-protocol contract itself
+// (js/common/developmentModePlan.js — the appendix text is materialized for
+// adaptive legs too, for on-demand escalation reads; its cliPrompts entry
+// stays gated to explicit plan mode so an adaptive leg's base prompt carries
+// only the adaptive block). The signal extractor + its calibration harness are
+// deleted outright — the in-leg estimate replaced them everywhere (owner decision).
 //
-// Mode semantics (owner, 2026-11-10): "plan" ignores this rule entirely
-// (always plan); the rule exists only for "adaptive". "default" never sees
-// this code path (invariant P1 from gh-1436 stays: zero IO, zero output).
-//
-// Signal extraction is a PURE function over ticket title+body — same text
-// ⇒ same decision (invariant A1, golden-tested). bodyTokens is the chars/4
-// backstop estimate; no tokenizer dependency is added (non-goal).
-//
-// shadowMode: true → compute + LOG the decision ("adaptive: would plan
-// (signals: modules=3) but shadow mode") WITHOUT acting — the rollout safe
-// mode. Shadow legs additionally clean stale appendix state so their prompt
-// stays byte-identical to a default-mode leg.
-//
-// Invariant A2: adaptive never spawns sub-agents — this module never reads
-// developmentModeConfig.spawn (that wiring is a later sub-issue, off by
-// default).
-//
-// The routing carrier is the SAME runtime appendix path the plan mode uses
-// (.dmtools/development-mode-plan-appendix.md): a routed-to-plan leg
-// materializes it (reusing the plan module's override machinery verbatim),
-// a routed-to-default / shadow leg removes any stale copy, so after the
-// preCli setup the file's existence IS the decision record. The conditional
-// cliPrompts entry in the dev leg configs therefore needs NO new entry for
-// adaptive — the condition script (js/conditions/isDevelopmentModePlan.js)
-// grew adaptive arms instead.
+// The decision record is one JSON line in the leg's outputs (the established
+// per-leg outputs convention, like response.md/concerns.md): the agent writes
+// only what it holds at decision time — sp/threshold/mode/reason, outcome
+// finalized at completion. model and legs_spent are NOT agent-written: the
+// harness emits the model in its per-leg usage line and the leg count is
+// derived offline by counting those lines.
 
 var developmentMode = require('./developmentMode.js');
-var developmentModePlan = require('./developmentModePlan.js');
 
-var DEFAULT_ADAPTIVE_THRESHOLDS = {
-    planIfModulesAtLeast: 2,
-    planIfAcceptanceBulletsAtLeast: 5,
-    planIfBodyTokensAtLeast: 800
-};
-var ADAPTIVE_THRESHOLD_KEYS = [
-    'planIfModulesAtLeast',
-    'planIfAcceptanceBulletsAtLeast',
-    'planIfBodyTokensAtLeast'
-];
+var ADAPTIVE_APPENDIX_ENTRY_ID = 'developmentModeAdaptive';
+var ADAPTIVE_APPENDIX_FILE_PATH = '.dmtools/development-mode-adaptive-appendix.md';
+var ADAPTIVE_APPENDIX_PROMPT_PATH = './' + ADAPTIVE_APPENDIX_FILE_PATH;
+var ADAPTIVE_APPENDIX_CONDITION_PATH = 'agents/js/conditions/isDevelopmentModeAdaptive.js';
+var ADAPTIVE_APPENDIX_EXCLUDE_COMMENT =
+    '# Development-mode adaptive appendix — runtime materialization, never committed';
 
-// Line-shape classifiers. Kept anchored and documented — the calibration
-// harness replays EXACTLY these rules over the labeled sample, so any change
-// here must re-run the calibration replay.
+var DEFAULT_PLAN_THRESHOLD = 3;
+// The estimate scale is open-ended (the appendix tells the agent to keep
+// going past any value it named) — the knob and the record accept any
+// positive integer; only positivity and integrality are enforced.
 
-// Markdown ATX heading ("## Title"); requires the space after the hashes,
-// like markdown itself does.
-var ATX_HEADING_RE = /^[ \t]*#{1,6}[ \t]+/;
-
-// A heading (or bare label line) that OPENS an acceptance section: any ATX
-// heading mentioning "acceptance" or a standalone "AC" word, or a bare
-// bold/plain label line that IS exactly the acceptance label (colons may sit
-// inside or outside the bold markers: "**Acceptance criteria:**" /
-// "**Acceptance criteria**:" / "Acceptance criteria:").
-var AC_HEADING_WORD_RE = /acceptance|(^|[^a-z0-9])ac([^a-z0-9]|$)/i;
-var AC_BARE_LABEL_RE = /^[ \t]*(?:\*\*|__)?[ \t]*(?:acceptance(?:[ \t]+criterias?)?|ac)[ \t]*:?[ \t]*(?:\*\*|__)?[ \t]*:?[ \t]*$/i;
-
-// List-item shapes: bullets ("- ", "* ", "+ ") and ordered items ("1. ", "1) ").
-var BULLET_LINE_RE = /^[ \t]*[-*+][ \t]+\S/;
-var NUMBERED_LINE_RE = /^[ \t]*[0-9]+[.)][ \t]+\S/;
-
-// "module N" mentions in either word order — "Module 3", "modules #4",
-// "module: 5", "3-module", "2 modules". Digits only (deterministic).
-var MODULE_NUM_AFTER_RE = /\bmodules?\b[ \t]*(?:#[ \t]*|[.,:][ \t]*)?([0-9]+)/gi;
-var MODULE_NUM_BEFORE_RE = /\b([0-9]+)[ \t]*-?[ \t]*\bmodules?\b/gi;
+var PLAN_APPENDIX_RUNTIME_PATH = '.dmtools/development-mode-plan-appendix.md';
+var SCOPE_ESTIMATE_RELATIVE_PATH = 'outputs/<KEY>/scope_estimate.json';
+var VALID_ESTIMATE_MODES = ['plan', 'default'];
 
 function isPlainObject(value) {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-// ── signal extraction (pure, A1) ─────────────────────────────────────────────
+// ── shadowMode (gh-1437 carry-over) ─────────────────────────────────────────
+// Strict boolean true enables it; absent/null/false keep it off; wrong-typed
+// reads as false (strict boolean true is the shadow test). A
+// shadow adaptive leg NEVER materializes: shadow means "log the intent, act
+// nothing" — the adaptive block would change the prompt, and that is an action.
 
-function isAtxHeading(line) {
-    return ATX_HEADING_RE.test(line);
-}
-
-function isAcceptanceSectionStart(line) {
-    if (AC_BARE_LABEL_RE.test(line)) return true;
-    return isAtxHeading(line) && AC_HEADING_WORD_RE.test(line.replace(ATX_HEADING_RE, ''));
-}
-
-function isBulletLine(line) {
-    return BULLET_LINE_RE.test(line);
-}
-
-function isNumberedLine(line) {
-    return NUMBERED_LINE_RE.test(line);
-}
-
-/** Highest "module N" mention in the text (either word order), else 0. */
-function maxModuleNumber(text) {
-    var max = 0;
-    var m;
-    MODULE_NUM_AFTER_RE.lastIndex = 0;
-    while ((m = MODULE_NUM_AFTER_RE.exec(text)) !== null) {
-        var n = parseInt(m[1], 10);
-        if (n > max) max = n;
-    }
-    MODULE_NUM_BEFORE_RE.lastIndex = 0;
-    while ((m = MODULE_NUM_BEFORE_RE.exec(text)) !== null) {
-        var nBefore = parseInt(m[1], 10);
-        if (nBefore > max) max = nBefore;
-    }
-    return max;
-}
-
-/**
- * Contiguous bullet groups: a maximal run of bullet lines (≥2) where blank
- * lines do NOT break the group (markdown lazy lists) but any other
- * non-bullet line does. Each group contributes 1 — the group is one
- * deliverables enumeration, not N deliverables (numbered lists carry the
- * per-item signal).
- */
-function countBulletGroups(lines, bulletIndexes) {
-    var groups = 0;
-    var runLength = 0;
-    for (var i = 0; i < bulletIndexes.length; i++) {
-        if (i === 0) {
-            runLength = 1;
-            continue;
-        }
-        var sameGroup = true;
-        for (var j = bulletIndexes[i - 1] + 1; j < bulletIndexes[i]; j++) {
-            var between = lines[j].trim();
-            if (between !== '') {
-                sameGroup = false;
-                break;
-            }
-        }
-        if (sameGroup) {
-            runLength++;
-        } else {
-            if (runLength >= 2) groups++;
-            runLength = 1;
-        }
-    }
-    if (runLength >= 2) groups++;
-    return groups;
-}
-
-/**
- * The pure signal extractor (A1): ticket title + body →
- * { modules, acceptanceBullets, bodyTokens }.
- *
- * - modules: max(numbered-list items outside AC sections, highest "module N"
- *   mention anywhere, contiguous bullet groups outside AC sections) — each
- *   ingredient is an independent estimate of "how many deliverables"; the
- *   strongest estimate wins.
- * - acceptanceBullets: list items (bullets AND ordered items) under
- *   Acceptance/AC sections.
- * - bodyTokens: chars/4 backstop over title + body (floor).
- */
-function emptySignalScan() {
-    return { acceptanceItems: 0, numberedOutside: 0, bulletIndexesOutside: [], inAcceptance: false };
-}
-
-/** Classify one line into the scan accumulator (AC sections toggle on headings). */
-function scanSignalLine(state, line, lineIndex) {
-    if (isAcceptanceSectionStart(line)) {
-        state.inAcceptance = true;
-        return;
-    }
-    if (isAtxHeading(line)) {
-        state.inAcceptance = false;
-        return;
-    }
-    if (state.inAcceptance) {
-        if (isBulletLine(line) || isNumberedLine(line)) state.acceptanceItems++;
-        return;
-    }
-    if (isBulletLine(line)) {
-        state.bulletIndexesOutside.push(lineIndex);
-    } else if (isNumberedLine(line)) {
-        state.numberedOutside++;
-    }
-}
-
-function scanSignalLines(lines) {
-    var state = emptySignalScan();
-    lines.forEach(function (line, i) {
-        scanSignalLine(state, line, i);
-    });
-    return state;
-}
-
-function extractSignals(title, body) {
-    var fullText = String(title == null ? '' : title) + '\n' + String(body == null ? '' : body);
-    var lines = fullText.split(/\r?\n/);
-    var state = scanSignalLines(lines);
-    var modules = Math.max(state.numberedOutside, maxModuleNumber(fullText), countBulletGroups(lines, state.bulletIndexesOutside));
-    return {
-        modules: modules,
-        acceptanceBullets: state.acceptanceItems,
-        bodyTokens: Math.floor(fullText.length / 4)
-    };
-}
-
-// ── adaptive config resolution (permissive) ──────────────────────────────────
-
-function adaptiveConfigBlock(customParams) {
-    return isPlainObject(customParams) && isPlainObject(customParams.developmentModeConfig)
+function isShadowMode(customParams) {
+    var config = isPlainObject(customParams) && isPlainObject(customParams.developmentModeConfig)
         ? customParams.developmentModeConfig.adaptive
         : null;
+    return !!(isPlainObject(config) && config.shadowMode === true);
 }
 
-function isThresholdUnset(block, key) {
-    return !block || !Object.prototype.hasOwnProperty.call(block, key) ||
-        block[key] === null || block[key] === undefined;
-}
+// ── Threshold resolution ────────────────────────────────────────────────────
+// developmentModeConfig.adaptive.planThreshold: absent ⇒ default (silent —
+// absence is the supported steady state, same philosophy as the gh-1435 knob).
+// Present-but-invalid (wrong type, non-integer, out of 1..13) ⇒ warn + default.
+// Nothing throws; the leg never fails because of this field.
 
-function isNonNegativeIntegerValue(raw) {
-    return typeof raw === 'number' && isFinite(raw) && raw >= 0 && raw % 1 === 0;
-}
-
-/**
- * One threshold setting: absent/null → default (silent); a non-negative
- * integer → the value; anything else → ONE warning naming the config path
- * and the default used.
- */
-function thresholdSetting(block, key, warnings) {
-    var fallback = DEFAULT_ADAPTIVE_THRESHOLDS[key];
-    if (isThresholdUnset(block, key)) {
-        return fallback;
-    }
-    var raw = block[key];
-    if (isNonNegativeIntegerValue(raw)) {
-        return raw;
-    }
-    warnings.push('⚠️ developmentModeConfig.adaptive.' + key + ': expected a non-negative integer, got ' +
-        developmentMode.describeRawValue(raw) + ' — using the default (' + fallback + ').');
-    return fallback;
-}
-
-function resolveThresholds(block, warnings) {
-    var thresholds = {};
-    ADAPTIVE_THRESHOLD_KEYS.forEach(function (key) {
-        thresholds[key] = thresholdSetting(block, key, warnings);
-    });
-    return thresholds;
-}
-
-/** shadowMode: strict boolean true enables it; absent/null/false keep it off. */
-function resolveShadowMode(block, warnings) {
-    if (!block || !Object.prototype.hasOwnProperty.call(block, 'shadowMode') ||
-        block.shadowMode === null || block.shadowMode === undefined) {
-        return false;
-    }
-    if (typeof block.shadowMode === 'boolean') return block.shadowMode;
-    warnings.push('⚠️ developmentModeConfig.adaptive.shadowMode: expected a boolean, got ' +
-        developmentMode.describeRawValue(block.shadowMode) + ' — treating as false.');
-    return false;
+function isIntegerInRange(value, min, max) {
+    return typeof value === 'number' && isFinite(value) && Math.floor(value) === value
+        && value >= min && value <= max;
 }
 
 /**
- * Resolve developmentModeConfig.adaptive permissively: thresholds +
- * shadowMode + warnings. A garbled block reads as defaults SILENTLY — the
- * gh-1435 aggregated validator (applyDevelopmentMode) already warns for a
- * non-object slice value, and this resolver must not duplicate the line.
+ * Resolve the adaptive routing threshold from customParams.
+ * @returns {{threshold: number, warning: string|null}} warning is null for the
+ * silent paths (absent key, valid value) and a one-line log message otherwise.
  */
-function resolveAdaptiveConfig(customParams) {
-    var warnings = [];
-    var block = adaptiveConfigBlock(customParams);
+function resolvePlanThreshold(customParams) {
+    var config = isPlainObject(customParams) && isPlainObject(customParams.developmentModeConfig)
+        ? customParams.developmentModeConfig.adaptive
+        : null;
+    if (!isPlainObject(config) || !('planThreshold' in config)) {
+        return { threshold: DEFAULT_PLAN_THRESHOLD, warning: null };
+    }
+    var raw = config.planThreshold;
+    if (isIntegerInRange(raw, 1, Number.MAX_SAFE_INTEGER)) {
+        return { threshold: raw, warning: null };
+    }
+    var shown = raw === null ? 'null' : (typeof raw === 'string' ? '"' + raw + '"' : String(raw));
     return {
-        thresholds: resolveThresholds(isPlainObject(block) ? block : null, warnings),
-        shadowMode: resolveShadowMode(isPlainObject(block) ? block : null, warnings),
-        warnings: warnings
+        threshold: DEFAULT_PLAN_THRESHOLD,
+        warning: 'developmentModeConfig.adaptive.planThreshold invalid (' + shown +
+            ') — using the default ' + DEFAULT_PLAN_THRESHOLD
     };
 }
 
-// ── decision + logging (pure) ────────────────────────────────────────────────
+// ── Decision-record parsing ─────────────────────────────────────────────────
+// Strict where it matters (sp, mode), lenient where it cannot hurt (reason,
+// outcome, threshold). Any violation ⇒ null — consumers fail safe to
+// "no record" (no label, no routing consequence), never throw.
 
-/**
- * The v1 decision rule, signal-ranked (decomposability first, token backstop
- * last — the weakest signal per the literature check). Returns the decided
- * mode plus the trigger that decided it (null for default).
- */
-function decideAdaptiveMode(signals, thresholds) {
-    if (signals.modules >= thresholds.planIfModulesAtLeast) {
-        return { mode: 'plan', trigger: 'modules' };
+function parseScopeEstimateRecord(text) {
+    if (typeof text !== 'string' || !text.trim()) return null;
+    var record;
+    try {
+        record = JSON.parse(text);
+    } catch (e) {
+        return null;
     }
-    if (signals.acceptanceBullets >= thresholds.planIfAcceptanceBulletsAtLeast) {
-        return { mode: 'plan', trigger: 'acceptanceBullets' };
-    }
-    if (signals.bodyTokens >= thresholds.planIfBodyTokensAtLeast) {
-        return { mode: 'plan', trigger: 'bodyTokens' };
-    }
-    return { mode: 'default', trigger: null };
+    if (!hasRequiredEstimateFields(record)) return null;
+    return estimateRecordWithoutExtras(record);
 }
 
-/** "modules=1, acceptanceBullets=2, bodyTokens=96" — the fixed render order. */
-function describeSignals(signals) {
-    return 'modules=' + signals.modules + ', acceptanceBullets=' + signals.acceptanceBullets +
-        ', bodyTokens=' + signals.bodyTokens;
+// The strict half of the parse: sp and mode are load-bearing (the label
+// decision reads mode; the threshold comparison reads sp) — any violation
+// here voids the whole record.
+function hasRequiredEstimateFields(record) {
+    return isPlainObject(record)
+        && isIntegerInRange(record.sp, 1, Number.MAX_SAFE_INTEGER)
+        && VALID_ESTIMATE_MODES.indexOf(record.mode) !== -1;
 }
 
-/**
- * The routing/shadow log line — the ticket's pinned format. A plan decision
- * quotes exactly the triggering signal (matching the ticket example
- * "adaptive: would plan (signals: modules=3) but shadow mode"); a default
- * decision carries the full triple, since no single signal decided it.
- */
-function routingLogLine(decision, signals, shadowMode) {
-    var signalText = decision.trigger
-        ? decision.trigger + '=' + signals[decision.trigger]
-        : describeSignals(signals);
-    var verb = shadowMode ? 'would' : 'routing to';
-    var tail = shadowMode ? ' but shadow mode' : '';
-    return 'adaptive: ' + verb + ' ' + decision.mode + ' (signals: ' + signalText + ')' + tail;
+// The lenient half: optional fields ride along only when well-typed.
+function estimateRecordWithoutExtras(record) {
+    var parsed = { sp: record.sp, mode: record.mode };
+    if (isIntegerInRange(record.threshold, 1, Number.MAX_SAFE_INTEGER)) {
+        parsed.threshold = record.threshold;
+    }
+    if (typeof record.reason === 'string' && record.reason.trim()) {
+        parsed.reason = record.reason;
+    }
+    if (record.outcome === 'completed' || record.outcome === 'blocked') {
+        parsed.outcome = record.outcome;
+    }
+    return parsed;
 }
 
-/**
- * Full evaluation for a leg: mode gate, signal extraction, threshold
- * decision, log lines. Pure — no IO, no console. Inactive (non-adaptive)
- * modes carry zero lines and zero warnings so callers can flush blindly.
- */
-function evaluateAdaptiveMode(customParams, ticketText) {
-    var resolvedMode = developmentMode.resolveDevelopmentMode(customParams).mode;
-    if (resolvedMode !== 'adaptive') {
+// ── The scope-estimate appendix (engine default text) ───────────────────────
+// Self-contained for the direct branch; the escalation branch hands off to the
+// plan appendix file (materialized alongside) so the plan contract has a
+// single source of truth. gh-1436's plan contract owns outputs/<KEY>/plan.md
+// + .dmtools/plan-snapshot.md; this block never redefines them.
+
+function adaptiveAppendixText(threshold) {
+    return [
+        '# Scope estimate & working mode (adaptive dev leg)',
+        '',
+        'Before your FIRST code edit: survey the ticket and the relevant code, then',
+        'estimate the work and fix your working mode for this leg.',
+        '',
+        '## Estimate',
+        '- One whole number on an open-ended scale: if the work feels bigger than',
+        '  the value you named, keep going.',
+        '- Estimate EFFORT, RISK and UNCERTAINTY — not file count. A sweeping mechanical',
+        '  rename is low; a small change into undocumented behavior is high.',
+        '- Structural surprises belong in a higher estimate: data/schema migrations,',
+        '  changes touching a second repository, unknown integration surfaces.',
+        '- Uncertainty resolves UP: when torn between two values, take the larger.',
+        '',
+        '## Record',
+        'Write exactly one JSON object to `' + SCOPE_ESTIMATE_RELATIVE_PATH + '`',
+        '(<KEY> = the ticket key):',
+        '',
+        '    {"sp": <int>, "threshold": <int>, "mode": "plan" | "default", "reason": "<one short sentence>"}',
+        '',
+        '## Decide (threshold: ' + threshold + ')',
+        '- sp >= threshold → work BY A PLAN for the rest of this leg: read',
+        '  `' + PLAN_APPENDIX_RUNTIME_PATH + '` now and follow its protocol (numbered',
+        '  tasks with what+verify, the committed snapshot, per-task checkpoints).',
+        '  Never demote back to direct mode within the same leg.',
+        '- sp < threshold → implement directly; no plan artifacts.',
+        '- Scope grows mid-work and a re-estimate reaches the threshold → raise it:',
+        '  write plan.md, follow the plan protocol from that point, update the',
+        '  record\'s "mode" to "plan" (and "sp" to the new estimate).',
+        '',
+        '## Complete honestly',
+        'Before writing `outputs/<KEY>/response.md`, set the record\'s final',
+        '"outcome": "completed" | "blocked". A plan-mode leg reports completion only',
+        'when its plan tasks are done — or honestly marked blocked/deferred in plan.md.'
+    ].join('\n') + '\n';
+}
+
+// ── Materialization ─────────────────────────────────────────────────────────
+// Shape mirrors materializePlanAppendix exactly: {ok, active, path, overridden,
+// error, warnings}. Inactive (non-adaptive) modes are a zero-IO no-op; a write
+// failure is ok:false + an honest error naming the path (the preCli caller
+// turns it into the leg's fail-fast setup error). `overridden` is always false
+// — the adaptive appendix is engine text only (the threshold is interpolated, the
+// workflow tunes it via planThreshold, not by shipping prose).
+
+function writeAdaptiveAppendix(threshold, io) {
+    var write = (io && io.file_write) || file_write;
+    try {
+        write({ path: ADAPTIVE_APPENDIX_FILE_PATH, content: adaptiveAppendixText(threshold) });
+    } catch (e) {
         return {
-            active: false,
-            shadowMode: false,
-            signals: null,
-            thresholds: null,
-            decision: { mode: 'default', trigger: null },
-            logLines: [],
-            warnings: []
+            ok: false,
+            path: ADAPTIVE_APPENDIX_FILE_PATH,
+            overridden: false,
+            error: 'developmentMode=adaptive: could not write the scope-estimate appendix to "' +
+                ADAPTIVE_APPENDIX_FILE_PATH + '": ' + e
         };
     }
-    var config = resolveAdaptiveConfig(customParams);
-    var signals = extractSignalsFromTicketText(ticketText);
-    var decision = decideAdaptiveMode(signals, config.thresholds);
+    return { ok: true, path: ADAPTIVE_APPENDIX_FILE_PATH, overridden: false, error: null };
+}
+
+/**
+ * Materialize the scope-estimate appendix for adaptive legs.
+ * @returns {{ok: boolean, active: boolean, path: string|null, overridden: boolean,
+ *            error: string|null, warnings: string[], logLines: string[]}}
+ */
+
+/**
+ * Resolve the adaptive appendix WITHOUT writing: mode/shadow gating, threshold
+ * resolution, text build. Lets the preCli caller validate BOTH appendices
+ * before committing either write — a failed plan resolution must not leave
+ * an orphan adaptive appendix behind (the old fail-fast invariant, gh-1503).
+ * @returns {{active: boolean, threshold: number|null, text: string|null,
+ *            error: string|null, warnings: string[], logLines: string[]}}
+ */
+function resolveAdaptiveAppendix(customParams) {
+    var mode = developmentMode.resolveDevelopmentMode(customParams).mode;
+    if (mode !== 'adaptive') {
+        return { active: false, threshold: null, text: null, error: null, warnings: [], logLines: [] };
+    }
+    if (isShadowMode(customParams)) {
+        return {
+            active: false, threshold: null, text: null, error: null, warnings: [],
+            logLines: ['📝 developmentMode=adaptive: adaptive routing would be active but shadow mode — nothing materialized']
+        };
+    }
+    var resolved = resolvePlanThreshold(customParams);
     return {
         active: true,
-        shadowMode: config.shadowMode,
-        signals: signals,
-        thresholds: config.thresholds,
-        decision: decision,
-        logLines: [routingLogLine(decision, signals, config.shadowMode)],
-        warnings: config.warnings
+        threshold: resolved.threshold,
+        text: adaptiveAppendixText(resolved.threshold),
+        error: null,
+        warnings: resolved.warning ? [resolved.warning] : [],
+        logLines: ['📝 developmentMode=adaptive: adaptive routing active (threshold ' +
+            resolved.threshold + ') → ' + ADAPTIVE_APPENDIX_FILE_PATH]
     };
 }
 
-/** Ticket text shape used across callers: title + '\n' + body. */
-function extractSignalsFromTicketText(ticketText) {
-    var separatorIndex = String(ticketText == null ? '' : ticketText).indexOf('\n');
-    var title = separatorIndex === -1 ? String(ticketText == null ? '' : ticketText) : String(ticketText).substring(0, separatorIndex);
-    var body = separatorIndex === -1 ? '' : String(ticketText).substring(separatorIndex + 1);
-    return extractSignals(title, body);
-}
+// ── preCli step (owned here so the pinned setup module stays complexity-flat) ──
+// Resolve BOTH appendices before committing either write: a failed plan
+// resolution must not leave an orphan adaptive appendix behind (fail-fast carries to
+// the caller — the setup step reports it like a plan-mode setup failure).
+// The plan appendix on an adaptive leg is an ESCALATION READ target (the adaptive
+// block points the agent at the file when it self-selects plan); the plan
+// cliPrompts entry itself stays gated to explicit plan mode.
 
 /**
- * The resolved development mode (the gh-1435 resolver's passthrough) — the
- * preCli dispatcher's gate, exported so the setup module needs no direct
- * dependency on the resolver module.
+ * The adaptive preCli step: materialize the adaptive appendix + the plan escalation
+ * read, seed the git local excludes for both, flush warnings + log lines.
+ * @param {Object} customParams the leg's customParams
+ * @returns {{ok: boolean, active: boolean, path: string|null, overridden: boolean,
+ *            error: string|null, warnings: string[], logLines: string[]}}
+ * @throws when either appendix cannot be materialized (config-error class).
  */
-function resolvedDevelopmentMode(customParams) {
-    return developmentMode.resolveDevelopmentMode(customParams).mode;
-}
-
-// ── materialization orchestration (the routing carrier) ──────────────────────
-
-/**
- * Readability probe: true when the appendix file exists (unreadable ⇒ assume
- * stale so a failed delete still warns).
- */
-function staleAppendixExists(io) {
-    var read = (io && io.file_read) || file_read;
-    try {
-        return typeof read({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH }) === 'string';
-    } catch (e) {
-        return true;
+function runPreCliAdaptiveAppendixStep(customParams, planModule, branchSetupMod) {
+    var resolution = resolveAdaptiveAppendix(customParams);
+    logResolutionEvents(resolution);
+    if (!resolution.active) {
+        return { ok: false, active: false, path: null, overridden: false, error: null, warnings: resolution.warnings, logLines: resolution.logLines };
     }
-}
-
-/**
- * Delete the appendix, contained — the platform returns {deleted:bool} and
- * never throws; the catch is defensive only, keeping "never fatal".
- */
-function deleteStaleAppendix(io) {
-    var remove = (io && io.file_delete) || file_delete;
-    try {
-        return remove({ path: developmentModePlan.PLAN_APPENDIX_FILE_PATH });
-    } catch (e) {
-        return null; // defensive only — the platform does not throw
-    }
-}
-
-/**
- * Best-effort removal of a stale materialized appendix — the hygiene that
- * keeps routed-default and shadow legs byte-identical to default-mode legs
- * even on a reused workspace. Silent on success, one honest warning on a
- * deletion failure (never fatal).
- *
- * Failure contract (gh-1437 review): dmtools file_delete NEVER throws — it
- * returns {deleted:true|false} (verified by runtime probe). So the delete
- * result is consulted, and the warning fires only when a file ACTUALLY
- * existed and survived the call: a plain {deleted:false} on an empty
- * workspace is the normal clean response and stays quiet.
- */
-function removeStaleAppendix(io) {
-    var existed = staleAppendixExists(io);
-    var result = deleteStaleAppendix(io);
-    if (existed && !(result && result.deleted === true)) {
-        console.warn('Could not remove the stale plan-mode appendix at "' +
-            developmentModePlan.PLAN_APPENDIX_FILE_PATH + '": ' +
-            developmentMode.describeRawValue(result));
-    }
-}
-
-/** The shadow outcome: decision computed + logged, nothing materialized. */
-function shadowOutcome(evaluation, io, result) {
-    removeStaleAppendix(io);
-    result.ok = true;
-    return result;
-}
-
-/** The routed-default outcome: same hygiene as shadow, routing line logged. */
-function routedDefaultOutcome(evaluation, io, result) {
-    removeStaleAppendix(io);
-    result.ok = true;
-    return result;
-}
-
-/**
- * The routed-plan outcome: resolve the appendix text through the plan
- * module's machinery (engine default or the workflow's
- * developmentModeConfig.plan.appendixFile override, verbatim), write it.
- * An unreadable override is a config error: ok:false + the path named — the
- * caller fails the leg fast, exactly like a plan-mode leg.
- */
-function routedPlanOutcome(evaluation, customParams, io, result) {
-    var resolved = developmentModePlan.resolveAppendixSource(customParams, io);
-    result.warnings = result.warnings.concat(resolved.warnings);
-    if (resolved.error) {
-        result.error = resolved.error;
-        return result;
-    }
-    var written = developmentModePlan.writeResolvedAppendix(resolved, io);
-    result.materialized = written.ok;
-    result.path = written.path;
-    result.overridden = written.overridden;
-    result.ok = written.ok;
-    result.error = written.error;
-    if (written.ok) {
-        result.logLines.push('📝 developmentMode=adaptive: ' + (written.overridden ? 'override' : 'engine default') +
-            ' appendix materialized → ' + developmentModePlan.PLAN_APPENDIX_FILE_PATH);
-    }
-    return result;
-}
-
-/**
- * Materialize (or clean up) the appendix for an ADAPTIVE leg. Non-adaptive
- * modes are an inactive no-op with zero IO (the caller dispatches, but the
- * gate is re-checked here — the plan module pins the same discipline).
- * Never throws.
- *
- * Shape mirrors materializePlanAppendix: ok:false reads as "nothing
- * materialized" UNLESS error is set (then it is a leg failure the caller
- * reports); callers check active/routed first.
- */
-function materializeAdaptiveAppendix(customParams, ticketText, io) {
-    var evaluation = evaluateAdaptiveMode(customParams, ticketText);
-    var result = {
-        ok: false,
-        active: evaluation.active,
-        routed: evaluation.active ? evaluation.decision.mode : null,
-        shadow: evaluation.shadowMode,
-        signals: evaluation.signals,
-        materialized: false,
-        path: null,
+    // resolve-both-before-write: a failed plan override must not strand an adaptive appendix
+    var planResolved = resolvePlanOverrideOrThrow(customParams, planModule);
+    var appendixPath = commitAppendixWrite(function () { return writeAdaptiveAppendix(resolution.threshold); });
+    var planPath = commitAppendixWrite(function () { return planModule.writeResolvedAppendix(planResolved); });
+    seedAppendixExcludes(planModule, branchSetupMod);
+    return {
+        ok: true,
+        active: true,
+        path: appendixPath,
         overridden: false,
         error: null,
-        logLines: evaluation.logLines,
-        warnings: evaluation.warnings
+        warnings: resolution.warnings,
+        logLines: resolution.logLines
     };
-    if (!evaluation.active) return result;
-    if (evaluation.shadowMode) return shadowOutcome(evaluation, io, result);
-    if (evaluation.decision.mode === 'plan') return routedPlanOutcome(evaluation, customParams, io, result);
-    return routedDefaultOutcome(evaluation, io, result);
+}
+
+function logResolutionEvents(resolution) {
+    (resolution.warnings || []).forEach(function (w) { console.warn(w); });
+    (resolution.logLines || []).forEach(function (l) { console.log(l); });
+}
+
+// gh-1435 override semantics: an unresolvable plan appendix aborts the leg
+// BEFORE any materialization (its warnings still surface first).
+function resolvePlanOverrideOrThrow(customParams, planModule) {
+    var planResolved = planModule.resolveAppendixSource(customParams);
+    if (planResolved && planResolved.error) {
+        (planResolved.warnings || []).forEach(function (w) { console.warn(w); });
+        throw new Error(planResolved.error);
+    }
+    return planResolved;
+}
+
+// One appendix write with its fail-fast error translation (the caller turns
+// the throw into the leg's setup error, naming the offending path).
+function commitAppendixWrite(write) {
+    var written = write();
+    if (!written.ok) {
+        throw new Error(written.error);
+    }
+    return written.path;
+}
+
+function seedAppendixExcludes(planModule, branchSetupMod) {
+    branchSetupMod.ensureGitInfoExclude(
+        planModule.PLAN_APPENDIX_FILE_PATH,
+        planModule.PLAN_APPENDIX_EXCLUDE_COMMENT,
+        'Could not exclude the plan-mode appendix from git:'
+    );
+    branchSetupMod.ensureGitInfoExclude(
+        ADAPTIVE_APPENDIX_FILE_PATH,
+        ADAPTIVE_APPENDIX_EXCLUDE_COMMENT,
+        'Could not exclude the scope-estimate appendix from git:'
+    );
+    console.log('📝 developmentMode=adaptive: plan appendix materialized for escalation reads → ' +
+        planModule.PLAN_APPENDIX_FILE_PATH);
+}
+
+// ── escalation visibility (the decision record is the durable signal; the
+// label only makes escalated legs visible to humans) ────────────────────────
+
+var DEV_PLAN_ESCALATED_LABEL = 'dev-plan-escalated';
+
+/**
+ * Stamp the informational label when the record says the leg self-selected
+ * plan. Pure over its arguments — the leg action owns the tracker access and
+ * the degrade-not-fail wrapper.
+ * @param {Object|null} record a parseScopeEstimateRecord result
+ * @param {function(string)} addLabel the tracker add-label call
+ * @returns {boolean} true when the label was due
+ */
+function stampDevPlanEscalatedFromRecord(record, addLabel) {
+    if (!record || record.mode !== 'plan') return false;
+    addLabel(DEV_PLAN_ESCALATED_LABEL);
+    return true;
+}
+
+/** The conditional cliPrompts entry for adaptive legs (see the condition script). */
+function adaptiveAppendixCliEntry() {
+    return {
+        id: ADAPTIVE_APPENDIX_ENTRY_ID,
+        prompt: ADAPTIVE_APPENDIX_PROMPT_PATH,
+        condition: ADAPTIVE_APPENDIX_CONDITION_PATH
+    };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        DEFAULT_ADAPTIVE_THRESHOLDS: DEFAULT_ADAPTIVE_THRESHOLDS,
-        ADAPTIVE_THRESHOLD_KEYS: ADAPTIVE_THRESHOLD_KEYS,
-        describeRawValue: developmentMode.describeRawValue,
-        extractSignals: extractSignals,
-        maxModuleNumber: maxModuleNumber,
-        countBulletGroups: countBulletGroups,
-        resolveAdaptiveConfig: resolveAdaptiveConfig,
-        decideAdaptiveMode: decideAdaptiveMode,
-        describeSignals: describeSignals,
-        routingLogLine: routingLogLine,
-        evaluateAdaptiveMode: evaluateAdaptiveMode,
-        extractSignalsFromTicketText: extractSignalsFromTicketText,
-        resolvedDevelopmentMode: resolvedDevelopmentMode,
-        materializeAdaptiveAppendix: materializeAdaptiveAppendix
+        ADAPTIVE_APPENDIX_ENTRY_ID: ADAPTIVE_APPENDIX_ENTRY_ID,
+        ADAPTIVE_APPENDIX_FILE_PATH: ADAPTIVE_APPENDIX_FILE_PATH,
+        ADAPTIVE_APPENDIX_PROMPT_PATH: ADAPTIVE_APPENDIX_PROMPT_PATH,
+        ADAPTIVE_APPENDIX_CONDITION_PATH: ADAPTIVE_APPENDIX_CONDITION_PATH,
+        ADAPTIVE_APPENDIX_EXCLUDE_COMMENT: ADAPTIVE_APPENDIX_EXCLUDE_COMMENT,
+        PLAN_APPENDIX_RUNTIME_PATH: PLAN_APPENDIX_RUNTIME_PATH,
+        SCOPE_ESTIMATE_RELATIVE_PATH: SCOPE_ESTIMATE_RELATIVE_PATH,
+        DEFAULT_PLAN_THRESHOLD: DEFAULT_PLAN_THRESHOLD,
+        resolvePlanThreshold: resolvePlanThreshold,
+        parseScopeEstimateRecord: parseScopeEstimateRecord,
+        adaptiveAppendixText: adaptiveAppendixText,
+        resolveAdaptiveAppendix: resolveAdaptiveAppendix,
+        writeAdaptiveAppendix: writeAdaptiveAppendix,
+        adaptiveAppendixCliEntry: adaptiveAppendixCliEntry,
+        runPreCliAdaptiveAppendixStep: runPreCliAdaptiveAppendixStep,
+        stampDevPlanEscalatedFromRecord: stampDevPlanEscalatedFromRecord,
+        DEV_PLAN_ESCALATED_LABEL: DEV_PLAN_ESCALATED_LABEL
     };
 }
