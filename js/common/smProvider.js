@@ -74,51 +74,6 @@
 var SM_IO_CACHE_TTL_MS = 60 * 1000;
 var _cache = { ttlMs: SM_IO_CACHE_TTL_MS, entries: {} };
 
-// [fix/io-cache-ttl] DIAGNOSTIC — module-eval marker + hit/miss counters.
-// _evalId stamps THIS evaluation of smProvider.js: several eval ids in one
-// tick log mean the module was re-required (separate _cache holders).
-var _evalId = String(Math.random()).slice(2, 8);
-var _stats = { eval: _evalId, hit: 0, miss: 0, expired: 0, puts: 0, drops: 0 };
-function ioCacheStats() {
-    return {
-        eval: _stats.eval, hit: _stats.hit, miss: _stats.miss,
-        expired: _stats.expired, puts: _stats.puts, drops: _stats.drops,
-        entries: Object.keys(_cache.entries).length
-    };
-}
-
-// [fix/io-cache-ttl] Live-probe cache: scan-time live reads (mutex phantom
-// probes gh-1000, run-jobs polls in stampLinkBlock) fire per rule today —
-// 84 identical actions/runs/<id>/jobs calls for 3 run ids measured in ONE
-// dry tick (fa, 2026-11-17). A SHORT TTL bounds the fan-out: scans see a
-// <=liveProbeTtlMs-stale layer; ACTION-time re-verifies keep true live
-// reads ("scan cached, act live") — separate holder from _cache because
-// the staleness contract differs.
-var SM_LIVE_PROBE_TTL_MS = 30 * 1000;
-var _probeCache = { entries: {} };
-function probeCacheGet(key, ttlMs) {
-    var e = _probeCache.entries[key];
-    if (!e) return undefined;
-    if (Date.now() - e.at > ttlMs) {
-        delete _probeCache.entries[key];
-        _stats.miss++;
-        return undefined;
-    }
-    _stats.hit++;
-    return e.data;
-}
-function probeCachePut(key, data) {
-    _probeCache.entries[key] = { at: Date.now(), data: data };
-    _stats.puts++;
-}
-function probeTtlMs() { return SM_LIVE_PROBE_TTL_MS; }
-// jobParams tuning (smAgent.initTickState): ioCacheTtlMs / liveProbeTtlMs.
-function applyIoCacheTuning(jobParams) {
-    var p = jobParams || {};
-    if (typeof p.ioCacheTtlMs === 'number' && p.ioCacheTtlMs >= 0) _cache.ttlMs = p.ioCacheTtlMs;
-    if (typeof p.liveProbeTtlMs === 'number' && p.liveProbeTtlMs >= 0) SM_LIVE_PROBE_TTL_MS = p.liveProbeTtlMs;
-}
-
 function ioCacheKey(owner, repo, kind, id) {
     return owner + '/' + repo + ':' + kind + (id ? ':' + id : '');
 }
@@ -126,13 +81,11 @@ function ioCacheKey(owner, repo, kind, id) {
 function ioCacheGet(owner, repo, kind, id) {
     var key = ioCacheKey(owner, repo, kind, id);
     var entry = _cache.entries[key];
-    if (!entry) { _stats.miss++; return undefined; }
+    if (!entry) return undefined;
     if (Date.now() - entry.at > _cache.ttlMs) {
         delete _cache.entries[key];
-        _stats.expired++;
         return undefined;
     }
-    _stats.hit++;
     return entry.data;
 }
 
@@ -140,7 +93,6 @@ function ioCacheGet(owner, repo, kind, id) {
 function ioCachePut(owner, repo, kind, id, data) {
     var at = (data && typeof data.fetchedAt === 'number') ? data.fetchedAt : Date.now();
     _cache.entries[ioCacheKey(owner, repo, kind, id)] = { at: at, data: data };
-    _stats.puts++;
 }
 
 // Drop ONE cached entry (owner directive 2026-10-04 "red yields the slot"):
@@ -153,7 +105,6 @@ function ioCachePut(owner, repo, kind, id, data) {
 // shorter TTLs: the 60s budget stays for read-only rules.
 function ioCacheDrop(owner, repo, kind, id) {
     delete _cache.entries[ioCacheKey(owner, repo, kind, id)];
-    _stats.drops++;
 }
 
 // Collect every non-expired entry of one kind for a repo into a plain
@@ -314,7 +265,6 @@ function branchHead(owner, repo, name) {
 function listOpenPrs(owner, repo) {
     var cached = ioCacheGet(owner, repo, 'openPrs', null);
     if (cached) return cached;
-    console.log('   [iocache-diag] openPrs MISS eval=' + _evalId);
     var list = asList(parseMcp(github_list_prs({
         workspace: owner, repository: repo, state: 'open'
     })));
@@ -1674,11 +1624,6 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         createSmProvider: createSmProvider,
         ioCacheDrop: ioCacheDrop,
-        ioCacheStats: ioCacheStats,
-        probeCacheGet: probeCacheGet,
-        probeCachePut: probeCachePut,
-        probeTtlMs: probeTtlMs,
-        applyIoCacheTuning: applyIoCacheTuning,
         BOOKKEEPING_CHECK_PREFIXES: BOOKKEEPING_CHECK_PREFIXES,
         // gh-1059: ONE head-repo resolver shared with githubSource.js (the
         // PR-list and prStatus payload dialects must never drift apart).

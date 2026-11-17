@@ -7,6 +7,7 @@
 var buildEncodedConfigModule = require('../common/buildEncodedConfig.js');
 var machineAuthorModule = require('../common/machineAuthor.js');
 var smProviderModule = require('../common/smProvider.js');
+var probeCacheModule = require('../common/probeCache.js');
 var smRuleLayersModule = require('../common/smRuleLayers.js');
 function normalizePositiveInt(value) {
   if (typeof value !== 'number' || !isFinite(value)) {
@@ -352,8 +353,8 @@ function logCompletionBanner(deps, allProcessedKeys, allSkippedKeys, stampsFaile
   }
   var procText = allProcessedKeys.length ? '[' + allProcessedKeys.join(', ') + ']' : '';
   var skipText = allSkippedKeys.length ? ' [' + allSkippedKeys.join(', ') + ']' : '';
-  var _ioc = (smProviderModule && typeof smProviderModule.ioCacheStats === 'function') ? smProviderModule.ioCacheStats() : null;
-  deps.log('\n══ SM Agent complete — processed: ' + allProcessedKeys.length + ' ' + procText + ', skipped: ' + allSkippedKeys.length + skipText + ', stamps_failed: ' + stampsFailed + ', guest_prs_blocked_no_validation_path: ' + dzCount + (_ioc ? ' | iocache[hit=' + _ioc.hit + ' miss=' + _ioc.miss + ' expired=' + _ioc.expired + ' puts=' + _ioc.puts + ' drops=' + _ioc.drops + ' entries=' + _ioc.entries + ' eval=' + _ioc.eval + ']' : '') + ' ══');
+  var _ioc = (probeCacheModule && typeof probeCacheModule.ioCacheStats === 'function') ? probeCacheModule.ioCacheStats() : null;
+  deps.log('\n══ SM Agent complete — processed: ' + allProcessedKeys.length + ' ' + procText + ', skipped: ' + allSkippedKeys.length + skipText + ', stamps_failed: ' + stampsFailed + ', guest_prs_blocked_no_validation_path: ' + dzCount + (_ioc ? ' | probe[hit=' + _ioc.hit + ' miss=' + _ioc.miss + ' expired=' + _ioc.expired + ' puts=' + _ioc.puts + ' drops=' + _ioc.drops + ' entries=' + _ioc.entries + ' eval=' + _ioc.eval + ']' : '') + ' ══');
   return dzCount;
 }
 function runTickSetupAndRules(deps, p, projectConfig, rules, workflowBudget, globalRepoInfo) {

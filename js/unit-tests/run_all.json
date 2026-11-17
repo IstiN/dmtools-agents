@@ -169,6 +169,7 @@
         "js/unit-tests/test_prepareDiscoveryContext.js",
         "js/unit-tests/test_preparePRForReview.js",
         "js/unit-tests/test_prepareTestPRForReview.js",
+        "js/unit-tests/test_probeCache.js",
         "js/unit-tests/test_publishDiscoveryToConfluence.js",
         "js/unit-tests/test_publishParams.js",
         "js/unit-tests/test_pullRequestHelper.js",

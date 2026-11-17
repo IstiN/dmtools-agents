@@ -84,6 +84,7 @@ var reworkAndVerdictsModule = require('./sm/reworkAndVerdicts.js');
 var ruleProcessorModule = require('./sm/ruleProcessor.js');
 var tickOrchestratorModule = require('./sm/tickOrchestrator.js');
 var validationCheckSyncModule = require('./sm/validationCheckSync.js');
+var probeCacheModule = require('./common/probeCache.js');
 var validationProbesModule = require('./sm/validationProbes.js');
 var verdictAndFailStateModule = require('./sm/verdictAndFailState.js');
 var workflowDispatchModule = require('./sm/workflowDispatch.js');
@@ -390,7 +391,7 @@ function buildTickOrchestratorDeps() {
         smForge = workflowDispatchModule.resolveSmForge(projectConfig);
         PRIORITY_LABELS = tickOrchestratorModule.resolvePriorityLabels(buildIoDeps(), projectConfig);
         if (smProviderModule && typeof smProviderModule.ioCacheReset === 'function') smProviderModule.ioCacheReset();
-        if (smProviderModule && typeof smProviderModule.applyIoCacheTuning === 'function') smProviderModule.applyIoCacheTuning(RUN_JOB_PARAMS);
+        if (probeCacheModule && typeof probeCacheModule.applyProbeTuning === 'function') probeCacheModule.applyProbeTuning(RUN_JOB_PARAMS);
         var jsonCap = typeof p.maxTriggeredWorkflows === 'number' ? p.maxTriggeredWorkflows : p.maxWorkflowsPerRun;
         var cap = tickOrchestratorModule.resolveWorkflowCap(buildIoDeps(), jsonCap, projectConfig);
         var workflowBudget = cap ? { initial: cap, remaining: cap, activeCount: 0, activeCountsByWorkflow: {}, activeRunSummariesByWorkflow: {} } : null;
