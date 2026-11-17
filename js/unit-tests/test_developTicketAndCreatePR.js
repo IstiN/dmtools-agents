@@ -1334,7 +1334,7 @@ suite('developTicketAndCreatePR > publish-time plan snapshot close-out (gh-1511)
             commands.push(args.command);
             if (args.command === 'git ls-files -- ' + SNAPSHOT) return SNAPSHOT;
             if (args.command === 'git rm -f -- ' + SNAPSHOT) return "removed '" + SNAPSHOT + "'";
-            if (args.command === 'git commit -m "' + branchName.split('/').pop() + ': plan done"') {
+            if (args.command.indexOf('git commit -m "' + branchName.split('/').pop() + ': plan done"') === 0) {
                 return '[ai/x 1a2b3c] plan done';
             }
             return base(args);
@@ -1362,8 +1362,8 @@ suite('developTicketAndCreatePR > publish-time plan snapshot close-out (gh-1511)
         assert.equal(result.prUrl, PR_URL, 'the PR is still created after the close-out');
         assert.ok(commands.indexOf('git rm -f -- ' + SNAPSHOT) !== -1,
             'the snapshot is removed from the branch — commands: ' + JSON.stringify(commands.filter(function (c) { return c.indexOf(SNAPSHOT) !== -1; })));
-        assert.ok(commands.indexOf('git commit -m "TS-40: plan done"') !== -1,
-            'the close-out commit carries the protocol subject');
+        assert.ok(commands.some(function (c) { return c.indexOf('git commit -m "TS-40: plan done"') === 0; }),
+            'the close-out commit carries the protocol subject (pathspec-limited to the snapshot)');
         var pushCount = commands.filter(function (c) { return c === 'git push -u origin ai/TS-40'; }).length;
         assert.ok(pushCount >= 2,
             'the close-out commit must be pushed (pipeline push + close-out push), got ' + pushCount);
