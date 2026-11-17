@@ -106,6 +106,9 @@ _Push Rework Changes Post-Action_
   - `configPath`
   - `contentOutput`
   - `contentOutput.target`
+  - `developmentMode`
+  - `developmentModeConfig`
+  - `developmentModeConfig.plan`
   - `dryRun`
   - `feedbackLoop`
   - `localTeammate`
@@ -183,6 +186,9 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `configPath` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
+- `developmentMode` _(used by JS action)_
+- `developmentModeConfig` _(used by JS action)_
+- `developmentModeConfig.plan` _(used by JS action)_
 - `feedbackLoop` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `managedSubmodules` _(used by JS action)_

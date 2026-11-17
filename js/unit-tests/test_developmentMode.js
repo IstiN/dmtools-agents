@@ -279,6 +279,9 @@ function legRequireMap() {
         // gh-1503: the adaptive decision module (the leg action reads scope_estimate.json)
         './common/developmentModeAdaptive.js': loadModule('js/common/developmentModeAdaptive.js',
             makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
+        // gh-1511: the close-out module — real removePlanSnapshot, git mocked per test.
+        './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+            makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
         './configLoader.js': legConfigLoader,
         './config.js': configModule,
         './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },

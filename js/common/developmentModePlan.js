@@ -37,6 +37,10 @@
 //   - resume rule — plan present or branch non-empty at start ⇒ continuation:
 //     read plan, git log, reconcile checkboxes against the diff, execute only
 //     pending tasks.
+//   - close out — when the last task is done, the snapshot is removed from
+//     the branch again (<KEY>: plan done) before the completion report; the
+//     publish gate and the rework push repeat the removal defensively, so a
+//     PR never carries the plan file (removePlanSnapshot below).
 //
 // Failure handling stays with the existing feedbackLoop machinery — the plan
 // adds no new failure states (the appendix materialization failure below is a
@@ -58,6 +62,12 @@ var PLAN_APPENDIX_PROMPT_PATH = './' + PLAN_APPENDIX_FILE_PATH;
 var PLAN_APPENDIX_CONDITION_PATH = 'agents/js/conditions/isDevelopmentModePlan.js';
 var PLAN_APPENDIX_EXCLUDE_COMMENT =
     '# Development-mode plan appendix — runtime materialization, never committed';
+
+// The committed snapshot path — the plan mirror the protocol commits to the
+// dev branch so plan state survives interruption windows mid-leg. Committed
+// DURING the leg, removed again at close-out (removePlanSnapshot below): the
+// PR diff and the base branch must never carry the plan file.
+var PLAN_SNAPSHOT_FILE_PATH = '.dmtools/plan-snapshot.md';
 
 // Engine-shipped appendix text (the plan-protocol protocol above, spelled out
 // for the agent). Rewording later = a developmentModeConfig.plan.appendixFile
@@ -102,7 +112,17 @@ var DEFAULT_PLAN_APPENDIX = [
     '  1. Read the plan and `git log`.',
     '  2. Reconcile the plan checkboxes against the actual branch diff — a task',
     '     whose change is already on the branch is done, checkbox or not.',
-    '  3. Execute ONLY the still-pending tasks.'
+    '  3. Execute ONLY the still-pending tasks.',
+    '',
+    '### 4. Close out — the plan file never rides the pull request',
+    '',
+    '- When the LAST task is done (every checkbox `[x]`), remove the snapshot',
+    '  from the branch again: `git rm .dmtools/plan-snapshot.md`, commit',
+    '  subject `<KEY>: plan done`.',
+    '- Do this BEFORE writing `outputs/<KEY>/response.md`: the completion',
+    '  report is the leg\'s deliverable — the plan file is leg scaffolding.',
+    '- The engine repeats this cleanup defensively before the PR is created,',
+    '  so an open pull request never carries the plan file.'
 ].join('\n');
 
 function isPlainObject(value) {
@@ -297,6 +317,36 @@ function materializePlanAppendix(customParams, io) {
     return written;
 }
 
+// ── publish-time hygiene (gh-1511) ──────────────────────────────────────────
+// The committed snapshot exists so plan state survives interruption windows
+// mid-leg. Once the leg is publishing (gates green, work pushed) it is pure
+// scaffolding: an open PR carrying it pollutes the review diff and a merge
+// would land the file on the base branch permanently. The appendix (section
+// 4) has the agent do the close-out itself; removePlanSnapshot is the
+// defensive repeat at the engine's publish sites.
+
+/**
+ * Remove the committed plan snapshot from the branch. Tracked-file probe
+ * first: an absent/untracked snapshot (direct-mode legs, already cleaned
+ * branches) is exactly one command. `-f` drops any uncommitted checkbox
+ * edits — the artifact is discarded at close-out, never salvaged. Throws on
+ * git failure — the caller owns the non-fatal warn (same contract as
+ * gitStaging.untrackRuntimeArtifacts).
+ *
+ * @param {function(string): string} run executes a git command in the leg checkout
+ * @param {string} ticketKey the close-out commit subject is `<KEY>: plan done`
+ * @returns {{removed: boolean, commit: string|null}} removed=true when the
+ *   close-out commit was created (the caller must push the branch)
+ */
+function removePlanSnapshot(run, ticketKey) {
+    var listed = String(run('git ls-files -- ' + PLAN_SNAPSHOT_FILE_PATH) || '').trim();
+    if (!listed) return { removed: false, commit: null };
+    run('git rm -f -- ' + PLAN_SNAPSHOT_FILE_PATH);
+    var subject = (ticketKey || 'ticket') + ': plan done';
+    run('git commit -m "' + subject + '"');
+    return { removed: true, commit: subject };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         PLAN_APPENDIX_ENTRY_ID: PLAN_APPENDIX_ENTRY_ID,
@@ -311,6 +361,9 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveAppendixSource: resolveAppendixSource,
         writeResolvedAppendix: writeResolvedAppendix,
         readAppendixText: readAppendixText,
-        materializePlanAppendix: materializePlanAppendix
+        readAppendixText: readAppendixText,
+        materializePlanAppendix: materializePlanAppendix,
+        PLAN_SNAPSHOT_FILE_PATH: PLAN_SNAPSHOT_FILE_PATH,
+        removePlanSnapshot: removePlanSnapshot
     };
 }

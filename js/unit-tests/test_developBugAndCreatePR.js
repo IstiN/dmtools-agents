@@ -119,6 +119,9 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         // same loadModule pattern as needsInput above.
         './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
         './common/developmentModeAdaptive.js': devModeSharedAdaptive,
+        // gh-1511: the close-out module — real removePlanSnapshot, git mocked per test.
+        './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+            makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
         './cacheToReleases.js': {},
         './common/gitStaging.js': gitStagingModule,
         './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -969,6 +972,12 @@ function loadBugForMissingResponseResume(opts) {
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': devModeSharedAdaptive,
+        // gh-1511: the close-out module — real removePlanSnapshot, git mocked per test.
+            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
+        // gh-1511: the close-out module — real removePlanSnapshot, git mocked per test.
+        './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+            makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModuleLocal,
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
