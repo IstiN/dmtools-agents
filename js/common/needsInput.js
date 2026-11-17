@@ -71,11 +71,53 @@ function needsInputOutcomeBody(ticketKey, branchName) {
     };
 }
 
+/**
+ * gh-1484: true when either the CLI response text or outputs/response.md
+ * declares an intentional cooperative interruption (`"path": "interrupted"`),
+ * mirroring pushReworkChanges.isInterruptedReworkResponse.
+ */
+function hasInterruptedPathMarker(text) {
+    var s = String(text || '');
+    return s.indexOf('"path":"interrupted"') !== -1 ||
+        s.indexOf('"path": "interrupted"') !== -1;
+}
+
+function isInterruptedDevelopmentResponse(responseText, fileResponseText) {
+    return hasInterruptedPathMarker(responseText) || hasInterruptedPathMarker(fileResponseText);
+}
+
+function interruptedDevelopmentOutcomeBody(ticketKey, branchName) {
+    return {
+        success: true,
+        path: 'development-interrupted',
+        ticketKey: ticketKey,
+        branchName: branchName || null
+    };
+}
+
+/**
+ * gh-1484: evaluates cooperative interrupted development outcome for a dev leg
+ * context (`"path": "interrupted"` in response.md or ctx.developmentSummary).
+ */
+function evaluateInterruptedDevelopment(ctx, readResponseMdFn, removeWipFn, wipLabelFn) {
+    var fileText = readResponseMdFn(ctx.ticketKey);
+    if (!isInterruptedDevelopmentResponse(ctx.developmentSummary, fileText)) {
+        return null;
+    }
+    removeWipFn(ctx.ticketKey, wipLabelFn(ctx.metadata));
+    console.log('Interrupted response marker ("path": "interrupted") detected — skipping gates and PR creation.');
+    return interruptedDevelopmentOutcomeBody(ctx.ticketKey, ctx.expectedBranch || ctx.branchName || null);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         hasNeedsInputFile: hasNeedsInputFile,
         markNeedsInputTicket: markNeedsInputTicket,
         clearNeedsInputTicket: clearNeedsInputTicket,
-        needsInputOutcomeBody: needsInputOutcomeBody
+        needsInputOutcomeBody: needsInputOutcomeBody,
+        hasInterruptedPathMarker: hasInterruptedPathMarker,
+        isInterruptedDevelopmentResponse: isInterruptedDevelopmentResponse,
+        interruptedDevelopmentOutcomeBody: interruptedDevelopmentOutcomeBody,
+        evaluateInterruptedDevelopment: evaluateInterruptedDevelopment
     };
 }

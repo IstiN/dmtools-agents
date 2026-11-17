@@ -1716,26 +1716,24 @@ function needsInputOutcomeBody(ctx) {
  * the same label. Returns null when the leg is not an ask-mode leg.
  */
 function askModeOutcome(ctx) {
-    if (!needsInputCommon.hasNeedsInputFile(outputFiles)) return null;
-    squashNonPublishWipCommits(ctx);
-    console.log('outputs/needs-input.md present — ask-mode leg: agent asked for missing inputs. No PR, no reset.');
-    markNeedsInputTicket(ctx);
-    return { result: needsInputOutcomeBody(ctx) };
+    if (needsInputCommon.hasNeedsInputFile(outputFiles)) {
+        squashNonPublishWipCommits(ctx);
+        console.log('outputs/needs-input.md present — ask-mode leg: agent asked for missing inputs. No PR, no reset.');
+        markNeedsInputTicket(ctx);
+        return { result: needsInputOutcomeBody(ctx) };
+    }
+    var coopInterrupted = needsInputCommon.evaluateInterruptedDevelopment(ctx, readResponseMd, removeWipLabelQuietly, wipLabelFor);
+    return coopInterrupted ? { result: coopInterrupted } : null;
 }
 
-/**
- * runPublishPipeline seam of the same pre-flight: outputs/needs-input.md
- * present → label + green outcome, skipping the gates and PR creation; the
- * ticket waits for the reporter's answer (a caller may re-arm the leg on a
- * human comment — see the dispatch gate's comment-resume). Absent → null
- * (the pipeline continues to PR creation).
- */
 function needsInputOutcome(ctx) {
-    if (!needsInputCommon.hasNeedsInputFile(outputFiles)) return null;
-    squashNonPublishWipCommits(ctx);
-    console.log('outputs/needs-input.md present — agent flagged missing ticket inputs. Skipping gates and PR creation.');
-    markNeedsInputTicket(ctx);
-    return needsInputOutcomeBody(ctx);
+    if (needsInputCommon.hasNeedsInputFile(outputFiles)) {
+        squashNonPublishWipCommits(ctx);
+        console.log('outputs/needs-input.md present — agent flagged missing ticket inputs. Skipping gates and PR creation.');
+        markNeedsInputTicket(ctx);
+        return needsInputOutcomeBody(ctx);
+    }
+    return needsInputCommon.evaluateInterruptedDevelopment(ctx, readResponseMd, removeWipLabelQuietly, wipLabelFor);
 }
 
 function recoverNoChangesOutcome(params, ctx) {

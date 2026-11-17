@@ -3510,6 +3510,65 @@ suite('developTicketAndCreatePR > inputs pre-flight (needs-input seams)', functi
             'no needs-input.md → the gh-742 interrupted-reset contract is unchanged');
     });
 
+    test('interruptedDevelopmentOutcome (gh-1484): "path": "interrupted" in response.md pushes work, skips gates and PR, returns development-interrupted', function () {
+        var comments = [];
+        var movedTo = [];
+        var addedLabels = [];
+        var removedLabels = [];
+        var gateCalls = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-1484', ''),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_add_label: function (args) { addedLabels.push(args.label); },
+            jira_remove_label: function (args) { removedLabels.push(args.label); }
+        }, {
+            responseMd: '### Partial progress\n{"path": "interrupted"}\n',
+            feedbackLoop: {
+                runQualityGates: function () { gateCalls.push('quality'); return { success: true }; },
+                runPolicyGates: function () { gateCalls.push('policy'); return { success: true }; },
+                runPostPublishGates: function () { gateCalls.push('postPublish'); return { success: true }; }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1484', fields: { summary: 'cooperative partial exit', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'partial'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'development-interrupted');
+        assert.equal(result.ticketKey, 'TS-1484');
+        assert.equal(result.branchName, 'ai/TS-1484');
+        assert.deepEqual(gateCalls, [], 'no gates may run on a cooperative interrupted exit');
+        assert.deepEqual(movedTo, [], 'no In Review or Ready For Development status move');
+        assert.deepEqual(addedLabels, [], 'no ai_developed label');
+        assert.deepEqual(removedLabels, ['story_development_wip'], 'WIP lock label is released');
+        assert.deepEqual(comments, []);
+    });
+
+    test('interruptedDevelopmentOutcome (gh-1484): no-changes path with "path":"interrupted" in params.response returns development-interrupted without throwing', function () {
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: noChangesGitCommandMock('TS-1485', 'ai/TS-1485'),
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_add_label: function () { }
+        }, {});
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1485', fields: { summary: 'cooperative stop before diff', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: '{"path":"interrupted"}'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'development-interrupted');
+        assert.equal(result.ticketKey, 'TS-1485');
+    });
+
 });
 
 // ─ Completion post-check: concerns seam (appendConcernsToCompletionComment /

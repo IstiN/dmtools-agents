@@ -259,6 +259,11 @@ function ensureLegContextLocalExcludes() {
         '# input/ branch-setup stash (crash window must never leak into a commit)',
         'Could not add ' + INPUT_STASH_DIR + '/ to .git/info/exclude:'
     );
+    ensureGitInfoExclude(
+        'cache*/',
+        '# DMTools REST client caches (gh-1505 / epam/dm.ai#868) - must never be committed',
+        'Could not add cache*/ to .git/info/exclude:'
+    );
 }
 
 /**

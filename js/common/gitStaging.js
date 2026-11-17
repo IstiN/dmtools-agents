@@ -43,7 +43,21 @@ var RUNTIME_ARTIFACT_PATHS = [
     // .dmtools/plan-snapshot.md.
     '.dmtools/development-mode-plan-appendix.md',
     '.dmtools-session-output.log',
-    '.claude-session-id'
+    '.claude-session-id',
+    // gh-1505 / epam/dm.ai#868: legacy dmtools REST-client cache folders
+    // created in the working directory before DMTOOLS_CACHE_DIR defaulted to
+    // ~/.dmtools/cache (plus any custom cache*Client / cacheTestRail dirs).
+    'cache*Client',
+    'cacheTestRail',
+    'cacheBasicOpenAI',
+    'cacheBasicDialAI',
+    'cacheBasicAnthropicAI',
+    'cacheBasicBedrockAI',
+    'cacheBasicOllamaAI',
+    'cacheBasicGitLab',
+    'cacheBasicGithub',
+    'cacheBasicConfluence',
+    'cacheBasicBitbucket'
 ];
 
 /**
@@ -97,11 +111,27 @@ function buildUntrackPathsCommand(paths) {
  *        or lives underneath it)
  * @returns {string[]} the paths that were untracked (empty when nothing was tracked)
  */
+function matchesCandidatePrefix(pathStr, candidate) {
+    if (candidate.indexOf('*') !== -1) {
+        var pattern = '^' + candidate.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '(/|$)';
+        return new RegExp(pattern).test(pathStr);
+    }
+    return pathStr === candidate || pathStr.indexOf(candidate + '/') === 0;
+}
+
+function matchesAnyCandidatePath(pathStr, candidates) {
+    var list = candidates;
+    for (var i = 0; i < list.length; i++) {
+        if (matchesCandidatePrefix(pathStr, list[i])) return true;
+    }
+    return false;
+}
+
 function untrackTrackedPaths(run, paths) {
     var candidates = paths || [];
     var listed = String(run(buildTrackedPathsCommand(candidates)) || '');
     var tracked = listed.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) {
-        return l && candidates.some(function (a) { return l === a || l.indexOf(a + '/') === 0; });
+        return l && matchesAnyCandidatePath(l, candidates);
     });
     if (tracked.length === 0) return [];
     run(buildUntrackPathsCommand(tracked));
@@ -208,7 +238,13 @@ function buildStagingPathspecs(runCommand, extraPaths) {
 function isRuntimeArtifactStatusLine(line) {
     if (!line) return false;
     for (var i = 0; i < RUNTIME_ARTIFACT_PATHS.length; i++) {
-        if (line.indexOf(RUNTIME_ARTIFACT_PATHS[i]) !== -1) return true;
+        var item = RUNTIME_ARTIFACT_PATHS[i];
+        if (item.indexOf('*') !== -1) {
+            var re = new RegExp('(?:^|\\s|")' + item.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/\\s"]*') + '(?:/|"|$)');
+            if (re.test(line)) return true;
+        } else if (line.indexOf(item) !== -1) {
+            return true;
+        }
     }
     return false;
 }

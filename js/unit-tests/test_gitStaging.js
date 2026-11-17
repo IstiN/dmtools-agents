@@ -26,7 +26,19 @@ var ALL_ARTIFACTS = [
     // gh-1436: plan-mode appendix materialization — engine-written prompt input.
     '.dmtools/development-mode-plan-appendix.md',
     '.dmtools-session-output.log',
-    '.claude-session-id'
+    '.claude-session-id',
+    // gh-1505 / epam/dm.ai#868: legacy dmtools REST-client cache folders.
+    'cache*Client',
+    'cacheTestRail',
+    'cacheBasicOpenAI',
+    'cacheBasicDialAI',
+    'cacheBasicAnthropicAI',
+    'cacheBasicBedrockAI',
+    'cacheBasicOllamaAI',
+    'cacheBasicGitLab',
+    'cacheBasicGithub',
+    'cacheBasicConfluence',
+    'cacheBasicBitbucket'
 ];
 
 suite('gitStaging', function() {
@@ -65,10 +77,10 @@ suite('gitStaging', function() {
         var removed = gitStaging.untrackRuntimeArtifacts(function(c) {
             seen.push(c);
             return c.indexOf('git ls-files') === 0
-                ? '.dmtools/credential-helper.log\n.dmtools/fa-sessions/a/b.json\nsrc/not-an-artifact.txt\n'
+                ? '.dmtools/credential-helper.log\n.dmtools/fa-sessions/a/b.json\ncacheAzureDevOpsClient/b6cfc36783a6e3be5f484405ef3770e9\nsrc/not-an-artifact.txt\n'
                 : '';
         });
-        assert.deepEqual(removed, ['.dmtools/credential-helper.log', '.dmtools/fa-sessions/a/b.json']);
+        assert.deepEqual(removed, ['.dmtools/credential-helper.log', '.dmtools/fa-sessions/a/b.json', 'cacheAzureDevOpsClient/b6cfc36783a6e3be5f484405ef3770e9']);
         assert.equal(seen.length, 2);
         assert.contains(seen[1], '"' + '.dmtools/credential-helper.log' + '"');
         assert.equal(seen[1].indexOf('not-an-artifact'), -1, 'a path outside the artifact list is never removed');
@@ -218,6 +230,14 @@ suite('gitStaging', function() {
             'untracked session store');
         assert.ok(gitStaging.isRuntimeArtifactStatusLine('?? .dmtools-session-output.log'),
             'untracked timer CLI-stdout snapshot');
+        assert.ok(gitStaging.isRuntimeArtifactStatusLine('?? cacheAzureDevOpsClient/'),
+            'untracked dmtools ADO client cache folder (gh-1505)');
+        assert.ok(gitStaging.isRuntimeArtifactStatusLine('?? cacheBasicJiraClient/abc'),
+            'untracked dmtools Jira client cache file (gh-1505)');
+        assert.ok(gitStaging.isRuntimeArtifactStatusLine('?? cacheTestRail/'),
+            'untracked dmtools TestRail client cache folder (gh-1505)');
+        assert.notOk(gitStaging.isRuntimeArtifactStatusLine('A  src/cacheManager/index.js'),
+            'application source files containing cache must not match cache*Client');
         assert.notOk(gitStaging.isRuntimeArtifactStatusLine('A  outputs/rca.md'),
             'real work must never be filtered');
         assert.notOk(gitStaging.isRuntimeArtifactStatusLine('?? factory-kit/'),
