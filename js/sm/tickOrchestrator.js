@@ -352,7 +352,8 @@ function logCompletionBanner(deps, allProcessedKeys, allSkippedKeys, stampsFaile
   }
   var procText = allProcessedKeys.length ? '[' + allProcessedKeys.join(', ') + ']' : '';
   var skipText = allSkippedKeys.length ? ' [' + allSkippedKeys.join(', ') + ']' : '';
-  deps.log('\n══ SM Agent complete — processed: ' + allProcessedKeys.length + ' ' + procText + ', skipped: ' + allSkippedKeys.length + skipText + ', stamps_failed: ' + stampsFailed + ', guest_prs_blocked_no_validation_path: ' + dzCount + ' ══');
+  var _ioc = (smProviderModule && typeof smProviderModule.ioCacheStats === 'function') ? smProviderModule.ioCacheStats() : null;
+  deps.log('\n══ SM Agent complete — processed: ' + allProcessedKeys.length + ' ' + procText + ', skipped: ' + allSkippedKeys.length + skipText + ', stamps_failed: ' + stampsFailed + ', guest_prs_blocked_no_validation_path: ' + dzCount + (_ioc ? ' | iocache[hit=' + _ioc.hit + ' miss=' + _ioc.miss + ' expired=' + _ioc.expired + ' puts=' + _ioc.puts + ' drops=' + _ioc.drops + ' entries=' + _ioc.entries + ' eval=' + _ioc.eval + ']' : '') + ' ══');
   return dzCount;
 }
 function runTickSetupAndRules(deps, p, projectConfig, rules, workflowBudget, globalRepoInfo) {
