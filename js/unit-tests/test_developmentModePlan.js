@@ -22,6 +22,10 @@
  *  REG — invariant P2 mechanics: the plan snapshot commit protocol coexists
  *        with the WIP auto-save squash (plan subjects never trigger it alone);
  *        runtime-artifact lists never treat the appendix file as committable.
+ *  UT  — gh-151 close-out: the appendix pins the plan-done removal step, and
+ *        removePlanSnapshot (the engine's defensive repeat) probes before it
+ *        removes, commits `<KEY>: plan done` only for a tracked snapshot, and
+ *        throws on git failure (callers own the non-fatal warn).
  */
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -341,6 +345,13 @@ suite('gh-1436 UT — canonical conditional cliPrompts entry', function () {
         assert.contains(t, 'T1', 'numbered tasks');
         assert.contains(t, 'pending', 'resume rule executes only pending tasks');
         assert.contains(t, 'checkbox', 'reconciliation instruction');
+        // gh-1511 close-out pins: the protocol owns the removal step, not only
+        // the commit ritual.
+        assert.contains(t, '### 4. Close out', 'the close-out section exists');
+        assert.contains(t, 'git rm .dmtools/plan-snapshot.md', 'the snapshot is removed from the branch');
+        assert.contains(t, '<KEY>: plan done', 'the close-out commit subject');
+        assert.contains(t, 'BEFORE writing', 'close-out happens before the completion report');
+        assert.contains(t, 'never carries the plan file', 'the PR must stay clean');
     });
 
     test('default appendix text obeys the pack content rules (R9): no gh-NN refs, no ISO dates', function () {
@@ -349,6 +360,75 @@ suite('gh-1436 UT — canonical conditional cliPrompts entry', function () {
         assert.equal(/\bpr-[0-9]+\b/i.test(t), false, 'no internal PR refs');
         assert.equal(/\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b/.test(t), false, 'no ISO dates');
         assert.equal(/(?:observed live|Evidence\s*\()/i.test(t), false, 'no live-incident markers');
+    });
+});
+
+// ── UT: gh-1511 close-out — removePlanSnapshot (the engine's defensive repeat) ──
+// Command recorder: every git command removePlanSnapshot issues is asserted,
+// so the probe → rm → commit sequence and the exact close-out subject stay
+// pinned. The helper throws on git failure — callers own the non-fatal warn
+// (same contract as gitStaging.untrackRuntimeArtifacts).
+
+function gitRecorder(lsFilesOutput, failOn) {
+    var commands = [];
+    return {
+        commands: commands,
+        run: function (command) {
+            commands.push(command);
+            if (failOn && command.indexOf(failOn) === 0) throw new Error('git failed: ' + command);
+            if (command.indexOf('git ls-files -- ') === 0) return lsFilesOutput;
+            return command.indexOf('git commit') === 0 ? '[ai/TS-30 1a2b3c] committed' : '';
+        }
+    };
+}
+
+suite('gh-1511 UT — removePlanSnapshot (publish-time close-out)', function () {
+
+    test('untracked/absent snapshot → exactly one probe, nothing removed', function () {
+        var rec = gitRecorder('');
+        var r = developmentModePlan.removePlanSnapshot(rec.run, 'TS-30');
+        assert.deepEqual(r, { removed: false, commit: null }, 'untracked → removed:false');
+        assert.equal(rec.commands.length, 1, 'only the ls-files probe ran');
+        assert.equal(rec.commands[0], 'git ls-files -- ' + developmentModePlan.PLAN_SNAPSHOT_FILE_PATH);
+    });
+
+    test('tracked snapshot → rm -f + close-out commit <KEY>: plan done', function () {
+        var rec = gitRecorder(developmentModePlan.PLAN_SNAPSHOT_FILE_PATH);
+        var r = developmentModePlan.removePlanSnapshot(rec.run, 'TS-30');
+        assert.deepEqual(r, { removed: true, commit: 'TS-30: plan done' });
+        assert.deepEqual(rec.commands, [
+            'git ls-files -- ' + developmentModePlan.PLAN_SNAPSHOT_FILE_PATH,
+            'git rm -f -- ' + developmentModePlan.PLAN_SNAPSHOT_FILE_PATH,
+            'git commit -m "TS-30: plan done"'
+        ], 'probe → rm -f → close-out commit, in order');
+    });
+
+    test('missing ticket key → the subject degrades to "ticket: plan done"', function () {
+        var rec = gitRecorder(developmentModePlan.PLAN_SNAPSHOT_FILE_PATH);
+        var r = developmentModePlan.removePlanSnapshot(rec.run, null);
+        assert.equal(r.commit, 'ticket: plan done');
+    });
+
+    test('git probe failure throws — the caller owns the non-fatal warn', function () {
+        var rec = gitRecorder('', 'git ls-files');
+        assert.throws(function () {
+            developmentModePlan.removePlanSnapshot(rec.run, 'TS-30');
+        }, /git failed/, 'probe failure propagates');
+        assert.equal(rec.commands.length, 1, 'no rm/commit after a failed probe');
+    });
+
+    test('git rm failure throws before any commit is attempted', function () {
+        var rec = gitRecorder(developmentModePlan.PLAN_SNAPSHOT_FILE_PATH, 'git rm');
+        assert.throws(function () {
+            developmentModePlan.removePlanSnapshot(rec.run, 'TS-30');
+        }, /git failed/, 'rm failure propagates');
+        assert.equal(rec.commands.length, 2, 'the close-out commit never ran');
+    });
+
+    test('whitespace-only ls-files output reads as untracked', function () {
+        var rec = gitRecorder('\n  \n');
+        var r = developmentModePlan.removePlanSnapshot(rec.run, 'TS-30');
+        assert.equal(r.removed, false, 'blank probe output → no removal');
     });
 });
 

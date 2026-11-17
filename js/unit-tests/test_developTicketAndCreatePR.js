@@ -57,6 +57,11 @@ var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 var developmentModeShared = loadModule('js/common/developmentMode.js');
 var developmentModeAdaptiveShared = loadModule('js/common/developmentModeAdaptive.js',
     makeRequire({ './developmentMode.js': developmentModeShared }));
+// gh-1511: the close-out module — one real instance shared by every
+// developTicketAndCreatePR loader map in this file (real removePlanSnapshot,
+// git mocked per test).
+var developmentModePlanShared = loadModule('js/common/developmentModePlan.js',
+    makeRequire({ './developmentMode.js': developmentModeShared }));
 
 
 // gh-1190: shared feedbackLoop stub builder — a named helper so the override
@@ -86,6 +91,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': developmentModeAdaptiveShared,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -124,6 +130,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks, feedbackLoopOverr
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': developmentModeAdaptiveShared,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -473,6 +480,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 // same loadModule pattern as needsInput above.
                 './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': developmentModeAdaptiveShared,
+            './common/developmentModePlan.js': developmentModePlanShared,
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -555,6 +563,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 // same loadModule pattern as needsInput above.
                 './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': developmentModeAdaptiveShared,
+            './common/developmentModePlan.js': developmentModePlanShared,
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -637,6 +646,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 // same loadModule pattern as needsInput above.
                 './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': developmentModeAdaptiveShared,
+            './common/developmentModePlan.js': developmentModePlanShared,
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
                 './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -790,6 +800,7 @@ function loadForLandingGuard(mocks, opts) {
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': developmentModeAdaptiveShared,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1004,6 +1015,7 @@ function loadForPrTail(mocks, opts) {
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': developmentModeAdaptiveShared,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1302,6 +1314,119 @@ suite('developTicketAndCreatePR > PR-creation tail (gh-729)', function () {
 
 });
 
+// ── gh-1511: publish-time plan-snapshot close-out ────────────────────────────
+// The plan protocol commits .dmtools/plan-snapshot.md to the dev branch so
+// plan state survives interruption; by publish time it is scaffolding. After
+// the publish pipeline (gates green, work pushed) and before PR creation the
+// leg strips it again — the PR diff must never carry the plan file. Here the
+// strip runs through action() with the REAL developmentModePlan module (only
+// the git calls are mocked), so the close-out subject and command sequence
+// stay pinned end to end.
+
+suite('developTicketAndCreatePR > publish-time plan snapshot close-out (gh-1511)', function () {
+
+    var PR_URL = 'https://github.com/acme/widgets/pull/1511';
+    var SNAPSHOT = '.dmtools/plan-snapshot.md';
+
+    function trackedSnapshotGitMock(branchName, commands) {
+        var base = committedWorkGitMock(branchName, PR_URL);
+        return function (args) {
+            commands.push(args.command);
+            if (args.command === 'git ls-files -- ' + SNAPSHOT) return SNAPSHOT;
+            if (args.command === 'git rm -f -- ' + SNAPSHOT) return "removed '" + SNAPSHOT + "'";
+            if (args.command === 'git commit -m "' + branchName.split('/').pop() + ': plan done"') {
+                return '[ai/x 1a2b3c] plan done';
+            }
+            return base(args);
+        };
+    }
+
+    test('tracked snapshot → close-out commit <KEY>: plan done + push, then the PR', function () {
+        var commands = [];
+        var gitMock = trackedSnapshotGitMock('ai/TS-40', commands);
+        var loaded = loadForPrTail({
+            cli_execute_command: gitMock,
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        }, { responseMd: '### What changed\n- Fixed the parser (`js/parser.js`).\n' });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-40', fields: { summary: 'plan leg with a committed snapshot', description: '', labels: [] } },
+            metadata: { contextId: 'sm_story_development' },
+            customParams: {},
+            response: '### What changed\n- Fixed the parser (`js/parser.js`).\n'
+        });
+
+        assert.equal(result.success, true, 'the close-out must not disturb the green leg');
+        assert.equal(result.prUrl, PR_URL, 'the PR is still created after the close-out');
+        assert.ok(commands.indexOf('git rm -f -- ' + SNAPSHOT) !== -1,
+            'the snapshot is removed from the branch — commands: ' + JSON.stringify(commands.filter(function (c) { return c.indexOf(SNAPSHOT) !== -1; })));
+        assert.ok(commands.indexOf('git commit -m "TS-40: plan done"') !== -1,
+            'the close-out commit carries the protocol subject');
+        var pushCount = commands.filter(function (c) { return c === 'git push -u origin ai/TS-40'; }).length;
+        assert.ok(pushCount >= 2,
+            'the close-out commit must be pushed (pipeline push + close-out push), got ' + pushCount);
+        assert.contains(loaded.logs.join('\n'), 'Removed the plan snapshot from the branch before PR creation',
+            'the close-out is visible in the leg log');
+    });
+
+    test('git probe failure → non-fatal warn, the PR proceeds as before', function () {
+        var commands = [];
+        var base = committedWorkGitMock('ai/TS-41', PR_URL);
+        var gitMock = function (args) {
+            commands.push(args.command);
+            if (args.command === 'git ls-files -- ' + SNAPSHOT) throw new Error('git exploded');
+            return base(args);
+        };
+        var loaded = loadForPrTail({
+            cli_execute_command: gitMock,
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        }, { responseMd: '### What changed\n- Fixed the parser (`js/parser.js`).\n' });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-41', fields: { summary: 'close-out hygiene failure', description: '', labels: [] } },
+            metadata: { contextId: 'sm_story_development' },
+            customParams: {},
+            response: '### What changed\n- Fixed the parser (`js/parser.js`).\n'
+        });
+
+        assert.equal(result.success, true, 'a failed close-out must never turn a green leg red');
+        assert.equal(result.prUrl, PR_URL, 'the PR still exists');
+        assert.contains(loaded.logs.join('\n'), 'Plan snapshot close-out skipped (non-fatal)',
+            'the failure is warned, not swallowed silently');
+        assert.equal(commands.filter(function (c) { return c.indexOf('git rm') === 0; }).length, 0,
+            'no removal is attempted after a failed probe');
+    });
+
+    test('untracked snapshot (default legs) → exactly one probe, zero close-out commands', function () {
+        var commands = [];
+        var gitMock = committedWorkGitMock('ai/TS-42', PR_URL);
+        var loaded = loadForPrTail({
+            cli_execute_command: function (args) { commands.push(args.command); return gitMock(args); },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        }, { responseMd: '### What changed\n- Fixed the parser (`js/parser.js`).\n' });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-42', fields: { summary: 'direct-mode leg', description: '', labels: [] } },
+            metadata: { contextId: 'sm_story_development' },
+            customParams: {},
+            response: '### What changed\n- Fixed the parser (`js/parser.js`).\n'
+        });
+
+        assert.equal(result.success, true);
+        var snapshotProbes = commands.filter(function (c) { return c === 'git ls-files -- ' + SNAPSHOT; }).length;
+        assert.equal(snapshotProbes, 1, 'exactly one close-out probe after the publish pipeline');
+        assert.equal(commands.filter(function (c) { return c.indexOf('git rm') === 0; }).length, 0,
+            'nothing is removed when the snapshot is absent');
+    });
+
+});
+
 
 // ── gh-775: resume-before-cold-reset ─────────────
 // Live fa gh-1341 (run 37521704313, 2026-10-06): a dev leg finished all its
@@ -1372,6 +1497,7 @@ function loadForMissingResponseResume(opts) {
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': developmentModeAdaptiveShared,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -1975,6 +2101,7 @@ function loadForOutcomePinning(mocks, opts) {
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': developmentModeAdaptiveShared,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './cacheToReleases.js': {
                 action: function () { telemetry.cache++; }
             },
@@ -3439,6 +3566,7 @@ function loadForConcernsSeam(mocks, opts) {
             // same loadModule pattern as needsInput above.
             './common/developmentMode.js': loadModule('js/common/developmentMode.js'),
             './common/developmentModeAdaptive.js': developmentModeAdaptiveShared,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
