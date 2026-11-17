@@ -366,3 +366,11 @@ test('expectedCandidateNamesOf reads the in-job plan legs', function() {
     assert.deepEqual(mod.expectedCandidateNamesOf(plan), ['security', 'polish']);
 });
 
+// ── suite registration (gh-1507: the dormant-suites silent-skip closes) ──────
+
+test('the suite is wired into run_all.json', function() {
+    var all = file_read({ path: 'js/unit-tests/run_all.json' }) || '';
+    assert.ok(all.indexOf('test_reviewPoolPost.js') !== -1,
+        'test_reviewPoolPost.js must be registered in run_all.json');
+});
+
