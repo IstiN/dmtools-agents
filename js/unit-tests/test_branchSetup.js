@@ -766,14 +766,17 @@ suite('branchSetup.ensureLegContextLocalExcludes (gh-1318)', function() {
     test('seeds both input/ and outputs/ into .git/info/exclude when empty', function() {
         var mocks = makeFileMocks('');
         loadBranchSetup(mocks).ensureLegContextLocalExcludes();
-        assert.equal(mocks.writes.length, 3, 'input/, outputs/ and the stash dir');
+        assert.equal(mocks.writes.length, 6, 'input/, outputs/, the stash dir, cache*Client/, cacheTestRail/, and cacheBasic*/');
+        assert.contains(mocks.writes[3].content, 'cache*Client/');
+        assert.contains(mocks.writes[4].content, 'cacheTestRail/');
+        assert.contains(mocks.writes[5].content, 'cacheBasic*/');
         assert.equal(mocks.writes[0].path, '.git/info/exclude');
         assert.contains(mocks.writes[0].content, 'input/');
         assert.contains(mocks.writes[1].content, 'outputs/');
     });
 
     test('idempotent: entries already present → no write', function() {
-        var existing = '# x\ninput/\noutputs/\n.input.branch-setup-bak/\n';
+        var existing = '# x\ninput/\noutputs/\n.input.branch-setup-bak/\ncache*Client/\ncacheTestRail/\ncacheBasic*/\n';
         var mocks = makeFileMocks(existing);
         loadBranchSetup(mocks).ensureLegContextLocalExcludes();
         assert.equal(mocks.writes.length, 0, 'all entries present, nothing to do');
@@ -782,7 +785,10 @@ suite('branchSetup.ensureLegContextLocalExcludes (gh-1318)', function() {
     test('partial state: only outputs/ present → the missing entries are appended', function() {
         var mocks = makeFileMocks('# keep\noutputs/\n');
         loadBranchSetup(mocks).ensureLegContextLocalExcludes();
-        assert.equal(mocks.writes.length, 2);
+        assert.equal(mocks.writes.length, 5);
+        assert.contains(mocks.writes[2].content, 'cache*Client/');
+        assert.contains(mocks.writes[3].content, 'cacheTestRail/');
+        assert.contains(mocks.writes[4].content, 'cacheBasic*/');
         var all = mocks.writes.map(function(w) { return w.content; }).join('');
         assert.contains(all, 'input/');
         assert.contains(all, '.input.branch-setup-bak/');

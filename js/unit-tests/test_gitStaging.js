@@ -26,7 +26,11 @@ var ALL_ARTIFACTS = [
     // gh-1436: plan-mode appendix materialization — engine-written prompt input.
     '.dmtools/development-mode-plan-appendix.md',
     '.dmtools-session-output.log',
-    '.claude-session-id'
+    '.claude-session-id',
+    // gh-1505 / epam/dm.ai#868: legacy dmtools REST-client cache folders.
+    'cache*Client',
+    'cacheTestRail',
+    'cacheBasic*'
 ];
 
 suite('gitStaging', function() {
@@ -48,6 +52,10 @@ suite('gitStaging', function() {
         for (var i = 0; i < ALL_ARTIFACTS.length; i++) {
             assert.contains(list, ' ' + ALL_ARTIFACTS[i], 'untrack candidate list must cover ' + ALL_ARTIFACTS[i]);
         }
+        assert.contains(list, '"cache*Client/**"',
+            'wildcard candidates must emit "candidate/**" so git ls-files enumerates tracked files inside matching directories');
+        assert.contains(list, '"cacheBasic*/**"',
+            'cacheBasic* wildcard candidate must emit "cacheBasic*/**"');
         assert.contains(rm, 'git rm -r --cached --ignore-unmatch -- "\.dmtools/fa-trace.log"'.replace('\\.', '.'),
             'the rm stays --cached and --ignore-unmatch, paths quoted');
     });
@@ -65,10 +73,10 @@ suite('gitStaging', function() {
         var removed = gitStaging.untrackRuntimeArtifacts(function(c) {
             seen.push(c);
             return c.indexOf('git ls-files') === 0
-                ? '.dmtools/credential-helper.log\n.dmtools/fa-sessions/a/b.json\nsrc/not-an-artifact.txt\n'
+                ? '.dmtools/credential-helper.log\n.dmtools/fa-sessions/a/b.json\ncacheAzureDevOpsClient/b6cfc36783a6e3be5f484405ef3770e9\nsrc/not-an-artifact.txt\n'
                 : '';
         });
-        assert.deepEqual(removed, ['.dmtools/credential-helper.log', '.dmtools/fa-sessions/a/b.json']);
+        assert.deepEqual(removed, ['.dmtools/credential-helper.log', '.dmtools/fa-sessions/a/b.json', 'cacheAzureDevOpsClient/b6cfc36783a6e3be5f484405ef3770e9']);
         assert.equal(seen.length, 2);
         assert.contains(seen[1], '"' + '.dmtools/credential-helper.log' + '"');
         assert.equal(seen[1].indexOf('not-an-artifact'), -1, 'a path outside the artifact list is never removed');
@@ -218,6 +226,14 @@ suite('gitStaging', function() {
             'untracked session store');
         assert.ok(gitStaging.isRuntimeArtifactStatusLine('?? .dmtools-session-output.log'),
             'untracked timer CLI-stdout snapshot');
+        assert.ok(gitStaging.isRuntimeArtifactStatusLine('?? cacheAzureDevOpsClient/'),
+            'untracked dmtools ADO client cache folder (gh-1505)');
+        assert.ok(gitStaging.isRuntimeArtifactStatusLine('?? cacheBasicJiraClient/abc'),
+            'untracked dmtools Jira client cache file (gh-1505)');
+        assert.ok(gitStaging.isRuntimeArtifactStatusLine('?? cacheTestRail/'),
+            'untracked dmtools TestRail client cache folder (gh-1505)');
+        assert.notOk(gitStaging.isRuntimeArtifactStatusLine('A  src/cacheManager/index.js'),
+            'application source files containing cache must not match cache*Client');
         assert.notOk(gitStaging.isRuntimeArtifactStatusLine('A  outputs/rca.md'),
             'real work must never be filtered');
         assert.notOk(gitStaging.isRuntimeArtifactStatusLine('?? factory-kit/'),
@@ -253,7 +269,7 @@ suite('gitStaging leg-context artifacts (gh-1318)', function() {
     });
 
     test('buildTrackedArtifactsCommand still enumerates the runtime list (delegates to the generic builder)', function() {
-        assert.equal(gitStaging.buildTrackedArtifactsCommand(), 'git ls-files -- ' + ALL_ARTIFACTS.join(' '));
+        assert.equal(gitStaging.buildTrackedArtifactsCommand(), gitStaging.buildTrackedPathsCommand(ALL_ARTIFACTS));
     });
 
     test('untrackTrackedPaths: only paths under the list are rm --cached, quoted', function() {
