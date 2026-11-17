@@ -894,8 +894,8 @@ suite('pushReworkChanges > plan-snapshot close-out (gh-1511)', function() {
         assert.deepEqual(commands, [
             'git ls-files -- ' + SNAPSHOT,
             'git rm -f -- ' + SNAPSHOT,
-            'git commit -m "PROJ-123: plan done"'
-        ], 'probe → rm -f → close-out commit, in order');
+            'git commit -m "PROJ-123: plan done" -- ' + SNAPSHOT
+        ], 'probe → rm -f → pathspec-limited close-out commit, in order');
         assert.ok(logs.some(function(l) { return l.indexOf('Removed the plan snapshot from the PR branch') !== -1; }),
             'the close-out is visible in the leg log');
     });
@@ -948,7 +948,7 @@ suite('pushReworkChanges > plan-snapshot close-out (gh-1511)', function() {
         mod.commitAndPush('PROJ-123', baseConfig(), {});
 
         var rmIdx = commands.indexOf('git rm -f -- ' + SNAPSHOT);
-        var closeoutCommitIdx = commands.indexOf('git commit -m "PROJ-123: plan done"');
+        var closeoutCommitIdx = commands.indexOf('git commit -m "PROJ-123: plan done" -- ' + SNAPSHOT);
         var addIdx = commands.findIndex(function(c) { return c.indexOf('git add . --') === 0; });
         assert.ok(rmIdx !== -1, 'the snapshot is removed from the PR branch');
         assert.ok(closeoutCommitIdx !== -1, 'the close-out commit carries the protocol subject');
