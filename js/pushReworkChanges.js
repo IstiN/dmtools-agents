@@ -27,6 +27,9 @@ const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js')
 var cacheToReleases = require('./cacheToReleases.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var ticketKeyShapes = require('./common/ticketKeyShapes.js');
+// gh-1511: plan-snapshot close-out — the rework push heals PR branches that
+// still carry the committed plan snapshot (see removePlanSnapshotQuietly).
+var developmentModePlan = require('./common/developmentModePlan.js');
 // gh-957: the no-op loop guard's lap markers — the post-action stamps one
 // per leg close ({head, pushed, resolved}) so the SM arm actions can bound
 // consecutive empty laps on one head.
@@ -527,6 +530,26 @@ function untrackRuntimeArtifactsQuietly(cmd) {
 }
 
 /**
+ * gh-1511 plan-snapshot close-out — best-effort, the same quiet contract as
+ * untrackRuntimeArtifactsQuietly: strips the committed plan snapshot
+ * (.dmtools/plan-snapshot.md) from the PR branch before staging so a rework
+ * push heals branches that still carry it (PRs opened before the dev leg's
+ * publish-time close-out existed, or legs that skipped it). The close-out
+ * commit rides the regular rework push below; untracked snapshots are one
+ * probe and a no-op.
+ */
+function removePlanSnapshotQuietly(cmd, ticketKey) {
+    try {
+        var outcome = developmentModePlan.removePlanSnapshot(cmd, ticketKey);
+        if (outcome.removed) {
+            console.log('🧹 Removed the plan snapshot from the PR branch: ' + outcome.commit);
+        }
+    } catch (cleanupErr) {
+        console.warn('⚠️ Plan snapshot close-out skipped (non-fatal):', cleanupErr);
+    }
+}
+
+/**
  * True when the staged diff stat is non-empty (something to commit).
  */
 function hasStagedChanges(status) {
@@ -636,6 +659,11 @@ function commitAndPush(ticketKey, config, customParams) {
     });
 
     untrackRuntimeArtifactsQuietly(cmd);
+
+    // gh-1511: heal branches that still carry the committed plan snapshot —
+    // the dev leg strips it before cutting the PR; PRs opened before that
+    // fix (or legs that skipped the close-out) are cleaned on this push.
+    removePlanSnapshotQuietly(cmd, ticketKey);
 
     // `:!factory-kit` — nested machine-infra gitlink must not kill rework staging (#648 class)
     // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec because
@@ -3075,7 +3103,7 @@ if (typeof module !== 'undefined' && module.exports) {
     actionSetup, pushAndPublishOrFail, resumeOrFailLadder, completeReworkLeg,
     openThreadsCompletionComment, unaddressedRepliesCompletionComment, changesRequestedCompletionComment, cleanCompletionComment, completionPrCommentSuffix,
     blockedLogLine, postBlockedPrComment, moveToBlockedStatus, removeContextWipLabel,
-    hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, parseLinkedIssueFromText, resolveLinkedIssueKeyForPr, canStripPrLabel, stripPrSideLabelQuietly, removeTrackerLabelQuietly, isPrAnchoredKey, stripLinkedIssueCounterpart, removeOneConfiguredLabel, removeConfiguredLabels, stripArmFromIssue, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, replyTargetsThread, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment,
+    hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, parseLinkedIssueFromText, resolveLinkedIssueKeyForPr, canStripPrLabel, stripPrSideLabelQuietly, removeTrackerLabelQuietly, isPrAnchoredKey, stripLinkedIssueCounterpart, removeOneConfiguredLabel, removeConfiguredLabels, stripArmFromIssue, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, replyTargetsThread, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, removePlanSnapshotQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment,
     // gh-1220: helpers extracted from the CRAP-target functions — exported for
     // direct unit testing (per-function CRAP ratchet).
     threadIdLabel, threadLocation, threadBodyExcerpt, replyMatchesThreadId, replyMatchesRootId,

@@ -84,8 +84,8 @@
       "functions": 46
     },
     "js/developTicketAndCreatePR.js": {
-      "lines": 2210,
-      "functions": 113
+      "lines": 2251,
+      "functions": 114
     },
     "js/dfManager.js": {
       "lines": 774,
@@ -144,8 +144,8 @@
       "functions": 41
     },
     "js/pushReworkChanges.js": {
-      "lines": 3098,
-      "functions": 174
+      "lines": 3113,
+      "functions": 175
     },
     "js/sm/mergeBot.js": {
       "lines": 1013,

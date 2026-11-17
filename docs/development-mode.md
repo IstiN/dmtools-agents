@@ -53,10 +53,16 @@ via `developmentModeConfig.plan.appendixFile`) that imposes a protocol:
 3. **Resume rule** — plan file present or branch non-empty at start ⇒
    continuation: reconcile checkboxes against the actual diff, execute
    only pending tasks.
+4. **Close out** — when the last task is done, the snapshot is removed
+   from the branch again (`git rm .dmtools/plan-snapshot.md`, commit
+   `<KEY>: plan done`) before the completion report is written. The
+   publish gate (dev leg) and the rework push repeat the removal
+   defensively, so a PR never carries the plan file: during the leg the
+   committed snapshot exists only so plan state survives interruption.
 
 The committed snapshot is the point: plan state survives interruption
-windows and session-cache misses. It complements — never replaces — the
-session restore path, which remains the primary resume mechanism.
+windows and session-cache misses mid-leg. It complements — never replaces —
+the session restore path, which remains the primary resume mechanism.
 
 ### 2.3 `adaptive`
 

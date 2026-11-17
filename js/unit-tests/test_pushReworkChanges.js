@@ -56,6 +56,11 @@ var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var ticketKeyShapesModule = loadModule('js/common/ticketKeyShapes.js');
 var gitStagingModule = loadModule('js/common/gitStaging.js');
+// gh-1511: the close-out module — one real instance shared by every
+// pushReworkChanges loader map in this file (real removePlanSnapshot, git
+// mocked per test).
+var developmentModePlanShared = loadModule('js/common/developmentModePlan.js',
+    makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') }));
 var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
 
 // Real githubHelpers (only its own deps stubbed) — pushReworkChanges requires
@@ -164,6 +169,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': { loadProjectConfig: function() { return {}; } },
             './common/scm.js': { createScm: function() { return scm; } },
@@ -571,6 +577,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
@@ -838,13 +845,118 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
         assert.contains(addCall, ':!.dmtools/fa-sessions', 'session store never staged');
         assert.contains(addCall, ':!.dmtools-session-output.log',
             'timer CLI-stdout snapshot never staged');
-        var rmCalls = commands.filter(function(c) { return c.indexOf('git ls-files -- ') === 0; });
+        // gh-1511: the close-out probe (`git ls-files -- .dmtools/plan-snapshot.md`)
+        // is separate cleanup traffic — scope this pin to the runtime-artifact
+        // listing (its argument list names the untrack list head).
+        var rmCalls = commands.filter(function(c) {
+            return c.indexOf('git ls-files -- ') === 0 && c.indexOf('.dmtools/credential-helper.log') !== -1;
+        });
         assert.equal(rmCalls.length, 1, 'exactly one untrack-cleanup command');
         assert.contains(rmCalls[0], '.dmtools/credential-helper.log',
             'already-tracked credential-helper.log is untracked (poisoned-branch self-heal)');
         assert.contains(rmCalls[0], '.dmtools/fa-sessions',
             'session store untracked too — untrack list must not drift from staging exclusions (gh-628)');
+        var closeoutProbes = commands.filter(function(c) { return c === 'git ls-files -- .dmtools/plan-snapshot.md'; });
+        assert.equal(closeoutProbes.length, 1,
+            'exactly one plan-snapshot close-out probe (untracked here → no rm, no close-out commit)');
     });
+});
+
+// ── gh-1511: plan-snapshot close-out on the rework push ─────────────────────
+// The dev leg strips the committed plan snapshot before cutting the PR, but
+// branches that already carry it (PRs opened before that fix, legs that
+// skipped the close-out) are healed on the first rework push: the probe-rm-
+// commit sequence runs before staging and the close-out commit rides the
+// regular rework push. Best-effort by contract — a git failure warns and the
+// rework proceeds, never blocks.
+
+suite('pushReworkChanges > plan-snapshot close-out (gh-1511)', function() {
+
+    var SNAPSHOT = '.dmtools/plan-snapshot.md';
+    // removePlanSnapshotQuietly touches no dmtools global beyond console — a
+    // bare loaded module is enough for the direct tests below.
+    var pushRework = loadPushReworkChangesForCommitAndPush({});
+
+    test('removePlanSnapshotQuietly: tracked snapshot → probe, rm -f, close-out commit, log line', function() {
+        var commands = [];
+        var logs = [];
+        var origLog = console.log;
+        console.log = function(msg) { logs.push(String(msg)); };
+        try {
+            pushRework.removePlanSnapshotQuietly(function(command) {
+                commands.push(command);
+                if (command.indexOf('git ls-files -- ') === 0) return SNAPSHOT;
+                return '';
+            }, 'PROJ-123');
+        } finally {
+            console.log = origLog;
+        }
+        assert.deepEqual(commands, [
+            'git ls-files -- ' + SNAPSHOT,
+            'git rm -f -- ' + SNAPSHOT,
+            'git commit -m "PROJ-123: plan done"'
+        ], 'probe → rm -f → close-out commit, in order');
+        assert.ok(logs.some(function(l) { return l.indexOf('Removed the plan snapshot from the PR branch') !== -1; }),
+            'the close-out is visible in the leg log');
+    });
+
+    test('removePlanSnapshotQuietly: untracked snapshot → one probe, no rm, no commit', function() {
+        var commands = [];
+        pushRework.removePlanSnapshotQuietly(function(command) {
+            commands.push(command);
+            return '';
+        }, 'PROJ-123');
+        assert.equal(commands.length, 1, 'only the probe ran');
+        assert.equal(commands[0], 'git ls-files -- ' + SNAPSHOT);
+    });
+
+    test('removePlanSnapshotQuietly: git failure → warn only, never throws', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(msg) { warns.push(String(msg)); };
+        try {
+            pushRework.removePlanSnapshotQuietly(function() {
+                throw new Error('git exploded');
+            }, 'PROJ-123');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.some(function(w) { return w.indexOf('Plan snapshot close-out skipped (non-fatal)') !== -1; }),
+            'the failure is warned, not swallowed silently');
+    });
+
+    test('commitAndPush: branch carrying the snapshot → close-out commit staged before git add', function() {
+        var commands = [];
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) {
+                    return '**Branch**: `bug/PROJ-123` → `develop`';
+                }
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+                }
+                if (args.command === 'git ls-files -- ' + SNAPSHOT) return SNAPSHOT;
+                return '';
+            }
+        });
+
+        mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        var rmIdx = commands.indexOf('git rm -f -- ' + SNAPSHOT);
+        var closeoutCommitIdx = commands.indexOf('git commit -m "PROJ-123: plan done"');
+        var addIdx = commands.findIndex(function(c) { return c.indexOf('git add . --') === 0; });
+        assert.ok(rmIdx !== -1, 'the snapshot is removed from the PR branch');
+        assert.ok(closeoutCommitIdx !== -1, 'the close-out commit carries the protocol subject');
+        assert.ok(addIdx !== -1, 'staging still runs');
+        assert.ok(rmIdx < addIdx && closeoutCommitIdx < addIdx,
+            'the close-out lands BEFORE staging, so the rework push carries the removal');
+    });
+
 });
 
 // ── action(): rework_setup_failed.md guard (issue #310) ──────────────────────
@@ -981,6 +1093,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': {
                 loadProjectConfig: function() { return baseConfig(opt(opts, 'config')); },
@@ -1356,6 +1469,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
@@ -3763,6 +3877,7 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
                 './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
                 './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
+                './common/developmentModePlan.js': developmentModePlanShared,
                 './forkCheckout.js': forkCheckoutModule,
                 './configLoader.js': configLoaderModule,
                 './config.js': configModule,
@@ -3834,6 +3949,7 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
                 './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
                 './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
+                './common/developmentModePlan.js': developmentModePlanShared,
                 './forkCheckout.js': forkCheckoutModule,
                 './configLoader.js': configLoaderModule,
                 './config.js': configModule,
@@ -3953,6 +4069,7 @@ function loadCommitAndPush1082(mocks, moduleOverrides) {
             './common/prTerminalState.js': loadModule('js/common/prTerminalState.js'),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
+            './common/developmentModePlan.js': developmentModePlanShared,
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,

@@ -31,6 +31,10 @@ var needsInputCommon = require('./common/needsInput.js');
 var developmentMode = require('./common/developmentMode.js');
 var developmentModeAdaptive = require('./common/developmentModeAdaptive.js');
 var wipSquash = require('./common/wipSquash.js');
+// gh-1511: publish-time plan hygiene — the committed plan snapshot
+// (.dmtools/plan-snapshot.md) is stripped from the branch before the PR is
+// cut (see stripPlanSnapshotBeforePr below).
+var developmentModePlan = require('./common/developmentModePlan.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 // gh-1250: the lazy-tracker boilerplate lives in the shared trackerSlot module.
@@ -2061,6 +2065,37 @@ function runPublishPipeline(params, ctx, branchName, commitMessage) {
     return null;
 }
 
+/**
+ * gh-1511 publish-time plan hygiene: strip the committed plan snapshot
+ * (.dmtools/plan-snapshot.md) from the branch before the PR is cut. The
+ * snapshot is committed DURING the leg only so plan state survives
+ * interruption windows (the plan appendix, section 2); by publish time it is
+ * scaffolding — a PR carrying it pollutes the review diff and a merge would
+ * land the file on the base branch permanently. Runs after the publish
+ * pipeline (all gates green, work already pushed) and before PR creation.
+ * Non-fatal by contract: any failure warns and the PR proceeds as before —
+ * the close-out must never turn a green leg red.
+ *
+ * @param {string} branchName the development branch (work already pushed)
+ * @param {string} ticketKey the close-out commit subject is `<KEY>: plan done`
+ */
+function stripPlanSnapshotBeforePr(branchName, ticketKey) {
+    try {
+        var runStr = function (command) { return runCmd({ command: command }); };
+        var outcome = developmentModePlan.removePlanSnapshot(runStr, ticketKey);
+        if (!outcome.removed) return;
+        var pushAttempt = pushBranchToRemote(runStr, branchName, false);
+        if (detectPushFailure(pushAttempt.output, pushAttempt.threw)) {
+            console.warn('⚠️ Plan snapshot close-out commit not pushed — the PR will carry ' +
+                developmentModePlan.PLAN_SNAPSHOT_FILE_PATH + ': ' + String(pushAttempt.output).substring(0, 200));
+            return;
+        }
+        console.log('🧹 Removed the plan snapshot from the branch before PR creation: ' + outcome.commit);
+    } catch (cleanupErr) {
+        console.warn('⚠️ Plan snapshot close-out skipped (non-fatal):', cleanupErr);
+    }
+}
+
 /** PR creation with the gh-729 failure recovery; recurses on a successful resume. */
 function createDevelopmentPr(params, ctx, branchName) {
     var prTitle = configLoader.formatTemplate(ctx.config.formats.prTitle.development, { ticketKey: ctx.ticketKey, ticketSummary: ctx.ticketSummary });
@@ -2161,6 +2196,10 @@ function action(params) {
         var publishTerminal = runPublishPipeline(params, ctx, branchName, commitMessage);
         if (publishTerminal) return publishTerminal;
 
+        // gh-1511: the committed plan snapshot is mid-leg scaffolding — strip
+        // it from the branch before the PR is cut (non-fatal; see the helper).
+        stripPlanSnapshotBeforePr(branchName, ctx.ticketKey);
+
         var responseContent = ensureResponseForPrBody(ctx);
         console.log('Using outputs/response.md as PR body (' + responseContent.length + ' characters)');
 
@@ -2191,6 +2230,8 @@ if (typeof module !== 'undefined' && module.exports) {
         logMoveToStatusOutcome,
         prepareDevelopmentGitStage, stageOutcomeOf, runPublishPipeline,
         createDevelopmentPr, finalizeDevelopmentSuccess, concludeActionFailure,
+        // gh-1511: publish-time plan-snapshot close-out — exported for direct tests.
+        stripPlanSnapshotBeforePr,
         // gh-1250: shared sync wrapper extracted from the two syncBranchWithBase
         // call sites — exported for direct characterization tests.
         syncBranchWithBaseUsingRunCmd,

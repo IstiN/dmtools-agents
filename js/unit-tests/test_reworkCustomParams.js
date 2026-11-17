@@ -79,6 +79,8 @@ function loadPushReworkChanges() {
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
+            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
@@ -195,6 +197,8 @@ function loadPushReworkChangesForAction(mocks) {
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
+            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': {
@@ -244,6 +248,8 @@ function loadPostTestReworkResults() {
         makeRequire({
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
+            './common/developmentModePlan.js': loadModule('js/common/developmentModePlan.js',
+                makeRequire({ './developmentMode.js': loadModule('js/common/developmentMode.js') })),
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
