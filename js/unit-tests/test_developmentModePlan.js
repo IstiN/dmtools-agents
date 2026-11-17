@@ -399,8 +399,8 @@ suite('gh-1511 UT — removePlanSnapshot (publish-time close-out)', function () 
         assert.deepEqual(rec.commands, [
             'git ls-files -- ' + developmentModePlan.PLAN_SNAPSHOT_FILE_PATH,
             'git rm -f -- ' + developmentModePlan.PLAN_SNAPSHOT_FILE_PATH,
-            'git commit -m "TS-30: plan done"'
-        ], 'probe → rm -f → close-out commit, in order');
+            'git commit -m "TS-30: plan done" -- ' + developmentModePlan.PLAN_SNAPSHOT_FILE_PATH
+        ], 'probe → rm -f → pathspec-limited close-out commit, in order');
     });
 
     test('missing ticket key → the subject degrades to "ticket: plan done"', function () {

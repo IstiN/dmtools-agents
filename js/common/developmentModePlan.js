@@ -329,7 +329,9 @@ function materializePlanAppendix(customParams, io) {
  * Remove the committed plan snapshot from the branch. Tracked-file probe
  * first: an absent/untracked snapshot (direct-mode legs, already cleaned
  * branches) is exactly one command. `-f` drops any uncommitted checkbox
- * edits — the artifact is discarded at close-out, never salvaged. Throws on
+ * edits — the artifact is discarded at close-out, never salvaged. The
+ * close-out commit is pathspec-limited to the snapshot: stray staged content
+ * in the index must not ride the `<KEY>: plan done` subject. Throws on
  * git failure — the caller owns the non-fatal warn (same contract as
  * gitStaging.untrackRuntimeArtifacts).
  *
@@ -343,7 +345,9 @@ function removePlanSnapshot(run, ticketKey) {
     if (!listed) return { removed: false, commit: null };
     run('git rm -f -- ' + PLAN_SNAPSHOT_FILE_PATH);
     var subject = (ticketKey || 'ticket') + ': plan done';
-    run('git commit -m "' + subject + '"');
+    // Pathspec-limited (gh-1513): only the snapshot removal rides the close-out
+    // subject — stray staged content in the index must not be swept in.
+    run('git commit -m "' + subject + '" -- ' + PLAN_SNAPSHOT_FILE_PATH);
     return { removed: true, commit: subject };
 }
 
@@ -360,7 +364,6 @@ if (typeof module !== 'undefined' && module.exports) {
         appendixOverridePath: appendixOverridePath,
         resolveAppendixSource: resolveAppendixSource,
         writeResolvedAppendix: writeResolvedAppendix,
-        readAppendixText: readAppendixText,
         readAppendixText: readAppendixText,
         materializePlanAppendix: materializePlanAppendix,
         PLAN_SNAPSHOT_FILE_PATH: PLAN_SNAPSHOT_FILE_PATH,
