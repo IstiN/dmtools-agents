@@ -21,3 +21,7 @@
 # gh-1436: plan-mode appendix materialization - engine-written prompt input,
 # never leg work (the durable plan artifact is .dmtools/plan-snapshot.md)
 .dmtools/development-mode-plan-appendix.md
+# gh-1505 / epam/dm.ai#868: dmtools REST client cache directories
+cache*Client/
+cacheTestRail/
+cacheBasic*/

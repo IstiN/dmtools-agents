@@ -8,6 +8,8 @@ cacheBasicGithub/
 .dmtools-logs/
 .dmtools-target-workingdir
 cacheBasic*/
+cache*Client/
+cacheTestRail/
 outputs/
 input/
 
