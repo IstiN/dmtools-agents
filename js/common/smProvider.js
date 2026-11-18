@@ -107,18 +107,6 @@ function ioCacheDrop(owner, repo, kind, id) {
     delete _cache.entries[ioCacheKey(owner, repo, kind, id)];
 }
 
-// jobParams tuning (smAgent.initTickState): `ioCacheTtlMs` (>= 0) sets the
-// per-tick io-cache TTL in place — mirrors applyProbeTuning on the probe
-// layer (pr #1514 review round 2, registry F5: the knob was promised in the
-// PR description but never shipped). Absent/negative tuning is ignored;
-// 0 disables caching (every read is a miss).
-function applyIoCacheTuning(jobParams) {
-    var p = jobParams || {};
-    if (p && typeof p.ioCacheTtlMs === 'number' && p.ioCacheTtlMs >= 0) {
-        _cache.ttlMs = p.ioCacheTtlMs;
-    }
-}
-
 // Collect every non-expired entry of one kind for a repo into a plain
 // {id: data} map — the prStatus leg of snapshot(). Keys are the id tail
 // of the cache key (PR numbers as strings).
@@ -1636,7 +1624,6 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         createSmProvider: createSmProvider,
         ioCacheDrop: ioCacheDrop,
-        applyIoCacheTuning: applyIoCacheTuning,
         BOOKKEEPING_CHECK_PREFIXES: BOOKKEEPING_CHECK_PREFIXES,
         // gh-1059: ONE head-repo resolver shared with githubSource.js (the
         // PR-list and prStatus payload dialects must never drift apart).

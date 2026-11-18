@@ -218,6 +218,26 @@ function makeSmAgent(opts) {
     var capturedLogs = [];
     var capturedScmLabelOps = [];
     var capturedSmProviderForges = [];
+    // pr #1514 F5: the tick-tunings wiring (d.applyTickTunings) mutates THIS
+    // holder through the smProvider require-map entry — named so the test
+    // can reach it. _cache is the machine-loop wiring surface the real
+    // module exports.
+    var smProviderStubForTickTunings = {
+        _cache: { ttlMs: 600 },
+        createSmProvider: function (cfg) {
+            capturedSmProviderForges.push(smProviderForgeOf(cfg));
+            return {
+                prStatus: providerPrStatusStub,
+                listOpenPrs: providerListOpenPrsStub
+            };
+        },
+        ioCacheDrop: function (o, r, kind, id) {
+            capturedIoCacheDrops.push({ owner: o, repo: r, kind: kind, id: id });
+        },
+        reviewThreadNodesOf: smProviderRealForGh1249().reviewThreadNodesOf,
+        ghPrMaintainerCanModify: smProviderRealForGh1249().ghPrMaintainerCanModify,
+        BOOKKEEPING_CHECK_PREFIXES: smProviderRealForGh1249().BOOKKEEPING_CHECK_PREFIXES
+    };
 
     // ── gh-1200 CRAP refactor: named builder units ──────────────────────────
     // Every branch that used to live in an anonymous closure inside
@@ -709,26 +729,7 @@ function makeSmAgent(opts) {
             './common/planAdvance.js': loadModule('js/common/planAdvance.js', makeRequire({
                 './issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {})
             }), {}),
-            './common/smProvider.js': {
-                createSmProvider: function (cfg) {
-                    capturedSmProviderForges.push(smProviderForgeOf(cfg));
-                    return {
-                        prStatus: providerPrStatusStub,
-                        listOpenPrs: providerListOpenPrsStub
-                    };
-                },
-                // ioCacheDrop spy (owner directive 2026-10-04): the same-tick
-                // slot-yield tests assert fail_validation/unarm drop the
-                // cached open-PR list after mutating labels.
-                ioCacheDrop: function (o, r, kind, id) {
-                    capturedIoCacheDrops.push({ owner: o, repo: r, kind: kind, id: id });
-                },
-                // gh-1249: smAgent.fetchPrReviewThreadNodes delegates to the
-                // shared envelope nav — stubs must serve the real one.
-                reviewThreadNodesOf: smProviderRealForGh1249().reviewThreadNodesOf,
-                ghPrMaintainerCanModify: smProviderRealForGh1249().ghPrMaintainerCanModify,
-                BOOKKEEPING_CHECK_PREFIXES: smProviderRealForGh1249().BOOKKEEPING_CHECK_PREFIXES
-            },
+            './common/smProvider.js': smProviderStubForTickTunings,
             './factoryState.js': loadModule('js/factoryState.js',
                 makeRequire({
                     './common/machineAuthor.js': machineAuthorModule,
@@ -741,6 +742,9 @@ function makeSmAgent(opts) {
 
     return {
         action: sm.action,
+        // pr #1514 F5: handle on the tick-tunings wiring + its holder
+        applyTickTunings: sm.applyTickTunings,
+        smProviderStubForTickTunings: smProviderStubForTickTunings,
         applyRuleOverridesForTest: sm.applyRuleOverridesForTest,
         runLocalAction: sm.runLocalAction,
         probeDispatchedState: sm.probeDispatchedState,
@@ -20065,4 +20069,18 @@ suite('smAgent: rework-loop-escalated head-move reset + machine unpark on dispat
         assert.equal(sm.capturedPrLabelRemoves[0].label, 'validation_failed');
         assert.ok(sm.capturedPrComments[0].body.indexOf('dispatched validation run on the current head concluded SUCCESS') !== -1);
     });
+});
+
+test('applyTickTunings: ioCacheTtlMs rides jobParams into the smProvider holder (pr #1514 F5)', function () {
+    var sm = makeSmAgent({});
+    var holder = sm.smProviderStubForTickTunings._cache;
+    var before = holder.ttlMs;
+    sm.applyTickTunings({ ioCacheTtlMs: 4321 });
+    assert.equal(holder.ttlMs, 4321, 'positive tuning applies to the io-cache holder');
+    sm.applyTickTunings({ ioCacheTtlMs: -5 });
+    assert.equal(holder.ttlMs, 4321, 'negative tuning is ignored');
+    sm.applyTickTunings(undefined);
+    assert.equal(holder.ttlMs, 4321, 'absent params are tolerated');
+    sm.applyTickTunings({ ioCacheTtlMs: before });
+    assert.equal(holder.ttlMs, before, 'holder restored');
 });

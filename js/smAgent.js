@@ -378,6 +378,19 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     return ruleProcessorModule.processRule(rpDeps, rule, globalRepoInfo, ruleIndex, workflowBudget, effectiveConfig, interpolatedJql);
 }
 
+// Per-tick tunings (pr #1514, registry F5): ioCacheTtlMs rides jobParams
+// into the smProvider io-cache holder, liveProbeTtlMs into the probe layer.
+// Lives HERE because smProvider sits exactly at its module-size pin
+// (1636/106) and cannot grow by a line — _cache is its exported
+// machine-loop wiring surface (makeSmAgent's stub carries one too).
+function applyTickTunings(p) {
+    p = p || {};
+    if (smProviderModule && smProviderModule._cache && typeof p.ioCacheTtlMs === 'number' && p.ioCacheTtlMs >= 0) {
+        smProviderModule._cache.ttlMs = p.ioCacheTtlMs;
+    }
+    if (probeCacheModule && typeof probeCacheModule.applyProbeTuning === 'function') probeCacheModule.applyProbeTuning(p);
+}
+
 function buildTickOrchestratorDeps() {
     var rvDeps = buildReworkVerdictsDeps(), lsDeps = buildLocalAndStateDeps(), d = buildIoDeps();
     d.initTickState = function (p) {
@@ -391,9 +404,7 @@ function buildTickOrchestratorDeps() {
         smForge = workflowDispatchModule.resolveSmForge(projectConfig);
         PRIORITY_LABELS = tickOrchestratorModule.resolvePriorityLabels(buildIoDeps(), projectConfig);
         if (smProviderModule && typeof smProviderModule.ioCacheReset === 'function') smProviderModule.ioCacheReset();
-        // io-cache TTL knob (pr #1514, registry F5) — mirrors the probe layer's tuning above.
-        if (smProviderModule && typeof smProviderModule.applyIoCacheTuning === 'function') smProviderModule.applyIoCacheTuning(RUN_JOB_PARAMS);
-        if (probeCacheModule && typeof probeCacheModule.applyProbeTuning === 'function') probeCacheModule.applyProbeTuning(RUN_JOB_PARAMS);
+        applyTickTunings(RUN_JOB_PARAMS);
         var jsonCap = typeof p.maxTriggeredWorkflows === 'number' ? p.maxTriggeredWorkflows : p.maxWorkflowsPerRun;
         var cap = tickOrchestratorModule.resolveWorkflowCap(buildIoDeps(), jsonCap, projectConfig);
         var workflowBudget = cap ? { initial: cap, remaining: cap, activeCount: 0, activeCountsByWorkflow: {}, activeRunSummariesByWorkflow: {} } : null;
@@ -428,6 +439,8 @@ function action(params) { return tickOrchestratorModule.runAction(buildTickOrche
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action, processRule: processRule, loadRuleConfig: loadRuleConfig,
+        // pr #1514 F5: per-tick TTL tunings (io-cache holder + probe layer)
+        applyTickTunings: applyTickTunings,
         readLocalActionSource: function (jsPath, readFile) { return localAndStateRunnerModule.readLocalActionSource(readFile || function (p) { return file_read({ path: p }); }, jsPath); },
         runLocalAction: function (jsPath, ticket, agentParams) { return localAndStateRunnerModule.runLocalAction(buildLocalAndStateDeps(), jsPath, ticket, agentParams); },
         probeDispatchedState: function (repoInfo, ciWorkflow, headSha) { return mergeAndParkProbesModule.probeDispatchedState(buildProbesDeps(), repoInfo, ciWorkflow, headSha); },

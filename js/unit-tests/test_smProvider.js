@@ -890,21 +890,6 @@ suite('smProvider', function () {
         assert.equal(typeof mod._cache.entries, 'object', '_cache exposed for tests');
     });
 
-    test('applyIoCacheTuning: ioCacheTtlMs >= 0 sets the holder TTL in place (pr #1514 F5)', function () {
-        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {});
-        var original = mod._cache.ttlMs;
-        mod.applyIoCacheTuning({ ioCacheTtlMs: 1234 });
-        assert.equal(mod._cache.ttlMs, 1234, 'positive tuning applies');
-        mod.applyIoCacheTuning({ ioCacheTtlMs: -5 });
-        assert.equal(mod._cache.ttlMs, 1234, 'negative tuning is ignored');
-        mod.applyIoCacheTuning({});
-        assert.equal(mod._cache.ttlMs, 1234, 'absent tuning is ignored');
-        mod.applyIoCacheTuning({ ioCacheTtlMs: 0 });
-        assert.equal(mod._cache.ttlMs, 0, '0 disables caching (every read is a miss)');
-        mod.applyIoCacheTuning({ ioCacheTtlMs: original });
-        assert.equal(mod._cache.ttlMs, original, 'holder restored');
-    });
-
     test('github: prStatus memo — same number fetched once per tick, per-number keys, TTL re-fetch', function () {
         var getCalls = 0, checkCalls = 0;
         var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal(), './validationLiveness.js': vlReal(), './mergeStateReconcile.js': msrReal() }, {}), {
