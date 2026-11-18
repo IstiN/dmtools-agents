@@ -243,6 +243,10 @@ var REAL_COMMON_MODULES = {
     reviewPoolSchema: 'js/common/reviewPoolSchema.js',
     reviewVerdicts: 'js/common/reviewVerdicts.js',
     machineAuthor: 'js/common/machineAuthor.js',
+    // fa #224: the SM tick's live-probe layer (phantom-probe + run-jobs
+    // poll scans) — pure module; suites shim the collaborators and
+    // resolve this one for real.
+    probeCache: 'js/common/probeCache.js',
     // gh-1471: the reviewer-pool execution chain (pure end-to-end) — the
     // post action and the pre-cli dispatcher require it; suites shim the
     // collaborators and resolve these for real.

@@ -26,6 +26,7 @@
 'use strict';
 
 var smProviderModule = require('../../common/smProvider.js');
+var probeCacheModule = require('../../common/probeCache.js');
 var machineAuthorModule = require('../../common/machineAuthor.js');
 var smAsyncModule = require('../../common/smAsync.js');
 var mutexRegistryModule = require('../../common/mutexRegistry.js');
@@ -952,27 +953,14 @@ function asItemsArray(liveData) {
 // Live open-PR re-read for the phantom-heal probe (E4 fail-closed: any
 // failure — no provider hook, malformed payload, thrown probe — reads as
 // null and the caller keeps the cached decision for one more tick). The
-// probe deliberately bypasses the provider's per-tick ioCache through the
-// facade's listOpenPrsLive() — the cache itself may be the stale layer a
-// phantom holder rides on, and the guard must name a method that really
-// exists on the smProvider facade (a githubApi-style indirection never did;
-// the rework review thread pinned the self-heal dead on that guard).
-function livePrItems(provider, repoInfo) {
-    if (!provider || typeof provider.listOpenPrsLive !== 'function' || !repoInfo) return null;
-    try {
-        var live = asItemsArray(provider.listOpenPrsLive());
-        // The live payload carries the same label shape github_list_prs
-        // returns (REST: {name} objects) — the probe's label scans read
-        // PLAIN strings (same contract as the query's prLabels mapping),
-        // so normalize here or every defer would misread as a phantom.
-        return live ? live.map(function (p) {
-            return { number: p.number, labels: prLabels(p) };
-        }) : null;
-    } catch (e) {
-        console.log('   ⚠️ gh-1000 phantom-heal live re-read failed: ' +
-            String((e && e.message) || e) + ' — keeping cached mutex decision (fail-closed)');
-        return null;
-    }
+// gh-1000 live re-read, since fa #224 through the 30s probe layer
+// (js/common/probeCache.js): the per-rule live fan-out measured 83
+// identical github_list_prs calls in one live tick while an arm was held.
+// "Scan cached, act live" — probeCache=true (the phantomHealIfFull SCAN)
+// rides the probe layer; action-time verifiers pass falsy and stay live.
+// The stale-layer warning and the gh-1000 facade guard live in the module.
+function livePrItems(provider, repoInfo, probeCache) {
+    return probeCacheModule.livePrItems(provider, repoInfo, probeCache, prLabels, asItemsArray);
 }
 
 // The open-PR cache is module-level in smProvider (the provider object is
@@ -1004,8 +992,8 @@ function logPhantomHeal(alarm, cachedHolders, liveHolders) {
 // label layer; a divergent cached holder is self-healed (cache drop +
 // alarm + tick counters) so a queued candidate arms in the SAME tick
 // (AC2). Returns the corrected holders; fail-closed keeps `holders`.
-function rederiveHoldersLive(holders, items, provider, repoInfo, q) {
-    var liveItems = livePrItems(provider, repoInfo);
+function rederiveHoldersLive(holders, items, provider, repoInfo, q, opts) {
+    var liveItems = livePrItems(provider, repoInfo, opts && opts.probeCache);
     if (!liveItems) return holders;
     var repoName = repoInfo.owner + '/' + repoInfo.repo;
     // The cached leg in NUMBER shape (matches the live leg) — `holders`
@@ -1023,6 +1011,12 @@ function rederiveHoldersLive(holders, items, provider, repoInfo, q) {
     var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
     if (divergent.selfHealed) {
         dropOpenPrsCache(repoInfo);
+        // The probe layer must not keep serving the pre-heal open-PR list
+        // for the rest of its TTL — drop it with the io-cache entry and
+        // count the drop (the next scan re-reads live).
+        if (probeCacheModule && typeof probeCacheModule.probeDrop === 'function') {
+            probeCacheModule.probeDrop('livePrs:' + repoInfo.owner + '/' + repoInfo.repo);
+        }
         logPhantomHeal(divergent.alarm, cachedHolders, liveHolderSet.holders);
         recordMutexTickEvent({
             mutexSelfHeals: 1,
@@ -1043,7 +1037,7 @@ function rederiveHoldersLive(holders, items, provider, repoInfo, q) {
 // identical to the pre-gh-1000 shape).
 function phantomHealIfFull(holders, items, provider, repoInfo, q, mutexMax) {
     if (holders.length < mutexMax) return holders;
-    return rederiveHoldersLive(holders, items, provider, repoInfo, q);
+    return rederiveHoldersLive(holders, items, provider, repoInfo, q, { probeCache: true });
 }
 
 function logMutexDefer(q, holderCount, mutexMax) {

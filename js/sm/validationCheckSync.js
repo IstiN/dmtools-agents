@@ -9,6 +9,7 @@
 'use strict';
 
 var checkRunStampModule = require('../common/checkRunStamp.js');
+var probeCacheModule = require('../common/probeCache.js');
 var FAILING_JOB_CONCLUSIONS = ['failure', 'timed_out', 'action_required', 'startup_failure', 'stale'];
 var ACTIVE_SYNC_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
 var stampTempSeq = 0;
@@ -63,15 +64,11 @@ function parseJobsResponse(res) {
   return parsed && parsed.jobs || [];
 }
 function fetchRunJobsSafe(deps, repoInfo, runId) {
-  try {
-    var res = deps.exec({
-      command: 'gh api repos/' + repoInfo.owner + '/' + repoInfo.repo + '/actions/runs/' + runId + '/jobs?per_page=100'
-    });
-    return parseJobsResponse(res);
-  } catch (e) {
-    deps.warn('  ⚠️  stamp job-table probe failed: ' + e);
-    return [];
-  }
+  // fa #224: the poll rode the 30s probe layer — 84 identical
+  // actions/runs/<id>/jobs calls for 3 run ids measured in ONE dry tick.
+  // The jobs table is informational (stamp summary body); the stamp POST
+  // itself is not affected. liveProbeTtlMs jobParam, 0 = live polls.
+  return probeCacheModule.cachedRunJobs(deps, repoInfo, runId, parseJobsResponse);
 }
 function stampLinkBlock(deps, repoInfo, runUrl, conclusion) {
   var block = {
