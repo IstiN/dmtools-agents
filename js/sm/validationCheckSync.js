@@ -159,12 +159,13 @@ function stampValidationChecksForModule(deps, repoInfo, headSha, status, conclus
     }
   }
 }
-function isArmedValidatingPr(pr) {
+function isSyncTargetPr(pr) {
   if (!pr || !pr.head || !pr.head.sha || !pr.head.ref) {
     return false;
   }
   return (pr.labels || []).some(function (l) {
-    return (l && l.name) === 'ai_validating';
+    var name = l && l.name;
+    return name === 'ai_validating' || name === 'validation_failed';
   });
 }
 function extractOpenPrList(prsRaw) {
@@ -261,7 +262,7 @@ function syncValidationChecks(deps, repoInfo, stampFn) {
     return;
   }
   var ciWorkflow = (deps.jobParams || {}).ciWorkflow || 'quality.yml';
-  var armed = extractOpenPrList(deps.listOpenPrs(repoInfo)).filter(isArmedValidatingPr);
+  var armed = extractOpenPrList(deps.listOpenPrs(repoInfo)).filter(isSyncTargetPr);
   if (!armed.length) {
     return;
   }

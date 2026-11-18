@@ -22,12 +22,18 @@ function isNewerHumanActorCommit(vprActor, vprParkedAt, deps, vprMachineLogin) {
   var vprActorLogin = String(vprActor.login || '').toLowerCase();
   return !deps.isMachineParkPush(vprActor.committer, vprActorLogin, vprMachineLogin);
 }
-function checkValidatePrParkedBackstop(deps, effectiveConfig, repoInfo, ticket, key) {
+function checkValidatePrParkedBackstop(deps, rule, effectiveConfig, repoInfo, ticket, key) {
   if ((ticket.labels || []).indexOf('validation_failed') === -1) {
     return true;
   }
   var vprMachineLogin = machineAuthorModule.resolveMachineAuthor(deps.jobParams, effectiveConfig);
   var vprHead = deps.resolveHeadSha(repoInfo, ticket);
+  var vprCiWf = resolveTicketCiWorkflow(rule, deps.jobParams);
+  if (vprHead && typeof deps.latestDispatchedVerdict === 'function' && deps.latestDispatchedVerdict(repoInfo, vprCiWf, vprHead) === 'success') {
+    unparkWithComment(deps, repoInfo, ticket.prNumber, 'validation_failed', '🅿️→▶ validation_failed cleared — the latest dispatched validation run on head `' + vprHead + '` concluded SUCCESS (rerun succeeded in place). Re-entering validation.');
+    deps.log('  ▶ ' + key + ' park cleared (latest dispatched validation run on head concluded SUCCESS) — validation proceeds');
+    return true;
+  }
   var vprActor = deps.parkResetCommit(repoInfo, vprHead, vprMachineLogin);
   var vprParkedAt = deps.parkedSince(repoInfo, ticket.prNumber);
   if (!isNewerHumanActorCommit(vprActor, vprParkedAt, deps, vprMachineLogin)) {
@@ -463,7 +469,7 @@ function checkValidatePrEntryGates(deps, rule, effectiveConfig, repoInfo, ticket
     skippedKeys.push(key);
     return false;
   }
-  if (!checkValidatePrParkedBackstop(deps, effectiveConfig, repoInfo, ticket, key)) {
+  if (!checkValidatePrParkedBackstop(deps, rule, effectiveConfig, repoInfo, ticket, key)) {
     return false;
   }
   if (!ticket.branch) {
