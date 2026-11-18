@@ -1,15 +1,4 @@
 {
-  "pr-1355": [
-    {
-      "leg": "review",
-      "at": "2026-11-04T08:00:21Z",
-      "prompt": 186722,
-      "completion": 27005,
-      "total": 213727,
-      "cacheRead": 3505408,
-      "model": "glm-5.3-flash"
-    }
-  ],
   "issue-1351": [
     {
       "leg": "dev",
@@ -2133,6 +2122,17 @@
       "completion": 67361,
       "total": 760768,
       "cacheRead": 27680832,
+      "model": "glm-5.3-flash"
+    }
+  ],
+  "pr-1517": [
+    {
+      "leg": "review",
+      "at": "2026-11-18T08:13:24Z",
+      "prompt": 105385,
+      "completion": 26400,
+      "total": 131785,
+      "cacheRead": 4239488,
       "model": "glm-5.3-flash"
     }
   ]
