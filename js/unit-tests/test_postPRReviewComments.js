@@ -79,6 +79,10 @@ function configLoaderStub(opts) {
     };
 }
 
+// gh-1510: the URL the formal-review scm stub's addComment returns (the
+// github_add_pr_comment comment object) — the formal verdict card links it.
+var DEFAULT_FORMAL_COMMENT_URL = 'https://github.com/IstiN/dmtools-agents/pull/42#issuecomment-9001';
+
 // scm stub for the formal-review suite: submit/list/dismiss review recorders,
 // a populated default repoInfo (overridable with an explicit null).
 function formalScmStub(opts, sinks) {
@@ -88,7 +92,18 @@ function formalScmStub(opts, sinks) {
         addLabel: function(prId, label) { sinks.addLabelCalls.push({ prId: prId, label: label }); },
         removeLabel: function() {},
         fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+        // gh-1510: the general comment + verdict record post through addComment;
+        // github_add_pr_comment returns the comment object — the formal verdict
+        // card derives its "Full review:" link from it. Overridable: a link-less
+        // result ({}), or a throw, to exercise the defensive pointer shapes.
+        addComment: function(prId, text) {
+            if (opts.addCommentThrows) throw new Error(opts.addCommentThrows);
+            sinks.addCommentCalls.push({ prId: prId, body: text });
+            return opts.addCommentResult !== undefined ? opts.addCommentResult
+                : { id: 9001, html_url: DEFAULT_FORMAL_COMMENT_URL };
+        },
         submitReview: function(prId, event, body) {
+            if (opts.submitReviewThrows) throw new Error(opts.submitReviewThrows);
             sinks.submitReviewCalls.push({ prId: prId, event: event, body: body });
         },
         listReviews: function() { return opts.existingReviews || []; },
@@ -222,6 +237,7 @@ function prReviewRequireMap(overrides) {
         }), {}),
         './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
         './common/reviewFilter.js': loadReviewFilterModule(),
+        './common/formalReviewCard.js': loadModule('js/common/formalReviewCard.js'),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
     };
     return Object.assign(map, overrides || {});
@@ -534,6 +550,7 @@ suite('postPRReviewComments', function() {
                     './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
                     './common/reviewFilter.js': loadReviewFilterModule(),
+                    './common/formalReviewCard.js': loadModule('js/common/formalReviewCard.js'),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
                 mergedMocks
@@ -760,8 +777,9 @@ suite('postPRReviewComments', function() {
             var addLabelCalls = [];
             var submitReviewCalls = [];
             var dismissReviewCalls = [];
+            var addCommentCalls = [];
 
-            var sinks = { addLabelCalls: addLabelCalls, submitReviewCalls: submitReviewCalls, dismissReviewCalls: dismissReviewCalls };
+            var sinks = { addLabelCalls: addLabelCalls, submitReviewCalls: submitReviewCalls, dismissReviewCalls: dismissReviewCalls, addCommentCalls: addCommentCalls };
             var scm = formalScmStub(opts, sinks);
 
             var outputFiles = formalOutputFilesStub(opts);
@@ -791,6 +809,7 @@ suite('postPRReviewComments', function() {
                     './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
                     './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
                     './common/reviewFilter.js': loadReviewFilterModule(),
+                    './common/formalReviewCard.js': loadModule('js/common/formalReviewCard.js'),
                     './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
                 }),
                 formalMocks
@@ -800,7 +819,8 @@ suite('postPRReviewComments', function() {
                 mod: mod,
                 addLabelCalls: addLabelCalls,
                 submitReviewCalls: submitReviewCalls,
-                dismissReviewCalls: dismissReviewCalls
+                dismissReviewCalls: dismissReviewCalls,
+                addCommentCalls: addCommentCalls
             };
         }
 
@@ -884,7 +904,14 @@ suite('postPRReviewComments', function() {
 
             assert.equal(loaded.submitReviewCalls.length, 1, 'should submit exactly one formal review');
             assert.equal(loaded.submitReviewCalls[0].event, 'REQUEST_CHANGES');
-            assert.equal(loaded.submitReviewCalls[0].body, 'Blocking issue found in file X.');
+            // gh-1510: the formal review is the compact verdict card — the
+            // full text belongs to the discussion comment alone.
+            assert.equal(loaded.submitReviewCalls[0].body,
+                '## Automated Code Review — REQUEST_CHANGES\n' +
+                'blocking 1 · important 0 · suggestions 0 · digest 0\n' +
+                'Full review: ' + DEFAULT_FORMAL_COMMENT_URL);
+            assert.equal(loaded.addCommentCalls.length, 1, 'the discussion comment still posts the full text');
+            assert.equal(loaded.addCommentCalls[0].body, 'Blocking issue found in file X.');
             assert.equal(loaded.dismissReviewCalls.length, 0);
             assert.equal(
                 loaded.addLabelCalls.filter(function(c) { return c.label === 'pr_approved'; }).length, 0,
@@ -926,19 +953,21 @@ suite('postPRReviewComments', function() {
             );
         });
 
-        test('APPROVE body resolves a generalComment FILE PATH to its content (#720 live bug)', function() {
-            // Live bug (flutter_agent_harness #720): the model followed the
-            // file-path contract (generalComment = 'outputs/pr_review_general.md'),
-            // postGeneralComment read the file correctly, but the formal APPROVE
-            // review posted the literal PATH as its body.
+        test('gh-1510: formal APPROVE body is the compact verdict card — census + pointer, never the general text (#720)', function() {
+            // gh-1510 case 1 + the #720 body-corruption class: one artifact per
+            // role — the discussion comment carries the full review text, the
+            // formal review carries the compact verdict card (the
+            // branch-protection signal). The card is never the general text (no
+            // verbatim dupe) and never the literal outputs/ path.
+            var generalMd = '# Full review text\nSolid work, one suggestion open.';
             var loaded = loadPostPRReviewCommentsForFormalReview({
                 reviewData: {
                     recommendation: 'APPROVE',
                     generalComment: 'outputs/pr_review_general.md',
-                    issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                    issueCounts: { blocking: 0, important: 0, suggestions: 1, digest: 1 },
                     inlineComments: []
                 },
-                generalMdContent: '## Automated Code Review — APPROVE\n\nSolid work.',
+                generalMdContent: generalMd,
                 existingReviews: []
             });
 
@@ -951,11 +980,182 @@ suite('postPRReviewComments', function() {
 
             assert.equal(loaded.submitReviewCalls.length, 1, 'exactly one formal review');
             assert.equal(loaded.submitReviewCalls[0].event, 'APPROVE');
+            var body = loaded.submitReviewCalls[0].body;
+            assert.notEqual(body, generalMd, 'the formal review must not duplicate the general comment verbatim');
+            assert.contains(body, '## Automated Code Review — APPROVE');
+            assert.contains(body, 'blocking 0 · important 0 · suggestions 1 · digest 1');
+            assert.contains(body, 'Full review: ' + DEFAULT_FORMAL_COMMENT_URL);
+            assert.notContains(body, '# Full review text', 'the full review text rides the comment only');
+            assert.notContains(body, 'outputs/pr_review_general.md', 'never the literal path (#720)');
+            assert.equal(loaded.addCommentCalls.length, 1, 'the discussion comment still posts');
+            assert.equal(loaded.addCommentCalls[0].body, generalMd, 'the comment carries the full text');
+        });
+
+        test('gh-1510 case 2: generalComment field missing but file written — comment posts AND the review links to it', function() {
+            // Old behavior: the falsy generalComment field early-returned out of
+            // postGeneralComment (no comment) while the formal review resolved
+            // the DEFAULT path and carried the full text anyway. Single
+            // resolution: the comment posts from the default-path fallback and
+            // the card links to it.
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'APPROVE',
+                    issueCounts: { blocking: 0, important: 0, suggestions: 0, digest: 0 },
+                    inlineComments: []
+                },
+                generalMdContent: '## General summary from the default file',
+                existingReviews: []
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(loaded.addCommentCalls.length, 1, 'the default-path fallback must post the general comment');
+            assert.equal(loaded.addCommentCalls[0].body, '## General summary from the default file');
+            assert.equal(loaded.submitReviewCalls.length, 1);
+            assert.contains(loaded.submitReviewCalls[0].body, 'Full review: ' + DEFAULT_FORMAL_COMMENT_URL);
+        });
+
+        test('gh-1510 case 3: nothing resolvable — no comment, bare card, no "See PR comments" stub', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'APPROVE',
+                    issueCounts: { blocking: 0, important: 0, suggestions: 1, digest: 0 },
+                    inlineComments: []
+                },
+                existingReviews: []
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(loaded.addCommentCalls.length, 0, 'nothing resolvable → no comment');
+            assert.equal(loaded.submitReviewCalls.length, 1);
+            assert.equal(loaded.submitReviewCalls[0].body,
+                '## Automated Code Review — APPROVE\nblocking 0 · important 0 · suggestions 1 · digest 0',
+                'the bare card carries no pointer — nothing exists to point at');
+            assert.notContains(loaded.submitReviewCalls[0].body, 'See PR comments',
+                'the stub must not reference comments that were never posted');
+        });
+
+        test('gh-1510: inline markdown generalComment — comment posts the inline text, review body is the card', function() {
+            var inlineMd = '## Inline review summary\nLooks good overall.';
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'APPROVE',
+                    generalComment: inlineMd,
+                    issueCounts: { blocking: 0, important: 0, suggestions: 0, digest: 0 },
+                    inlineComments: []
+                },
+                existingReviews: []
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(loaded.addCommentCalls.length, 1);
+            assert.equal(loaded.addCommentCalls[0].body, inlineMd, 'inline markdown posts as the comment verbatim (unchanged)');
+            assert.equal(loaded.submitReviewCalls.length, 1);
+            assert.notEqual(loaded.submitReviewCalls[0].body, inlineMd, 'the review body is the card, not the inline text');
+            assert.contains(loaded.submitReviewCalls[0].body, '## Automated Code Review — APPROVE');
+        });
+
+        test('gh-1510: REQUEST_CHANGES — pointer only when the comment actually posted (honest stub)', function() {
+            // Posted, but the provider returned no html_url → the
+            // above-comment pointer, never a fabricated link.
+            var linked = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    generalComment: 'Blocking issue found in file X.',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0, digest: 0 },
+                    inlineComments: []
+                },
+                addCommentResult: {},
+                existingReviews: []
+            });
+            linked.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+            assert.equal(linked.addCommentCalls.length, 1);
+            assert.contains(linked.submitReviewCalls[0].body, 'see the review summary comment above');
+            assert.notContains(linked.submitReviewCalls[0].body, 'Full review: http');
+
+            // Nothing posted → no pointer at all, and never the
+            // "See PR comments" claim about comments that do not exist.
+            var bare = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0, digest: 0 },
+                    inlineComments: []
+                },
+                existingReviews: []
+            });
+            bare.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+            assert.equal(bare.addCommentCalls.length, 0);
+            assert.equal(bare.submitReviewCalls[0].body,
+                '## Automated Code Review — REQUEST_CHANGES\nblocking 1 · important 0 · suggestions 0 · digest 0',
+                'no pointer line when nothing was posted');
+            assert.notContains(bare.submitReviewCalls[0].body, 'See PR comments');
+        });
+
+        test('gh-1510: own-PR 422 on formal APPROVE — honest warn names PR author and reviewer, no "?" hedge', function() {
+            var warns = [];
+            var origWarn = console.warn;
+            console.warn = function(msg) { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+            var loaded;
+            try {
+                loaded = loadPostPRReviewCommentsForFormalReview({
+                    config: { machineAuthor: 'ai-teammate' },
+                    prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n- **Author**: ai-teammate\n',
+                    reviewData: {
+                        recommendation: 'APPROVE',
+                        issueCounts: { blocking: 0, important: 0, suggestions: 0, digest: 0 },
+                        inlineComments: []
+                    },
+                    existingReviews: [],
+                    submitReviewThrows: 'Tool execution failed: PR review submission failed (422): "Review Can not approve your own pull request"'
+                });
+                loaded.mod.action({
+                    ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                    response: 'Jira review content',
+                    inputFolderPath: 'input/PROJ-1',
+                    customParams: { formalGithubReview: true }
+                });
+            } finally {
+                console.warn = origWarn;
+            }
+
+            assert.equal(loaded.submitReviewCalls.length, 0, 'the 422 rejection leaves no formal review');
             assert.equal(
-                loaded.submitReviewCalls[0].body,
-                '## Automated Code Review — APPROVE\n\nSolid work.',
-                'the review body must be the file CONTENT, never the outputs/ path'
+                loaded.addLabelCalls.filter(function(c) { return c.label === 'pr_approved'; }).length, 1,
+                'the pr_approved label lifecycle stays the source of truth'
             );
+            var ownPrWarns = warns.filter(function(w) {
+                return w.indexOf('formalGithubReview') !== -1 && w.indexOf('own PR') !== -1;
+            });
+            assert.equal(ownPrWarns.length, 1, 'exactly one honest warn about the own-PR restriction');
+            assert.contains(ownPrWarns[0], 'ai-teammate', 'both identities named (author == reviewer here)');
+            assert.notContains(ownPrWarns[0], 'restriction?', 'no hedged "?"');
         });
 
         test('PR-anchored EXTERNAL PR + APPROVE: pr_approved arms the merge pipeline for any author (owner rule)', function() {
@@ -1107,6 +1307,7 @@ suite('postPRReviewComments', function() {
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './common/reviewFilter.js': loadReviewFilterModule(),
+            './common/formalReviewCard.js': loadModule('js/common/formalReviewCard.js'),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
                 {
@@ -1541,6 +1742,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './common/reviewFilter.js': loadReviewFilterModule(),
+            './common/formalReviewCard.js': loadModule('js/common/formalReviewCard.js'),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
         merged
@@ -2454,6 +2656,7 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
             }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './common/reviewFilter.js': loadReviewFilterModule(),
+            './common/formalReviewCard.js': loadModule('js/common/formalReviewCard.js'),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }), {});
 
@@ -2548,6 +2751,7 @@ function gh926ResumeRequire(opts) {
         './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
         './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
         './common/reviewFilter.js': loadReviewFilterModule(),
+        './common/formalReviewCard.js': loadModule('js/common/formalReviewCard.js'),
         './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
     });
 }
@@ -2985,6 +3189,7 @@ function loadForPrSearch(foundPr) {
             './common/findingRegistry.js': loadModule('js/common/findingRegistry.js', makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}) }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './common/reviewFilter.js': loadReviewFilterModule(),
+            './common/formalReviewCard.js': loadModule('js/common/formalReviewCard.js'),
             './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
         }),
         {
@@ -5128,6 +5333,7 @@ function loadPostPRReviewCommentsForPool(opts) {
             }), {}),
             './common/reviewSpecClaims.js': loadSpecClaimsWithRegistry(),
             './common/reviewFilter.js': loadReviewFilterModule(),
+            './common/formalReviewCard.js': loadModule('js/common/formalReviewCard.js'),
             // gh-1471: the real pool execution chain (pure modules).
             './common/reviewPool.js': loadPoolChainReal().pool,
             './common/reviewPoolPost.js': loadPoolChainReal().post,
