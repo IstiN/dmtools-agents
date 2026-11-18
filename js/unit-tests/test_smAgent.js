@@ -20069,6 +20069,201 @@ suite('smAgent: rework-loop-escalated head-move reset + machine unpark on dispat
         assert.equal(sm.capturedPrLabelRemoves[0].label, 'validation_failed');
         assert.ok(sm.capturedPrComments[0].body.indexOf('dispatched validation run on the current head concluded SUCCESS') !== -1);
     });
+
+    test('guest PR parked validation_failed restamps umbrella checks to success and unparks when a rerun of the dispatched validation run succeeds in place', function () {
+        var stamped = [];
+        var stampBodies = [];
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            captureConsole: true,
+            onFileWrite: function (w) {
+                if (w && String(w.path).indexOf('/tmp/sm-check-run-') === 0) {
+                    stampBodies.push(JSON.parse(w.content));
+                }
+            },
+            github: {
+                items: [{
+                    key: 'pr-2240',
+                    prNumber: 2240,
+                    branch: 'fix/2237-compaction-basis',
+                    author: 'ajaxspace',
+                    labels: ['validation_failed', 'pr_approved'],
+                    pr: { headSha: NEW_HEAD, state: 'OPEN', mergeState: 'UNSTABLE' }
+                }],
+                prList: [{
+                    number: 2240,
+                    head: { sha: NEW_HEAD, ref: 'fix/2237-compaction-basis' },
+                    labels: [{ name: 'validation_failed' }, { name: 'pr_approved' }]
+                }],
+                workflowApiRuns: [{
+                    id: 44394140613,
+                    event: 'workflow_dispatch',
+                    head_sha: NEW_HEAD,
+                    status: 'completed',
+                    conclusion: 'success',
+                    html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/44394140613'
+                }],
+                // Umbrella check-runs are still FAILURE from attempt 1 before restamp
+                commitCheckRuns: { check_runs: [
+                    { name: 'Quality gate', status: 'completed', conclusion: 'failure' },
+                    { name: 'Binaries smoke gate', status: 'completed', conclusion: 'failure' },
+                    { name: 'JS engine integration (quickjs-ng)', status: 'completed', conclusion: 'failure' }
+                ] },
+                prComments: [{ body: '🛑 validation_failed — parked-head: ' + NEW_HEAD }]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/check-runs ') !== -1) {
+                    stamped.push(c);
+                    return '{}';
+                }
+                if (c.indexOf('/commits/' + NEW_HEAD) !== -1) {
+                    return JSON.stringify({
+                        login: 'ajaxspace',
+                        date: '2026-11-18T15:00:00Z',
+                        committer: 'GitHub',
+                        sha: NEW_HEAD,
+                        parents: ['1111111111111111111111111111111111111111']
+                    });
+                }
+                if (c.indexOf('/issues/2240/events') !== -1) {
+                    return '"2026-11-18T16:00:00Z"';
+                }
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return JSON.stringify({ workflow_runs: [{
+                        id: 44394140613, head_sha: NEW_HEAD, status: 'completed', conclusion: 'success',
+                        created_at: '2026-11-18T15:30:00Z', updated_at: '2026-11-18T16:20:00Z'
+                    }] });
+                }
+                return '';
+            }
+        });
+
+        sm.action({ jobParams: {
+            owner: 'IstiN',
+            repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml',
+            validationChecks: ['Quality gate', 'Binaries smoke gate', 'JS engine integration (quickjs-ng)'],
+            machineAuthor: 'dmtools-factory-bot[bot]',
+            rules: [PARK_RULE]
+        } });
+        assert.equal(stamped.length, 3, 'syncValidationChecks restamps all 3 umbrella check-runs on validation_failed PR');
+        assert.equal(stampBodies.length, 3, '3 check-run payloads written');
+        assert.ok(stampBodies.every(function (b) { return b.conclusion === 'success' && b.status === 'completed'; }),
+            'umbrella check-runs are restamped to conclusion=success');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'validation_failed cleared without requiring an empty commit');
+        assert.equal(sm.capturedPrLabelRemoves[0].label, 'validation_failed');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('dispatched validation run on the current head concluded SUCCESS') !== -1);
+    });
+
+    test('validate_pr backstop unparks a parked PR and proceeds when latestDispatchedVerdict is success on the current head', function () {
+        var VALIDATE_RULE = {
+            id: 'validate-armed',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved'], draft: false },
+            localAction: 'validate_pr',
+            ciWorkflow: 'ci.yml',
+            skipIfGreenCi: true
+        };
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            captureConsole: true,
+            github: {
+                items: [{
+                    key: 'pr-2240',
+                    prNumber: 2240,
+                    branch: 'fix/2237-compaction-basis',
+                    author: 'ajaxspace',
+                    labels: ['validation_failed', 'pr_approved'],
+                    pr: { headSha: NEW_HEAD, state: 'OPEN', mergeState: 'BLOCKED' }
+                }],
+                commitCheckRuns: { check_runs: [
+                    { name: 'Quality gate', status: 'completed', conclusion: 'success' }
+                ] },
+                prComments: []
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return JSON.stringify({ workflow_runs: [{
+                        id: 44394140613, head_sha: NEW_HEAD, status: 'completed', conclusion: 'success',
+                        created_at: '2026-11-18T15:30:00Z', updated_at: '2026-11-18T16:20:00Z'
+                    }] });
+                }
+                return '';
+            }
+        });
+
+        sm.action({ jobParams: {
+            owner: 'IstiN',
+            repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml',
+            machineAuthor: 'dmtools-factory-bot[bot]',
+            rules: [VALIDATE_RULE]
+        } });
+
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 2240 && r.label === 'validation_failed';
+        }), 'validate_pr backstop removes validation_failed when dispatched run succeeded');
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('the latest dispatched validation run on head `' + NEW_HEAD + '` concluded SUCCESS') !== -1;
+        }), 'validate_pr backstop posts unpark comment');
+    });
+
+    test('legacy park reset ladder bypasses isMachineHoldOnLegacyPark when guest PR head was moved by sm-silent-update and in-place rerun succeeded', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            captureConsole: true,
+            github: {
+                items: [{
+                    key: 'pr-2240',
+                    prNumber: 2240,
+                    branch: 'fix/2237-compaction-basis',
+                    author: 'ajaxspace',
+                    labels: ['validation_failed', 'pr_approved'],
+                    pr: { headSha: NEW_HEAD, state: 'OPEN', mergeState: 'UNSTABLE' }
+                }],
+                commitCheckRuns: { check_runs: [
+                    { name: 'Quality gate', status: 'completed', conclusion: 'failure' }
+                ] },
+                prComments: []
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/commits/' + NEW_HEAD) !== -1) {
+                    return JSON.stringify({
+                        login: 'dmtools-factory-bot[bot]',
+                        date: '2026-11-18T15:00:00Z',
+                        committer: 'sm-silent-update',
+                        sha: NEW_HEAD,
+                        parents: ['1111111111111111111111111111111111111111']
+                    });
+                }
+                if (c.indexOf('/issues/2240/events') !== -1) {
+                    return '"2026-11-18T16:00:00Z"';
+                }
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return JSON.stringify({ workflow_runs: [{
+                        id: 44394140613, head_sha: NEW_HEAD, status: 'completed', conclusion: 'success',
+                        created_at: '2026-11-18T15:30:00Z', updated_at: '2026-11-18T16:20:00Z'
+                    }] });
+                }
+                return '';
+            }
+        });
+
+        sm.action({ jobParams: {
+            owner: 'IstiN',
+            repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml',
+            machineAuthor: 'dmtools-factory-bot[bot]',
+            rules: [PARK_RULE]
+        } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'isMachineHoldOnLegacyPark bypassed when dispatched run succeeded');
+        assert.equal(sm.capturedPrLabelRemoves[0].label, 'validation_failed');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('dispatched validation run on the current head concluded SUCCESS') !== -1);
+    });
 });
 
 test('applyTickTunings: ioCacheTtlMs rides jobParams into the smProvider holder (pr #1514 F5)', function () {
