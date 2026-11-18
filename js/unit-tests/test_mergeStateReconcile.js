@@ -51,7 +51,8 @@ var fsReal = function () {
             './common/machineAuthor.js': machineAuthorReal(),
             './common/reworkLatch.js': loadModule('js/common/reworkLatch.js',
                 makeRequire({ './legRunVocab.js': loadModule('js/common/legRunVocab.js', makeRequire({}), {}) }), {}),
-            './common/mergeStateReconcile.js': mrReal()
+            './common/mergeStateReconcile.js': mrReal(),
+            './common/probeCache.js': loadModule('js/common/probeCache.js')
         }), {});
     }
     return fsReal.mod;
