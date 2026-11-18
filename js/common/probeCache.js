@@ -149,6 +149,9 @@ function normalizeLive(live, prLabels) {
     });
 }
 
+// The gate-heavy legs live in helpers ("branch-light for the CRAP gate"):
+// livePrItems keeps only the guard + cached-lookup, fetchLivePrItems the
+// live fetch leg.
 function livePrItems(provider, repoInfo, probeCache, prLabels, asItemsArray) {
     if (!provider || typeof provider.listOpenPrsLive !== 'function' || !repoInfo) return null;
     var key = 'livePrs:' + repoInfo.owner + '/' + repoInfo.repo;
@@ -156,6 +159,10 @@ function livePrItems(provider, repoInfo, probeCache, prLabels, asItemsArray) {
         var cached = probeGet(key, probeTtlMs());
         if (cached) return cached;
     }
+    return fetchLivePrItems(provider, repoInfo, probeCache, prLabels, asItemsArray, key);
+}
+
+function fetchLivePrItems(provider, repoInfo, probeCache, prLabels, asItemsArray, key) {
     try {
         var live = asItemsArray(provider.listOpenPrsLive());
         var normalized = normalizeLive(live, prLabels);
