@@ -1432,6 +1432,26 @@ function publishCommands(state, cfg, existingSha) {
 }
 
 /**
+ * gh-1518: the bootstrap POST is 'create-first, 422-fails-harmlessly' (see
+ * publishCommands) — once per rule it re-attempted creating a branch that
+ * cannot disappear mid-tick (38 identical POSTs/tick). One bootstrap per
+ * probe TTL: the command ends in '|| true', so created / already-exists /
+ * transient are indistinguishable — the ATTEMPT is what gets cached; a
+ * transient failure lives ≤TTL (the PUT itself still fails open and the
+ * next tick retries — unchanged contract). Owns the whole exec loop
+ * (gh-1518 crap4js ratchet: the inline ternary+put regressed
+ * publishFactoryState 9.2 → 11.1 — moving the decisions here leaves the
+ * caller at its pre-#1518 shape).
+ */
+function runPublishCommands(commands, bootKey, exec) {
+    var bootstrapped = probeCacheModule.probeGet(bootKey, probeCacheModule.probeTtlMs()) !== undefined;
+    (bootstrapped ? commands.slice(1) : commands).forEach(function (c) {
+        exec({ command: c });
+    });
+    if (!bootstrapped) probeCacheModule.probePut(bootKey, true);
+}
+
+/**
  * Publish via `exec` (cli_execute_command in the bridge; a capturer in
  * tests). Returns the public board URL.
  */
@@ -1448,20 +1468,8 @@ function publishFactoryState(state, cfg, exec) {
             .trim();
         if (sha.indexOf('Not Found') !== -1) sha = '';
     } catch (e) { sha = ''; } // first publish — the file is absent
-    // gh-1518: the bootstrap POST is 'create-first, 422-fails-harmlessly'
-    // (see publishCommands) — once per rule it re-attempted creating a
-    // branch that cannot disappear mid-tick (38 identical POSTs/tick). One
-    // bootstrap per probe TTL: the command ends in '|| true', so created /
-    // already-exists / transient are indistinguishable — the ATTEMPT is
-    // what gets cached; a transient failure lives ≤TTL (the PUT itself
-    // still fails open and the next tick retries — unchanged contract).
-    var commands = publishCommands(state, cfg, sha);
-    var bootKey = 'factoryDataBranch:' + repo + ':' + branch;
-    var bootstrapped = probeCacheModule.probeGet(bootKey, probeCacheModule.probeTtlMs()) !== undefined;
-    (bootstrapped ? commands.slice(1) : commands).forEach(function (c) {
-        exec({ command: c });
-    });
-    if (!bootstrapped) probeCacheModule.probePut(bootKey, true);
+    runPublishCommands(publishCommands(state, cfg, sha),
+        'factoryDataBranch:' + repo + ':' + branch, exec);
     return 'https://raw.githubusercontent.com/' + repo + '/' + branch +
         '/data/' + asset;
 }
@@ -1651,6 +1659,7 @@ module.exports = {
     bucketCounts: bucketCounts,
     publishCommands: publishCommands,
     publishFactoryState: publishFactoryState,
+    runPublishCommands: runPublishCommands,
     fetchPreviousState: fetchPreviousState,
     stampOf: stampOf,
     snapshotPutCommand: snapshotPutCommand,
