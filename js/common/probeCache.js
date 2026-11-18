@@ -71,7 +71,11 @@ function _fresh(entry, ttlMs, now) {
 function probeGet(key, ttlMs, now) {
     var at = (now === undefined) ? Date.now() : now;
     var entry = _probes[key];
-    if (!_fresh(entry, ttlMs, at)) {
+    // ttl 0 = always live (liveProbeTtlMs jobParam contract): an entry is
+    // NEVER served — a <=0ms-staleness window would race the wall clock
+    // (a put in the same millisecond as the read reads as fresh), so the
+    // zero case short-circuits deterministically instead.
+    if (ttlMs === 0 || !_fresh(entry, ttlMs, at)) {
         if (entry) {
             delete _probes[key];
             _stats.expired++;
