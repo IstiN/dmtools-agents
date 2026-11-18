@@ -1,24 +1,4 @@
 {
-  "issue-1351": [
-    {
-      "leg": "dev",
-      "at": "2026-11-04T12:17:49Z",
-      "prompt": 159057,
-      "completion": 57153,
-      "total": 216210,
-      "cacheRead": 14789824,
-      "model": "glm-5.3-flash"
-    },
-    {
-      "leg": "review",
-      "at": "2026-11-04T13:01:51Z",
-      "prompt": 144658,
-      "completion": 31556,
-      "total": 176214,
-      "cacheRead": 5597504,
-      "model": "glm-5.3-flash"
-    }
-  ],
   "issue-1352": [
     {
       "leg": "dev",
@@ -2144,6 +2124,17 @@
       "completion": 38733,
       "total": 188243,
       "cacheRead": 3109312,
+      "model": "glm-5.3-flash"
+    }
+  ],
+  "pr-1522": [
+    {
+      "leg": "review",
+      "at": "2026-11-18T22:19:48Z",
+      "prompt": 99772,
+      "completion": 30617,
+      "total": 130389,
+      "cacheRead": 2715776,
       "model": "glm-5.3-flash"
     }
   ]
