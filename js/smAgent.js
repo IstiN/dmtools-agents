@@ -391,6 +391,8 @@ function buildTickOrchestratorDeps() {
         smForge = workflowDispatchModule.resolveSmForge(projectConfig);
         PRIORITY_LABELS = tickOrchestratorModule.resolvePriorityLabels(buildIoDeps(), projectConfig);
         if (smProviderModule && typeof smProviderModule.ioCacheReset === 'function') smProviderModule.ioCacheReset();
+        // io-cache TTL knob (pr #1514, registry F5) — mirrors the probe layer's tuning above.
+        if (smProviderModule && typeof smProviderModule.applyIoCacheTuning === 'function') smProviderModule.applyIoCacheTuning(RUN_JOB_PARAMS);
         if (probeCacheModule && typeof probeCacheModule.applyProbeTuning === 'function') probeCacheModule.applyProbeTuning(RUN_JOB_PARAMS);
         var jsonCap = typeof p.maxTriggeredWorkflows === 'number' ? p.maxTriggeredWorkflows : p.maxWorkflowsPerRun;
         var cap = tickOrchestratorModule.resolveWorkflowCap(buildIoDeps(), jsonCap, projectConfig);
