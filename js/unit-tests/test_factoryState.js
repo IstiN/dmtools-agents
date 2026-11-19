@@ -10,11 +10,20 @@ var assert = globalThis.assert;
 
 var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
 var reworkLatchModule = loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {});
+// gh-1518: the SAME probeCache instance factoryState's loader map wires —
+// _reset() here isolates the tokens/bootstrap dedup tests from the suites'
+// execution order.
+var probeCacheModule = loadModule('js/common/probeCache.js');
+function resetProbe() { probeCacheModule._reset(); }
+
 var fsModule = loadModule('js/factoryState.js',
     makeRequire({
         './common/machineAuthor.js': machineAuthorModule,
         './common/reworkLatch.js': reworkLatchModule,
-        './common/mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {})
+        './common/mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {}),
+        // gh-1518: the real probe cache — the dedup under test (per-instance
+        // counters reset per suite via _reset()).
+        './common/probeCache.js': probeCacheModule
     }), {});
 
 // ── laneOf ───────────────────────────────────────────────────────────────────
@@ -918,6 +927,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
     '"issue-7":[{"leg":"review","at":"2026-10-08T11:00:00Z","prompt":1,"completion":2,"total":3}]}';
 
   test('fetches data/fa-tokens.json off the data branch and returns the map', function () {
+    resetProbe();
     var seen = [];
     var map = fsModule.fetchTokensFromBranch('o/r',
       { tag: 'factory-data' }, function (a) {
@@ -934,6 +944,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
   });
 
   test('any miss → null, never a throw (404 / garbage JSON / rate limit)', function () {
+    resetProbe();
     assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
       function () { throw new Error('Not Found (HTTP 404)'); }), null, '404 → null');
     assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
@@ -943,6 +954,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
   });
 
   test('non-map shapes → null (array payload, scalar payload, no array values, empty map)', function () {
+    resetProbe();
     assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
       function () { return { output: '[]' }; }), null, 'array payload → null');
     assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
@@ -955,6 +967,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
   });
 
   test('tag override rides the fetch (multi-factory data branches)', function () {
+    resetProbe();
     var seen = [];
     fsModule.fetchTokensFromBranch('o/r', { tag: 'factory-data-eu' },
       function (a) { seen.push(a.command); return { output: TOKENS }; });
@@ -962,6 +975,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
   });
 
   test('statePublish.tokensAsset overrides the fixed asset (multi-factory shared branch)', function () {
+    resetProbe();
     var seen = [];
     var map = fsModule.fetchTokensFromBranch('o/r',
       { tag: 'factory-data', tokensAsset: 'factoryB-tokens.json' },
@@ -974,6 +988,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
   });
 
   test('tokensAsset absent → the fixed gh-781 default (back-compat)', function () {
+    resetProbe();
     var seen = [];
     fsModule.fetchTokensFromBranch('o/r', { tag: 'factory-data' },
       function (a) { seen.push(a.command); return { output: TOKENS }; });
@@ -981,6 +996,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
   });
 
   test('tokensAsset rides a tag override too (both knobs compose)', function () {
+    resetProbe();
     var seen = [];
     fsModule.fetchTokensFromBranch('o/r',
       { tag: 'factory-data-eu', tokensAsset: 'factoryB-tokens.json' },
@@ -1066,6 +1082,7 @@ suite('factoryState — publishFactoryState', function () {
   });
 
   test('publish runs exec per command and returns the raw.githubusercontent URL', function () {
+    resetProbe();
     var seen = [];
     var url = fsModule.publishFactoryState(ST, { repo: 'IstiN/flutter_agent_harness',
       tag: 'factory-data', asset: 'fa-state.json' },
@@ -1095,6 +1112,105 @@ suite('factoryState — publishFactoryState', function () {
     var cmds = fsModule.publishCommands(ST, {});
     assert.ok(cmds[0].indexOf('refs/heads/factory-data') > 0);
     assert.ok(cmds[1].indexOf('data/flutter_agent_harness-state.json') > 0);
+  });
+
+});
+
+// ── gh-1518: state-publish dedup (probe cache on the write path) ─────────────
+// The tick publishes factory state once per RULE (38 rules ⇒ 38 publishes),
+// and every publish re-fetched the tokens asset + re-attempted the branch
+// bootstrap — 76 identical calls per tick before any rule work (measured in
+// the 2026-11-18 tick logs, both repos). Both are tick-stable: the asset
+// cannot change within a tick and the branch cannot disappear — cachedProbe /
+// probeGet collapse them to the first attempt per probe TTL.
+
+suite('factoryState — state-publish dedup (gh-1518)', function () {
+  var TOKENS = '{"pr-31":[{"leg":"dev","at":"2026-10-08T10:00:00Z","prompt":10,"completion":5,"total":15}]}';
+
+  test('AC1: three tokens fetches in TTL → exactly ONE contents GET, same map', function () {
+    resetProbe();
+    var seen = [];
+    function fetch() {
+      return fsModule.fetchTokensFromBranch('o/r', { tag: 'factory-data' },
+        function (a) { seen.push(a.command); return { output: TOKENS }; });
+    }
+    var first = fetch(), second = fetch(), third = fetch();
+    assert.ok(first && first['pr-31'], 'first fetch returns the map');
+    assert.deepEqual(second, first, '2nd fetch served from the probe cache');
+    assert.deepEqual(third, first, '3rd fetch served from the probe cache');
+    assert.equal(seen.length, 1, 'exactly one gh contents GET — seen: ' + JSON.stringify(seen));
+    var stats = probeCacheModule.ioCacheStats();
+    assert.ok(stats.hit >= 2, 'probe hits recorded (got ' + stats.hit + ')');
+  });
+
+  test('AC1: failed/empty fetch stays UNCACHED — the next rule self-retries', function () {
+    resetProbe();
+    var calls = 0;
+    function fetch() {
+      return fsModule.fetchTokensFromBranch('o/r', { tag: 'factory-data' },
+        function () { calls++; return { output: 'not json' }; });
+    }
+    assert.equal(fetch(), null, 'garbage → null');
+    assert.equal(fetch(), null, 'still null on retry');
+    assert.equal(calls, 2, 'no caching of a failed listing — retried per rule');
+  });
+
+  test('AC1: liveProbeTtlMs=0 (always live) → every fetch re-executes', function () {
+    resetProbe();
+    probeCacheModule.applyProbeTuning({ liveProbeTtlMs: 0 });
+    var seen = [];
+    function fetch() {
+      return fsModule.fetchTokensFromBranch('o/r', { tag: 'factory-data' },
+        function (a) { seen.push(a.command); return { output: TOKENS }; });
+    }
+    fetch(); fetch(); fetch();
+    assert.equal(seen.length, 3, 'ttl 0 = always live (jobParams contract)');
+    probeCacheModule._reset();
+  });
+
+  test('AC1: different tag/asset = different cache key (multi-factory isolation)', function () {
+    resetProbe();
+    var seen = [];
+    function fetch(cfg) {
+      return fsModule.fetchTokensFromBranch('o/r', cfg,
+        function (a) { seen.push(a.command); return { output: TOKENS }; });
+    }
+    fetch({ tag: 'factory-data' });
+    fetch({ tag: 'factory-data-eu' });
+    fetch({ tag: 'factory-data', tokensAsset: 'factoryB-tokens.json' });
+    assert.equal(seen.length, 3, 'each key fetches independently');
+  });
+
+  test('AC2: three publishes in TTL → ONE branch bootstrap, a PUT per publish', function () {
+    resetProbe();
+    var ST = fsModule.buildFactoryState({
+      repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' },
+      prs: [], runs: [], now: '2026-09-23T18:00:00Z'
+    });
+    var seen = [];
+    function publish() {
+      return fsModule.publishFactoryState(ST, { repo: 'IstiN/flutter_agent_harness',
+        tag: 'factory-data', asset: 'fa-state.json' },
+        function (a) {
+          seen.push(a.command);
+          if (a.command.indexOf('/contents/') > 0 && a.command.indexOf('-X PUT') === -1) {
+            return { output: 'deadbeef123\n' };
+          }
+          return undefined;
+        });
+    }
+    publish(); publish(); publish();
+    var bootstraps = seen.filter(function (c) {
+      return c.indexOf('gh api -X POST repos/IstiN/flutter_agent_harness/git/refs') === 0;
+    }).length;
+    var puts = seen.filter(function (c) { return c.indexOf('-X PUT') > 0; }).length;
+    var shaProbes = seen.filter(function (c) {
+      return c.indexOf('/contents/') > 0 && c.indexOf('--jq .sha') > 0;
+    }).length;
+    assert.equal(bootstraps, 1,
+      'branch bootstrap runs ONCE per probe TTL — got ' + bootstraps + ' of ' + seen.length + ' calls');
+    assert.equal(puts, 3, 'every publish still PUTs the state');
+    assert.equal(shaProbes, 3, 'the existing-sha probe stays UNCACHED (mutates per publish)');
   });
 
 });

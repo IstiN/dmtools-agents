@@ -1528,7 +1528,8 @@ suite('aiTeammateTokenUsageReporter publishTokensMap (gh-1108 IT-pub-1)', functi
             makeRequire({
                 './common/machineAuthor.js': machineAuthorModule,
                 './common/reworkLatch.js': reworkLatchModule,
-                './common/mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {})
+                './common/mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {}),
+                './common/probeCache.js': loadModule('js/common/probeCache.js')
             }), {});
         var reporter = loadReporter();
         function row2(title, agent, at, read, write, cached) {

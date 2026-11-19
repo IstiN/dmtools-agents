@@ -734,7 +734,8 @@ function makeSmAgent(opts) {
                 makeRequire({
                     './common/machineAuthor.js': machineAuthorModule,
                     './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {}),
-                    './common/mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {})
+                    './common/mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {}),
+                    './common/probeCache.js': loadModule('js/common/probeCache.js')
                 }), {}),
         }), smMocks),
         smMocks

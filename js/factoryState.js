@@ -164,6 +164,11 @@ var reworkLatchModule = require('./common/reworkLatch.js');
 // on a head the machine's own merge lanes refuse. Hoisted (gh-823 rule);
 // the module requires nothing back.
 var mergeStateReconcileModule = require('./common/mergeStateReconcile.js');
+// gh-1518: the state-publish path rides the same per-tick probe cache as the
+// live-layer scans (#1514) — the tokens fetch and the branch bootstrap
+// repeat once per RULE otherwise (38×/tick at 38 rules), and neither the
+// asset nor the branch can change within a tick.
+var probeCacheModule = require('./common/probeCache.js');
 
 // Schema 1 lane order (board back-compat; old snapshots on the data branch).
 var LANE_ORDER_V1 = ['validating', 'approved_queue', 'review', 'fresh'];
@@ -603,12 +608,23 @@ function inCostWindow(row, nowMs) {
  */
 function fetchTokensFromBranch(repo, cfg, exec) {
     var asset = (cfg && cfg.tokensAsset) || FACTORY_TOKENS_ASSET;
-    try {
-        return tokensMapOf(JSON.parse(
-            contentsOf(repo, 'data/' + asset, cfg, exec)));
-    } catch (e) {
-        return null;
-    }
+    // gh-1518: the state publish calls this once per RULE (38×/tick when the
+    // local tokens file is absent) and the asset cannot change within a
+    // tick — cachedProbe serves the first fetch for the probe TTL. A failed
+    // or empty listing stays UNCACHED: the next rule re-executes, so a
+    // transient gh api failure self-retries (same contract as
+    // cachedRunJobs, #1514).
+    var fetched = probeCacheModule.cachedProbe(
+        'factoryTokens:' + repo + ':' + tagOf(cfg) + ':' + asset,
+        function () {
+            try {
+                return tokensMapOf(JSON.parse(
+                    contentsOf(repo, 'data/' + asset, cfg, exec)));
+            } catch (e) {
+                return null;
+            }
+        });
+    return fetched || null;
 }
 
 /**
@@ -1416,6 +1432,26 @@ function publishCommands(state, cfg, existingSha) {
 }
 
 /**
+ * gh-1518: the bootstrap POST is 'create-first, 422-fails-harmlessly' (see
+ * publishCommands) — once per rule it re-attempted creating a branch that
+ * cannot disappear mid-tick (38 identical POSTs/tick). One bootstrap per
+ * probe TTL: the command ends in '|| true', so created / already-exists /
+ * transient are indistinguishable — the ATTEMPT is what gets cached; a
+ * transient failure lives ≤TTL (the PUT itself still fails open and the
+ * next tick retries — unchanged contract). Owns the whole exec loop
+ * (gh-1518 crap4js ratchet: the inline ternary+put regressed
+ * publishFactoryState 9.2 → 11.1 — moving the decisions here leaves the
+ * caller at its pre-#1518 shape).
+ */
+function runPublishCommands(commands, bootKey, exec) {
+    var bootstrapped = probeCacheModule.probeGet(bootKey, probeCacheModule.probeTtlMs()) !== undefined;
+    (bootstrapped ? commands.slice(1) : commands).forEach(function (c) {
+        exec({ command: c });
+    });
+    if (!bootstrapped) probeCacheModule.probePut(bootKey, true);
+}
+
+/**
  * Publish via `exec` (cli_execute_command in the bridge; a capturer in
  * tests). Returns the public board URL.
  */
@@ -1432,9 +1468,8 @@ function publishFactoryState(state, cfg, exec) {
             .trim();
         if (sha.indexOf('Not Found') !== -1) sha = '';
     } catch (e) { sha = ''; } // first publish — the file is absent
-    publishCommands(state, cfg, sha).forEach(function (c) {
-        exec({ command: c });
-    });
+    runPublishCommands(publishCommands(state, cfg, sha),
+        'factoryDataBranch:' + repo + ':' + branch, exec);
     return 'https://raw.githubusercontent.com/' + repo + '/' + branch +
         '/data/' + asset;
 }
@@ -1624,6 +1659,7 @@ module.exports = {
     bucketCounts: bucketCounts,
     publishCommands: publishCommands,
     publishFactoryState: publishFactoryState,
+    runPublishCommands: runPublishCommands,
     fetchPreviousState: fetchPreviousState,
     stampOf: stampOf,
     snapshotPutCommand: snapshotPutCommand,
