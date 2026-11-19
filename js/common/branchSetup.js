@@ -555,6 +555,18 @@ function ensureBranchUpstream(branchName, execFn) {
     }
 }
 
+/**
+ * Resolve git author name and email from `gitConfig` with `fallback` defaults.
+ */
+function resolveGitAuthor(gitConfig, fallback) {
+    var cfg = gitConfig || {};
+    var fb = fallback || {};
+    return {
+        authorName: cfg.authorName || fb.AUTHOR_NAME || 'AI Teammate',
+        authorEmail: cfg.authorEmail || fb.AUTHOR_EMAIL || 'agent.ai.native@gmail.com'
+    };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         configureGitAuthor: configureGitAuthor,
@@ -586,5 +598,6 @@ if (typeof module !== 'undefined' && module.exports) {
         , resolveDryRunReworkTarget: resolveDryRunReworkTarget
         , runDryRunReworkSetup: runDryRunReworkSetup
         , ensureBranchUpstream: ensureBranchUpstream
+        , resolveGitAuthor: resolveGitAuthor
     };
 }

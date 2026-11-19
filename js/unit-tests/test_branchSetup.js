@@ -848,5 +848,17 @@ suite('branchSetup.ensureLegContextLocalExcludes (gh-1318)', function() {
         bs.ensureBranchUpstream('feat', function(c) { upstreamCmds.push(c); });
         bs.ensureBranchUpstream('feat', function() { throw new Error('no remote'); });
         assert.deepEqual(upstreamCmds, ['git branch --set-upstream-to=origin/feat feat']);
+        assert.deepEqual(bs.resolveGitAuthor(null, null), {
+            authorName: 'AI Teammate',
+            authorEmail: 'agent.ai.native@gmail.com'
+        });
+        assert.deepEqual(bs.resolveGitAuthor({}, { AUTHOR_NAME: 'Def', AUTHOR_EMAIL: 'def@x' }), {
+            authorName: 'Def',
+            authorEmail: 'def@x'
+        });
+        assert.deepEqual(bs.resolveGitAuthor({ authorName: 'PostNL-AI', authorEmail: 'ai@postnl.nl' }, { AUTHOR_NAME: 'Def', AUTHOR_EMAIL: 'def@x' }), {
+            authorName: 'PostNL-AI',
+            authorEmail: 'ai@postnl.nl'
+        });
     });
 });

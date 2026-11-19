@@ -59,6 +59,8 @@ _Push Knowledge Update Post-Action (postJSAction for pr_knowledge_update agent)_
   - git push
   - git checkout
 - Parameters (customParams):
+  - `branchCreateFnPath`
+  - `dryRun`
   - `knowledgeDir`
   - `prNumber`
 

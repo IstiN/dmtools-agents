@@ -203,9 +203,9 @@ function _reapplyPreflightStash(cmd, branchName, stashed) {
 }
 
 function _configurePRCheckoutAuthor(cmd, gitConfig) {
-    var cfg = gitConfig || {};
-    cmd('git config user.name "' + (cfg.authorName || GIT_CONFIG.AUTHOR_NAME) + '"');
-    cmd('git config user.email "' + (cfg.authorEmail || GIT_CONFIG.AUTHOR_EMAIL) + '"');
+    var author = branchSetup.resolveGitAuthor(gitConfig, GIT_CONFIG);
+    cmd('git config user.name "' + author.authorName + '"');
+    cmd('git config user.email "' + author.authorEmail + '"');
 }
 
 function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef, gitConfig) {

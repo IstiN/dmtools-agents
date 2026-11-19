@@ -23,6 +23,7 @@
 
 var configLoader = require('./configLoader.js');
 const { GIT_CONFIG } = require('./config.js');
+var branchSetup = require('./common/branchSetup.js');
 
 function cleanOutput(output) {
     return (output || '').toString().trim();
@@ -39,9 +40,9 @@ function branchSlugFor(customParams) {
 }
 
 function configureKnowledgeGitAuthor(config) {
-    var gitCfg = (config && config.git) || {};
-    cli_execute_command({ command: 'git config user.name "' + (gitCfg.authorName || GIT_CONFIG.AUTHOR_NAME) + '"' });
-    cli_execute_command({ command: 'git config user.email "' + (gitCfg.authorEmail || GIT_CONFIG.AUTHOR_EMAIL) + '"' });
+    var author = branchSetup.resolveGitAuthor(config && config.git, GIT_CONFIG);
+    cli_execute_command({ command: 'git config user.name "' + author.authorName + '"' });
+    cli_execute_command({ command: 'git config user.email "' + author.authorEmail + '"' });
 }
 
 function action(params) {

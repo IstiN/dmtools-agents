@@ -7,13 +7,16 @@
  * run) since this action is not tracker-bound.
  */
 
+var branchSetupReal = loadModule('js/common/branchSetup.js');
+
 function loadPushKnowledgeUpdate(cliCalls) {
     return loadModule(
         'js/pushKnowledgeUpdate.js',
         makeRequire({
             './configLoader.js': { loadProjectConfig: function() { return {}; } },
             './config.js': configModule,
-            'config': configModule
+            'config': configModule,
+            './common/branchSetup.js': branchSetupReal
         }),
         {
             cli_execute_command: function(opts) {
@@ -53,7 +56,8 @@ suite('pushKnowledgeUpdate — no changes to push', function() {
             makeRequire({
                 './configLoader.js': { loadProjectConfig: function() { return {}; } },
                 './config.js': configModule,
-                'config': configModule
+                'config': configModule,
+                './common/branchSetup.js': branchSetupReal
             }),
             {
                 cli_execute_command: function(opts) {
@@ -84,7 +88,8 @@ suite('pushKnowledgeUpdate — commits and pushes changes', function() {
             makeRequire({
                 './configLoader.js': { loadProjectConfig: function() { return {}; } },
                 './config.js': configModule,
-                'config': configModule
+                'config': configModule,
+                './common/branchSetup.js': branchSetupReal
             }),
             {
                 cli_execute_command: function(opts) {
@@ -160,7 +165,8 @@ suite('pushKnowledgeUpdate — commits and pushes changes', function() {
                     }
                 },
                 './config.js': configModule,
-                'config': configModule
+                'config': configModule,
+                './common/branchSetup.js': branchSetupReal
             }),
             {
                 cli_execute_command: function(opts) {
