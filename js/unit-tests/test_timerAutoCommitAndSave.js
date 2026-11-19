@@ -340,8 +340,45 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         var commitCall = cliCalls.filter(function(c) { return c.indexOf('git commit') === 0; })[0];
         assert.ok(commitCall && commitCall.indexOf('git commit --amend -m ') === 0,
             'must amend existing WIP auto-save commit instead of stacking a new one: ' + commitCall);
-        assert.ok(cliCalls.indexOf('git push --force-with-lease') !== -1,
-            'amended WIP auto-save must push with --force-with-lease');
+        assert.ok(cliCalls.indexOf('git push --force-with-lease origin HEAD') !== -1,
+            'amended WIP auto-save must push with --force-with-lease origin HEAD');
+    });
+
+    test('gh-1523: does NOT amend HEAD WIP auto-save commit when it is already on remote (creates a new commit and pushes normally)', function() {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
+                if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
+                if (args.command === 'git log -1 --no-merges --format=%s HEAD') {
+                    return 'PROJ-123 WIP auto-save 2026-11-18T19-52-18\n';
+                }
+                if (args.command === 'git branch -r --contains HEAD') {
+                    return '  origin/bugfix/2069918\n';
+                }
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir' }
+                },
+                metadata: { contextId: 'sf_bug_rework' }
+            },
+            currentCliOutput: ''
+        });
+        var commitCall = cliCalls.filter(function(c) { return c.indexOf('git commit') === 0; })[0];
+        assert.ok(commitCall && commitCall.indexOf('git commit -m ') === 0,
+            'must create a new commit instead of amending an already-pushed WIP commit: ' + commitCall);
+        assert.ok(cliCalls.indexOf('git push origin HEAD') !== -1,
+            'new WIP auto-save commit must push normally with git push origin HEAD');
+        assert.equal(cliCalls.some(function(c) { return c.indexOf('--force-with-lease') !== -1; }), false,
+            'must not force-push when HEAD was not amended');
     });
 
     test('never stages machine-local .dmtools runtime logs — credential-helper.log leaked onto ai/gh-628 (gh-628)', function() {

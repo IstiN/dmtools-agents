@@ -42,6 +42,20 @@ function cleanCommandOutput(output) {
 }
 
 /**
+ * Best-effort upstream tracking setup (`origin/<branchName>`) so plain
+ * `git push` / `git push --force-with-lease` on a branch fetched via
+ * `<branch>:<branch>` has an upstream configured (gh-1523).
+ */
+function _ensureBranchUpstream(branchName, cmd) {
+    if (!branchName) return;
+    try {
+        cmd('git branch --set-upstream-to=origin/' + branchName + ' ' + branchName);
+    } catch (e) {
+        // Non-fatal: e.g. local-only branch without origin/<branchName>
+    }
+}
+
+/**
  * Switches the working tree onto `branchName` (creating a local tracking
  * branch from origin when needed). Assumes the working tree is already clean —
  * callers (checkoutPRBranch) are responsible for stashing local state first.
@@ -68,6 +82,7 @@ function _switchToBranch(branchName, cmd) {
         // "Need to specify how to reconcile divergent branches".
         // The remote is always the source of truth for an existing PR branch.
         cmd('git reset --hard origin/' + branchName);
+        _ensureBranchUpstream(branchName, cmd);
     } else {
         // gh-912: decide on a real refs/heads/<branch> ref line — a
         // warning-only capture (central-mode insteadOf origin, git ≥ 2.54)
@@ -93,6 +108,7 @@ function _switchToBranch(branchName, cmd) {
                     cmd('git checkout ' + branchName);
                 }
             }
+            _ensureBranchUpstream(branchName, cmd);
         } else {
             throw new Error('Branch not found locally or remotely: ' + branchName);
         }

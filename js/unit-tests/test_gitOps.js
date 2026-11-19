@@ -188,6 +188,26 @@ suite('gitOps.checkoutPRBranch', function() {
         });
         assert.ok(hasCorrectFetch, 'fetch must use +refs/heads/<b>:refs/remotes/origin/<b> refspec');
     });
+
+    test('gh-1523: sets upstream tracking to origin/<branch> when checking out an existing or fetched PR branch', function() {
+        var commands = [];
+        var gitOps = loadGitOps({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git status --porcelain') return '\nCOMMAND_EXIT_CODE=0';
+                if (args.command === 'git branch --list "bugfix/2069918"') return '\nCOMMAND_EXIT_CODE=0';
+                if (args.command === 'git ls-remote --heads origin bugfix/2069918') {
+                    return 'fb81b5aefb81b5aefb81b5aefb81b5aefb81b5ae\trefs/heads/bugfix/2069918\nCOMMAND_EXIT_CODE=0';
+                }
+                return 'COMMAND_EXIT_CODE=0';
+            }
+        });
+
+        gitOps.checkoutPRBranch('bugfix/2069918');
+
+        assert.ok(commands.indexOf('git branch --set-upstream-to=origin/bugfix/2069918 bugfix/2069918') !== -1,
+            'must configure upstream tracking so git push --force-with-lease never fails with no upstream branch');
+    });
 });
 
 

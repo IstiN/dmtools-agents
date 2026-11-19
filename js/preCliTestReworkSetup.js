@@ -193,6 +193,7 @@ function prepareBranchWithoutOpenPr(scm, config, tracker, ticketKey, testBranchN
         try {
             cli_execute_command({ command: gh.buildOriginFetchCommand(testBranchName + ':' + testBranchName) });
             cli_execute_command({ command: 'git checkout ' + testBranchName });
+            try { cli_execute_command({ command: 'git branch --set-upstream-to=origin/' + testBranchName + ' ' + testBranchName }); } catch (e3) {}
             console.log('✅ Checked out branch via fetch:', testBranchName);
         } catch (e2) {
             console.warn('Branch checkout failed:', e2);

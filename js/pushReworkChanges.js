@@ -3051,8 +3051,11 @@ function completeReworkLeg(params, setup, tracker, branchName, codeChangesCommit
 
 function action(params) {
     var tracker = null;
+    var ticketKey = null;
+    var isResumeRecursing = false;
     try {
         var setup = actionSetup(params);
+        ticketKey = setup.ticketKey;
         // Probe the tracker provider once — the same script then runs unchanged
         // on Jira / ADO / GitHub deployments.
         tracker = trackersModule.createTracker(setup.config, setup.customParams);
@@ -3075,6 +3078,7 @@ function action(params) {
         // Commit and push + post-publish gates
         var pushOutcome = pushAndPublishOrFail(setup.ticketKey, setup.config, setup.customParams, tracker);
         if (pushOutcome.resume) {
+            isResumeRecursing = true;
             return action(params);
         }
         if (pushOutcome.failed) {
@@ -3085,6 +3089,7 @@ function action(params) {
             pushOutcome.branchName, setup.statuses, setup.fixSummary);
         if (failOutcome) {
             if (failOutcome.resume) {
+                isResumeRecursing = true;
                 return action(params);
             }
             return failOutcome.result;
@@ -3095,6 +3100,13 @@ function action(params) {
 
     } catch (error) {
         return handleActionError(params, error, tracker);
+    } finally {
+        if (!isResumeRecursing) {
+            var usageKey = ticketKey || errorTicketKeyOf(params);
+            if (usageKey) {
+                postCompletionTokenUsage(params, usageKey);
+            }
+        }
     }
 }
 
