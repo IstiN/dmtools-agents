@@ -202,15 +202,16 @@ function _reapplyPreflightStash(cmd, branchName, stashed) {
     }
 }
 
+function _configurePRCheckoutAuthor(cmd, gitConfig) {
+    var cfg = gitConfig || {};
+    cmd('git config user.name "' + (cfg.authorName || GIT_CONFIG.AUTHOR_NAME) + '"');
+    cmd('git config user.email "' + (cfg.authorEmail || GIT_CONFIG.AUTHOR_EMAIL) + '"');
+}
+
 function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef, gitConfig) {
     console.log('Checking out PR branch:', branchName);
     var cmd = dirScopedCmd(workingDir);
-    var authorName = (gitConfig && gitConfig.authorName) || GIT_CONFIG.AUTHOR_NAME;
-    var authorEmail = (gitConfig && gitConfig.authorEmail) || GIT_CONFIG.AUTHOR_EMAIL;
-
-    cmd('git config user.name "' + authorName + '"');
-    cmd('git config user.email "' + authorEmail + '"');
-
+    _configurePRCheckoutAuthor(cmd, gitConfig);
     // 1. Snapshot local state so a dirty tree can never block the switch below.
     // factory-kit excluded: the factory workflow's nested machine-infra repo
     // (git init inside the workspace) is a gitlink `git add -A` cannot stage

@@ -39,8 +39,10 @@ _Pre-CLI Knowledge Update Setup Action (preCliJSAction for pr_knowledge_update a
 
 - Source: `agents/js/preCliKnowledgeUpdateSetup.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
   - `diffText`
   - `discussionsMarkdown`
+  - `dryRun`
   - `knowledgeDir`
   - `prNumber`
   - `prTitle`
@@ -68,8 +70,10 @@ _Push Knowledge Update Post-Action (postJSAction for pr_knowledge_update agent)_
 
 ## Custom params
 
+- `branchCreateFnPath` _(used by JS action)_
 - `diffText` _(used by JS action)_
 - `discussionsMarkdown` _(used by JS action)_
+- `dryRun` _(used by JS action)_
 - `knowledgeDir` _(used by JS action)_
 - `prNumber` _(used by JS action)_
 - `prTitle` _(used by JS action)_

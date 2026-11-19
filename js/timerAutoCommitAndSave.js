@@ -338,17 +338,20 @@ function shouldAmendHeadWipCommit(workingDir) {
 }
 
 /** Best-effort git author configuration in the timer working dir when config.git is present. */
+function applyTimerGitAuthor(workingDir, gitCfg) {
+    if (!gitCfg) return;
+    if (gitCfg.authorName) {
+        cli_execute_command({ command: 'git config user.name "' + gitCfg.authorName + '"', workingDirectory: workingDir });
+    }
+    if (gitCfg.authorEmail) {
+        cli_execute_command({ command: 'git config user.email "' + gitCfg.authorEmail + '"', workingDirectory: workingDir });
+    }
+}
+
 function configureTimerGitAuthor(workingDir, params) {
     try {
         var cfg = configLoader.loadProjectConfig((params && params.jobParams) || params || {});
-        var gitCfg = cfg && cfg.git;
-        if (!gitCfg) return;
-        if (gitCfg.authorName) {
-            cli_execute_command({ command: 'git config user.name "' + gitCfg.authorName + '"', workingDirectory: workingDir });
-        }
-        if (gitCfg.authorEmail) {
-            cli_execute_command({ command: 'git config user.email "' + gitCfg.authorEmail + '"', workingDirectory: workingDir });
-        }
+        applyTimerGitAuthor(workingDir, cfg && cfg.git);
     } catch (e) {
         console.log('⏱️ timer: git author config skipped:', e.toString().substring(0, 100));
     }

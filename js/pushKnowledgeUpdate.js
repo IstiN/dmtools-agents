@@ -38,6 +38,12 @@ function branchSlugFor(customParams) {
     return 'update-' + ts;
 }
 
+function configureKnowledgeGitAuthor(config) {
+    var gitCfg = (config && config.git) || {};
+    cli_execute_command({ command: 'git config user.name "' + (gitCfg.authorName || GIT_CONFIG.AUTHOR_NAME) + '"' });
+    cli_execute_command({ command: 'git config user.email "' + (gitCfg.authorEmail || GIT_CONFIG.AUTHOR_EMAIL) + '"' });
+}
+
 function action(params) {
     try {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
@@ -58,10 +64,7 @@ function action(params) {
 
         console.log('pushKnowledgeUpdate: detected changes under', knowledgeDir, ':\n' + status);
 
-        var authorName = (config && config.git && config.git.authorName) || GIT_CONFIG.AUTHOR_NAME;
-        var authorEmail = (config && config.git && config.git.authorEmail) || GIT_CONFIG.AUTHOR_EMAIL;
-        cli_execute_command({ command: 'git config user.name "' + authorName + '"' });
-        cli_execute_command({ command: 'git config user.email "' + authorEmail + '"' });
+        configureKnowledgeGitAuthor(config);
 
         var slug = branchSlugFor(customParams);
         var branchName = 'knowledge/' + slug + '-review-lessons';

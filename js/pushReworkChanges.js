@@ -2850,6 +2850,7 @@ function postReworkErrorComment(errorTracker, ticketKey, error) {
 function handleActionError(params, error, tracker) {
     console.error('❌ Error in pushReworkChanges:', error);
     try {
+        postCompletionTokenUsage(params, errorTicketKeyOf(params));
         const ticketKey = errorTicketKeyOf(params);
         if (!ticketKey) {
             return { success: false, error: error.toString() };
@@ -3073,9 +3074,6 @@ function action(params) {
         return completeReworkLeg(params, setup, tracker, pushOutcome.branchName,
             pushOutcome.codeChangesCommitted, gateSummary);
     } catch (error) {
-        var usageKey = null;
-        try { usageKey = errorTicketKeyOf(params); } catch (eKey) { /* keep null */ }
-        if (usageKey) postCompletionTokenUsage(params, usageKey);
         return handleActionError(params, error, tracker);
     }
 }

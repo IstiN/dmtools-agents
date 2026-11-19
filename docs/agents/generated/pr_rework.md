@@ -101,6 +101,7 @@ _Push Rework Changes Post-Action_
   - `artefactRepository`
   - `autoStartReview`
   - `autoStartReviewConfigFile`
+  - `branchCreateFnPath`
   - `cacheToReleases`
   - `commentMarkup`
   - `configPath`
