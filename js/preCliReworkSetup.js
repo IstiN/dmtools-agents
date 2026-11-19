@@ -829,9 +829,6 @@ function postReworkStartedCommentOrSkip(prAnchor, tracker, ticketKey, customPara
     });
 }
 
-function isDryRunReworkParams(params, actualParams) {
-    return branchSetup.isDryRunParams(params) || branchSetup.isDryRunParams(actualParams);
-}
 
 function resolveReworkBaseBranch(prDetails, config) {
     return prDetails.base ? prDetails.base.ref : config.git.baseBranch;
@@ -850,10 +847,6 @@ function resolveRequiredPrForRework(prAnchor, scm, config, tracker, ticketKey, i
     }
     return pr;
 }
-
-var resolveReworkInputDiff = function(scm, pr, baseBranch, branchName, config, dryRun) {
-    return branchSetup.resolveReworkInputDiff(scm, pr, baseBranch, branchName, config, dryRun, gitOps.getPRDiff);
-};
 
 function action(params) {
     var tracker = null;
@@ -876,16 +869,16 @@ function action(params) {
         // throws a ReviewPolicyValidationError HERE, before any side effect.
         var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(config, actualParams);
 
-        if (isDryRunReworkParams(params, actualParams)) {
+        if (branchSetup.isDryRunParams(params) || branchSetup.isDryRunParams(actualParams)) {
             return branchSetup.runDryRunReworkSetup(params, actualParams, parsed, runtime, reviewPolicy, {
                 resolveRepoInfo: resolveRepoInfo,
                 findPrForRework: findPrForRework,
-                getPRDetails: function(s, n) { return gh.getPRDetails(s, n); },
+                getPRDetails: gh.getPRDetails,
                 resolveReworkBaseBranch: resolveReworkBaseBranch,
                 writeReworkInputContext: writeReworkInputContext,
                 enforceReworkInputContract: enforceReworkInputContract,
-                fetchQuestions: function(ap) { fetchQuestionsToInput.action(ap); },
-                fetchParentContext: function(p) { fetchParentContextToInput.action(p); }
+                fetchQuestions: fetchQuestionsToInput.action,
+                fetchParentContext: fetchParentContextToInput.action
             });
         }
         restoreArtefactsQuietly(params);
@@ -1017,6 +1010,5 @@ if (typeof module !== 'undefined' && module.exports) {
         writeReworkInputContext,
         enforceReworkInputContract,
         postReworkStartedCommentOrSkip,
-        resolveReworkInputDiff,
     };
 }

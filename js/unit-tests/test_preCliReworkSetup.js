@@ -1926,22 +1926,21 @@ suite('preCliReworkSetup — dryRun guard (gh-1356)', function() {
     });
 
     test('gh-1520: resolveReworkInputDiff uses SCM getDiffText / getPrDiff in dryRun and never calls gitOps.getPRDiff', function() {
-        var h = makeActionHarness({});
-        var mod = h.module;
+        var bs = loadModule('js/common/branchSetup.js');
         assert.equal(
-            mod.resolveReworkInputDiff({ getDiffText: function() { return 'diff --git a/x b/x'; } }, { number: 7 }, 'master', 'b', {}, true),
+            bs.resolveReworkInputDiff({ getDiffText: function() { return 'diff --git a/x b/x'; } }, { number: 7 }, 'master', 'b', {}, true),
             'diff --git a/x b/x'
         );
         assert.equal(
-            mod.resolveReworkInputDiff({ getPrDiff: function() { return 'diff --git a/y b/y'; } }, { number: 7 }, 'master', 'b', {}, true),
+            bs.resolveReworkInputDiff({ getPrDiff: function() { return 'diff --git a/y b/y'; } }, { number: 7 }, 'master', 'b', {}, true),
             'diff --git a/y b/y'
         );
         assert.equal(
-            mod.resolveReworkInputDiff({ getDiffText: function() { throw new Error('api error'); } }, { number: 7 }, 'master', 'b', {}, true),
+            bs.resolveReworkInputDiff({ getDiffText: function() { throw new Error('api error'); } }, { number: 7 }, 'master', 'b', {}, true),
             ''
         );
         assert.equal(
-            mod.resolveReworkInputDiff(null, { number: 7 }, 'master', 'b', {}, true),
+            bs.resolveReworkInputDiff(null, { number: 7 }, 'master', 'b', {}, true),
             ''
         );
     });
