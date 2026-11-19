@@ -69,6 +69,9 @@ var prTerminalStateModule = require('./common/prTerminalState.js');
 // The runtime's input folder name for a ticket (input/gh-N for a GitHub key): the Java runtime
 // passes params.inputFolderPath to pre-CLI actions only, so a post-action derives it.
 var ticketKeyShapes = require('./common/ticketKeyShapes.js');
+// gh-1510 (hoisted, never lazy — the gh-823 pack-require rule): the compact
+// formal-review verdict card builders (verdict + census + honest pointer).
+var formalReviewCardModule = require('./common/formalReviewCard.js');
 
 var RESUME_MARKER = 'outputs/.pr-review-missing-output-resume-attempted';
 
@@ -438,21 +441,39 @@ function resolveGeneralCommentText(commentPath, ticketKey, workingDir) {
     return readMarkdownFile(DEFAULT_GENERAL_COMMENT_PATH, ticketKey, workingDir);
 }
 
-function postGeneralComment(scm, pullRequestId, commentPath, ticketKey, workingDir) {
+/**
+ * gh-1510: post the ALREADY-RESOLVED general comment text — the single
+ * resolution shared by the discussion comment and the formal review
+ * verdict card. Returns the posting result { posted, url }:
+ * - `posted` gates every downstream "see the comments" claim — the formal
+ *   card may only point at a comment this leg actually posted;
+ * - `url` is the provider's comment link (github_add_pr_comment returns
+ *   the comment object; defensively unwrapped — a provider without a
+ *   link degrades to the above-comment pointer).
+ */
+function postGeneralCommentText(scm, pullRequestId, generalText) {
     try {
-        const comment = resolveGeneralCommentText(commentPath, ticketKey, workingDir);
-        if (!comment) {
-            console.warn('No general comment content found at', commentPath);
-            return false;
+        if (!generalText) {
+            console.warn('No general comment content resolved — general review comment not posted');
+            return { posted: false, url: null };
         }
         console.log('Posting general review comment to PR #' + pullRequestId);
-        scm.addComment(pullRequestId, comment);
+        var posted = scm.addComment(pullRequestId, generalText);
         console.log('✅ Posted general review comment');
-        return true;
+        return { posted: true, url: commentHtmlUrlOf(posted) };
     } catch (error) {
         console.error('Failed to post general comment:', error);
-        return false;
+        return { posted: false, url: null };
     }
+}
+
+function commentHtmlUrlOf(commentResult) {
+    return (commentResult && commentResult.html_url) ? commentResult.html_url : null;
+}
+
+function postGeneralComment(scm, pullRequestId, commentPath, ticketKey, workingDir) {
+    return postGeneralCommentText(scm, pullRequestId,
+        resolveGeneralCommentText(commentPath, ticketKey, workingDir)).posted;
 }
 
 function parseDiffLineInfo(diffText, filePath, targetLine) {
@@ -935,45 +956,28 @@ function resolveApprovedThreads(scm, pullRequestId, resolvedThreadIds) {
  *
  * Never touches LABELS.PR_APPROVED or any Jira/GitHub label.
  */
-function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation, generalComment, ticketKey, workingDir) {
+function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation, issueCounts, generalPost, prAuthor, reviewerLogins) {
     if (typeof scm.submitReview !== 'function') {
         console.warn('formalGithubReview: SCM provider does not support submitReview — skipping');
         return;
     }
     try {
         if (isApproved) {
-            applyFormalApprove(scm, pullRequestId, formalApproveBody(generalComment, ticketKey, workingDir));
+            applyFormalApprove(scm, pullRequestId, formalReviewCardModule.formalApproveBody(issueCounts, generalPost), prAuthor, reviewerLogins);
             return;
         }
-        scm.submitReview(pullRequestId, 'REQUEST_CHANGES', formalRejectBody(generalComment, recommendation, ticketKey, workingDir));
+        scm.submitReview(pullRequestId, 'REQUEST_CHANGES', formalReviewCardModule.formalRejectBody(recommendation, issueCounts, generalPost));
         console.log('✅ Submitted formal Request Changes review');
     } catch (e) {
         console.warn('formalGithubReview: failed to apply formal review:', e.message || e);
     }
 }
 
-function formalReviewContent(generalComment, ticketKey, workingDir) {
-    // generalComment follows the file-path contract (postGeneralComment
-    // resolves path → CONTENT or inline markdown / outputs/pr_review_general.md fallback):
-    // resolve before submitting, or the review body is the literal "outputs/..." string
-    // (live: flutter_agent_harness #720 APPROVE body was the file path).
-    return resolveGeneralCommentText(generalComment, ticketKey, workingDir);
-}
+// gh-1510: the formal review body is the compact verdict card — see
+// js/common/formalReviewCard.js (the card never repeats the general text;
+// its pointer only references artifacts this leg actually posted).
 
-function nonEmptyBody(content, fallback) {
-    return (content && String(content).trim()) ? content : fallback;
-}
-
-function formalApproveBody(generalComment, ticketKey, workingDir) {
-    return nonEmptyBody(formalReviewContent(generalComment, ticketKey, workingDir), 'AI review approves this pull request.');
-}
-
-function formalRejectBody(generalComment, recommendation, ticketKey, workingDir) {
-    return nonEmptyBody(formalReviewContent(generalComment, ticketKey, workingDir),
-        'AI review returned ' + recommendation + '. See PR comments for details.');
-}
-
-function applyFormalApprove(scm, pullRequestId, approveBody) {
+function applyFormalApprove(scm, pullRequestId, approveBody, prAuthor, reviewerLogins) {
     // Dismiss our own earlier "Request Changes" first (GitHub keeps
     // blocking the PR until it is dismissed). Providers without a
     // review listing (GitLab) skip the pass — approving over a stale
@@ -984,10 +988,11 @@ function applyFormalApprove(scm, pullRequestId, approveBody) {
         console.log('✅ Submitted formal APPROVE review');
     } catch (approveErr) {
         // GitHub/GitLab refuse approvals from the PR/MR AUTHOR. When
-        // the reviewing identity is the same bot that opened the PR,
+        // the reviewing identity is the same login that opened the PR,
         // the label lifecycle stays the source of truth — do not fail
         // the whole review action over it.
-        console.warn('formalGithubReview: formal APPROVE rejected (own-PR restriction?):', approveErr.message || approveErr);
+        console.warn(formalReviewCardModule.ownPrApprovalWarning(
+            prAuthor, reviewerLogins, approveErr.message || approveErr));
     }
 }
 
@@ -2469,11 +2474,6 @@ function auditDensityAgainstPolicy(issueCounts, prObj, policy) {
     }
 }
 
-function postGeneralCommentIfPresent(ctx, pr, reviewData) {
-    if (!reviewData.generalComment) return;
-    postGeneralComment(ctx.scm, pr.number, reviewData.generalComment, ctx.ticketKey, ctx.workingDir);
-}
-
 function hasInlineComments(reviewData) {
     return !!(reviewData.inlineComments && Array.isArray(reviewData.inlineComments) && reviewData.inlineComments.length > 0);
 }
@@ -2529,9 +2529,10 @@ function applyPRApprovalOutcome(ctx, pr, isApproved, recommendation) {
         'Failed to add pr_approved label to GitHub PR:');
 }
 
-function applyFormalReviewIfEnabled(ctx, pr, reviewData, isApproved, recommendation) {
+function applyFormalReviewIfEnabled(ctx, pr, isApproved, recommendation, issueCounts, generalPost) {
     if (!resolveFormalReviewEnabled(ctx.customParams, ctx.config)) return;
-    applyFormalGithubReview(ctx.scm, pr.number, isApproved, recommendation, reviewData.generalComment, ctx.ticketKey, ctx.workingDir);
+    applyFormalGithubReview(ctx.scm, pr.number, isApproved, recommendation, issueCounts, generalPost,
+        pr.author, ctx.machineAuthor);
 }
 
 /**
@@ -2546,8 +2547,12 @@ function postGitHubReview(ctx, pr, repoInfo, reviewData, isApproved, recommendat
     }
     console.log('Posting review to GitHub PR #' + pr.number + ' (recommendation: ' + recommendation + ')');
 
-    // Post general comment
-    postGeneralCommentIfPresent(ctx, pr, reviewData);
+    // gh-1510: ONE resolution of the general text, shared by the discussion
+    // comment and the formal review verdict card — the comment is the full
+    // text, the formal review is the compact card (no verbatim dupe), and
+    // the card's pointer only references artifacts this leg actually posted.
+    var generalPost = postGeneralCommentText(ctx.scm, pr.number,
+        resolveGeneralCommentText(reviewData.generalComment, ctx.ticketKey, ctx.workingDir));
 
     // Post inline comments
     postInlineCommentsIfPresent(ctx, pr, reviewData);
@@ -2576,7 +2581,9 @@ function postGitHubReview(ctx, pr, repoInfo, reviewData, isApproved, recommendat
 
     // Opt-in: formal review decision (Approve / Request Changes via the
     // real Review API), independent of the pr_approved label logic above.
-    applyFormalReviewIfEnabled(ctx, pr, reviewData, isApproved, recommendation);
+    // Rides the general-comment posting result so the verdict card can
+    // link (or honestly point at) the discussion comment.
+    applyFormalReviewIfEnabled(ctx, pr, isApproved, recommendation, issueCounts, generalPost);
 }
 
 function fetchPullRequestObject(repoInfo, prNumber) {
@@ -3292,6 +3299,9 @@ if (typeof module !== 'undefined' && module.exports) {
         postInlineComment,
         postGeneralComment,
         resolveGeneralCommentText,
+        postGeneralCommentText,
+        formalApproveBody: formalReviewCardModule.formalApproveBody,
+        formalRejectBody: formalReviewCardModule.formalRejectBody,
         postVerdictRecord,
         findingsFromReviewData,
         findingReviewOf,

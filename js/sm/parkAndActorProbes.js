@@ -229,6 +229,12 @@ function evaluateMachineUnpark(deps, repoInfo, ticket, uHead, parkedAtVf, probeH
 }
 function evaluateGuestZeroRedSelfClear(deps, repoInfo, isMachinePrU, uHead, probeHeadVerdictVf) {
   if (isMachinePrU || !uHead) return { clear: false, why: '' };
+  if (probeHeadVerdictVf() === 'success') {
+    return {
+      clear: true,
+      why: 'the dispatched validation run on the current head concluded SUCCESS (rerun succeeded in place)'
+    };
+  }
   var gRunsVf = deps.headCheckRunsSafe(repoInfo, uHead);
   if (gRunsVf === null) return { clear: false, why: '' };
   var gTallyVf = guestValidationPathModule.realCheckTally(gRunsVf, smProviderModule.BOOKKEEPING_CHECK_PREFIXES);
@@ -282,10 +288,13 @@ function applyHumanOrGuestUnpark(deps, repoInfo, ticket, key, parkLabelVf, uHead
   deps.log('  ▶ ' + key + ' ' + parkLabelVf + ' cleared: HUMAN push newer than the park — re-entering validation');
   return true;
 }
-function isMachineHoldOnLegacyPark(deps, key, parkLabelVf, actorVf, prMachineAuthorU) {
+function isMachineHoldOnLegacyPark(deps, key, parkLabelVf, actorVf, prMachineAuthorU, probeHeadVerdictVf) {
   var actorLoginVf = String(actorVf.login || '').toLowerCase();
   var lastCommitter = String(actorVf.committer || '');
   if (!deps.isMachineParkPush(lastCommitter, actorLoginVf, prMachineAuthorU)) {
+    return false;
+  }
+  if (typeof probeHeadVerdictVf === 'function' && probeHeadVerdictVf() === 'success') {
     return false;
   }
   deps.log('  🅿️  ' + key + ' ' + parkLabelVf + ' holds — the last substantive commit is machine work (' + (lastCommitter === 'sm-silent-update' ? 'sm-silent-update' : actorLoginVf) + '); silent-updates, bot merges of main and agent auto-saves are not new work');
@@ -302,7 +311,7 @@ function handleLegacyParkResetLadder(deps, rule, repoInfo, ticket, key, parkLabe
   if (applyMachineSelfUnparkIfEligible(deps, repoInfo, ticket, key, parkLabelVf, uHead, parkedAtVf, isMachinePrU, probeHeadVerdictVf)) {
     return true;
   }
-  if (isMachineHoldOnLegacyPark(deps, key, parkLabelVf, actorVf, prMachineAuthorU)) {
+  if (isMachineHoldOnLegacyPark(deps, key, parkLabelVf, actorVf, prMachineAuthorU, probeHeadVerdictVf)) {
     return false;
   }
   return applyHumanOrGuestUnpark(deps, repoInfo, ticket, key, parkLabelVf, uHead, actorVf, parkedAtVf, isMachinePrU, probeHeadVerdictVf);

@@ -159,13 +159,16 @@ function stampValidationChecksForModule(deps, repoInfo, headSha, status, conclus
     }
   }
 }
+function hasSyncTargetLabel(l) {
+  var name = l && l.name;
+  return name === 'ai_validating' || name === 'validation_failed';
+}
 function isArmedValidatingPr(pr) {
-  if (!pr || !pr.head || !pr.head.sha || !pr.head.ref) {
+  var head = pr && pr.head;
+  if (!head || !head.sha || !head.ref) {
     return false;
   }
-  return (pr.labels || []).some(function (l) {
-    return (l && l.name) === 'ai_validating';
-  });
+  return (pr.labels || []).some(hasSyncTargetLabel);
 }
 function extractOpenPrList(prsRaw) {
   var prs = mcpParse(prsRaw);

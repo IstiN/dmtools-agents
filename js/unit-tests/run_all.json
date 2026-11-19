@@ -71,6 +71,7 @@
         "js/unit-tests/test_factoryTokenUsageIssue889.js",
         "js/unit-tests/test_failureAnalyzer.js",
         "js/unit-tests/test_feedbackLoop.js",
+        "js/unit-tests/test_formalReviewCard.js",
         "js/unit-tests/test_fetchConfluenceOutputContext.js",
         "js/unit-tests/test_fetchEpicsToInput.js",
         "js/unit-tests/test_fetchLinkedBugsToInput.js",
