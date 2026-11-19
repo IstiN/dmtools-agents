@@ -13,15 +13,6 @@
   "pr-1373": [
     {
       "leg": "rework",
-      "at": "2026-11-05T11:05:15Z",
-      "prompt": 614254,
-      "completion": 70319,
-      "total": 684573,
-      "cacheRead": 14862336,
-      "model": "glm-5.3-flash"
-    },
-    {
-      "leg": "rework",
       "at": "2026-11-05T11:53:15Z",
       "prompt": 284368,
       "completion": 16754,
@@ -2035,6 +2026,17 @@
       "completion": 9540,
       "total": 197470,
       "cacheRead": 2150528,
+      "model": "glm-5.3-flash"
+    }
+  ],
+  "pr-1525": [
+    {
+      "leg": "review",
+      "at": "2026-11-19T11:21:28Z",
+      "prompt": 181315,
+      "completion": 37620,
+      "total": 218935,
+      "cacheRead": 4859402,
       "model": "glm-5.3-flash"
     }
   ]
