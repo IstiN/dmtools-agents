@@ -1945,5 +1945,16 @@ suite('preCliReworkSetup — dryRun guard (gh-1356)', function() {
             ''
         );
     });
+
+    test('gh-1520: dryRun handles missing repoInfo, missing PR, and missing PR details gracefully', function() {
+        var hNoRepo = makeActionHarness({ repoInfo: null, remoteRepoInfo: null });
+        assert.deepEqual(hNoRepo.module.action({ inputFolderPath: 'input/PROJ-123', dryRun: true }), { success: true, dryRun: true });
+
+        var hNoPr = makeActionHarness({ foundPr: null });
+        assert.deepEqual(hNoPr.module.action({ inputFolderPath: 'input/PROJ-123', dryRun: true }), { success: true, dryRun: true });
+
+        var hNoDetails = makeActionHarness({ prDetails: null });
+        assert.deepEqual(hNoDetails.module.action({ inputFolderPath: 'input/PROJ-123', dryRun: true }), { success: true, dryRun: true });
+    });
 });
 

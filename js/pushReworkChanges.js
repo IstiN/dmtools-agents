@@ -1868,15 +1868,9 @@ function handleReworkSetupAlreadyFailed(tracker, ticketKey, customParams, failur
     console.warn('⚠️ Rework setup already failed (no PR found) for', ticketKey, '— skipping commit/push and CLI retry.');
     try {
         var m = commentMarkup.forTicket(ticketKey);
+        var detail = failureContent ? m.code(failureContent.trim()) : ('See ' + m.inline(inputFolderFor(ticketKey) + '/rework_setup_failed.md') + ' for details.');
         var comment = m.h(3, '❌ Rework Push Skipped — Setup Already Failed') + '\n\n' +
-            'Rework setup did not find (or could not check out) a Pull Request for this ticket, ' +
-            'so there is no branch to push changes to. Retrying the CLI agent cannot fix a missing PR, ' +
-            'so the push step was skipped rather than retried.\n\n';
-        if (failureContent) {
-            comment += m.code(failureContent.trim());
-        } else {
-            comment += 'See ' + m.inline(inputFolderFor(ticketKey) + '/rework_setup_failed.md') + ' for details.';
-        }
+            'Rework setup did not find (or could not check out) a Pull Request for this ticket, so there is no branch to push changes to. Retrying the CLI agent cannot fix a missing PR, so the push step was skipped rather than retried.\n\n' + detail;
         tracker.postComment(ticketKey, comment);
         console.log('✅ Posted rework-setup-already-failed comment to ticket:', ticketKey);
     } catch (e) {
@@ -3051,62 +3045,35 @@ function completeReworkLeg(params, setup, tracker, branchName, codeChangesCommit
 
 function action(params) {
     var tracker = null;
-    var ticketKey = null;
-    var isResumeRecursing = false;
     try {
         var setup = actionSetup(params);
-        ticketKey = setup.ticketKey;
-        // Probe the tracker provider once — the same script then runs unchanged
-        // on Jira / ADO / GitHub deployments.
         tracker = trackersModule.createTracker(setup.config, setup.customParams);
-
         console.log('=== Push rework changes for:', setup.ticketKey, '===');
-
-        // Configure git
         configureGitAuthor(setup.config);
-
         var gateSummary = runPrePushGates(setup.ticketKey, setup.customParams, setup.fixSummary);
-
-        // If rework setup already failed (e.g. no PR found for this ticket), there is
-        // nothing to commit/push to and no amount of CLI retrying can fix a missing PR.
-        // Bail out here, before touching git at all.
         var reworkSetupFailure = readReworkSetupFailure(setup.ticketKey);
         if (reworkSetupFailure !== null) {
+            postCompletionTokenUsage(params, setup.ticketKey);
             return handleReworkSetupAlreadyFailed(tracker, setup.ticketKey, setup.customParams, reworkSetupFailure);
         }
-
-        // Commit and push + post-publish gates
         var pushOutcome = pushAndPublishOrFail(setup.ticketKey, setup.config, setup.customParams, tracker);
-        if (pushOutcome.resume) {
-            isResumeRecursing = true;
-            return action(params);
-        }
+        if (pushOutcome.resume) return action(params);
         if (pushOutcome.failed) {
+            postCompletionTokenUsage(params, setup.ticketKey);
             return { success: false, error: pushOutcome.error };
         }
-
         var failOutcome = resumeOrFailLadder(setup.ticketKey, setup.customParams, tracker,
             pushOutcome.branchName, setup.statuses, setup.fixSummary);
         if (failOutcome) {
-            if (failOutcome.resume) {
-                isResumeRecursing = true;
-                return action(params);
-            }
+            if (failOutcome.resume) return action(params);
+            postCompletionTokenUsage(params, setup.ticketKey);
             return failOutcome.result;
         }
-
         return completeReworkLeg(params, setup, tracker, pushOutcome.branchName,
             pushOutcome.codeChangesCommitted, gateSummary);
-
     } catch (error) {
+        postCompletionTokenUsage(params, errorTicketKeyOf(params));
         return handleActionError(params, error, tracker);
-    } finally {
-        if (!isResumeRecursing) {
-            var usageKey = ticketKey || errorTicketKeyOf(params);
-            if (usageKey) {
-                postCompletionTokenUsage(params, usageKey);
-            }
-        }
     }
 }
 

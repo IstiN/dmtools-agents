@@ -419,9 +419,6 @@ function ensureInputContextContract(inputFolder, scm, prNumber, discussionData, 
 }
 
 function failSetup(tracker, ticketKey, inputFolder, message, customParams) {
-    if (customParams && branchSetup.isDryRunParams({ customParams: customParams })) {
-        throw new Error(message);
-    }
     try {
         file_write({
             path: inputFolder + '/rework_setup_failed.md',
@@ -798,41 +795,10 @@ function syncBaseAndDetectConflicts(baseBranch, customParams, config, inputFolde
     return gitOps.detectMergeConflicts(baseBranch, inputFolder, config.workingDir);
 }
 
-/**
- * Write the rework input context (Steps 4.7-6): the PR diff, the failed CI
- * checks probed against it, the discussions (human-readable + raw with ids),
- * and the head this pass starts from. Returns the pieces later steps need.
- * (gh-1220) Extracted from action().
- */
-/**
- * Resolve the PR diff for rework input context: in dryRun mode, read the diff
- * from the SCM PR API (`scm.getDiffText` / `scm.getPrDiff`) or return `''` so
- * `writePRContext` writes its placeholder without running local git commands on
- * an unchecked-out branch (gh-1520).
- */
-function resolveReworkInputDiff(scm, pr, baseBranch, branchName, config, dryRun) {
-    if (dryRun) {
-        if (!scm) return '';
-        try {
-            if (typeof scm.getDiffText === 'function') {
-                var diffText = scm.getDiffText(pr.number);
-                if (typeof diffText === 'string' && diffText.trim()) return diffText;
-            }
-            if (typeof scm.getPrDiff === 'function') {
-                var scmDiff = scm.getPrDiff(pr.number, config && config.workingDir);
-                if (typeof scmDiff === 'string' && scmDiff.trim()) return scmDiff;
-            }
-        } catch (e) {
-            console.warn('[dryRun] SCM PR diff lookup failed (non-fatal):', e && e.message ? e.message : String(e));
-        }
-        return '';
-    }
-    return gitOps.getPRDiff(baseBranch, branchName, config.workingDir);
-}
-
+// Write the rework input context (Steps 4.7-6): diff, failed CI checks, discussions, and head SHA.
 function writeReworkInputContext(inputFolder, config, scm, pr, prDetails, branchName, baseBranch, dryRun) {
     const headSha = (prDetails.head && prDetails.head.sha) || null;
-    const diff = resolveReworkInputDiff(scm, pr, baseBranch, branchName, config, dryRun);
+    const diff = branchSetup.resolveReworkInputDiff(scm, pr, baseBranch, branchName, config, dryRun, gitOps.getPRDiff);
     const failedChecks = gh.detectFailedChecks(
         scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath, diff);
     console.log('Fetching PR discussions...');
@@ -885,51 +851,9 @@ function resolveRequiredPrForRework(prAnchor, scm, config, tracker, ticketKey, i
     return pr;
 }
 
-/**
- * Run the read-only dry-run rework setup (gh-1520): resolves the PR, fetches
- * PR details, discussions, diff, and CI failures, writes the input context
- * files (`pr_info.md`, `pr_diff.txt`, `pr_discussions.md`,
- * `pr_discussions_raw.json`, `ci_failures.md`, `review_state.md`,
- * `review_policy.md`), and skips every mutating step (branch checkout, base
- * merge, setup commands, artefact restore, status move, tracker comments).
- */
-function runDryRunReworkSetup(params, actualParams, parsed, runtime, tracker, reviewPolicy) {
-    var inputFolder = parsed.inputFolder;
-    var ticketKey = parsed.ticketKey;
-    var prAnchor = parsed.prAnchor;
-    var config = runtime.config;
-    var customParams = Object.assign({}, runtime.customParams || {}, { dryRun: true });
-    var scm = runtime.scm;
-
-    console.log('[dryRun] Skipping mutating rework setup (branch checkout, merge, setup commands, tracker/SCM writes)');
-    var repoInfo = resolveRepoInfo(config, scm);
-    if (!repoInfo) {
-        return { success: true, dryRun: true };
-    }
-    var pr = findPrForRework(prAnchor, scm, config, ticketKey);
-    if (!pr) {
-        return { success: true, dryRun: true };
-    }
-    var prDetails = gh.getPRDetails(scm, pr.number);
-    var branchName = prDetails && prDetails.head ? prDetails.head.ref : null;
-    if (!prDetails || !branchName) {
-        return { success: true, dryRun: true };
-    }
-    var baseBranch = resolveReworkBaseBranch(prDetails, config);
-    var inputContext = writeReworkInputContext(inputFolder, config, scm, pr, prDetails, branchName, baseBranch, true);
-    enforceReworkInputContract(inputFolder, scm, prDetails, inputContext.discussionData, inputContext.failedChecks, reviewPolicy);
-    try {
-        fetchQuestionsToInput.action(actualParams);
-    } catch (e) {
-        console.warn('Failed to fetch questions (non-fatal):', e);
-    }
-    try {
-        fetchParentContextToInput.action(params);
-    } catch (e2) {
-        console.warn('fetchParentContextToInput failed (non-fatal):', e2);
-    }
-    return { success: true, dryRun: true };
-}
+var resolveReworkInputDiff = function(scm, pr, baseBranch, branchName, config, dryRun) {
+    return branchSetup.resolveReworkInputDiff(scm, pr, baseBranch, branchName, config, dryRun, gitOps.getPRDiff);
+};
 
 function action(params) {
     var tracker = null;
@@ -953,7 +877,16 @@ function action(params) {
         var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(config, actualParams);
 
         if (isDryRunReworkParams(params, actualParams)) {
-            return runDryRunReworkSetup(params, actualParams, parsed, runtime, tracker, reviewPolicy);
+            return branchSetup.runDryRunReworkSetup(params, actualParams, parsed, runtime, reviewPolicy, {
+                resolveRepoInfo: resolveRepoInfo,
+                findPrForRework: findPrForRework,
+                getPRDetails: function(s, n) { return gh.getPRDetails(s, n); },
+                resolveReworkBaseBranch: resolveReworkBaseBranch,
+                writeReworkInputContext: writeReworkInputContext,
+                enforceReworkInputContract: enforceReworkInputContract,
+                fetchQuestions: function(ap) { fetchQuestionsToInput.action(ap); },
+                fetchParentContext: function(p) { fetchParentContextToInput.action(p); }
+            });
         }
         restoreArtefactsQuietly(params);
 
@@ -1085,6 +1018,5 @@ if (typeof module !== 'undefined' && module.exports) {
         enforceReworkInputContract,
         postReworkStartedCommentOrSkip,
         resolveReworkInputDiff,
-        runDryRunReworkSetup
     };
 }
