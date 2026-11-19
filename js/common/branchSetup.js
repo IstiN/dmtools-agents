@@ -541,6 +541,20 @@ function runDryRunReworkSetup(params, actualParams, parsed, runtime, reviewPolic
     return { success: true, dryRun: true };
 }
 
+/**
+ * Best-effort upstream tracking setup (`origin/<branchName>`) so plain
+ * `git push` / `git push --force-with-lease` on a branch fetched via
+ * `<branch>:<branch>` has an upstream configured (gh-1523).
+ */
+function ensureBranchUpstream(branchName, execFn) {
+    if (!branchName || typeof execFn !== 'function') return;
+    try {
+        execFn('git branch --set-upstream-to=origin/' + branchName + ' ' + branchName);
+    } catch (e) {
+        // Non-fatal: e.g. local-only branch without origin/<branchName>
+    }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         configureGitAuthor: configureGitAuthor,
@@ -571,5 +585,6 @@ if (typeof module !== 'undefined' && module.exports) {
         , resolveReworkInputDiff: resolveReworkInputDiff
         , resolveDryRunReworkTarget: resolveDryRunReworkTarget
         , runDryRunReworkSetup: runDryRunReworkSetup
+        , ensureBranchUpstream: ensureBranchUpstream
     };
 }

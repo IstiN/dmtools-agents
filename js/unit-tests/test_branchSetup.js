@@ -842,5 +842,11 @@ suite('branchSetup.ensureLegContextLocalExcludes (gh-1318)', function() {
             fetchParentContext: function() { throw new Error('p err'); }
         });
         assert.deepEqual(res, { success: true, dryRun: true });
+        var upstreamCmds = [];
+        bs.ensureBranchUpstream('', function(c) { upstreamCmds.push(c); });
+        bs.ensureBranchUpstream('feat', null);
+        bs.ensureBranchUpstream('feat', function(c) { upstreamCmds.push(c); });
+        bs.ensureBranchUpstream('feat', function() { throw new Error('no remote'); });
+        assert.deepEqual(upstreamCmds, ['git branch --set-upstream-to=origin/feat feat']);
     });
 });

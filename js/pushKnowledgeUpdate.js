@@ -58,8 +58,10 @@ function action(params) {
 
         console.log('pushKnowledgeUpdate: detected changes under', knowledgeDir, ':\n' + status);
 
-        cli_execute_command({ command: 'git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"' });
-        cli_execute_command({ command: 'git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"' });
+        var authorName = (config && config.git && config.git.authorName) || GIT_CONFIG.AUTHOR_NAME;
+        var authorEmail = (config && config.git && config.git.authorEmail) || GIT_CONFIG.AUTHOR_EMAIL;
+        cli_execute_command({ command: 'git config user.name "' + authorName + '"' });
+        cli_execute_command({ command: 'git config user.email "' + authorEmail + '"' });
 
         var slug = branchSlugFor(customParams);
         var branchName = 'knowledge/' + slug + '-review-lessons';

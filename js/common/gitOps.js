@@ -23,6 +23,7 @@ const { GIT_CONFIG } = require('../config.js');
 const prHelper = require('./pullRequest.js');
 var gitStaging = require('./gitStaging.js');
 var forkCheckout = require('./forkCheckout.js');
+var branchSetup = require('./branchSetup.js');
 
 var MAX_PR_DIFF_CONTEXT_CHARS = 12000;
 
@@ -47,12 +48,7 @@ function cleanCommandOutput(output) {
  * `<branch>:<branch>` has an upstream configured (gh-1523).
  */
 function _ensureBranchUpstream(branchName, cmd) {
-    if (!branchName) return;
-    try {
-        cmd('git branch --set-upstream-to=origin/' + branchName + ' ' + branchName);
-    } catch (e) {
-        // Non-fatal: e.g. local-only branch without origin/<branchName>
-    }
+    branchSetup.ensureBranchUpstream(branchName, cmd);
 }
 
 /**
@@ -206,12 +202,14 @@ function _reapplyPreflightStash(cmd, branchName, stashed) {
     }
 }
 
-function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
+function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef, gitConfig) {
     console.log('Checking out PR branch:', branchName);
     var cmd = dirScopedCmd(workingDir);
+    var authorName = (gitConfig && gitConfig.authorName) || GIT_CONFIG.AUTHOR_NAME;
+    var authorEmail = (gitConfig && gitConfig.authorEmail) || GIT_CONFIG.AUTHOR_EMAIL;
 
-    cmd('git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"');
-    cmd('git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"');
+    cmd('git config user.name "' + authorName + '"');
+    cmd('git config user.email "' + authorEmail + '"');
 
     // 1. Snapshot local state so a dirty tree can never block the switch below.
     // factory-kit excluded: the factory workflow's nested machine-infra repo
@@ -717,6 +715,7 @@ function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
 module.exports = {
     cleanCommandOutput: cleanCommandOutput,
     checkoutPRBranch: checkoutPRBranch,
+    _ensureBranchUpstream: _ensureBranchUpstream,
     getPRDiff: getPRDiff,
     getDiffBetweenCommits: getDiffBetweenCommits,
     detectMergeConflicts: detectMergeConflicts,

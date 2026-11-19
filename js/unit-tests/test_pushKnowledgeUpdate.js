@@ -148,4 +148,35 @@ suite('pushKnowledgeUpdate — commits and pushes changes', function() {
         assert.equal(addCalls.length, 1);
         assert.equal(addCalls[0], 'git add -- "knowledge"');
     });
+
+    test('configures git author from config.git when present, falling back to GIT_CONFIG', function() {
+        var cliCalls = [];
+        var mod = loadModule(
+            'js/pushKnowledgeUpdate.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function() {
+                        return { git: { authorName: 'PostNL-AI', authorEmail: 'ai.teammate@postnl.nl' } };
+                    }
+                },
+                './config.js': configModule,
+                'config': configModule
+            }),
+            {
+                cli_execute_command: function(opts) {
+                    cliCalls.push(opts.command);
+                    if (opts.command.indexOf('git status --porcelain') === 0) return ' M knowledge/foo.md\n';
+                    return '';
+                }
+            }
+        );
+
+        mod.action({
+            inputFolderPath: 'input/pr_knowledge_update',
+            customParams: { knowledgeDir: 'knowledge', prNumber: '42' }
+        });
+
+        assert.ok(cliCalls.indexOf('git config user.name "PostNL-AI"') !== -1);
+        assert.ok(cliCalls.indexOf('git config user.email "ai.teammate@postnl.nl"') !== -1);
+    });
 });

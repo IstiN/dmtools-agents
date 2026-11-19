@@ -218,7 +218,7 @@ function checkoutPrBranch(ctx, branchName, prDetails) {
             var pullRef = forkCheckout.resolvePullRef(
                 forkCheckout.prPullRef(prDetails), forkCheckout.envCheckoutRef());
             console.log('Checking out PR branch:', branchName, 'workingDir:', ctx.config.workingDir || '(default)');
-            gitOps.checkoutPRBranch(branchName, ctx.config.workingDir, ctx.config.git.baseBranch, pullRef);
+            gitOps.checkoutPRBranch(branchName, ctx.config.workingDir, ctx.config.git.baseBranch, pullRef, ctx.config.git);
             console.log('Checkout completed for branch:', branchName);
         } else {
             console.warn('PR details did not include a head branch; checkout skipped');

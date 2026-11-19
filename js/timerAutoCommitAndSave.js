@@ -337,6 +337,23 @@ function shouldAmendHeadWipCommit(workingDir) {
     }
 }
 
+/** Best-effort git author configuration in the timer working dir when config.git is present. */
+function configureTimerGitAuthor(workingDir, params) {
+    try {
+        var cfg = configLoader.loadProjectConfig((params && params.jobParams) || params || {});
+        var gitCfg = cfg && cfg.git;
+        if (!gitCfg) return;
+        if (gitCfg.authorName) {
+            cli_execute_command({ command: 'git config user.name "' + gitCfg.authorName + '"', workingDirectory: workingDir });
+        }
+        if (gitCfg.authorEmail) {
+            cli_execute_command({ command: 'git config user.email "' + gitCfg.authorEmail + '"', workingDirectory: workingDir });
+        }
+    } catch (e) {
+        console.log('⏱️ timer: git author config skipped:', e.toString().substring(0, 100));
+    }
+}
+
 /** Commit the staged tree (amending when HEAD is already a WIP auto-save commit). */
 function commitWorkingTree(workingDir, commitMsg, amend) {
     try {
@@ -394,6 +411,7 @@ function autoCommitAndPush(customParams, ticketKey, params) {
 
     untrackRuntimeArtifactsSafe(repo.workingDir);
     if (!stageWorkingTree(repo.workingDir)) return false;
+    configureTimerGitAuthor(repo.workingDir, params);
     var amend = shouldAmendHeadWipCommit(repo.workingDir);
     if (!commitWorkingTree(repo.workingDir, commitMsg, amend)) return false;
     return pushAndLog(repo.workingDir, commitMsg, amend);
@@ -514,6 +532,7 @@ if (typeof module !== 'undefined' && module.exports) {
         saveSessionArtefact: saveSessionArtefact,
         releaseTemplatesOf: releaseTemplatesOf,
         shouldAmendHeadWipCommit: shouldAmendHeadWipCommit,
-        isHeadOnRemoteBranch: isHeadOnRemoteBranch
+        isHeadOnRemoteBranch: isHeadOnRemoteBranch,
+        configureTimerGitAuthor: configureTimerGitAuthor
     };
 }

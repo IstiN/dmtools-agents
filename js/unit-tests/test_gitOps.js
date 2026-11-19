@@ -161,6 +161,26 @@ suite('gitOps.checkoutPRBranch', function() {
             'invariant check must be skipped entirely when baseBranch is not supplied');
     });
 
+    test('uses custom gitConfig authorName and authorEmail when passed to checkoutPRBranch', function() {
+        var commands = [];
+        var gitOps = loadGitOps({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git status --porcelain') return '\nCOMMAND_EXIT_CODE=0';
+                if (args.command === 'git branch --list "feature/x"') return '  feature/x\nCOMMAND_EXIT_CODE=0';
+                return 'COMMAND_EXIT_CODE=0';
+            }
+        });
+
+        gitOps.checkoutPRBranch('feature/x', 'dependencies/PostNL-commercial', 'develop', undefined, {
+            authorName: 'PostNL-AI',
+            authorEmail: 'ai.teammate@postnl.nl'
+        });
+
+        assert.ok(commands.indexOf('git config user.name "PostNL-AI"') !== -1);
+        assert.ok(commands.indexOf('git config user.email "ai.teammate@postnl.nl"') !== -1);
+    });
+
     test('resets local branch to origin after force-push (divergent branches)', function() {
         var commands = [];
         var gitOps = loadGitOps({

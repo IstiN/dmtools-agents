@@ -444,7 +444,7 @@ function diffHeadRef(branchName, prDetails) {
 function checkoutTestBranch(gitOps, branchName, config) {
     try {
         if (branchName) {
-            gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+            gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch, undefined, config.git);
         }
     } catch (e) {
         console.warn('Could not checkout test branch:', e);

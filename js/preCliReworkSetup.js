@@ -575,7 +575,7 @@ function moveTicketToReworkStatus(config, tracker, ticketKey, statuses, prAnchor
  */
 function checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams, pullRef) {
     try {
-        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch, pullRef);
+        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch, pullRef, config.git);
     } catch (e) {
         failSetup(tracker, ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString(), customParams);
     }

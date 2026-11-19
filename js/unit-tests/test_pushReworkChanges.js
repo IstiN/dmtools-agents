@@ -5245,4 +5245,25 @@ suite('pushReworkChanges — gh-1521 token usage posted on failure and early exi
             stubTokenUsageComment.postTokenUsageSafely = origSafely;
         }
     });
+
+    test('configureGitAuthor passes workingDirectory when config.workingDir is set and action(null) fails gracefully', function() {
+        var cliArgs = [];
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: function(args) {
+                cliArgs.push(args);
+                return '';
+            }
+        });
+        var ok = loaded.mod.configureGitAuthor({
+            workingDir: 'dependencies/PostNL-commercial',
+            git: { authorName: 'PostNL-AI', authorEmail: 'ai.teammate@postnl.nl' }
+        });
+        assert.equal(ok, true);
+        assert.deepEqual(cliArgs, [
+            { workingDirectory: 'dependencies/PostNL-commercial', command: 'git config user.name "PostNL-AI"' },
+            { workingDirectory: 'dependencies/PostNL-commercial', command: 'git config user.email "ai.teammate@postnl.nl"' }
+        ]);
+        var nullRes = loaded.mod.action(null);
+        assert.equal(nullRes.success, false, 'action(null) returns graceful failure without throwing out of catch');
+    });
 });

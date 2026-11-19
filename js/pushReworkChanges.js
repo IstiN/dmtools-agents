@@ -363,8 +363,9 @@ function findPRForTicket(scm, ticketKey) {
 
 function configureGitAuthor(config) {
     try {
-        cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
-        cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
+        var opts = (config && config.workingDir) ? { workingDirectory: config.workingDir } : {};
+        cli_execute_command(Object.assign({}, opts, { command: 'git config user.name "' + config.git.authorName + '"' }));
+        cli_execute_command(Object.assign({}, opts, { command: 'git config user.email "' + config.git.authorEmail + '"' }));
         return true;
     } catch (error) {
         console.error('Failed to configure git author:', error);
@@ -3072,13 +3073,15 @@ function action(params) {
         return completeReworkLeg(params, setup, tracker, pushOutcome.branchName,
             pushOutcome.codeChangesCommitted, gateSummary);
     } catch (error) {
-        postCompletionTokenUsage(params, errorTicketKeyOf(params));
+        var usageKey = null;
+        try { usageKey = errorTicketKeyOf(params); } catch (eKey) { /* keep null */ }
+        if (usageKey) postCompletionTokenUsage(params, usageKey);
         return handleActionError(params, error, tracker);
     }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, getGitHubRepoInfo, parseGitHubRemoteUrl,
+    module.exports = { action, configureGitAuthor, getGitHubRepoInfo, parseGitHubRemoteUrl,
     actionSetup, pushAndPublishOrFail, resumeOrFailLadder, completeReworkLeg,
     openThreadsCompletionComment, unaddressedRepliesCompletionComment, changesRequestedCompletionComment, cleanCompletionComment, completionPrCommentSuffix,
     blockedLogLine, postBlockedPrComment, moveToBlockedStatus, removeContextWipLabel,

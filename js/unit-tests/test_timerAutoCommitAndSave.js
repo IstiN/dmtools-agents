@@ -38,6 +38,7 @@ function timerConfigLoader(opts) {
         loadProjectConfig: function(params) {
             var cfg = { scm: { provider: opts.scmProvider || 'github' } };
             if (opts.formats) cfg.formats = opts.formats;
+            if (opts.git) cfg.git = opts.git;
             if (opts.configThrows) throw new Error('config unreadable');
             return cfg;
         },
@@ -1408,6 +1409,44 @@ suite('timerAutoCommitAndSave — leg-context staging exclusions (gh-1318)', fun
             'ignored paths must not appear in ANY pathspec (gh-683 ignored-pathspec guard)');
         assert.equal(addCall.indexOf(':!outputs'), -1,
             'ignored paths must not appear in ANY pathspec (gh-683 ignored-pathspec guard)');
+    });
+
+    test('configures git user.name and user.email in workingDir before commit when config.git is present', function() {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args);
+                if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
+                return '';
+            }
+        }, {
+            git: { authorName: 'PostNL-AI', authorEmail: 'ai.teammate@postnl.nl' }
+        });
+        m.action({
+            ticket: { key: 'BICE-4618' },
+            jobParams: {
+                customParams: { targetRepository: { workingDir: 'dependencies/PostNL-commercial' } },
+                metadata: { contextId: 'bice_story_development' }
+            },
+            currentCliOutput: ''
+        });
+        var nameCall = cliCalls.filter(function(c) { return c.command === 'git config user.name "PostNL-AI"'; })[0];
+        var emailCall = cliCalls.filter(function(c) { return c.command === 'git config user.email "ai.teammate@postnl.nl"'; })[0];
+        assert.ok(nameCall, 'user.name configured before timer commit');
+        assert.equal(nameCall.workingDirectory, 'dependencies/PostNL-commercial');
+        assert.ok(emailCall, 'user.email configured before timer commit');
+        assert.equal(emailCall.workingDirectory, 'dependencies/PostNL-commercial');
+    });
+
+    test('configureTimerGitAuthor logs and continues when configLoader throws', function() {
+        var m = loadTimer({
+            cli_execute_command: function() { return ''; }
+        }, {
+            configThrows: true
+        });
+        assert.doesNotThrow(function() {
+            m.configureTimerGitAuthor('dependencies/PostNL-commercial', {});
+        });
     });
 
 });
