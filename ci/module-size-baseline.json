@@ -71,21 +71,17 @@
       "lines": 1445,
       "functions": 82
     },
-    "js/createIntakeTickets.js": {
-      "lines": 838,
-      "functions": 41
-    },
     "js/createPlannedStoriesFromOutput.js": {
       "lines": 696,
       "functions": 71
     },
     "js/developBugAndCreatePR.js": {
-      "lines": 928,
+      "lines": 873,
       "functions": 46
     },
     "js/developTicketAndCreatePR.js": {
-      "lines": 2249,
-      "functions": 114
+      "lines": 2268,
+      "functions": 115
     },
     "js/dfManager.js": {
       "lines": 774,
@@ -96,11 +92,11 @@
       "functions": 53
     },
     "js/factory/token_usage.js": {
-      "lines": 661,
-      "functions": 42
+      "lines": 714,
+      "functions": 44
     },
     "js/factoryState.js": {
-      "lines": 1727,
+      "lines": 1731,
       "functions": 102
     },
     "js/fetchParentContextToInput.js": {
@@ -132,11 +128,11 @@
       "functions": 56
     },
     "js/preCliDevelopmentSetup.js": {
-      "lines": 1359,
-      "functions": 74
+      "lines": 1319,
+      "functions": 69
     },
     "js/preCliReworkSetup.js": {
-      "lines": 1027,
+      "lines": 1014,
       "functions": 44
     },
     "js/prepareTestPRForReview.js": {
@@ -144,15 +140,15 @@
       "functions": 41
     },
     "js/pushReworkChanges.js": {
-      "lines": 3113,
-      "functions": 175
+      "lines": 3130,
+      "functions": 174
     },
     "js/sm/mergeBot.js": {
       "lines": 1013,
       "functions": 55
     },
     "js/sm/sources/githubSource.js": {
-      "lines": 1508,
+      "lines": 1500,
       "functions": 115
     },
     "js/tcDifferentialDispatcher.js": {
