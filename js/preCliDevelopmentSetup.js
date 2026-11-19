@@ -281,6 +281,7 @@ function checkoutExistingRemoteBranch(ticketKey, branchName, rebaseBase) {
     try {
         runCmd({ command: prHelper.buildOriginFetchCommand(branchName + ':' + branchName) });
         runCmd({ command: 'git checkout ' + branchName });
+        branchSetup.ensureBranchUpstream(branchName, function(c) { return runCmd({ command: c }); });
     } catch (fetchCheckoutErr) {
         console.warn('fetch+checkout failed, resetting local branch from origin:', fetchCheckoutErr);
         prHelper.ensureRemoteBranchRef(runCommandStr, _workingDir, branchName);

@@ -59,6 +59,7 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
   - move ticket to status (via tracker)
 - Parameters (customParams):
   - `aiRepository`
+  - `branchCreateFnPath`
   - `configPath`
   - `contentOutput`
   - `contentOutput.target`

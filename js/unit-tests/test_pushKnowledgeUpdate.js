@@ -7,13 +7,16 @@
  * run) since this action is not tracker-bound.
  */
 
+var branchSetupReal = loadModule('js/common/branchSetup.js');
+
 function loadPushKnowledgeUpdate(cliCalls) {
     return loadModule(
         'js/pushKnowledgeUpdate.js',
         makeRequire({
             './configLoader.js': { loadProjectConfig: function() { return {}; } },
             './config.js': configModule,
-            'config': configModule
+            'config': configModule,
+            './common/branchSetup.js': branchSetupReal
         }),
         {
             cli_execute_command: function(opts) {
@@ -53,7 +56,8 @@ suite('pushKnowledgeUpdate — no changes to push', function() {
             makeRequire({
                 './configLoader.js': { loadProjectConfig: function() { return {}; } },
                 './config.js': configModule,
-                'config': configModule
+                'config': configModule,
+                './common/branchSetup.js': branchSetupReal
             }),
             {
                 cli_execute_command: function(opts) {
@@ -84,7 +88,8 @@ suite('pushKnowledgeUpdate — commits and pushes changes', function() {
             makeRequire({
                 './configLoader.js': { loadProjectConfig: function() { return {}; } },
                 './config.js': configModule,
-                'config': configModule
+                'config': configModule,
+                './common/branchSetup.js': branchSetupReal
             }),
             {
                 cli_execute_command: function(opts) {
@@ -147,5 +152,37 @@ suite('pushKnowledgeUpdate — commits and pushes changes', function() {
         var addCalls = loaded.cliCalls.filter(function(c) { return c.indexOf('git add') === 0; });
         assert.equal(addCalls.length, 1);
         assert.equal(addCalls[0], 'git add -- "knowledge"');
+    });
+
+    test('configures git author from config.git when present, falling back to GIT_CONFIG', function() {
+        var cliCalls = [];
+        var mod = loadModule(
+            'js/pushKnowledgeUpdate.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function() {
+                        return { git: { authorName: 'PostNL-AI', authorEmail: 'ai.teammate@postnl.nl' } };
+                    }
+                },
+                './config.js': configModule,
+                'config': configModule,
+                './common/branchSetup.js': branchSetupReal
+            }),
+            {
+                cli_execute_command: function(opts) {
+                    cliCalls.push(opts.command);
+                    if (opts.command.indexOf('git status --porcelain') === 0) return ' M knowledge/foo.md\n';
+                    return '';
+                }
+            }
+        );
+
+        mod.action({
+            inputFolderPath: 'input/pr_knowledge_update',
+            customParams: { knowledgeDir: 'knowledge', prNumber: '42' }
+        });
+
+        assert.ok(cliCalls.indexOf('git config user.name "PostNL-AI"') !== -1);
+        assert.ok(cliCalls.indexOf('git config user.email "ai.teammate@postnl.nl"') !== -1);
     });
 });

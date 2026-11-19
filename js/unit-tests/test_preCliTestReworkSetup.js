@@ -358,8 +358,8 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
         var bugsCalls = [];
         var ctx = loadPreCliTestReworkSetup({
             gitOps: {
-                checkoutPRBranch: function(branch, workingDir, baseBranch) {
-                    gitOpsCalls.checkout.push([branch, workingDir, baseBranch]);
+                checkoutPRBranch: function(branch, workingDir, baseBranch, pullRef, gitCfg) {
+                    gitOpsCalls.checkout.push([branch, workingDir, baseBranch, pullRef, gitCfg]);
                 },
                 detectMergeConflicts: function(baseBranch, inputFolder) {
                     gitOpsCalls.conflicts.push([baseBranch, inputFolder]);
@@ -387,7 +387,7 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
             owner: 'acme',
             repo: 'widgets'
         }, 'success shape pins the contract consumed by pr_test_automation_rework');
-        assert.deepEqual(gitOpsCalls.checkout, [['test/PROJ-12', '/repo', 'main']], 'checkout on test branch');
+        assert.deepEqual(gitOpsCalls.checkout, [['test/PROJ-12', '/repo', 'main', undefined, { baseBranch: 'main' }]], 'checkout on test branch');
         assert.deepEqual(gitOpsCalls.conflicts, [['main', 'input/PROJ-12']], 'conflict detection against PR base');
         assert.deepEqual(gitOpsCalls.diff, [['main', 'test/PROJ-12']], 'diff base..head');
         assert.equal(gitOpsCalls.context.length, 1, 'PR context written');

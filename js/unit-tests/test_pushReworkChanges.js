@@ -5206,3 +5206,64 @@ suite('pushReworkChanges — gh-1287 cross-anchor label stripping (PR + linked i
         mod.stripArmFromIssue(alwaysFailTracker, 'pr-1940', 'agent:rework', pr);
     });
 });
+
+suite('pushReworkChanges — gh-1521 token usage posted on failure and early exit paths', function() {
+
+    test('posts token usage comment when rework push / merge fails in pushAndPublishOrFail', function() {
+        var tokenUsageCalls = [];
+        var origSafely = stubTokenUsageComment.postTokenUsageSafely;
+        stubTokenUsageComment.postTokenUsageSafely = function(key, p) {
+            tokenUsageCalls.push({ key: key, params: p });
+        };
+        try {
+            var loaded = loadPushReworkChangesForAction({
+                cli_execute_command: function(args) {
+                    var c = args && args.command;
+                    if (c === 'git branch --show-current') return 'bug/PROJ-123\n';
+                    if (c.indexOf('git push') === 0) {
+                        throw new Error('! [rejected] bug/PROJ-123 -> bug/PROJ-123 (non-fast-forward)');
+                    }
+                    if (c.indexOf('git merge') === 0) {
+                        throw new Error('CONFLICT (content): Merge conflict in AccountGroupControllerTest.java');
+                    }
+                    return '';
+                }
+            });
+
+            var res = loaded.mod.action({
+                ticket: { key: 'PROJ-123', fields: { labels: [] } },
+                response: 'Fixed tests',
+                customParams: {}
+            });
+
+            assert.equal(res.success, false, 'rework push must report failure');
+            assert.ok(loaded.jiraPostCommentCalls.some(function(c) { return c.comment.indexOf('Rework Push Failed') !== -1; }),
+                'failure comment posted on ticket');
+            assert.equal(tokenUsageCalls.length, 1, 'postCompletionTokenUsage must still run in finally when rework push fails');
+            assert.equal(tokenUsageCalls[0].key, 'PROJ-123');
+        } finally {
+            stubTokenUsageComment.postTokenUsageSafely = origSafely;
+        }
+    });
+
+    test('configureGitAuthor passes workingDirectory when config.workingDir is set and action(null) fails gracefully', function() {
+        var cliArgs = [];
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: function(args) {
+                cliArgs.push(args);
+                return '';
+            }
+        });
+        var ok = loaded.mod.configureGitAuthor({
+            workingDir: 'dependencies/PostNL-commercial',
+            git: { authorName: 'PostNL-AI', authorEmail: 'ai.teammate@postnl.nl' }
+        });
+        assert.equal(ok, true);
+        assert.deepEqual(cliArgs, [
+            { workingDirectory: 'dependencies/PostNL-commercial', command: 'git config user.name "PostNL-AI"' },
+            { workingDirectory: 'dependencies/PostNL-commercial', command: 'git config user.email "ai.teammate@postnl.nl"' }
+        ]);
+        var nullRes = loaded.mod.action(null);
+        assert.equal(nullRes.success, false, 'action(null) returns graceful failure without throwing out of catch');
+    });
+});

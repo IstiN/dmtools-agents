@@ -302,16 +302,58 @@ function stageWorkingTree(workingDir) {
     }
 }
 
-/** True when HEAD is already a non-merge `WIP auto-save` commit (gh-1501). */
+/**
+ * True when `HEAD` is already reachable from any remote-tracking ref (`origin/*`),
+ * so amending it would rewrite already-pushed history (gh-1523).
+ */
+function isHeadOnRemoteBranch(workingDir) {
+    try {
+        var out = cleanCommandOutput(cli_execute_command({
+            command: 'git branch -r --contains HEAD',
+            workingDirectory: workingDir
+        }) || '').trim();
+        return out.length > 0;
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * True when HEAD is already an unpushed non-merge `WIP auto-save` commit
+ * (gh-1501 / gh-1523). Once a WIP commit has been pushed to `origin/<branch>`,
+ * subsequent timer ticks MUST create a new commit instead of amending it
+ * locally and diverges-failing on push.
+ */
 function shouldAmendHeadWipCommit(workingDir) {
     try {
         var subj = cleanCommandOutput(cli_execute_command({
             command: 'git log -1 --no-merges --format=%s HEAD',
             workingDirectory: workingDir
         }) || '').trim();
-        return /WIP auto-save/.test(subj);
+        if (!/WIP auto-save/.test(subj)) return false;
+        return !isHeadOnRemoteBranch(workingDir);
     } catch (e) {
         return false;
+    }
+}
+
+/** Best-effort git author configuration in the timer working dir when config.git is present. */
+function applyTimerGitAuthor(workingDir, gitCfg) {
+    if (!gitCfg) return;
+    if (gitCfg.authorName) {
+        cli_execute_command({ command: 'git config user.name "' + gitCfg.authorName + '"', workingDirectory: workingDir });
+    }
+    if (gitCfg.authorEmail) {
+        cli_execute_command({ command: 'git config user.email "' + gitCfg.authorEmail + '"', workingDirectory: workingDir });
+    }
+}
+
+function configureTimerGitAuthor(workingDir, params) {
+    try {
+        var cfg = configLoader.loadProjectConfig((params && params.jobParams) || params || {});
+        applyTimerGitAuthor(workingDir, cfg && cfg.git);
+    } catch (e) {
+        console.log('⏱️ timer: git author config skipped:', e.toString().substring(0, 100));
     }
 }
 
@@ -336,7 +378,7 @@ function pushAndLog(workingDir, commitMsg, amend) {
     try {
         pushBranchWithSelfHeal(function (command) {
             return cli_execute_command({
-                command: (amend && command === 'git push origin HEAD') ? 'git push --force-with-lease' : command,
+                command: (amend && command === 'git push origin HEAD') ? 'git push --force-with-lease origin HEAD' : command,
                 workingDirectory: workingDir
             });
         }, function () {
@@ -372,6 +414,7 @@ function autoCommitAndPush(customParams, ticketKey, params) {
 
     untrackRuntimeArtifactsSafe(repo.workingDir);
     if (!stageWorkingTree(repo.workingDir)) return false;
+    configureTimerGitAuthor(repo.workingDir, params);
     var amend = shouldAmendHeadWipCommit(repo.workingDir);
     if (!commitWorkingTree(repo.workingDir, commitMsg, amend)) return false;
     return pushAndLog(repo.workingDir, commitMsg, amend);
@@ -491,6 +534,8 @@ if (typeof module !== 'undefined' && module.exports) {
         autoSaveCommitMessageOverride: autoSaveCommitMessageOverride,
         saveSessionArtefact: saveSessionArtefact,
         releaseTemplatesOf: releaseTemplatesOf,
-        shouldAmendHeadWipCommit: shouldAmendHeadWipCommit
+        shouldAmendHeadWipCommit: shouldAmendHeadWipCommit,
+        isHeadOnRemoteBranch: isHeadOnRemoteBranch,
+        configureTimerGitAuthor: configureTimerGitAuthor
     };
 }

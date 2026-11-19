@@ -161,6 +161,26 @@ suite('gitOps.checkoutPRBranch', function() {
             'invariant check must be skipped entirely when baseBranch is not supplied');
     });
 
+    test('uses custom gitConfig authorName and authorEmail when passed to checkoutPRBranch', function() {
+        var commands = [];
+        var gitOps = loadGitOps({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git status --porcelain') return '\nCOMMAND_EXIT_CODE=0';
+                if (args.command === 'git branch --list "feature/x"') return '  feature/x\nCOMMAND_EXIT_CODE=0';
+                return 'COMMAND_EXIT_CODE=0';
+            }
+        });
+
+        gitOps.checkoutPRBranch('feature/x', 'dependencies/PostNL-commercial', 'develop', undefined, {
+            authorName: 'PostNL-AI',
+            authorEmail: 'ai.teammate@postnl.nl'
+        });
+
+        assert.ok(commands.indexOf('git config user.name "PostNL-AI"') !== -1);
+        assert.ok(commands.indexOf('git config user.email "ai.teammate@postnl.nl"') !== -1);
+    });
+
     test('resets local branch to origin after force-push (divergent branches)', function() {
         var commands = [];
         var gitOps = loadGitOps({
@@ -187,6 +207,26 @@ suite('gitOps.checkoutPRBranch', function() {
             return c && c.indexOf('fetch origin') !== -1 && c.indexOf('+refs/heads/ai/TS-1268:refs/remotes/origin/ai/TS-1268') !== -1;
         });
         assert.ok(hasCorrectFetch, 'fetch must use +refs/heads/<b>:refs/remotes/origin/<b> refspec');
+    });
+
+    test('gh-1523: sets upstream tracking to origin/<branch> when checking out an existing or fetched PR branch', function() {
+        var commands = [];
+        var gitOps = loadGitOps({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git status --porcelain') return '\nCOMMAND_EXIT_CODE=0';
+                if (args.command === 'git branch --list "bugfix/2069918"') return '\nCOMMAND_EXIT_CODE=0';
+                if (args.command === 'git ls-remote --heads origin bugfix/2069918') {
+                    return 'fb81b5aefb81b5aefb81b5aefb81b5aefb81b5ae\trefs/heads/bugfix/2069918\nCOMMAND_EXIT_CODE=0';
+                }
+                return 'COMMAND_EXIT_CODE=0';
+            }
+        });
+
+        gitOps.checkoutPRBranch('bugfix/2069918');
+
+        assert.ok(commands.indexOf('git branch --set-upstream-to=origin/bugfix/2069918 bugfix/2069918') !== -1,
+            'must configure upstream tracking so git push --force-with-lease never fails with no upstream branch');
     });
 });
 

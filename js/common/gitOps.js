@@ -23,6 +23,7 @@ const { GIT_CONFIG } = require('../config.js');
 const prHelper = require('./pullRequest.js');
 var gitStaging = require('./gitStaging.js');
 var forkCheckout = require('./forkCheckout.js');
+var branchSetup = require('./branchSetup.js');
 
 var MAX_PR_DIFF_CONTEXT_CHARS = 12000;
 
@@ -39,6 +40,15 @@ function dirScopedCmd(workingDir) {
 // common/pullRequest.js once — this delegate keeps every local call site.
 function cleanCommandOutput(output) {
     return prHelper.cleanCommandOutput(output);
+}
+
+/**
+ * Best-effort upstream tracking setup (`origin/<branchName>`) so plain
+ * `git push` / `git push --force-with-lease` on a branch fetched via
+ * `<branch>:<branch>` has an upstream configured (gh-1523).
+ */
+function _ensureBranchUpstream(branchName, cmd) {
+    branchSetup.ensureBranchUpstream(branchName, cmd);
 }
 
 /**
@@ -68,6 +78,7 @@ function _switchToBranch(branchName, cmd) {
         // "Need to specify how to reconcile divergent branches".
         // The remote is always the source of truth for an existing PR branch.
         cmd('git reset --hard origin/' + branchName);
+        _ensureBranchUpstream(branchName, cmd);
     } else {
         // gh-912: decide on a real refs/heads/<branch> ref line — a
         // warning-only capture (central-mode insteadOf origin, git ≥ 2.54)
@@ -93,6 +104,7 @@ function _switchToBranch(branchName, cmd) {
                     cmd('git checkout ' + branchName);
                 }
             }
+            _ensureBranchUpstream(branchName, cmd);
         } else {
             throw new Error('Branch not found locally or remotely: ' + branchName);
         }
@@ -190,13 +202,16 @@ function _reapplyPreflightStash(cmd, branchName, stashed) {
     }
 }
 
-function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
+function _configurePRCheckoutAuthor(cmd, gitConfig) {
+    var author = branchSetup.resolveGitAuthor(gitConfig, GIT_CONFIG);
+    cmd('git config user.name "' + author.authorName + '"');
+    cmd('git config user.email "' + author.authorEmail + '"');
+}
+
+function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef, gitConfig) {
     console.log('Checking out PR branch:', branchName);
     var cmd = dirScopedCmd(workingDir);
-
-    cmd('git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"');
-    cmd('git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"');
-
+    _configurePRCheckoutAuthor(cmd, gitConfig);
     // 1. Snapshot local state so a dirty tree can never block the switch below.
     // factory-kit excluded: the factory workflow's nested machine-infra repo
     // (git init inside the workspace) is a gitlink `git add -A` cannot stage
@@ -701,6 +716,7 @@ function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
 module.exports = {
     cleanCommandOutput: cleanCommandOutput,
     checkoutPRBranch: checkoutPRBranch,
+    _ensureBranchUpstream: _ensureBranchUpstream,
     getPRDiff: getPRDiff,
     getDiffBetweenCommits: getDiffBetweenCommits,
     detectMergeConflicts: detectMergeConflicts,

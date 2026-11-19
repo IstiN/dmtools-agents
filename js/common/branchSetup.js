@@ -477,6 +477,96 @@ function isDryRunParams(params) {
     return !!(jp.customParams && isDryRunFlag(jp.customParams.dryRun));
 }
 
+/**
+ * Resolve the PR diff for rework input context: in dryRun mode, read the diff
+ * from the SCM PR API (`scm.getDiffText` / `scm.getPrDiff`) or return `''` so
+ * `writePRContext` writes its placeholder without running local git commands on
+ * an unchecked-out branch (gh-1520).
+ */
+function pickFirstNonEmptyDiff(candidates) {
+    for (var i = 0; i < candidates.length; i++) {
+        try {
+            var text = candidates[i]();
+            if (typeof text === 'string' && text.trim()) return text;
+        } catch (e) {
+            console.warn('[dryRun] SCM PR diff lookup failed (non-fatal):', e && e.message ? e.message : String(e));
+        }
+    }
+    return '';
+}
+
+function readDryRunScmDiff(scm, prNumber, workingDir) {
+    if (!scm) return '';
+    var fns = [];
+    if (typeof scm.getDiffText === 'function') fns.push(function() { return scm.getDiffText(prNumber); });
+    if (typeof scm.getPrDiff === 'function') fns.push(function() { return scm.getPrDiff(prNumber, workingDir); });
+    return pickFirstNonEmptyDiff(fns);
+}
+
+function resolveReworkInputDiff(scm, pr, baseBranch, branchName, config, dryRun, getPRDiffFn) {
+    if (dryRun) {
+        return readDryRunScmDiff(scm, pr && pr.number, config && config.workingDir);
+    }
+    return typeof getPRDiffFn === 'function' ? getPRDiffFn(baseBranch, branchName, config && config.workingDir) : '';
+}
+
+/**
+ * Run the read-only dry-run rework setup (gh-1520): resolves the PR, fetches
+ * PR details, discussions, diff, and CI failures, writes the input context
+ * files (`pr_info.md`, `pr_diff.txt`, `pr_discussions.md`,
+ * `pr_discussions_raw.json`, `ci_failures.md`, `review_state.md`,
+ * `review_policy.md`), and skips every mutating step (branch checkout, base
+ * merge, setup commands, artefact restore, status move, tracker comments).
+ */
+function resolveDryRunReworkTarget(parsed, runtime, deps) {
+    var config = runtime.config;
+    var scm = runtime.scm;
+    if (!deps.resolveRepoInfo(config, scm)) return null;
+    var pr = deps.findPrForRework(parsed.prAnchor, scm, config, parsed.ticketKey);
+    if (!pr) return null;
+    var prDetails = deps.getPRDetails(scm, pr.number);
+    var branchName = prDetails && prDetails.head ? prDetails.head.ref : null;
+    return (prDetails && branchName) ? { pr: pr, prDetails: prDetails, branchName: branchName } : null;
+}
+
+function runDryRunReworkSetup(params, actualParams, parsed, runtime, reviewPolicy, deps) {
+    console.log('[dryRun] Skipping mutating rework setup (branch checkout, merge, setup commands, tracker/SCM writes)');
+    var target = resolveDryRunReworkTarget(parsed, runtime, deps);
+    if (!target) return { success: true, dryRun: true };
+    var baseBranch = deps.resolveReworkBaseBranch(target.prDetails, runtime.config);
+    var ctx = deps.writeReworkInputContext(parsed.inputFolder, runtime.config, runtime.scm, target.pr, target.prDetails, target.branchName, baseBranch, true);
+    deps.enforceReworkInputContract(parsed.inputFolder, runtime.scm, target.prDetails, ctx.discussionData, ctx.failedChecks, reviewPolicy);
+    try { deps.fetchQuestions(actualParams); } catch (e) {}
+    try { deps.fetchParentContext(params); } catch (e2) {}
+    return { success: true, dryRun: true };
+}
+
+/**
+ * Best-effort upstream tracking setup (`origin/<branchName>`) so plain
+ * `git push` / `git push --force-with-lease` on a branch fetched via
+ * `<branch>:<branch>` has an upstream configured (gh-1523).
+ */
+function ensureBranchUpstream(branchName, execFn) {
+    if (!branchName || typeof execFn !== 'function') return;
+    try {
+        execFn('git branch --set-upstream-to=origin/' + branchName + ' ' + branchName);
+    } catch (e) {
+        // Non-fatal: e.g. local-only branch without origin/<branchName>
+    }
+}
+
+/**
+ * Resolve git author name and email from `gitConfig` with `fallback` defaults.
+ */
+function resolveGitAuthor(gitConfig, fallback) {
+    var cfg = gitConfig || {};
+    var fb = fallback || {};
+    return {
+        authorName: cfg.authorName || fb.AUTHOR_NAME || 'AI Teammate',
+        authorEmail: cfg.authorEmail || fb.AUTHOR_EMAIL || 'agent.ai.native@gmail.com'
+    };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         configureGitAuthor: configureGitAuthor,
@@ -502,5 +592,12 @@ if (typeof module !== 'undefined' && module.exports) {
         findMergedPrForBranch: findMergedPrForBranch,
         checkoutTestBranchHead: checkoutTestBranchHead
         , isDryRunParams: isDryRunParams
+        , pickFirstNonEmptyDiff: pickFirstNonEmptyDiff
+        , readDryRunScmDiff: readDryRunScmDiff
+        , resolveReworkInputDiff: resolveReworkInputDiff
+        , resolveDryRunReworkTarget: resolveDryRunReworkTarget
+        , runDryRunReworkSetup: runDryRunReworkSetup
+        , ensureBranchUpstream: ensureBranchUpstream
+        , resolveGitAuthor: resolveGitAuthor
     };
 }

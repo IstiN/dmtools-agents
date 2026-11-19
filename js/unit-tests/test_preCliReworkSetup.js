@@ -1897,5 +1897,63 @@ suite('preCliReworkSetup — dryRun guard (gh-1356)', function() {
         assert.equal(hErr.calls.postComment.length, 0, 'policy validation error in dryRun must not post tracker comment');
     });
 
+
+    test('gh-1520: dryRun populates read-only PR context (pr_info.md, pr_discussions.md, pr_discussions_raw.json, ci_failures.md, review_state.md, review_policy.md) without mutating git or tracker', function() {
+        var h = makeActionHarness({
+            discussionData: {
+                markdown: '## Review Threads\n- Fix null check',
+                rawThreads: { threads: [{ threadId: 'PRRT_1', rootCommentId: 101, resolved: false, path: 'a.js', line: 10, body: 'Fix null check' }] }
+            }
+        });
+        var result = h.module.action({
+            inputFolderPath: 'input/PROJ-123',
+            dryRun: true,
+            jobParams: { inputFolderPath: 'input/PROJ-123', dryRun: true, customParams: {} }
+        });
+        assert.deepEqual(result, { success: true, dryRun: true });
+        assert.equal(h.calls.checkoutPRBranch.length, 0, 'must not checkout branch in dryRun');
+        assert.equal(h.calls.detectMergeConflictsArg, undefined, 'must not merge base branch in dryRun');
+        assert.equal(h.calls.runSetupCommands, 0, 'must not run setup commands in dryRun');
+        assert.equal(h.calls.postComment.length, 0, 'must not post tracker comments in dryRun');
+        assert.equal(h.calls.moveToStatus.length, 0, 'must not move ticket status in dryRun');
+        assert.ok(h.calls.writePRContext, 'must write PR context in dryRun');
+        assert.equal(h.calls.writePRContext.inputFolder, 'input/PROJ-123');
+        assert.equal(h.calls.writePRContext.prNumber, 7);
+        assert.equal(h.calls.writePRContext.markdown, '## Review Threads\n- Fix null check');
+        assert.ok(h.files['input/PROJ-123/ci_failures.md'], 'ci_failures.md contract file written in dryRun');
+        assert.ok(h.files['input/PROJ-123/review_state.md'], 'review_state.md contract file written in dryRun');
+        assert.ok(h.files['input/PROJ-123/review_policy.md'], 'review_policy.md contract file written in dryRun');
+    });
+
+    test('gh-1520: resolveReworkInputDiff uses SCM getDiffText / getPrDiff in dryRun and never calls gitOps.getPRDiff', function() {
+        var bs = loadModule('js/common/branchSetup.js');
+        assert.equal(
+            bs.resolveReworkInputDiff({ getDiffText: function() { return 'diff --git a/x b/x'; } }, { number: 7 }, 'master', 'b', {}, true),
+            'diff --git a/x b/x'
+        );
+        assert.equal(
+            bs.resolveReworkInputDiff({ getPrDiff: function() { return 'diff --git a/y b/y'; } }, { number: 7 }, 'master', 'b', {}, true),
+            'diff --git a/y b/y'
+        );
+        assert.equal(
+            bs.resolveReworkInputDiff({ getDiffText: function() { throw new Error('api error'); } }, { number: 7 }, 'master', 'b', {}, true),
+            ''
+        );
+        assert.equal(
+            bs.resolveReworkInputDiff(null, { number: 7 }, 'master', 'b', {}, true),
+            ''
+        );
+    });
+
+    test('gh-1520: dryRun handles missing repoInfo, missing PR, and missing PR details gracefully', function() {
+        var hNoRepo = makeActionHarness({ repoInfo: null, remoteRepoInfo: null });
+        assert.deepEqual(hNoRepo.module.action({ inputFolderPath: 'input/PROJ-123', dryRun: true }), { success: true, dryRun: true });
+
+        var hNoPr = makeActionHarness({ foundPr: null });
+        assert.deepEqual(hNoPr.module.action({ inputFolderPath: 'input/PROJ-123', dryRun: true }), { success: true, dryRun: true });
+
+        var hNoDetails = makeActionHarness({ prDetails: null });
+        assert.deepEqual(hNoDetails.module.action({ inputFolderPath: 'input/PROJ-123', dryRun: true }), { success: true, dryRun: true });
+    });
 });
 

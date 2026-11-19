@@ -575,7 +575,7 @@ function moveTicketToReworkStatus(config, tracker, ticketKey, statuses, prAnchor
  */
 function checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams, pullRef) {
     try {
-        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch, pullRef);
+        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch, pullRef, config.git);
     } catch (e) {
         failSetup(tracker, ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString(), customParams);
     }
@@ -795,15 +795,10 @@ function syncBaseAndDetectConflicts(baseBranch, customParams, config, inputFolde
     return gitOps.detectMergeConflicts(baseBranch, inputFolder, config.workingDir);
 }
 
-/**
- * Write the rework input context (Steps 4.7-6): the PR diff, the failed CI
- * checks probed against it, the discussions (human-readable + raw with ids),
- * and the head this pass starts from. Returns the pieces later steps need.
- * (gh-1220) Extracted from action().
- */
-function writeReworkInputContext(inputFolder, config, scm, pr, prDetails, branchName, baseBranch) {
+// Write the rework input context (Steps 4.7-6): diff, failed CI checks, discussions, and head SHA.
+function writeReworkInputContext(inputFolder, config, scm, pr, prDetails, branchName, baseBranch, dryRun) {
     const headSha = (prDetails.head && prDetails.head.sha) || null;
-    const diff = gitOps.getPRDiff(baseBranch, branchName, config.workingDir);
+    const diff = branchSetup.resolveReworkInputDiff(scm, pr, baseBranch, branchName, config, dryRun, gitOps.getPRDiff);
     const failedChecks = gh.detectFailedChecks(
         scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath, diff);
     console.log('Fetching PR discussions...');
@@ -834,9 +829,6 @@ function postReworkStartedCommentOrSkip(prAnchor, tracker, ticketKey, customPara
     });
 }
 
-function isDryRunReworkParams(params, actualParams) {
-    return branchSetup.isDryRunParams(params) || branchSetup.isDryRunParams(actualParams);
-}
 
 function resolveReworkBaseBranch(prDetails, config) {
     return prDetails.base ? prDetails.base.ref : config.git.baseBranch;
@@ -877,9 +869,17 @@ function action(params) {
         // throws a ReviewPolicyValidationError HERE, before any side effect.
         var reviewPolicy = reviewPolicyModule.resolveReviewPolicy(config, actualParams);
 
-        if (isDryRunReworkParams(params, actualParams)) {
-            console.log('[dryRun] Skipping mutating rework setup (branch checkout, merge, setup commands, tracker/SCM writes)');
-            return { success: true, dryRun: true };
+        if (branchSetup.isDryRunParams(params) || branchSetup.isDryRunParams(actualParams)) {
+            return branchSetup.runDryRunReworkSetup(params, actualParams, parsed, runtime, reviewPolicy, {
+                resolveRepoInfo: resolveRepoInfo,
+                findPrForRework: findPrForRework,
+                getPRDetails: gh.getPRDetails,
+                resolveReworkBaseBranch: resolveReworkBaseBranch,
+                writeReworkInputContext: writeReworkInputContext,
+                enforceReworkInputContract: enforceReworkInputContract,
+                fetchQuestions: fetchQuestionsToInput.action,
+                fetchParentContext: fetchParentContextToInput.action
+            });
         }
         restoreArtefactsQuietly(params);
 
@@ -1009,6 +1009,6 @@ if (typeof module !== 'undefined' && module.exports) {
         syncBaseAndDetectConflicts,
         writeReworkInputContext,
         enforceReworkInputContract,
-        postReworkStartedCommentOrSkip
+        postReworkStartedCommentOrSkip,
     };
 }

@@ -23,6 +23,7 @@
 
 var configLoader = require('./configLoader.js');
 const { GIT_CONFIG } = require('./config.js');
+var branchSetup = require('./common/branchSetup.js');
 
 function cleanOutput(output) {
     return (output || '').toString().trim();
@@ -36,6 +37,12 @@ function branchSlugFor(customParams) {
     // a timestamp so concurrent/repeated runs don't collide on the same branch name.
     var ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
     return 'update-' + ts;
+}
+
+function configureKnowledgeGitAuthor(config) {
+    var author = branchSetup.resolveGitAuthor(config && config.git, GIT_CONFIG);
+    cli_execute_command({ command: 'git config user.name "' + author.authorName + '"' });
+    cli_execute_command({ command: 'git config user.email "' + author.authorEmail + '"' });
 }
 
 function action(params) {
@@ -58,8 +65,7 @@ function action(params) {
 
         console.log('pushKnowledgeUpdate: detected changes under', knowledgeDir, ':\n' + status);
 
-        cli_execute_command({ command: 'git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"' });
-        cli_execute_command({ command: 'git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"' });
+        configureKnowledgeGitAuthor(config);
 
         var slug = branchSlugFor(customParams);
         var branchName = 'knowledge/' + slug + '-review-lessons';

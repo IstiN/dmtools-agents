@@ -186,13 +186,14 @@ function prepareBranchWithoutOpenPr(scm, config, tracker, ticketKey, testBranchN
     // Branch exists — ALWAYS checkout first so CLI runs on correct branch
     // (critical: CLI always runs regardless of preCliJSAction return value)
     try {
-        gitOps.checkoutPRBranch(testBranchName, config.workingDir, config.git.baseBranch);
+        gitOps.checkoutPRBranch(testBranchName, config.workingDir, config.git.baseBranch, undefined, config.git);
         console.log('✅ Checked out branch:', testBranchName);
     } catch (e) {
         console.warn('Could not checkout branch (will try fetch+checkout):', e);
         try {
             cli_execute_command({ command: gh.buildOriginFetchCommand(testBranchName + ':' + testBranchName) });
             cli_execute_command({ command: 'git checkout ' + testBranchName });
+            branchSetup.ensureBranchUpstream(testBranchName, function(c) { return cli_execute_command({ command: c }); });
             console.log('✅ Checked out branch via fetch:', testBranchName);
         } catch (e2) {
             console.warn('Branch checkout failed:', e2);
@@ -210,7 +211,7 @@ function prepareBranchWithoutOpenPr(scm, config, tracker, ticketKey, testBranchN
 /** Step-4 checkout; returns an error string instead of throwing. */
 function checkoutPrBranchOrFail(branchName, config) {
     try {
-        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch, undefined, config.git);
         return null;
     } catch (e) {
         return 'Failed to checkout branch: ' + e.toString();

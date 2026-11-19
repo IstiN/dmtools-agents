@@ -817,4 +817,48 @@ suite('branchSetup.ensureLegContextLocalExcludes (gh-1318)', function() {
         }
     });
 
+
+    test('gh-1520: pickFirstNonEmptyDiff, readDryRunScmDiff, resolveReworkInputDiff, and runDryRunReworkSetup cover all branches', function() {
+        var bs = loadBranchSetup();
+        assert.equal(bs.pickFirstNonEmptyDiff([
+            function() { throw new Error('err'); },
+            function() { return '  '; },
+            function() { return 'diff --git a/x b/x'; }
+        ]), 'diff --git a/x b/x');
+        assert.equal(bs.pickFirstNonEmptyDiff([function() { return ''; }]), '');
+        assert.equal(bs.readDryRunScmDiff(null, 1, null), '');
+        assert.equal(bs.readDryRunScmDiff({}, 1, null), '');
+        assert.equal(bs.resolveReworkInputDiff(null, { number: 1 }, 'main', 'b', {}, false, null), '');
+        assert.equal(bs.resolveReworkInputDiff(null, { number: 1 }, 'main', 'b', {}, false, function() { return 'local-diff'; }), 'local-diff');
+
+        var res = bs.runDryRunReworkSetup({}, {}, { inputFolder: 'input/X', prAnchor: null, ticketKey: 'X' }, { config: {}, scm: {} }, {}, {
+            resolveRepoInfo: function() { return { owner: 'o', repo: 'r' }; },
+            findPrForRework: function() { return { number: 5 }; },
+            getPRDetails: function() { return { number: 5, head: { ref: 'feat', sha: '123' }, base: { ref: 'main' } }; },
+            resolveReworkBaseBranch: function() { return 'main'; },
+            writeReworkInputContext: function() { return { discussionData: {}, failedChecks: [] }; },
+            enforceReworkInputContract: function() {},
+            fetchQuestions: function() { throw new Error('q err'); },
+            fetchParentContext: function() { throw new Error('p err'); }
+        });
+        assert.deepEqual(res, { success: true, dryRun: true });
+        var upstreamCmds = [];
+        bs.ensureBranchUpstream('', function(c) { upstreamCmds.push(c); });
+        bs.ensureBranchUpstream('feat', null);
+        bs.ensureBranchUpstream('feat', function(c) { upstreamCmds.push(c); });
+        bs.ensureBranchUpstream('feat', function() { throw new Error('no remote'); });
+        assert.deepEqual(upstreamCmds, ['git branch --set-upstream-to=origin/feat feat']);
+        assert.deepEqual(bs.resolveGitAuthor(null, null), {
+            authorName: 'AI Teammate',
+            authorEmail: 'agent.ai.native@gmail.com'
+        });
+        assert.deepEqual(bs.resolveGitAuthor({}, { AUTHOR_NAME: 'Def', AUTHOR_EMAIL: 'def@x' }), {
+            authorName: 'Def',
+            authorEmail: 'def@x'
+        });
+        assert.deepEqual(bs.resolveGitAuthor({ authorName: 'PostNL-AI', authorEmail: 'ai@postnl.nl' }, { AUTHOR_NAME: 'Def', AUTHOR_EMAIL: 'def@x' }), {
+            authorName: 'PostNL-AI',
+            authorEmail: 'ai@postnl.nl'
+        });
+    });
 });
