@@ -5265,6 +5265,9 @@ suite('pushReworkChanges — gh-1521 token usage posted on failure and early exi
         ]);
         var nullRes = loaded.mod.action(null);
         assert.equal(nullRes.success, false, 'action(null) returns graceful failure without throwing out of catch');
+    });
+});
+
 // ── gh-1521: the usage comment posts on EVERY rework outcome ────────────────
 suite('pushReworkChanges — gh-1521 usage comment on failure outcomes', function () {
 

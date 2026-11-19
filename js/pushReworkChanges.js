@@ -2860,7 +2860,6 @@ function handleActionError(params, error, tracker) {
         }
     } catch (eUsage) { /* never a blocker */ }
     try {
-        postCompletionTokenUsage(params, errorTicketKeyOf(params));
         const ticketKey = errorTicketKeyOf(params);
         if (!ticketKey) {
             return { success: false, error: error.toString() };
