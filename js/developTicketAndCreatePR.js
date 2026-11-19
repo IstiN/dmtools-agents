@@ -2143,8 +2143,9 @@ function finalizeDevelopmentSuccess(params, ctx, branchName, prResult, prApprove
 // gh-1521: the action's ticket key, resolved from either params shape —
 // null when the leg never got far enough to know one (nothing to post on).
 function failedDevTicketKeyOf(params) {
-    var actualParams = params && params.ticket ? params : ((params && params.jobParams) || params || {});
-    return (actualParams && actualParams.ticket && actualParams.ticket.key) || null;
+    var p = params || {};
+    var actualParams = p.ticket ? p : (p.jobParams || p);
+    return (actualParams.ticket && actualParams.ticket.key) || null;
 }
 
 function concludeActionFailure(params, error) {

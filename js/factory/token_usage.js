@@ -257,22 +257,27 @@ function cutoffIso(now, days) {
  * The printf row: field order is the contract
  * {"leg","at","prompt","completion","total","cacheRead","requests",
  *  "source","model"} — requests defaults to 0 (absent field parity with
- * the ledger counter), source to ''.
+ * the ledger counter), source to ''. Numeric coercion and the string
+ * defaults ride the per-field helpers below (per-field CRAP ratchet).
  */
+function rowStringOf(v) {
+    return String(v || '');
+}
+
 function buildRow(o) {
     o = o || {};
     var prompt = ledgerInt(o.prompt) || 0;
     var completion = ledgerInt(o.completion) || 0;
     return {
-        leg: String(o.leg || ''),
-        at: String(o.at || ''),
+        leg: rowStringOf(o.leg),
+        at: rowStringOf(o.at),
         prompt: prompt,
         completion: completion,
         total: prompt + completion,
         cacheRead: ledgerInt(o.cacheRead) || 0,
         requests: ledgerInt(o.requests) || 0,
-        source: String(o.source || ''),
-        model: String(o.model || '')
+        source: rowStringOf(o.source),
+        model: rowStringOf(o.model)
     };
 }
 
@@ -674,6 +679,7 @@ module.exports = {
     utcStampZ: utcStampZ,
     cutoffIso: cutoffIso,
     buildRow: buildRow,
+    rowStringOf: rowStringOf,
     objectOrEmpty: objectOrEmpty,
     orderedKeysOf: orderedKeysOf,
     retainedRowsOf: retainedRowsOf,
