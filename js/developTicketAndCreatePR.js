@@ -2135,9 +2135,27 @@ function finalizeDevelopmentSuccess(params, ctx, branchName, prResult, prApprove
  * The outer-catch recovery: marked failures rethrow (dead letters already
  * did their tracker side effects), an attempted resume recurses into
  * action(), anything else is the reset-for-retry "success" result.
+ * gh-1521: the usage comment posts on EVERY dev outcome — including this
+ * failure path — before any recovery: crashes are exactly the runs whose
+ * cost matters. Best-effort, deduped per run by tokenUsageComment
+ * (postedInRun), and never a blocker (posted safely).
  */
+// gh-1521: the action's ticket key, resolved from either params shape —
+// null when the leg never got far enough to know one (nothing to post on).
+function failedDevTicketKeyOf(params) {
+    var actualParams = params && params.ticket ? params : ((params && params.jobParams) || params || {});
+    return (actualParams && actualParams.ticket && actualParams.ticket.key) || null;
+}
+
 function concludeActionFailure(params, error) {
     console.error('❌ Error in development workflow:', error);
+
+    // gh-1521: post usage telemetry on the failure outcome too (best-effort;
+    // a resume recursion re-enters action() deduped via postedInRun).
+    var failedKey = failedDevTicketKeyOf(params);
+    if (failedKey) {
+        tokenUsageComment.postTokenUsageSafely(failedKey, params);
+    }
 
     if (rethrownAsIs(error)) {
         throw error;

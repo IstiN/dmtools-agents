@@ -18,8 +18,11 @@ Behavior contract is identical:
 
 1. **Ledger parse** — sum every `fa-tokens: {…}` record in the run output
    (balanced-brace scan; one line per session segment, resume-aware).
-   `input`/`output`/`cacheRead` are summed; last-seen `model` wins.
-   Invalid/truncated payloads are skipped.
+   `input`/`output`/`cacheRead`/`requests` are summed; last-seen `model`
+   wins; `source` collects the record kinds — `reported` | `estimated`,
+   `mixed` when both appear in one ledger. `requests` absent → 0;
+   a non-numeric field skips the whole record (the sh `int()` raise
+   parity). Invalid/truncated payloads are skipped.
 2. **Skips** (warn + exit, never throw): run output missing/empty
    (`no-run-output`); zero input+output sums (`no-ledger`); anchor not
    `pr-*`/`gh-*` (`bad-anchor`).
@@ -28,16 +31,29 @@ Behavior contract is identical:
    `KIND`, else `dev`.
 4. **Key** — `pr-<n>` passes through; `gh-<n>` → `issue-<n>`.
 5. **Row** — printf field order:
-   `{"leg","at","prompt","completion","total","cacheRead","model"}`,
+   `{"leg","at","prompt","completion","total","cacheRead","requests",
+   "source","model"}`,
    `at` = UTC ISO-8601 seconds, `total = prompt + completion`.
 6. **Publish** — bootstrap the data branch from the default-branch head
    (422 already-exists is normal), then up to 3 attempts: GET contents
    (sha + body), append the row under the key, drop rows older than 14
-   days, keep the last 40 per key, drop emptied keys, PUT the Contents API
+   days, keep the last 200 per key (ROW_KEEP — the honest cap; 40 silently
+   ate a real leg's tail), drop emptied keys, PUT the Contents API
    with the existing sha. Conflict → refetch → retry (sh backoff
    `attempt*2s`; the JS default `sleepMs` is a no-op — retries refetch
    anyway, injection point for tests). Exhausted → warn; rows are
    decorative, the next leg retries.
+
+### The one canonical path (owner directive 2026-11-19)
+
+`data/agents-tokens.json` @ branch `factory-data` — hardcoded, NOT
+configurable. No `DATA_PATH` env, no `dataPath` job param, no copy in the
+pack config: `token_usage.DEFAULT_DATA_PATH` is the single JS constant,
+`scripts/publish-token-usage.sh` pins the same literal, and
+`factoryState.FACTORY_TOKENS_ASSET` reads the same asset on the tick side
+(`statePublish.tokensAsset` in machine-sm.yml keeps its explicit
+`agents-tokens.json` pin). The stream is a flat `data/<name>.json` file —
+the Contents API has no subdirectories.
 
 ### Env/file contract (what the awf side passes today)
 
@@ -49,9 +65,11 @@ Behavior contract is identical:
 | `ANCHOR`      | `anchor`     | work anchor: `pr-<n>` \| `gh-<n>`              | — (absent → skip)    |
 | `REPO`        | `repo`       | factory-data target `owner/repo`               | — (needed to publish)|
 | `DATA_BRANCH` | `dataBranch` | target branch                                  | `factory-data`       |
-| `DATA_PATH`   | `dataPath`   | target path                                    | `data/fa-tokens.json`|
 
-Files touched: only the Contents API on `DATA_BRANCH`/`DATA_PATH` (plus a
+(The target path is not in the table — see the canonical-path section.)
+
+Files touched: only the Contents API on the data branch at the canonical
+path (plus a
 short-lived `/tmp/fa-tokens-put-<ms>-<attempt>.json` body file deleted in
 `finally`). Transport is gh-first (`gh api … --input <tempFile>` — executor
 whitelist, zero payload bytes in argv to avoid `E2BIG` past 128 KiB), with

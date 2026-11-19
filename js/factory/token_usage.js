@@ -12,21 +12,32 @@
  *   2. Sum every `fa-tokens: {…}` ledger line (resume-aware: one line per
  *      session segment) — balanced-brace scan so a payload wrapped in a log
  *      line is found whole; invalid payloads are skipped. input/output/
- *      cacheRead are summed; the last-seen model wins. Zero in+out → skip.
+ *      cacheRead/requests are summed; the last-seen model wins; the source
+ *      is 'reported' | 'estimated' | 'mixed' when both kinds appear (fa's
+ *      usageSourceLabel discipline). Zero in+out → skip.
  *   3. Leg: the run guard collapses the rework slot into kind="dev", so the
  *      true leg is recovered from the runner-config basename — *rework* →
  *      "rework", else KIND, else "dev".
  *   4. Anchor → key: pr-* passes through; gh-N → issue-N; anything else →
  *      skip (warn).
  *   5. Row (printf field order): {"leg","at","prompt","completion","total",
- *      "cacheRead","model"} — at = UTC ISO-8601 seconds.
+ *      "cacheRead","requests","source","model"} — at = UTC ISO-8601 seconds.
  *   6. Bootstrap the factory-data branch from the default-branch head
  *      (422 "already exists" is the normal case), then up to 3 attempts:
  *      GET contents (sha + body), append the row under the key, drop rows
- *      older than 14 days, keep the last 40 per key, drop emptied keys,
+ *      older than 14 days, keep the last 200 per key, drop emptied keys,
  *      PUT Contents API with the existing sha. Conflict → refetch → retry
  *      (sh backoff attempt*2s). Exhausted → warn; rows are decorative and
  *      the next leg retries.
+ *
+ * THE PATH IS NOT CONFIGURABLE (owner directive 2026-11-19): every writer
+ * and reader of the leg-tokens stream goes through DEFAULT_DATA_PATH =
+ * 'data/agents-tokens.json' — no DATA_PATH env, no job-config copy, no
+ * repo variable. The factory-data stream is a flat `data/<name>.json` file
+ * (the Contents API has no subdirectories). js/factoryState.js
+ * (FACTORY_TOKENS_ASSET) and scripts/publish-token-usage.sh carry the same
+ * literal pinned by the AC3 consistency test in
+ * js/unit-tests/test_factoryTokenUsage.js.
  *
  * Transport mirrors factoryState.js: every command starts with `gh` (the
  * executor whitelists the first token); base64 stays in-shell
@@ -41,17 +52,19 @@
  *   ANCHOR       work anchor: pr-<n> | gh-<n>
  *   REPO         owner/repo of the factory-data target
  *   DATA_BRANCH  target branch (default "factory-data")
- *   DATA_PATH    target path   (default "data/fa-tokens.json")
+ *   (path is NOT an option — DEFAULT_DATA_PATH is the one canonical
+ *   constant; see the owner directive above)
  *
  * Pure functions carry no IO: the publisher takes { exec, read, sleepMs,
  * log } capturers (factoryState.js convention) so tests mock the transport
  * via loadModule without touching any global.
  */
 
-var ROW_KEEP = 40;              // jq `.[-40:]` tail cap per key
+var ROW_KEEP = 200;             // per-key tail cap (owner 2026-11-19: 40 lied
+                                // — a real leg made 83 turns and lost its tail)
 var DEFAULT_WINDOW_DAYS = 14;   // jq cutoff: keep rows newer than now-14d
 var DEFAULT_DATA_BRANCH = 'factory-data';
-var DEFAULT_DATA_PATH = 'data/fa-tokens.json';
+var DEFAULT_DATA_PATH = 'data/agents-tokens.json'; // THE one canonical path
 var DEFAULT_ATTEMPTS = 3;       // concurrent-leg PUT conflict absorber
 
 // ── ledger parsing (pure) ────────────────────────────────────────────────────
@@ -140,26 +153,47 @@ function ledgerInt(v) {
 /**
  * Folds one parsed ledger record into the sums: int() raise (a non-numeric
  * field) skips the whole record silently; the last-seen non-empty model
- * wins.
+ * wins; requests sum with the same int() parity; the source kinds
+ * ('reported' | 'estimated') are collected — 'mixed' when both appear.
  */
 function applyLedgerRecord(sums, rec) {
     var inp = ledgerInt(rec.input);
     var out = ledgerInt(rec.output);
     var cr = ledgerInt(rec.cacheRead);
     if (inp === null || out === null || cr === null) return; // int() raise
+    var req = ledgerInt(rec.requests);
+    if (req === null) return; // a non-numeric requests skips the record too
     sums.input += inp;
     sums.output += out;
     sums.cacheRead += cr;
+    sums.requests += req;
+    if (rec.source === 'reported' || rec.source === 'estimated') {
+        sums.sources[rec.source] = true;
+    }
     if (rec.model) sums.model = String(rec.model); // last-seen wins
 }
 
 /**
+ * The published source label: '' when the ledger never carried a source,
+ * the single kind when all records agree, 'mixed' when both 'reported' and
+ * 'estimated' appear — the same discipline as the fa reporter's
+ * usageSourceLabel.
+ */
+function sourceLabelOf(sources) {
+    var kinds = Object.keys(sources).sort();
+    if (kinds.length === 0) return '';
+    if (kinds.length === 1) return kinds[0];
+    return 'mixed';
+}
+
+/**
  * Sums every fa-tokens ledger record in the run output.
- * Returns { input, output, cacheRead, model } — model is the last-seen
- * non-empty model ('' when the ledger never carries one).
+ * Returns { input, output, cacheRead, requests, model, source } — model is
+ * the last-seen non-empty model ('' when the ledger never carries one) and
+ * source is '' | 'reported' | 'estimated' | 'mixed'.
  */
 function parseFaTokensLedger(text) {
-    var sums = { input: 0, output: 0, cacheRead: 0, model: '' };
+    var sums = { input: 0, output: 0, cacheRead: 0, requests: 0, model: '', sources: {} };
     var body = String(text || '');
     var re = /fa-tokens:/g;
     var m;
@@ -172,6 +206,8 @@ function parseFaTokensLedger(text) {
         if (!rec || typeof rec !== 'object' || Array.isArray(rec)) continue;
         applyLedgerRecord(sums, rec);
     }
+    sums.source = sourceLabelOf(sums.sources);
+    delete sums.sources;
     return sums;
 }
 
@@ -219,7 +255,9 @@ function cutoffIso(now, days) {
 
 /**
  * The printf row: field order is the contract
- * {"leg","at","prompt","completion","total","cacheRead","model"}.
+ * {"leg","at","prompt","completion","total","cacheRead","requests",
+ *  "source","model"} — requests defaults to 0 (absent field parity with
+ * the ledger counter), source to ''.
  */
 function buildRow(o) {
     o = o || {};
@@ -232,6 +270,8 @@ function buildRow(o) {
         completion: completion,
         total: prompt + completion,
         cacheRead: ledgerInt(o.cacheRead) || 0,
+        requests: ledgerInt(o.requests) || 0,
+        source: String(o.source || ''),
         model: String(o.model || '')
     };
 }
@@ -457,12 +497,13 @@ function publishIoOf(io) {
     };
 }
 
-// Target defaults: repo, factory-data branch, fa-tokens path, 3 attempts.
+// Target defaults: repo, factory-data branch, THE canonical path (no
+// dataPath option — DEFAULT_DATA_PATH only), 3 attempts.
 function publishTargetOf(opts) {
     return {
         repo: opts.repo || '',
         branch: opts.dataBranch || DEFAULT_DATA_BRANCH,
-        path: opts.dataPath || DEFAULT_DATA_PATH,
+        path: DEFAULT_DATA_PATH,
         attempts: opts.attempts || DEFAULT_ATTEMPTS
     };
 }
@@ -541,8 +582,9 @@ function putRowWithRetries(io, target, now, key, leg, row, cutoff, log, sleepMs)
 /**
  * Publish one leg's token-usage row.
  *
- * opts: runOutput, configPath, kind, anchor, repo, dataBranch, dataPath,
+ * opts: runOutput, configPath, kind, anchor, repo, dataBranch,
  *       now (Date|ms|ISO — tests pin the clock), attempts (default 3)
+ *       (the target path is the fixed DEFAULT_DATA_PATH — not an option)
  * io:   exec({command}) → {output|stdout} (throws on failure) — REQUIRED
  *       for any gh traffic; read(path) → string (throws when absent);
  *       sleepMs(ms) (default no-op — the sh sleeps attempt*2 s; the agent
@@ -591,12 +633,16 @@ function publishTokenUsage(opts, io) {
         prompt: sums.input,
         completion: sums.output,
         cacheRead: sums.cacheRead,
+        requests: sums.requests,
+        source: sums.source,
         model: sums.model
     });
     log('leg tokens: ' + key + ' ' + leg +
         ' prompt=' + sums.input +
         ' completion=' + sums.output +
         ' cached=' + sums.cacheRead +
+        ' requests=' + sums.requests +
+        ' source=' + (sums.source || 'none') +
         ' model=' + (sums.model || 'none'));
 
     // 6) bootstrap the data branch (422 already-exists is the normal case)
@@ -622,6 +668,7 @@ module.exports = {
     jsonPayloadEndFrom: jsonPayloadEndFrom,
     braceStartAfterMarker: braceStartAfterMarker,
     applyLedgerRecord: applyLedgerRecord,
+    sourceLabelOf: sourceLabelOf,
     resolveLeg: resolveLeg,
     resolveAnchorKey: resolveAnchorKey,
     utcStampZ: utcStampZ,

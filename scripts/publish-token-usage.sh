@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Extracted byte-for-byte from .github/workflows/factory-teammate.yml
-# (step: Publish leg token usage (fa-tokens ledger -> factory-data)) — stage-1 de-bloat.
-# Behavior contract: identical. Invoke with `bash -e` (the GH runner default
-# shell for inline `run:`); env block + always() stay on the workflow step.
+# Extracted from the awf factory-teammate.yml step «Publish leg token usage».
+# Owner directive 2026-11-19: the target path is the ONE hardcoded constant
+# `data/agents-tokens.json` (branch `factory-data`) — no DATA_PATH /
+# DATA_BRANCH env; the JS producer (js/factory/token_usage.js
+# DEFAULT_DATA_PATH) and the SM tick reader (js/factoryState.js
+# FACTORY_TOKENS_ASSET) pin the same literals.
 set -eu
 if [ ! -s "${RUN_OUTPUT}" ]; then
   echo "::warning::no run output captured — skipping token publish"
@@ -20,8 +22,9 @@ fi
 # session segment). Balanced-brace JSON after the marker.
 read -r SUM_IN SUM_OUT SUM_CR MODEL < <(python3 - "${RUN_OUTPUT}" <<'PY' || true
 import json, re, sys
-inp = out = cr = 0
+inp = out = cr = req = 0
 model = ""
+sources = set()
 try:
     text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 except OSError:
@@ -41,6 +44,16 @@ for m in re.finditer(r"fa-tokens:[ \t]*(\{)", text):
         # board prices it (model-pricing cacheRead rates) and
         # renders an `input cached` column — sum it like in/out.
         cr += int(rec.get("cacheRead") or 0)
+        # requests: the ledger's per-segment request count — the row
+        # answers "how expensive is a leg with the cache priced in".
+        # int() parity with input/output: absent → 0, non-numeric
+        # skips the whole record.
+        req += int(rec.get("requests") or 0)
+        # source kinds (reported | estimated) — 'mixed' when both
+        # appear in one ledger (owner 2026-11-19: cold-restart
+        # visibility; same discipline as the fa reporter).
+        if rec.get("source") in ("reported", "estimated"):
+            sources.add(rec["source"])
         # last-seen model wins (fa ledger carries it once gh-1241
         # grows the field; absent today — stay empty, consumers
         # render tokens-only)
@@ -48,12 +61,19 @@ for m in re.finditer(r"fa-tokens:[ \t]*(\{)", text):
             model = str(rec["model"])
     except Exception:
         continue
-print(inp, out, cr, model)
+src = ""
+if len(sources) == 1:
+    src = next(iter(sources))
+elif len(sources) > 1:
+    src = "mixed"
+print(inp, out, cr, req, src, model)
 PY
 ) || true
 SUM_IN="${SUM_IN:-0}"
 SUM_OUT="${SUM_OUT:-0}"
 SUM_CR="${SUM_CR:-0}"
+SUM_REQ="${SUM_REQ:-0}"
+SOURCE="${SOURCE:-}"
 MODEL="${MODEL:-}"
 if [ "${SUM_IN}" = "0" ] && [ "${SUM_OUT}" = "0" ]; then
   echo "::warning::no fa-tokens ledger line in run output — skipping token publish"
@@ -71,15 +91,15 @@ case "${ANCHOR}" in
   *) echo "::warning::unrecognized anchor '${ANCHOR}' — skipping token publish"; exit 0 ;;
 esac
 AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-ROW="$(printf '{"leg":"%s","at":"%s","prompt":%s,"completion":%s,"total":%s,"cacheRead":%s,"model":"%s"}' \
-  "${LEG}" "${AT}" "${SUM_IN}" "${SUM_OUT}" "$((SUM_IN + SUM_OUT))" "${SUM_CR}" "${MODEL}")"
-echo "leg tokens: ${KEY} ${LEG} prompt=${SUM_IN} completion=${SUM_OUT} cached=${SUM_CR} model=${MODEL:-none}"
+ROW="$(printf '{"leg":"%s","at":"%s","prompt":%s,"completion":%s,"total":%s,"cacheRead":%s,"requests":%s,"source":"%s","model":"%s"}' \
+  "${LEG}" "${AT}" "${SUM_IN}" "${SUM_OUT}" "$((SUM_IN + SUM_OUT))" "${SUM_CR}" "${SUM_REQ}" "${SOURCE}" "${MODEL}")"
+echo "leg tokens: ${KEY} ${LEG} prompt=${SUM_IN} completion=${SUM_OUT} cached=${SUM_CR} requests=${SUM_REQ} source=${SOURCE:-none} model=${MODEL:-none}"
 # Bootstrap the data branch exactly like the tick's state publish
 # (422 "already exists" is the normal case) — then PUT with the
 # existing sha; 3 attempts absorb concurrent leg publishes.
 gh api "repos/${REPO}/git/ref/heads/$(gh api "repos/${REPO}" --jq .default_branch)" \
   --jq .object.sha \
-  | xargs -I{} gh api -X POST "repos/${REPO}/git/refs" -f ref="refs/heads/${DATA_BRANCH}" -f sha={} || true
+  | xargs -I{} gh api -X POST "repos/${REPO}/git/refs" -f ref="refs/heads/factory-data" -f sha={} || true
 NEXT_FILE="$(mktemp "${TMPDIR:-/tmp}/fa-tokens-next.XXXXXX")"
 BODY_FILE=""
 trap 'rm -f "${NEXT_FILE}" "${BODY_FILE}"' EXIT
@@ -88,7 +108,7 @@ ok=0
 for attempt in 1 2 3; do
   SHA=""
   CUR="{}"
-  if META="$(gh api "repos/${REPO}/contents/${DATA_PATH}?ref=${DATA_BRANCH}" 2>/dev/null)"; then
+  if META="$(gh api "repos/${REPO}/contents/data/agents-tokens.json?ref=factory-data" 2>/dev/null)"; then
     SHA="$(printf %s "${META}" | jq -r .sha)"
     CUR="$(printf %s "${META}" | jq -r .content | tr -d '\n' | base64 -d 2>/dev/null || echo '{}')"
     printf %s "${CUR}" | jq empty >/dev/null 2>&1 || CUR='{}'
@@ -100,11 +120,11 @@ for attempt in 1 2 3; do
      | with_entries(select(.value | length > 0))' > "${NEXT_FILE}"
   jq -n \
     --rawfile next "${NEXT_FILE}" \
-    --arg branch "${DATA_BRANCH}" \
+    --arg branch "factory-data" \
     --arg message "leg tokens — ${KEY} ${LEG} [skip ci]" \
     --arg sha "${SHA}" \
     '{branch: $branch, message: $message, content: ($next | @base64)} + (if $sha != "" then {sha: $sha} else {} end)' > "${BODY_FILE}"
-  if gh api -X PUT "repos/${REPO}/contents/${DATA_PATH}" --input "${BODY_FILE}"; then ok=1; break; fi
+  if gh api -X PUT "repos/${REPO}/contents/data/agents-tokens.json" --input "${BODY_FILE}"; then ok=1; break; fi
   echo "token publish attempt ${attempt} conflicted — refetching"
   sleep $((attempt * 2))
 done

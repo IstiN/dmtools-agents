@@ -59,6 +59,8 @@ suite('factoryTokenUsage — parseFaTokensLedger', function () {
     assert.equal(sums.input, 1200);
     assert.equal(sums.output, 340);
     assert.equal(sums.cacheRead, 9900);
+    assert.equal(sums.requests, 0, 'absent requests field → 0');
+    assert.equal(sums.source, 'reported');
     assert.equal(sums.model, '');
   });
 
@@ -103,14 +105,23 @@ suite('factoryTokenUsage — parseFaTokensLedger', function () {
     assert.equal(sums.cacheRead, 0);
   });
 
+  test('requests sum + mixed source when both kinds appear in one ledger', function () {
+    var sums = tuModule.parseFaTokensLedger(
+      'fa-tokens: {"input":10,"output":5,"cacheRead":0,"requests":4,"source":"reported"}\n' +
+      'fa-tokens: {"input":20,"output":6,"cacheRead":0,"requests":7,"source":"estimated"}\n');
+    assert.equal(sums.input, 30);
+    assert.equal(sums.output, 11);
+    assert.equal(sums.requests, 11);
+    assert.equal(sums.source, 'mixed');
+  });
+
   test('no marker at all → zero sums, empty model', function () {
     var sums = tuModule.parseFaTokensLedger('a perfectly ordinary run log');
-    assert.deepEqual(sums, { input: 0, output: 0, cacheRead: 0, model: '' });
+    assert.deepEqual(sums, { input: 0, output: 0, cacheRead: 0, requests: 0, model: '', source: '' });
   });
 
   test('empty text → zero sums', function () {
-    assert.deepEqual(tuModule.parseFaTokensLedger(''),
-        { input: 0, output: 0, cacheRead: 0, model: '' });
+    assert.deepEqual(tuModule.parseFaTokensLedger(''), { input: 0, output: 0, cacheRead: 0, requests: 0, model: '', source: '' });
   });
 });
 
@@ -157,11 +168,18 @@ suite('factoryTokenUsage — buildRow / utcStampZ / cutoffIso', function () {
 
   test('row shape is the printf contract, field order exact', function () {
     var row = tuModule.buildRow({
-      leg: 'dev', at: NOW, prompt: 1200, completion: 340, cacheRead: 9900, model: 'gpt-y'
+      leg: 'dev', at: NOW, prompt: 1200, completion: 340, cacheRead: 9900,
+      requests: 33, source: 'reported', model: 'gpt-y'
     });
     assert.equal(JSON.stringify(row),
       '{"leg":"dev","at":"' + NOW + '","prompt":1200,"completion":340,' +
-      '"total":1540,"cacheRead":9900,"model":"gpt-y"}');
+      '"total":1540,"cacheRead":9900,"requests":33,"source":"reported","model":"gpt-y"}');
+  });
+
+  test('gh-1521-adjacent: requests/source default to 0/empty (absent ledger parity)', function () {
+    var row = tuModule.buildRow({ leg: 'dev', at: NOW, prompt: 10, completion: 5 });
+    assert.equal(row.requests, 0);
+    assert.equal(row.source, '');
   });
 
   test('total = prompt + completion; cacheRead rides along unpriced', function () {
@@ -201,17 +219,17 @@ suite('factoryTokenUsage — mergeTokenRows', function () {
     assert.deepEqual(next['issue-1'], [KEPT, ROW]);
   });
 
-  test('retention: rows older than the cutoff are dropped, then the tail is capped at 40', function () {
+  test('retention: rows older than the cutoff are dropped, then the tail is capped at ROW_KEEP', function () {
     var cur = { 'pr-1': [OLD, KEPT] };
     var many = [];
-    for (var i = 0; i < 45; i++) {
+    for (var i = 0; i < tuModule.ROW_KEEP + 5; i++) {
       many.push({ leg: 'dev', at: '2026-10-02T00:00:' + (i < 10 ? '0' + i : i) + 'Z',
         prompt: i, completion: 0, total: i, cacheRead: 0, model: '' });
     }
     cur['pr-1'] = cur['pr-1'].concat(many);
     var next = tuModule.mergeTokenRows(cur, 'pr-1', ROW, CUTOFF);
-    assert.equal(next['pr-1'].length, 40, 'cap: last 40 survive');
-    assert.deepEqual(next['pr-1'][39], ROW, 'new row is the newest tail element');
+    assert.equal(next['pr-1'].length, tuModule.ROW_KEEP, 'cap: last ROW_KEEP survive');
+    assert.deepEqual(next['pr-1'][tuModule.ROW_KEEP - 1], ROW, 'new row is the newest tail element');
     assert.deepEqual(next['pr-1'][0],
         { leg: 'dev', at: '2026-10-02T00:00:06Z', prompt: 6, completion: 0, total: 6, cacheRead: 0, model: '' });
     assert.equal(JSON.stringify(next['pr-1']).indexOf('2026-09-01'), -1, 'pre-cutoff row gone');
@@ -244,20 +262,20 @@ suite('factoryTokenUsage — gh command builders', function () {
   });
 
   test('probes: .sha via --jq; body via .content | base64 -d; both ref-locked', function () {
-    assert.equal(tuModule.contentsShaCommand('O/R', 'data/fa-tokens.json', 'factory-data'),
-        'gh api repos/O/R/contents/data/fa-tokens.json?ref=factory-data --jq .sha');
-    assert.equal(tuModule.contentsBodyCommand('O/R', 'data/fa-tokens.json', 'factory-data'),
-        'gh api repos/O/R/contents/data/fa-tokens.json?ref=factory-data --jq .content | base64 -d');
+    assert.equal(tuModule.contentsShaCommand('O/R', 'data/agents-tokens.json', 'factory-data'),
+        'gh api repos/O/R/contents/data/agents-tokens.json?ref=factory-data --jq .sha');
+    assert.equal(tuModule.contentsBodyCommand('O/R', 'data/agents-tokens.json', 'factory-data'),
+        'gh api repos/O/R/contents/data/agents-tokens.json?ref=factory-data --jq .content | base64 -d');
   });
 
   test('PUT assembles branch, message, base64 content and existing sha', function () {
-    var cmd = tuModule.contentsPutCommand('O/R', 'data/fa-tokens.json', {
+    var cmd = tuModule.contentsPutCommand('O/R', 'data/agents-tokens.json', {
       branch: 'factory-data',
       message: 'leg tokens — pr-783 dev [skip ci]',
       json: '{"pr-783":[]}',
       sha: 'abc123'
     });
-    assert.contains(cmd, 'gh api -X PUT repos/O/R/contents/data/fa-tokens.json');
+    assert.contains(cmd, 'gh api -X PUT repos/O/R/contents/data/agents-tokens.json');
     assert.contains(cmd, "-f branch=factory-data");
     assert.contains(cmd, "-f message='leg tokens — pr-783 dev [skip ci]'");
     assert.contains(cmd, '-f content="$(printf %s \'{"pr-783":[]}\' | base64)"');
@@ -265,7 +283,7 @@ suite('factoryTokenUsage — gh command builders', function () {
   });
 
   test('first publish (no sha) omits -f sha entirely', function () {
-    var cmd = tuModule.contentsPutCommand('O/R', 'data/fa-tokens.json', {
+    var cmd = tuModule.contentsPutCommand('O/R', 'data/agents-tokens.json', {
       branch: 'factory-data', message: 'm', json: '{}', sha: ''
     });
     assert.equal(cmd.indexOf('-f sha'), -1);
@@ -340,8 +358,8 @@ suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', 
     var p = tuModule.tempPutBodyPath(NOW, 2);
     assert.ok(/^\/tmp\/fa-tokens-put-\d+-2\.json$/.test(p), 'got: ' + p);
     assert.equal(tuModule.tempPutBodyPath('not-a-date', 0), '/tmp/fa-tokens-put-0-0.json');
-    var cmd = tuModule.contentsPutInputCommand('IstiN/flutter_agent_harness', 'data/fa-tokens.json', p);
-    assert.equal(cmd, 'gh api -X PUT repos/IstiN/flutter_agent_harness/contents/data/fa-tokens.json --input ' + p);
+    var cmd = tuModule.contentsPutInputCommand('IstiN/flutter_agent_harness', 'data/agents-tokens.json', p);
+    assert.equal(cmd, 'gh api -X PUT repos/IstiN/flutter_agent_harness/contents/data/agents-tokens.json --input ' + p);
   });
 
   test('publishTokenUsage with write/del uses --input temp file and cleans up on success & conflict', function () {
@@ -351,7 +369,7 @@ suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', 
     var res = tuModule.publishTokenUsage({
       runOutput: 'out.txt', configPath: 'config-rework.json', kind: 'dev',
       anchor: 'pr-1665', repo: 'IstiN/flutter_agent_harness',
-      dataBranch: 'factory-data', dataPath: 'data/fa-tokens.json', now: NOW
+      dataBranch: 'factory-data', now: NOW
     }, {
       exec: stub.exec,
       read: function () { return 'fa-tokens: {"input":500,"output":100,"cacheRead":2000,"model":"claude-opus-4-7"}'; },
@@ -373,7 +391,7 @@ suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', 
     var expectedRowJson = JSON.stringify({
       "pr-1665": [{
         leg: "rework", at: NOW, prompt: 500, completion: 100,
-        total: 600, cacheRead: 2000, model: "claude-opus-4-7"
+        total: 600, cacheRead: 2000, requests: 0, source: "", model: "claude-opus-4-7"
       }]
     });
     assert.equal(parsedBody.content, tuModule.base64EncodeUtf8(expectedRowJson));
@@ -387,10 +405,10 @@ suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', 
       log: function (m) { logs.push(m); }
     };
     var bigJson = buildLargeTokensJson();
-    assert.equal(tuModule.putTokenContents(io, 'O/R', 'data/fa-tokens.json', NOW, 1, {
+    assert.equal(tuModule.putTokenContents(io, 'O/R', 'data/agents-tokens.json', NOW, 1, {
       branch: 'factory-data', message: 'm', json: bigJson, sha: 's1'
     }), true);
-    assert.equal(tuModule.putTokenContents(io, 'O/R', 'data/fa-tokens.json', NOW, 2, {
+    assert.equal(tuModule.putTokenContents(io, 'O/R', 'data/agents-tokens.json', NOW, 2, {
       branch: 'factory-data', message: 'm', json: bigJson, sha: 's1'
     }), true);
     assert.equal(logs.length, 1, 'warning logged once on attempt 1');
@@ -406,7 +424,7 @@ suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', 
     var res = tuModule.publishTokenUsage({
       runOutput: 'out.txt', configPath: 'config-dev.json', kind: 'dev',
       anchor: 'pr-1715', repo: 'IstiN/flutter_agent_harness',
-      dataBranch: 'factory-data', dataPath: 'data/fa-tokens.json', now: NOW
+      dataBranch: 'factory-data', now: NOW
     }, {
       exec: stub.exec,
       read: function () { return 'fa-tokens: {"input":1000,"output":250,"cacheRead":500,"model":"claude-opus-4-7"}'; },
@@ -449,7 +467,6 @@ suite('factoryTokenUsage — publishTokenUsage', function () {
       anchor: 'pr-783',
       repo: 'O/R',
       dataBranch: 'factory-data',
-      dataPath: 'data/fa-tokens.json',
       now: NOW
     }, opts || {}), io);
     return { result: result, stub: stub, io: io };
@@ -490,7 +507,7 @@ suite('factoryTokenUsage — publishTokenUsage', function () {
     assert.equal(r.result.attempts, 1);
     assert.deepEqual(r.result.row, {
       leg: 'dev', at: NOW, prompt: 1200, completion: 340, total: 1540,
-      cacheRead: 9900, model: 'gpt-y'
+      cacheRead: 9900, requests: 0, source: '', model: 'gpt-y'
     });
     var cmds = r.stub.state.commands;
     assert.equal(cmds.length, 4, 'bootstrap, sha probe, body probe, PUT');
@@ -498,7 +515,7 @@ suite('factoryTokenUsage — publishTokenUsage', function () {
     assert.contains(cmds[1], '--jq .sha');
     assert.contains(cmds[2], 'base64 -d');
     var put = cmds[3];
-    assert.contains(put, '-X PUT repos/O/R/contents/data/fa-tokens.json');
+    assert.contains(put, '-X PUT repos/O/R/contents/data/agents-tokens.json');
     assert.contains(put, '-f branch=factory-data');
     assert.contains(put, "-f message='leg tokens — pr-783 dev [skip ci]'");
     assert.contains(put, '"prompt":1200');
@@ -570,7 +587,7 @@ suite('factoryTokenUsage — publishTokenUsage', function () {
     run({}, {}, { log: function (l) { lines.push(l); } });
     var leg = lines.filter(function (l) { return l.indexOf('leg tokens:') === 0; })[0];
     assert.ok(leg, 'leg tokens line present');
-    assert.contains(leg, 'pr-783 dev prompt=1200 completion=340 cached=9900 model=gpt-y');
+    assert.contains(leg, 'pr-783 dev prompt=1200 completion=340 cached=9900 requests=0 source=none model=gpt-y');
   });
 
   test('empty model renders as "none" in the log line, empty string in the row', function () {
@@ -599,19 +616,19 @@ suite('factoryTokenUsage — entry action (token_usage_publish.js)', function ()
       runOutput: 'a.txt', anchor: 'pr-1', repo: 'O/R'
     }}}, {
       RUN_OUTPUT: 'env.txt', CONFIG: 'env.json', KIND: 'dev',
-      ANCHOR: 'gh-1', REPO: 'E/R', DATA_BRANCH: 'ignored-branch', DATA_PATH: 'x.json'
+      ANCHOR: 'gh-1', REPO: 'E/R', DATA_BRANCH: 'ignored-branch'
     });
     assert.equal(p.runOutput, 'a.txt', 'customParams beat env');
     assert.equal(p.anchor, 'pr-1');
     assert.equal(p.configPath, 'env.json', 'env fills the gaps');
     assert.equal(p.dataBranch, 'ignored-branch', 'explicit env branch honored');
-    assert.equal(p.dataPath, 'x.json');
+    assert.equal(p.dataPath, undefined, 'gh-1521 sibling (owner 2026-11-19): path is NOT configurable — no dataPath option');
 
     var d = entry.resolveParams({}, {});
     assert.equal(d.runOutput, '');
     assert.equal(d.kind, '');
     assert.equal(d.dataBranch, 'factory-data', 'default branch');
-    assert.equal(d.dataPath, 'data/fa-tokens.json', 'default path');
+    assert.equal(d.dataPath, undefined, 'no dataPath option');
   });
 
   function recordPath(arr) {
@@ -676,14 +693,16 @@ suite('factoryTokenUsage — mergeTokenRows helpers (gh-1193)', function () {
         assert.deepEqual(tuModule.orderedKeysOf({}, 'k'), ['k']);
     });
 
-    test('retainedRowsOf keeps at/after-cutoff rows and caps the tail at 40', function () {
+    test('retainedRowsOf keeps at/after-cutoff rows and caps the tail at ROW_KEEP', function () {
         var rows = [];
-        for (var i = 0; i < 45; i++) {
-            rows.push({ at: '2026-10-0' + (1 + Math.floor(i / 5)) + 'T00:00:0' + (i % 10) + 'Z', i: i });
+        for (var i = 0; i < tuModule.ROW_KEEP + 5; i++) {
+            var sec = i < 10 ? '0' + i : String(i);
+            var min = Math.floor(i / 60);
+            rows.push({ at: '2026-10-02T00:' + (min < 10 ? '0' + min : min) + ':' + sec + 'Z', i: i });
         }
         var kept = tuModule.retainedRowsOf(rows, '2026-10-01T00:00:00Z');
-        assert.equal(kept.length, 40);
-        assert.equal(kept[kept.length - 1].i, 44, 'the newest row survives the tail cap');
+        assert.equal(kept.length, tuModule.ROW_KEEP);
+        assert.equal(kept[kept.length - 1].i, tuModule.ROW_KEEP + 4, 'the newest row survives the tail cap');
 
         var dropped = tuModule.retainedRowsOf([
             { at: '2026-09-01T00:00:00Z' },
@@ -800,12 +819,12 @@ suite('factoryTokenUsage — parseFaTokensLedger skip branches (gh-1225)', funct
 
   test('a non-object payload (array) is skipped', function () {
     assert.deepEqual(tuModule.parseFaTokensLedger('fa-tokens: [1,2,3]'),
-        { input: 0, output: 0, cacheRead: 0, model: '' });
+        { input: 0, output: 0, cacheRead: 0, requests: 0, model: '', source: '' });
   });
 
   test('a non-numeric string field invalidates the whole record (the sh int() raise)', function () {
     assert.deepEqual(tuModule.parseFaTokensLedger('fa-tokens: {"input":"12x","output":3}'),
-        { input: 0, output: 0, cacheRead: 0, model: '' });
+        { input: 0, output: 0, cacheRead: 0, requests: 0, model: '', source: '' });
   });
 
   test('valid records still sum after skipped ones (marker-paced, non-overlapping)', function () {
@@ -813,7 +832,7 @@ suite('factoryTokenUsage — parseFaTokensLedger skip branches (gh-1225)', funct
         'fa-tokens:x\n' +
         'fa-tokens: {"input":"1e3","output":2}\n' +
         'fa-tokens: {"input":10,"output":20,"cacheRead":5,"model":"kimi"}');
-    assert.deepEqual(sums, { input: 10, output: 20, cacheRead: 5, model: 'kimi' });
+    assert.deepEqual(sums, { input: 10, output: 20, cacheRead: 5, requests: 0, model: 'kimi', source: '' });
   });
 });
 
@@ -850,16 +869,37 @@ suite('factoryTokenUsage — balanced-payload scan helpers (gh-1225)', function 
   });
 
   test('applyLedgerRecord sums fields and rides the last-seen model', function () {
-    var sums = { input: 0, output: 0, cacheRead: 0, model: '' };
+    var sums = { input: 0, output: 0, cacheRead: 0, requests: 0, model: '', sources: {} };
     tuModule.applyLedgerRecord(sums, { input: 10, output: '20', cacheRead: 5, model: 'kimi' });
     tuModule.applyLedgerRecord(sums, { input: 1, output: 2, cacheRead: 3, model: '' });
     tuModule.applyLedgerRecord(sums, { input: 7, output: 8, cacheRead: 9, model: 'copilot' });
-    assert.deepEqual(sums, { input: 18, output: 30, cacheRead: 17, model: 'copilot' });
+    assert.deepEqual(sums, { input: 18, output: 30, cacheRead: 17, requests: 0, model: 'copilot', sources: {} });
+  });
+
+  test('applyLedgerRecord sums requests and collects source kinds', function () {
+    var sums = { input: 0, output: 0, cacheRead: 0, requests: 0, model: '', sources: {} };
+    tuModule.applyLedgerRecord(sums, { input: 1, output: 2, cacheRead: 0, requests: 4, source: 'reported' });
+    tuModule.applyLedgerRecord(sums, { input: 3, output: 4, cacheRead: 0, requests: '6', source: 'estimated' });
+    assert.equal(sums.requests, 10);
+    assert.equal(tuModule.sourceLabelOf(sums.sources), 'mixed');
+  });
+
+  test('applyLedgerRecord: a non-numeric requests skips the whole record (int() parity)', function () {
+    var sums = { input: 4, output: 4, cacheRead: 0, requests: 1, model: '', sources: {} };
+    tuModule.applyLedgerRecord(sums, { input: 10, output: 2, cacheRead: 0, requests: 'many' });
+    assert.deepEqual(sums, { input: 4, output: 4, cacheRead: 0, requests: 1, model: '', sources: {} });
+  });
+
+  test('sourceLabelOf: empty / single / mixed', function () {
+    assert.equal(tuModule.sourceLabelOf({}), '');
+    assert.equal(tuModule.sourceLabelOf({ reported: true }), 'reported');
+    assert.equal(tuModule.sourceLabelOf({ estimated: true }), 'estimated');
+    assert.equal(tuModule.sourceLabelOf({ reported: true, estimated: true }), 'mixed');
   });
 
   test('applyLedgerRecord: a non-numeric field skips the record silently (int() raise)', function () {
-    var sums = { input: 4, output: 4, cacheRead: 0, model: '' };
+    var sums = { input: 4, output: 4, cacheRead: 0, requests: 0, model: '', sources: {} };
     tuModule.applyLedgerRecord(sums, { input: '1e3', output: 2 });
-    assert.deepEqual(sums, { input: 4, output: 4, cacheRead: 0, model: '' });
+    assert.deepEqual(sums, { input: 4, output: 4, cacheRead: 0, requests: 0, model: '', sources: {} });
   });
 });

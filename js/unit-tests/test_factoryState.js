@@ -926,7 +926,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
   var TOKENS = '{"pr-31":[{"leg":"dev","at":"2026-10-08T10:00:00Z","prompt":10,"completion":5,"total":15}],' +
     '"issue-7":[{"leg":"review","at":"2026-10-08T11:00:00Z","prompt":1,"completion":2,"total":3}]}';
 
-  test('fetches data/fa-tokens.json off the data branch and returns the map', function () {
+  test('fetches data/agents-tokens.json off the data branch and returns the map', function () {
     resetProbe();
     var seen = [];
     var map = fsModule.fetchTokensFromBranch('o/r',
@@ -939,8 +939,8 @@ suite('factoryState — fetchTokensFromBranch', function () {
       'multi-key map survives (issue keys ride along pr keys)');
     assert.equal(seen.length, 1, 'one gh probe per tick');
     assert.equal(seen[0],
-      'gh api repos/o/r/contents/data/fa-tokens.json?ref=factory-data --jq .content | base64 -d',
-      'one gh probe: data/fa-tokens.json @ factory-data');
+      'gh api repos/o/r/contents/data/agents-tokens.json?ref=factory-data --jq .content | base64 -d',
+      'one gh probe: data/agents-tokens.json @ factory-data');
   });
 
   test('any miss → null, never a throw (404 / garbage JSON / rate limit)', function () {
@@ -971,7 +971,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
     var seen = [];
     fsModule.fetchTokensFromBranch('o/r', { tag: 'factory-data-eu' },
       function (a) { seen.push(a.command); return { output: TOKENS }; });
-    assert.contains(seen[0], 'data/fa-tokens.json?ref=factory-data-eu');
+    assert.contains(seen[0], 'data/agents-tokens.json?ref=factory-data-eu');
   });
 
   test('statePublish.tokensAsset overrides the fixed asset (multi-factory shared branch)', function () {
@@ -983,7 +983,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
     assert.ok(map && map['pr-31'], 'map still validates through tokensMapOf');
     assert.contains(seen[0], 'data/factoryB-tokens.json?ref=factory-data',
       'the override asset is probed');
-    assert.ok(seen[0].indexOf('fa-tokens.json') === -1,
+    assert.ok(seen[0].indexOf('agents-tokens.json') === -1,
       'the fixed default must NOT be probed when tokensAsset is set');
   });
 
@@ -992,7 +992,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
     var seen = [];
     fsModule.fetchTokensFromBranch('o/r', { tag: 'factory-data' },
       function (a) { seen.push(a.command); return { output: TOKENS }; });
-    assert.contains(seen[0], 'data/fa-tokens.json?ref=factory-data');
+    assert.contains(seen[0], 'data/agents-tokens.json?ref=factory-data');
   });
 
   test('tokensAsset rides a tag override too (both knobs compose)', function () {
@@ -1013,7 +1013,7 @@ suite('factoryState — fetchTokensFromBranch', function () {
 suite('factoryState — contentsOf (shared transport)', function () {
   test('returns the decoded content from one gh Contents probe', function () {
     var seen = [];
-    var raw = fsModule.contentsOf('o/r', 'data/fa-tokens.json',
+    var raw = fsModule.contentsOf('o/r', 'data/agents-tokens.json',
       { tag: 'factory-data' }, function (a) {
         seen.push(a.command);
         return { output: '{"pr-31":[]}' };
@@ -1021,7 +1021,7 @@ suite('factoryState — contentsOf (shared transport)', function () {
     assert.equal(raw, '{"pr-31":[]}');
     assert.equal(seen.length, 1, 'one probe per call');
     assert.equal(seen[0],
-      'gh api repos/o/r/contents/data/fa-tokens.json?ref=factory-data --jq .content | base64 -d',
+      'gh api repos/o/r/contents/data/agents-tokens.json?ref=factory-data --jq .content | base64 -d',
       'gh-first whitelist + in-shell base64 decode, pinned in ONE place');
   });
 

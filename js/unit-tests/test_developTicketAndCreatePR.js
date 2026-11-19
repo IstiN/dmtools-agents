@@ -97,7 +97,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
+            './common/tokenUsageComment.js': _m.tokenUsageCommentStub || { postTokenUsageComments: function () { }, postTokenUsageSafely: function () { }, customParamsOf: function (p) { return (p && p.customParams) || {}; } }
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })(Object.assign({
@@ -4138,5 +4138,53 @@ suite('developTicketAndCreatePR > WIP auto-save squash (gh-1308)', function () {
         assert.equal(squashed, true);
         assert.ok(commands.indexOf('git reset --soft 1111111111111111') !== -1);
         assert.ok(commands.indexOf('git push -u origin ai/TS-1501 --force-with-lease') !== -1);
+    });
+});
+
+// ── gh-1521: the dev leg's usage comment posts on the failure outcome too ──
+suite('developTicketAndCreatePR — gh-1521 usage comment on failure outcomes', function () {
+
+    function failLoader(failStub) {
+        return loadDevelopTicketAndCreatePR({ tokenUsageCommentStub: failStub });
+    }
+
+    test('concludeActionFailure posts usage telemetry (deduped, never a blocker)', function () {
+        var posted = [];
+        var mod = failLoader({
+            postTokenUsageComments: function () {},
+            postTokenUsageSafely: function (key, params) { posted.push({ key: key, params: params }); },
+            customParamsOf: function (p) { return (p && p.customParams) || {}; }
+        });
+        var params = { ticket: { key: 'PROJ-1521', fields: { summary: 'Do the thing' } } };
+        var result = mod.concludeActionFailure(params, new Error('push rejected'));
+        assert.equal(result.path, 'development-reset-for-retry');
+        assert.deepEqual(posted, [{ key: 'PROJ-1521', params: params }],
+            'the failure outcome posts usage exactly once');
+    });
+
+    test('concludeActionFailure: marked dead-letter rethrow still posts usage first', function () {
+        var posted = [];
+        var mod = failLoader({
+            postTokenUsageComments: function () {},
+            postTokenUsageSafely: function (key) { posted.push(key); },
+            customParamsOf: function (p) { return (p && p.customParams) || {}; }
+        });
+        var marked = new Error('interrupted');
+        marked.interruptedReset = true;
+        var threw = null;
+        try { mod.concludeActionFailure({ ticket: { key: 'PROJ-1521' } }, marked); } catch (e) { threw = e; }
+        assert.equal(threw, marked);
+        assert.deepEqual(posted, ['PROJ-1521'], 'posted before the rethrow');
+    });
+
+    test('concludeActionFailure: unknown ticket → no post', function () {
+        var posted = [];
+        var mod = failLoader({
+            postTokenUsageComments: function () {},
+            postTokenUsageSafely: function (key) { posted.push(key); },
+            customParamsOf: function (p) { return (p && p.customParams) || {}; }
+        });
+        mod.concludeActionFailure({}, new Error('boom'));
+        assert.deepEqual(posted, []);
     });
 });

@@ -14077,7 +14077,7 @@ suite('smAgent: validate-fresh-masked-green (gh-759 post-dev dead zone)', functi
 // ── Factory state publish: per-leg tokens (gh-781) ───────────────────────────
 // The tick's tokens pipeline: LOCAL outputs/token_usage/factory_tokens.json
 // first (pack-carrying factories keep working), factory-data branch
-// data/fa-tokens.json as the fallback (the leg-side producer's publish).
+// data/agents-tokens.json as the fallback (the leg-side producer's publish).
 // Any branch miss → token-less cards, the tick stays green.
 
 suite('smAgent: statePublish tokens — local file first, branch fallback', function() {
@@ -14085,7 +14085,7 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
     var SP = { channel: 'release', repo: 'o/r', asset: 'fa-state.json' };
     var LOCAL_PATH = 'outputs/token_usage/factory_tokens.json';
     var TOKENS_FETCH =
-        'gh api repos/o/r/contents/data/fa-tokens.json?ref=factory-data --jq .content | base64 -d';
+        'gh api repos/o/r/contents/data/agents-tokens.json?ref=factory-data --jq .content | base64 -d';
     var BRANCH_TOKENS = JSON.stringify({
         'pr-31': [{ leg: 'dev', at: '2026-10-08T10:00:00Z', prompt: 10, completion: 5, total: 15 }],
         'issue-7': [{ leg: 'review', at: '2026-10-08T11:00:00Z', prompt: 1, completion: 2, total: 3 }]
@@ -14193,14 +14193,14 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
             fileMap: fileMap,
             github: { prList: PR31 },
             onCliExecute: function (cmdOpts) {
-                if (cmdOpts.command.indexOf('fa-tokens.json') !== -1) {
+                if (cmdOpts.command.indexOf('agents-tokens.json') !== -1) {
                     throw new Error('local file present — the branch must not be fetched');
                 }
                 return undefined;
             }
         });
         var branchFetches = run.sm.capturedCliCommands.filter(function (c) {
-            return c.command.indexOf('fa-tokens.json') !== -1;
+            return c.command.indexOf('agents-tokens.json') !== -1;
         });
         assert.equal(branchFetches.length, 0, 'branch never fetched when the local file wins');
         var card = run.state.lanes.pr_created.filter(function (c) { return c.pr === 31; })[0];

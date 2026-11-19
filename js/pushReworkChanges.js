@@ -2849,6 +2849,16 @@ function postReworkErrorComment(errorTracker, ticketKey, error) {
 
 function handleActionError(params, error, tracker) {
     console.error('❌ Error in pushReworkChanges:', error);
+    // gh-1521: the usage comment posts on EVERY rework outcome — including
+    // this crash path. Startup mutations are not a blocker: best-effort,
+    // deduped per run by tokenUsageComment (postedInRun — a resume
+    // recursion re-entering action() never double-posts).
+    try {
+        var failedKey = errorTicketKeyOf(params);
+        if (failedKey) {
+            postCompletionTokenUsage(params, failedKey);
+        }
+    } catch (eUsage) { /* never a blocker */ }
     try {
         postCompletionTokenUsage(params, errorTicketKeyOf(params));
         const ticketKey = errorTicketKeyOf(params);
@@ -3061,6 +3071,9 @@ function action(params) {
         var pushOutcome = pushAndPublishOrFail(setup.ticketKey, setup.config, setup.customParams, tracker);
         if (pushOutcome.resume) return action(params);
         if (pushOutcome.failed) {
+            // gh-1521: a failed push/merge is exactly the run whose cost the
+            // owner needs to see — post before the honest failure return
+            // (deduped, never a blocker).
             postCompletionTokenUsage(params, setup.ticketKey);
             return { success: false, error: pushOutcome.error };
         }
@@ -3068,6 +3081,8 @@ function action(params) {
             pushOutcome.branchName, setup.statuses, setup.fixSummary);
         if (failOutcome) {
             if (failOutcome.resume) return action(params);
+            // gh-1521: the interrupted/failed-CLI terminal outcomes post
+            // usage too (deduped with the completion post by postedInRun).
             postCompletionTokenUsage(params, setup.ticketKey);
             return failOutcome.result;
         }
@@ -3080,7 +3095,7 @@ function action(params) {
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { action, configureGitAuthor, getGitHubRepoInfo, parseGitHubRemoteUrl,
-    actionSetup, pushAndPublishOrFail, resumeOrFailLadder, completeReworkLeg,
+    actionSetup, pushAndPublishOrFail, resumeOrFailLadder, completeReworkLeg, handleActionError,
     openThreadsCompletionComment, unaddressedRepliesCompletionComment, changesRequestedCompletionComment, cleanCompletionComment, completionPrCommentSuffix,
     blockedLogLine, postBlockedPrComment, moveToBlockedStatus, removeContextWipLabel,
     hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, parseLinkedIssueFromText, resolveLinkedIssueKeyForPr, canStripPrLabel, stripPrSideLabelQuietly, removeTrackerLabelQuietly, isPrAnchoredKey, stripLinkedIssueCounterpart, removeOneConfiguredLabel, removeConfiguredLabels, stripArmFromIssue, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, replyTargetsThread, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, removePlanSnapshotQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment,

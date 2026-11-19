@@ -217,14 +217,18 @@ var DEFAULT_MACHINE_AUTHOR = 'ai-teammate';   // back-compat/tests only — an
 var HISTORY_CAP = 100;                        // bound snapshot growth
 var HISTORY_KEEP = 500;                       // default snapshot index depth
 var DEFAULT_TOKENS_FILE = 'outputs/token_usage/factory_tokens.json';
-var FACTORY_TOKENS_ASSET = 'fa-tokens.json';   // data/<asset> on the data
-                                               // branch (gh-781; the leg-side
-                                               // producer's publish path).
-                                               // statePublish.tokensAsset
-                                               // overrides — multi-factory
-                                               // deployments sharing one
-                                               // branch keep their token
-                                               // streams apart
+var FACTORY_TOKENS_ASSET = 'agents-tokens.json'; // data/<asset> on the data
+                                                 // branch (gh-781; the leg-side
+                                                 // producer's publish path —
+                                                 // owner directive 2026-11-19:
+                                                 // THE canonical asset name,
+                                                 // matching token_usage.js
+                                                 // DEFAULT_DATA_PATH).
+                                                 // statePublish.tokensAsset
+                                                 // overrides — multi-factory
+                                                 // deployments sharing one
+                                                 // branch keep their token
+                                                 // streams apart
 var BACKLOG_CAP = 50;                         // per bucket — github_search_issues
                                               // returns ONE page (no perPage),
                                               // so the snapshot stays bounded
@@ -596,7 +600,7 @@ function inCostWindow(row, nowMs) {
  * (gh-781; mirrors fetchPreviousState — one gh Contents probe via the
  * shared contentsOf transport): `data/<tokensAsset>.json` @ tagOf(cfg),
  * produced by the leg-side publisher in the teammate workflow. The asset
- * is statePublish.tokensAsset when set, else the fixed fa-tokens.json —
+ * is statePublish.tokensAsset when set, else the fixed agents-tokens.json —
  * the override mirrors assetName so multi-factory deployments sharing one
  * data branch keep their token streams apart (token keys are repo-global,
  * a shared fixed asset would cross-attach factories' rows). The map

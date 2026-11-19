@@ -182,7 +182,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': { cacheSessionLog: noop },
-            './common/tokenUsageComment.js': stubTokenUsageComment
+            './common/tokenUsageComment.js': opt(opts, 'tokenUsageComment') || stubTokenUsageComment
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -1116,7 +1116,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
-            './common/tokenUsageComment.js': stubTokenUsageComment
+            './common/tokenUsageComment.js': opt(opts, 'tokenUsageComment') || stubTokenUsageComment
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -5265,5 +5265,36 @@ suite('pushReworkChanges — gh-1521 token usage posted on failure and early exi
         ]);
         var nullRes = loaded.mod.action(null);
         assert.equal(nullRes.success, false, 'action(null) returns graceful failure without throwing out of catch');
+// ── gh-1521: the usage comment posts on EVERY rework outcome ────────────────
+suite('pushReworkChanges — gh-1521 usage comment on failure outcomes', function () {
+
+    function failLoader(failStub) {
+        return loadPushReworkChangesForAction({}, { tokenUsageComment: failStub });
+    }
+
+    test('handleActionError posts the usage comment (deduped by postedInRun) before recovery', function () {
+        var posted = [];
+        var mod = failLoader({
+            postTokenUsageComments: function () {},
+            postTokenUsageSafely: function (key, params) { posted.push({ key: key, params: params }); },
+            customParamsOf: function (p) { return (p && p.customParams) || {}; }
+        }).mod;
+        var params = { ticket: { key: 'PROJ-1521' } };
+        var res = mod.handleActionError(params, new Error('push failed'), null);
+        assert.equal(res.success, false);
+        assert.deepEqual(posted, [{ key: 'PROJ-1521', params: params }],
+            'the failure outcome posts usage exactly once');
+    });
+
+    test('handleActionError: no ticket key → no post, no crash', function () {
+        var posted = [];
+        var mod = failLoader({
+            postTokenUsageComments: function () {},
+            postTokenUsageSafely: function (key) { posted.push(key); },
+            customParamsOf: function (p) { return (p && p.customParams) || {}; }
+        }).mod;
+        var res = mod.handleActionError({}, new Error('boom'), null);
+        assert.equal(res.success, false);
+        assert.deepEqual(posted, [], 'nothing to post on when the leg never knew a ticket');
     });
 });
