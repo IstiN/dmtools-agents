@@ -28,7 +28,8 @@ function resolveParams(params, envMap) {
         anchor: pick('anchor', 'ANCHOR', ''),
         repo: pick('repo', 'REPO', ''),
         dataBranch: pick('dataBranch', 'DATA_BRANCH', tokenUsage.DEFAULT_DATA_BRANCH),
-        dataPath: pick('dataPath', 'DATA_PATH', tokenUsage.DEFAULT_DATA_PATH),
+        // owner directive 2026-11-19: the target path is NOT configurable —
+        // token_usage.publishTargetOf pins DEFAULT_DATA_PATH for both worlds.
         now: custom.now
     };
 }
