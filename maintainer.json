@@ -1,0 +1,72 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "maintainer",
+      "descriptionPath": "agents/docs/agents/maintainer.md"
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "find,ls,cat,mkdir,bash,run-agent.sh,gradlew"
+    },
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "customParams": {
+      "responseTarget": "scm",
+      "removeLabel": "sm_maintainer_triggered",
+      "maintainerPhase": "plan"
+    },
+    "cliPrompts": [
+      "You are the owner and long-term maintainer of this codebase, and its design is up to you.",
+      "Codebase Maintainer — structural quality pass (analysis and planning)",
+      "./agents/instructions/common/agent_task_preamble.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/common/coding_guidelines.md",
+      "./agents/instructions/maintainer/coding_guidelines.md",
+      "./agents/instructions/maintainer/general_guidelines.md",
+      "./agents/instructions/maintainer/test_guidelines.md",
+      "./agents/instructions/maintainer/plan_output_rules.md",
+      "./agents/instructions/common/blocked_output_contract.md",
+      "./agents/instructions/common/dmtools_cli.md",
+      "./agents/instructions/common/session_ephemerality.md",
+      "./agents/prompts/bash_tools.md",
+      {
+        "id": "codegraph",
+        "prompt": "./agents/prompts/codegraph_tools.md",
+        "condition": "agents/js/conditions/isCodeGraphAvailable.js"
+      },
+      {
+        "id": "maintainerExecute",
+        "prompt": "./agents/instructions/maintainer/execute_appendix.md",
+        "condition": "agents/js/conditions/isMaintainerExecute.js"
+      }
+    ],
+    "cliPromptsByTracker": {
+      "jira": [
+        {
+          "id": "responseFormatJiraWiki",
+          "prompt": "./agents/instructions/tracker/jira_comment_format.md",
+          "condition": "agents/js/conditions/isResponseToTracker.js"
+        },
+        {
+          "id": "responseFormatMarkdown",
+          "prompt": "./agents/instructions/common/markdown_output_format.md",
+          "condition": "agents/js/conditions/isResponseToScm.js"
+        },
+        "./agents/instructions/tracker/jira_context.md"
+      ],
+      "ado": [
+        "./agents/instructions/tracker/ado_comment_format.md"
+      ],
+      "github": [
+        "./agents/instructions/common/github_comment_format.md"
+      ]
+    }
+  }
+}

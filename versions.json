@@ -20,6 +20,8 @@
   "intake": "0.1.361",
   "machine_merge": "0.1.359",
   "machine_sm": "0.1.361",
+  "maintainer": "0.1.361",
+  "maintainer_execute": "0.1.361",
   "po_refinement": "0.1.361",
   "poc_development_redirect": "0.1.360",
   "pr_bug_test_automation_review": "0.1.361",

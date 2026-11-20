@@ -304,6 +304,24 @@
           "skipIfLabel": "sm_bug_to_fix_check_triggered",
           "localExecution": true,
           "enabled": true
+        },
+        {
+          "description": "Maintainer label -> structural quality plan (analysis + fix plan, no code)",
+          "jql": "project = {jiraProject} AND labels in ('ai_maintainer_plan') AND status not in ('{status.DONE:Done}')",
+          "configFile": "agents/maintainer.json",
+          "skipIfLabel": "sm_maintainer_triggered",
+          "addLabel": "sm_maintainer_triggered",
+          "localExecution": true,
+          "enabled": true
+        },
+        {
+          "description": "Maintainer execute label -> implement the approved structural plan (PR)",
+          "jql": "project = {jiraProject} AND labels in ('ai_maintainer_execute') AND status not in ('{status.DONE:Done}')",
+          "configFile": "agents/maintainer_execute.json",
+          "skipIfLabel": "sm_maintainer_execute_triggered",
+          "addLabel": "sm_maintainer_execute_triggered",
+          "localExecution": true,
+          "enabled": true
         }
       ]
     }

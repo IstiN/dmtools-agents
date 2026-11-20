@@ -69,6 +69,8 @@ This document describes every agent in the `agents/` directory: what ticket it h
 | 31 | Test Case, `Failed` | `bug_creation.json` | `sm_bug_creation_triggered` | `sm_bug_creation_triggered` | — |
 | 32 | Test Case, `Backlog`/`To Do`/`Ready For Development` | `test_case_automation.json` | `sm_test_automation_triggered` | `sm_test_automation_triggered` | `In Development` |
 | 33 | Story/Test Case, `Bug To Fix` | `bug_to_fix_check.json` | `sm_bug_to_fix_check_triggered` | — | — |
+| 34 | Label `ai_maintainer_plan` | `maintainer.json` | `sm_maintainer_triggered` | `sm_maintainer_triggered` | — |
+| 35 | Label `ai_maintainer_execute` | `maintainer_execute.json` | `sm_maintainer_execute_triggered` | `sm_maintainer_execute_triggered` | — |
 
 ---
 
@@ -149,6 +151,37 @@ This document describes every agent in the `agents/` directory: what ticket it h
 - **Ticket type**: `Bug`
 - **Pre-actions**: `checkWipLabel.js`, `preCliDevelopmentSetup.js`
 - **Post-action**: `developBugAndCreatePR.js`
+- **Status moves**: active statuses → `In Development` → `In Review`
+- **Next**: `pr_review`
+
+### Maintenance
+
+Structural quality passes. The plan phase analyzes a degraded subsystem and
+posts an evidence-based fix plan (no code changes); the execute phase
+implements the owner-approved plan (the owner's edited version wins), makes
+each fixed problem class unrepresentable (structure, not guards), removes
+interim guards and absorbed tests, and opens a PR. Both legs carry the
+ownership role framing (Anthropic prompting guidance, "Say who owns the
+code"); dev legs keep the guest framing on purpose — the two roles are
+complements.
+
+#### `maintainer.json` — Structural quality plan
+- **ContextId**: `maintainer`
+- **Ticket type**: any (the description acts as the case card)
+- **Pre-actions**: `checkWipLabel.js`
+- **Post-action**: none (comment pipeline posts the plan)
+- **Inputs**: case card (symptom, scope window, signals), prepared context
+- **Outputs**: `outputs/maintainer-findings.md`, `outputs/maintainer-plan.md`, ticket comment
+- **Status moves**: —
+- **Next**: owner approval → label `ai_maintainer_execute` → `maintainer_execute`
+
+#### `maintainer_execute.json` — Execute approved structural plan
+- **ContextId**: `maintainer_execute`
+- **Ticket type**: any
+- **Pre-actions**: `checkWipLabel.js`, `preCliDevelopmentSetup.js`
+- **Post-action**: `developTicketAndCreatePR.js`
+- **Inputs**: the approved (possibly owner-edited) plan in `input/<KEY>/`
+- **Outputs**: structural commits + PR (`outputs/response.md`)
 - **Status moves**: active statuses → `In Development` → `In Review`
 - **Next**: `pr_review`
 
