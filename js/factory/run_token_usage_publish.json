@@ -9,8 +9,7 @@
         "kind": "{kind}",
         "anchor": "{anchor}",
         "repo": "{owner}/{repo}",
-        "dataBranch": "factory-data",
-        "dataPath": "data/fa-tokens.json"
+        "dataBranch": "factory-data"
       }
     }
   }
