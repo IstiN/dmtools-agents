@@ -33,13 +33,10 @@
  * THE PATH IS NOT CONFIGURABLE (owner directive 2026-11-19): every writer
  * and reader of the leg-tokens stream goes through DEFAULT_DATA_PATH =
  * 'data/agents-tokens.json' — no DATA_PATH env, no job-config copy, no
- * repo variable. The factory-data stream is a flat `data/<name>.json` file
- * (the Contents API has no subdirectories). js/factoryState.js
- * (FACTORY_TOKENS_ASSET) and scripts/publish-token-usage.sh carry the same
- * literal — the single-source invariant is machine-checked by the AC3
- * consistency suite in js/unit-tests/test_factoryTokenUsage.js (path parity
- * producer ↔ tick reader ↔ sh, the sh counter hand-off arity, and ROW_KEEP
- * cap parity; the sh counter additionally carries a `--self-test`).
+ * repo variable. js/factoryState.js (FACTORY_TOKENS_ASSET) and
+ * scripts/publish-token-usage.sh carry the same literal. The AC3 suite in
+ * js/unit-tests/test_factoryTokenUsage.js checks path, sh hand-off and ROW_KEEP
+ * parity; the sh counter also has a `--self-test`.
  *
  * Transport mirrors factoryState.js: every command starts with `gh` (the
  * executor whitelists the first token); base64 stays in-shell
