@@ -227,17 +227,26 @@ function collectBaseFailingChecks(fetchCheckRuns, baseSha, explicitBaseFailing) 
     }
 }
 
+function prHeadShaOf(pr) {
+    var head = pr && pr.head;
+    return validGitSha(head && head.sha);
+}
+
+function isSamePrOrHead(pr, sha, currentPrNumber, currentHeadSha) {
+    if (currentPrNumber != null && String(pr && pr.number) === String(currentPrNumber)) return true;
+    return Boolean(currentHeadSha) && sha === String(currentHeadSha);
+}
+
 function otherPrCandidateShas(openPrs, currentPrNumber, currentHeadSha) {
-    var shas = [];
     var list = Array.isArray(openPrs) ? openPrs : [];
-    for (var i = 0; i < list.length && shas.length < 3; i++) {
-        var pr = list[i];
-        var sha = pr && pr.head && pr.head.sha ? String(pr.head.sha).trim() : '';
-        var samePr = currentPrNumber != null && pr && String(pr.number) === String(currentPrNumber);
-        var sameSha = Boolean(currentHeadSha) && sha === String(currentHeadSha);
-        if (sha && !samePr && !sameSha) shas.push(sha);
+    var shas = [];
+    for (var i = 0; i < list.length; i++) {
+        var sha = prHeadShaOf(list[i]);
+        if (sha && !isSamePrOrHead(list[i], sha, currentPrNumber, currentHeadSha)) {
+            shas.push(sha);
+        }
     }
-    return shas;
+    return shas.slice(0, 3);
 }
 
 function collectOtherPrFailingChecks(scm, fetchCheckRuns, currentPrNumber, currentHeadSha, explicitOtherPrFailing) {

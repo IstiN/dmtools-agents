@@ -838,14 +838,14 @@ suite('ciClassification.classify — conservative infra vs owned check classific
         var scm = {
             listPrs: function() {
                 return [
-                    { number: 1, head: { sha: 'head1' } },
-                    { number: 2, head: { sha: 'head2' } }
+                    { number: 1, head: { sha: 'deadbeef1' } },
+                    { number: 2, head: { sha: 'cafebabe2' } }
                 ];
             }
         };
         assert.deepEqual(ciClass.collectOtherPrFailingChecks(scm, function(sha) {
-            return sha === 'head2' ? [{ name: 'e2e', conclusion: 'failure' }] : [];
-        }, 1, 'head1'), ['e2e']);
+            return sha === 'cafebabe2' ? [{ name: 'e2e', conclusion: 'failure' }] : [];
+        }, 1, 'deadbeef1'), ['e2e']);
         assert.deepEqual(ciClass.collectOtherPrFailingChecks({ listPrs: function() { throw new Error('boom'); } }, function() { return []; }, 1, 'h1'), []);
 
         var written = null;
@@ -876,12 +876,12 @@ suite('ciClassification.classify — conservative infra vs owned check classific
             scm,
             'acme',
             'repo',
-            'head1',
-            { baseSha: 'base1', prNumber: 1 },
+            'deadbeef1',
+            { baseSha: '1234567', prNumber: 1 },
             {
                 writeFn: function(arg) { written2 = arg; },
                 fetchCheckRuns: function(_s, _o, _r, sha) {
-                    return sha === 'base1' ? [{ name: 'build', conclusion: 'failure' }] : [];
+                    return sha === '1234567' ? [{ name: 'build', conclusion: 'failure' }] : [];
                 }
             }
         );
