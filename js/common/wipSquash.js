@@ -171,8 +171,20 @@ function isSelfHealMergeSubject(subject) {
     return /^Merge (remote-tracking )?branch /i.test(s) || WIP_RE.test(s);
 }
 
+function readMergeSubjects(runCommand, range) {
+    var firstParent = parseLines(runCommand('git log --first-parent --merges --format=%s ' + range));
+    if (firstParent.length > 0) return firstParent;
+    return parseLines(runCommand('git log --merges --format=%s ' + range));
+}
+
+function readNonMergeSubjectsAcrossMerge(runCommand, range) {
+    var firstParent = parseLines(runCommand('git log --first-parent --no-merges --format=%s ' + range));
+    if (firstParent.length > 0) return firstParent;
+    return parseLines(runCommand('git log --no-merges --format=%s ' + range));
+}
+
 function allMergesAreSelfHeal(runCommand, range) {
-    var mergeSubjects = parseLines(runCommand('git log --merges --format=%s ' + range));
+    var mergeSubjects = readMergeSubjects(runCommand, range);
     if (mergeSubjects.length === 0) return false;
     for (var i = 0; i < mergeSubjects.length; i++) {
         if (!isSelfHealMergeSubject(mergeSubjects[i])) return false;
@@ -183,7 +195,7 @@ function allMergesAreSelfHeal(runCommand, range) {
 function canSquashAcrossMerges(runCommand, range, ticketKey, safeMessage) {
     try {
         if (!allMergesAreSelfHeal(runCommand, range)) return false;
-        var nonMerge = parseLines(runCommand('git log --no-merges --format=%s ' + range));
+        var nonMerge = readNonMergeSubjectsAcrossMerge(runCommand, range);
         if (!allSubjectsMatchWipOrTicket(nonMerge, ticketKey, safeMessage)) return false;
         return canSquashWipSubjects(nonMerge, safeMessage);
     } catch (e) {
@@ -201,7 +213,7 @@ function inspectSquashRange(runCommand, range, ticketKey, safeMessage) {
     if (merges) {
         if (canSquashAcrossMerges(runCommand, range, ticketKey, safeMessage)) {
             return {
-                subjects: parseLines(runCommand('git log --no-merges --format=%s ' + range)),
+                subjects: readNonMergeSubjectsAcrossMerge(runCommand, range),
                 skipReason: null
             };
         }
@@ -227,12 +239,14 @@ function canSquashReworkSubjects(subjects, ticketKey, reworkMsg) {
 }
 
 function inspectReworkSquashRange(runCommand, range, ticketKey, reworkMsg) {
-    var merges = cleanText(runCommand('git rev-list --merges ' + range));
+    var merges = cleanText(runCommand('git rev-list --first-parent --merges ' + range)) ||
+        cleanText(runCommand('git rev-list --merges ' + range));
     if (merges && !allMergesAreSelfHeal(runCommand, range)) {
         return { subjects: [], skipReason: 'non-self-heal merge commit in ' + range };
     }
-    var cmd = merges ? 'git log --no-merges --format=%s ' + range : 'git log --format=%s ' + range;
-    var subjects = parseLines(runCommand(cmd));
+    var subjects = merges
+        ? readNonMergeSubjectsAcrossMerge(runCommand, range)
+        : parseLines(runCommand('git log --format=%s ' + range));
     if (subjects.length < 2) {
         return { subjects: [], skipReason: 'fewer than 2 commits in ' + range };
     }

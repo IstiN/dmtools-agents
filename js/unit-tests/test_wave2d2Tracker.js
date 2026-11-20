@@ -209,7 +209,7 @@ suite('wave2d2 ado — createRepoTasks', function() {
         assert.equal(r.success, true);
         var created = w2Args(rec.calls, 'ado_create_work_item');
         assert.equal(created.length, 1);
-        assert.equal(created[0].workItemType, 'Sub-task');
+        assert.equal(created[0].workItemType, 'Task');
         assert.equal(w2Args(rec.calls, 'ado_link_work_items')[0].targetId, '50');
         w2NoJira(rec.calls);
     });

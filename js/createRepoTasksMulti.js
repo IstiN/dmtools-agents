@@ -181,13 +181,14 @@ function buildTaskSubTaskPlans(tasks, saKey, parentKey, baseUrl) {
     });
 }
 
-function createSubTasks(tracker, tasks, projectKey, parentKey, parentSummary, saKey, baseUrl, ticketLabels, existingSummaries) {
+function createSubTasks(tracker, tasks, projectKey, parentKey, parentSummary, saKey, baseUrl, ticketLabels, existingSummaries, issueType) {
     // parentSummary is unused here: task summaries come from task titles, not the parent summary.
     var plans = buildTaskSubTaskPlans(tasks, saKey, parentKey, baseUrl);
     var options = {
         projectKey: projectKey,
         parentKey: parentKey,
-        ticketLabels: ticketLabels
+        ticketLabels: ticketLabels,
+        issueType: issueType
     };
     var outcome = shared.createSubTasks(tracker, plans, options, existingSummaries);
     return { created: outcome.created, skipped: outcome.skipped, taskKeyMap: outcome.keyMap };

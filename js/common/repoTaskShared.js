@@ -133,17 +133,87 @@ function resolveTrackerProvider(tracker) {
     return tracker && typeof tracker.provider === 'function' ? tracker.provider() : 'jira';
 }
 
+function isAdoProvider(tracker) {
+    return String(resolveTrackerProvider(tracker) || '').toLowerCase() === 'ado';
+}
+
+function firstDefinedValue(list) {
+    for (var i = 0; i < list.length; i++) {
+        if (list[i]) return list[i];
+    }
+    return null;
+}
+
+function nestedSubtaskType(holder) {
+    var types = holder && holder.issueTypes;
+    return types && types.SUBTASK;
+}
+
+function explicitSubTaskIssueType(cp, cfg) {
+    return firstDefinedValue([
+        cp.workItemType,
+        cp.subTaskIssueType,
+        cp.issueType,
+        nestedSubtaskType(cp),
+        nestedSubtaskType(cfg.tracker),
+        nestedSubtaskType(cfg.jira)
+    ]);
+}
+
+function isDefaultJiraSubtaskOnAdo(tracker, explicit) {
+    return isAdoProvider(tracker) && /^sub-?task$/i.test(String(explicit || ''));
+}
+
+function resolveSubTaskIssueType(tracker, projectConfig, customParams) {
+    var explicit = explicitSubTaskIssueType(customParams || {}, projectConfig || {});
+    if (explicit && !isDefaultJiraSubtaskOnAdo(tracker, explicit)) {
+        return explicit;
+    }
+    return isAdoProvider(tracker) ? 'Task' : 'Sub-task';
+}
+
+function projectFromSection(section) {
+    if (!section) return null;
+    return firstDefinedValue([section.projectKey, section.adoProject, section.jiraProject, section.project]);
+}
+
+function resolveTaskProjectKey(parentKey, projectConfig, customParams) {
+    var cfg = projectConfig || {};
+    var explicit = firstDefinedValue([
+        projectFromSection(customParams),
+        projectFromSection(cfg.tracker),
+        projectFromSection(cfg.jira)
+    ]);
+    return explicit || String(parentKey || '').split('-')[0];
+}
+
+function projectStatusesSection(projectConfig) {
+    var cfg = projectConfig || {};
+    var trackerCfg = cfg.tracker;
+    var jiraCfg = cfg.jira;
+    return (trackerCfg && trackerCfg.statuses) || (jiraCfg && jiraCfg.statuses);
+}
+
+function resolveBlockedStatus(customParams, projectConfig, tracker) {
+    var cp = customParams || {};
+    if (cp.blockedStatus) return cp.blockedStatus;
+    var statuses = configModule.resolveStatuses(cp, projectStatusesSection(projectConfig), resolveTrackerProvider(tracker));
+    return (statuses && statuses.BLOCKED) || 'Blocked';
+}
+
 function summaryOf(t) {
     return t.fields && t.fields.summary ? t.fields.summary : (t.summary || '');
 }
 
-function loadExistingSummaries(tracker, parentKey) {
+function loadExistingSummaries(tracker, parentKey, issueType) {
     var existingSummaries = [];
     try {
         var provider = resolveTrackerProvider(tracker);
+        var typeName = issueType || resolveSubTaskIssueType(tracker);
+        var jql = 'parent = ' + parentKey + ' AND issuetype = ' + (typeName.indexOf(' ') !== -1 ? '"' + typeName + '"' : typeName);
         var existing = tracker.searchIssues(
-            // JQL text: provider-specific query (WIQL on ado)
-            linkedIssuesReport.buildChildrenQuery(provider, parentKey, 'parent = ' + parentKey + ' AND issuetype = Sub-task', 'Sub-task'), {
+            // JQL text: provider-specific query (WIQL on ado: omit workItemType filter so all child work items under [System.Parent] match regardless of process template)
+            linkedIssuesReport.buildChildrenQuery(provider, parentKey, jql, isAdoProvider(tracker) ? null : typeName), {
             fields: ['summary']
         });
         if (Array.isArray(existing)) {
@@ -165,7 +235,7 @@ function loadExistingSummaries(tracker, parentKey) {
  * @param {Array} plans - One entry per Sub-task:
  *   {summary, description, dedupeLabel, skipLog, skipValue, mapKey,
  *    buildRecord(createdKey), buildErrorRecord(error)}
- * @param {Object} options - {projectKey, parentKey, ticketLabels}
+ * @param {Object} options - {projectKey, parentKey, ticketLabels, issueType}
  * @param {Array} existingSummaries - Summaries of Sub-tasks already under the parent
  * @returns {{created: Array, skipped: Array, keyMap: Object}} plan mapKey → created ticket key
  */
@@ -173,6 +243,7 @@ function createSubTasks(tracker, plans, options, existingSummaries) {
     var created = [];
     var skipped = [];
     var keyMap = {};
+    var issueType = (options && options.issueType) || resolveSubTaskIssueType(tracker);
 
     plans.forEach(function(p) {
         if (decideDuplicate(existingSummaries, p.dedupeLabel)) {
@@ -182,7 +253,7 @@ function createSubTasks(tracker, plans, options, existingSummaries) {
         }
 
         try {
-            var result = tracker.createTicketWithParent(options.projectKey, 'Sub-task', p.summary, p.description, options.parentKey, { labels: options.ticketLabels });
+            var result = tracker.createTicketWithParent(options.projectKey, issueType, p.summary, p.description, options.parentKey, { labels: options.ticketLabels });
 
             var createdKey = extractCreatedKey(result);
 
@@ -195,7 +266,6 @@ function createSubTasks(tracker, plans, options, existingSummaries) {
             created.push(p.buildErrorRecord(e));
         }
     });
-
     return { created: created, skipped: skipped, keyMap: keyMap };
 }
 
@@ -263,7 +333,7 @@ function resolveTaskOptions(params) {
     return {
         customParams: customParams,
         blocksRelationship: customParams.blocksRelationship || 'Blocks',
-        blockedStatus:      customParams.blockedStatus      || 'Blocked',
+        blockedStatus:      customParams.blockedStatus      || 'Blocked', // legacy fallback for direct resolveTaskOptions callers
         ticketLabels:       customParams.labels             || ['development']
     };
 }
@@ -327,7 +397,10 @@ function runRepoTaskAction(params, variant) {
         console.log(variant.scriptName + ': processing SA ticket ' + saKey);
 
         var options = resolveTaskOptions(params);
-        var tracker = trackersModule.createTracker(resolveProjectConfig(params), options.customParams);
+        var projectConfig = resolveProjectConfig(params);
+        var tracker = trackersModule.createTracker(projectConfig, options.customParams);
+        var issueType = resolveSubTaskIssueType(tracker, projectConfig, options.customParams);
+        var blockedStatus = resolveBlockedStatus(options.customParams, projectConfig, tracker);
 
         var saContext = resolveSaTicketContext(tracker, saKey);
         if (!saContext.parentKey) {
@@ -347,16 +420,15 @@ function runRepoTaskAction(params, variant) {
         console.log(variant.describeUnits(repos, units));
 
         var baseUrl = getJiraBaseUrl();
-        var projectKey = saContext.parentKey.split('-')[0];
+        var projectKey = resolveTaskProjectKey(saContext.parentKey, projectConfig, options.customParams);
 
         // Load existing Sub-tasks under the parent to avoid duplicates
-        var existingSummaries = loadExistingSummaries(tracker, saContext.parentKey);
+        var existingSummaries = loadExistingSummaries(tracker, saContext.parentKey, issueType);
 
-        var outcome = variant.createSubTasks(tracker, units, projectKey, saContext.parentKey, parentSummary, saKey, baseUrl, options.ticketLabels, existingSummaries);
+        var outcome = variant.createSubTasks(tracker, units, projectKey, saContext.parentKey, parentSummary, saKey, baseUrl, options.ticketLabels, existingSummaries, issueType);
 
         // Wire dependencies: blocker Blocks dependent + move dependent to Blocked status
-        wireDependencies(tracker, outcome.created, variant.keyMapOf(outcome), options.blocksRelationship, options.blockedStatus);
-
+        wireDependencies(tracker, outcome.created, variant.keyMapOf(outcome), options.blocksRelationship, blockedStatus);
         postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome, variant.labelField);
 
         var successCount = outcome.created.filter(function(c) { return !c.error; }).length;
@@ -377,6 +449,9 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         runRepoTaskAction: runRepoTaskAction,
         resolveProjectConfig: resolveProjectConfig,
+        resolveSubTaskIssueType: resolveSubTaskIssueType,
+        resolveTaskProjectKey: resolveTaskProjectKey,
+        resolveBlockedStatus: resolveBlockedStatus,
         getJiraBaseUrl: getJiraBaseUrl,
         jiraLink: jiraLink,
         parseAffectedRepos: parseAffectedRepos,

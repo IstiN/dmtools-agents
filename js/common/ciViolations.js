@@ -687,6 +687,9 @@ function validateOwnedViolationsSummary(summary, violations) {
     return errors.length > 0 ? { ok: false, errors: errors, unaccounted: unaccounted } : { ok: true };
 }
 
+var ciClassification = null;
+try { ciClassification = require('./ciClassification.js'); } catch (e) { ciClassification = null; }
+
 module.exports = {
     MAX_TABLE_ROWS: MAX_TABLE_ROWS,
     normalizePath: normalizePath,
@@ -698,5 +701,8 @@ module.exports = {
     buildViolationsMarkdown: buildViolationsMarkdown,
     violationsSummaryJson: violationsSummaryJson,
     findDismissalClaim: findDismissalClaim,
-    validateOwnedViolationsSummary: validateOwnedViolationsSummary
+    validateOwnedViolationsSummary: validateOwnedViolationsSummary,
+    classify: ciClassification ? ciClassification.classify : function() { return []; },
+    resolveClassificationOptions: ciClassification ? ciClassification.resolveClassificationOptions : function() { return { namePatterns: [], logPatterns: [] }; },
+    writeCiClassificationFromEntries: ciClassification ? ciClassification.writeCiClassificationFromEntries : function() { return []; }
 };

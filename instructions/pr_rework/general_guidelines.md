@@ -3,7 +3,7 @@ flowchart TD
     START([Ticket enters rework]) --> SETUP{rework_setup_failed.md exists?}
     SETUP -->|Yes| FAIL[Write setup failure response and stop]
     SETUP -->|No| INPUT[Read ALL input files in the ticket subfolder]
-    INPUT --> INPUTS["request.md, comments.md, existing_questions.json, parent_context_*.md, review_policy.md, pr_info.md, pr_diff.txt, merge_conflicts.md, ci_failures.md, ci_failures_full.log, review_state.md, pr_discussions.md, pr_discussions_raw.json"]
+    INPUT --> INPUTS["request.md, comments.md, existing_questions.json, parent_context_*.md, review_policy.md, pr_info.md, pr_diff.txt, merge_conflicts.md, ci_failures.md, ci_failures_full.log, ci_classification.json, review_state.md, pr_discussions.md, pr_discussions_raw.json"]
     INPUTS --> CONFLICTS{merge_conflicts.md exists?}
     CONFLICTS -->|Yes| RESOLVE["Resolve every conflict marker, git add each file, verify with git diff --check"]
     CONFLICTS -->|No| CI
@@ -39,10 +39,11 @@ flowchart TD
         P4["4️⃣ input/TICKET/pr_files.txt — list of changed files"]
         P5["5️⃣ input/TICKET/ci_failures.md — CI failures = BLOCKING (last 500 lines)"]
         P5_FULL["5️⃣ input/TICKET/ci_failures_full.log — full CI logs"]
+        P5_CLASS["5️⃣ input/TICKET/ci_classification.json — machine-classified check failures (infra vs owned)"]
         P6["6️⃣ input/TICKET/review_state.md — reviewer verdict + decision state (CHANGES_REQUESTED = blocking)"]
         P7["7️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
         P8["8️⃣ input/TICKET/review_policy.md — the resolved reviewPolicy: which severities trigger this lap, density cap, downgrade protocol"]
-        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6 --> P7 --> P8
+        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P5_CLASS --> P6 --> P7 --> P8
     end
 
     subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
@@ -70,6 +71,10 @@ Read PR files to understand WHAT changed. Read ticket files to understand WHY it
 - **"Foreign / infra reds (do not chase)"** — reds in files this PR does not touch. Do not fix them here; mention them in the summary.
 
 The full uncapped list lives in `ci_violations.json`. In `outputs/response.md`, **list every owned violation with `fixed` or `disputed: <reason>`**. A summary that claims the reds are "not caused by this PR" / "unrelated" / "infra" while owned violations are open is mechanically rejected: the leg fails and the no-op loop guard counts the lap.
+
+When `input/<TICKET>/ci_classification.json` is present (`[{ "name", "class": "infra|owned", "confirmedBy": "base|other-pr|none" }]`), read it first:
+- Leave checks classified as `"class": "infra"` alone (do not spend rework commits trying to fix runner/network failures already confirmed on the base branch) and note them under foreign/infra reds in `outputs/response.md`.
+- Fix every check classified as `"class": "owned"` (including `confirmedBy: "other-pr"` or `"none"`). Never classify a check as `infra` yourself — `ci_classification.json` is the sole authority.
 
 For `dart_format` owned items (rule `dart_format` — the `static` job failed on `dart format --set-exit-if-changed`), the expected fix is `dart format .` on the whole tree, then verify with `dart format --set-exit-if-changed --output=none .` before pushing.
 
@@ -109,6 +114,6 @@ In `pr_rework`, you are modifying an existing PR that has already been implement
 - **Modify ONLY** the files and code regions directly required to resolve:
   1. Open review threads (`pr_discussions.md` / `pr_discussions_raw.json`),
   2. Merge conflicts (`merge_conflicts.md`), or
-  3. Owned CI failures (`ci_failures.md` / `ci_violations.json`).
+  3. Owned CI failures (`ci_failures.md` / `ci_violations.json` / `ci_classification.json`).
 - **DO NOT** refactor, reformat, rename, reorganize imports, or rewrite untouched/already-approved parts of the PR diff (even if your session started fresh without prior history).
 - Keep the rework commit diff minimal and strictly scoped to the open findings so reviewers can verify each fix in isolation.

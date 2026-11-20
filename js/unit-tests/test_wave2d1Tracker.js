@@ -164,7 +164,7 @@ suite('wave2d1 tracker — createRepoTasksMulti', function() {
         assert.equal(r.created, 1);
         var cw = d1Calls(rec.calls, 'ado_create_work_item')[0].args;
         assert.contains(cw.title, '[repo-a]');
-        assert.equal(cw.workItemType, 'Sub-task');
+        assert.equal(cw.workItemType, 'Task');
         assert.deepEqual(d1Calls(rec.calls, 'ado_link_work_items')[0].args, { sourceId: '201', targetId: '50', relationship: 'parent' });
         assert.deepEqual(d1Calls(rec.calls, 'ado_add_work_item_label')[0].args, { id: '201', label: 'development' });
         assert.equal(d1Calls(rec.calls, 'ado_add_work_item_comment')[0].args.id, '100');

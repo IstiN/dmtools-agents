@@ -54,12 +54,13 @@ function buildRepoSubTaskPlans(repos, parentSummary, saKey, parentKey, baseUrl) 
     return plans;
 }
 
-function createSubTasks(tracker, repos, projectKey, parentKey, parentSummary, saKey, baseUrl, ticketLabels, existingSummaries) {
+function createSubTasks(tracker, repos, projectKey, parentKey, parentSummary, saKey, baseUrl, ticketLabels, existingSummaries, issueType) {
     var plans = buildRepoSubTaskPlans(repos, parentSummary, saKey, parentKey, baseUrl);
     var outcome = shared.createSubTasks(tracker, plans, {
         projectKey: projectKey,
         parentKey: parentKey,
-        ticketLabels: ticketLabels
+        ticketLabels: ticketLabels,
+        issueType: issueType
     }, existingSummaries);
     return { created: outcome.created, skipped: outcome.skipped, repoKeyMap: outcome.keyMap };
 }
