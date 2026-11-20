@@ -702,7 +702,7 @@ module.exports = {
     violationsSummaryJson: violationsSummaryJson,
     findDismissalClaim: findDismissalClaim,
     validateOwnedViolationsSummary: validateOwnedViolationsSummary,
-    classify: ciClassification ? ciClassification.classify : null,
-    resolveClassificationOptions: ciClassification ? ciClassification.resolveClassificationOptions : null,
-    writeCiClassificationFromEntries: ciClassification ? ciClassification.writeCiClassificationFromEntries : null
+    classify: ciClassification ? ciClassification.classify : function() { return []; },
+    resolveClassificationOptions: ciClassification ? ciClassification.resolveClassificationOptions : function() { return { namePatterns: [], logPatterns: [] }; },
+    writeCiClassificationFromEntries: ciClassification ? ciClassification.writeCiClassificationFromEntries : function() { return []; }
 };

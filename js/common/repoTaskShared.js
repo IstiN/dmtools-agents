@@ -137,35 +137,67 @@ function isAdoProvider(tracker) {
     return String(resolveTrackerProvider(tracker) || '').toLowerCase() === 'ado';
 }
 
+function firstDefinedValue(list) {
+    for (var i = 0; i < list.length; i++) {
+        if (list[i]) return list[i];
+    }
+    return null;
+}
+
+function nestedSubtaskType(holder) {
+    var types = holder && holder.issueTypes;
+    return types && types.SUBTASK;
+}
+
+function explicitSubTaskIssueType(cp, cfg) {
+    return firstDefinedValue([
+        cp.workItemType,
+        cp.subTaskIssueType,
+        cp.issueType,
+        nestedSubtaskType(cp),
+        nestedSubtaskType(cfg.tracker),
+        nestedSubtaskType(cfg.jira)
+    ]);
+}
+
+function isDefaultJiraSubtaskOnAdo(tracker, explicit) {
+    return isAdoProvider(tracker) && /^sub-?task$/i.test(String(explicit || ''));
+}
+
 function resolveSubTaskIssueType(tracker, projectConfig, customParams) {
-    var cp = customParams || {};
-    var cfg = projectConfig || {};
-    var explicit = cp.workItemType || cp.subTaskIssueType || cp.issueType ||
-        (cp.issueTypes && cp.issueTypes.SUBTASK) ||
-        (cfg.tracker && cfg.tracker.issueTypes && cfg.tracker.issueTypes.SUBTASK) ||
-        (cfg.jira && cfg.jira.issueTypes && cfg.jira.issueTypes.SUBTASK);
-    if (explicit && !(isAdoProvider(tracker) && /^sub-?task$/i.test(String(explicit)))) {
+    var explicit = explicitSubTaskIssueType(customParams || {}, projectConfig || {});
+    if (explicit && !isDefaultJiraSubtaskOnAdo(tracker, explicit)) {
         return explicit;
     }
     return isAdoProvider(tracker) ? 'Task' : 'Sub-task';
 }
 
+function projectFromSection(section) {
+    if (!section) return null;
+    return firstDefinedValue([section.projectKey, section.adoProject, section.jiraProject, section.project]);
+}
+
 function resolveTaskProjectKey(parentKey, projectConfig, customParams) {
-    var cp = customParams || {};
     var cfg = projectConfig || {};
-    var explicit = cp.projectKey || cp.adoProject || cp.jiraProject || cp.project ||
-        (cfg.tracker && (cfg.tracker.projectKey || cfg.tracker.adoProject || cfg.tracker.project)) ||
-        (cfg.jira && (cfg.jira.projectKey || cfg.jira.project));
-    if (explicit) return explicit;
-    return String(parentKey || '').split('-')[0];
+    var explicit = firstDefinedValue([
+        projectFromSection(customParams),
+        projectFromSection(cfg.tracker),
+        projectFromSection(cfg.jira)
+    ]);
+    return explicit || String(parentKey || '').split('-')[0];
+}
+
+function projectStatusesSection(projectConfig) {
+    var cfg = projectConfig || {};
+    var trackerCfg = cfg.tracker;
+    var jiraCfg = cfg.jira;
+    return (trackerCfg && trackerCfg.statuses) || (jiraCfg && jiraCfg.statuses);
 }
 
 function resolveBlockedStatus(customParams, projectConfig, tracker) {
     var cp = customParams || {};
     if (cp.blockedStatus) return cp.blockedStatus;
-    var cfg = projectConfig || {};
-    var provider = resolveTrackerProvider(tracker);
-    var statuses = configModule.resolveStatuses(cp, (cfg.tracker && cfg.tracker.statuses) || (cfg.jira && cfg.jira.statuses), provider);
+    var statuses = configModule.resolveStatuses(cp, projectStatusesSection(projectConfig), resolveTrackerProvider(tracker));
     return (statuses && statuses.BLOCKED) || 'Blocked';
 }
 

@@ -227,6 +227,7 @@ var REAL_COMMON_MODULES = {
     reviewPoolPost: 'js/common/reviewPoolPost.js',
     gitlabTracker: 'js/common/gitlabTracker.js',
     wipSquash: 'js/common/wipSquash.js',
+    ciClassification: 'js/common/ciClassification.js',
     // gh-1493: the terminal-signal delivery helpers are pure (no requires);
     // suites shim developBugAndCreatePR's siblings but resolve these for real.
     terminalDelivery: 'js/common/terminalDelivery.js'

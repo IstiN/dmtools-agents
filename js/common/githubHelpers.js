@@ -925,8 +925,8 @@ function extractViolationsFromEntries(entries, diffText) {
     return violations;
 }
 
-/** gh-1119: best-effort ci_violations.json write (full uncapped list, E2). */
-function writeViolationsJson(inputFolder, violations) {
+function writeViolationsJson(inputFolder, violations, classifyHook) {
+    if (classifyHook) classifyHook(typeof file_write === 'function' ? file_write : null);
     if (!violations || violations.length === 0) return;
     try {
         file_write({
@@ -1083,8 +1083,7 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
         var fullLogWritten = _tryWriteFullLog(inputFolder, sections.fullLogContent);
 
-        writeViolationsJson(inputFolder, violations);
-        if (ciViolations.writeCiClassificationFromEntries && typeof file_write === 'function') { ciViolations.writeCiClassificationFromEntries(inputFolder, entries, scm, owner, repo, headSha, classifyOptsOpt, { writeFn: file_write, fetchCheckRuns: _fetchCommitCheckRuns }); }
+        writeViolationsJson(inputFolder, violations, function(writeFn) { ciViolations.writeCiClassificationFromEntries(inputFolder, entries, scm, owner, repo, headSha, classifyOptsOpt, { writeFn: writeFn, fetchCheckRuns: _fetchCommitCheckRuns }); });
 
         var md = buildCiFailuresHeader(failedChecks, headSha, fullLogWritten) +
                  buildViolationsBlock(violations) +

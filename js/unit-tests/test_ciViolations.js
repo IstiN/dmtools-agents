@@ -889,5 +889,9 @@ suite('ciClassification.classify — conservative infra vs owned check classific
         assert.equal(out2[0]['class'], 'infra');
         assert.equal(written2.path, 'input/PROJ-2/ci_classification.json');
         assert.deepEqual(ciClass.writeCiClassificationFromEntries('input/PROJ-2', [], null, null, null, null, null, null), []);
+        assert.deepEqual(ciClass.collectOtherPrFailingChecks(scm, function() { return []; }, null, 'head1', ['explicit']), ['explicit']);
+        assert.deepEqual(ciClass.collectOtherPrFailingChecks({ listPrs: function() { return null; } }, function() { return []; }, 1, 'h1'), []);
+        assert.deepEqual(ciClass.writeCiClassificationJson('input/PROJ-1', [], function() {}, {}), []);
+        assert.deepEqual(ciClass.classify(['only-name'], ['only-name'], [], { logPatterns: ['503'] }), [{ name: 'only-name', 'class': 'owned', confirmedBy: 'base' }]);
     });
 });

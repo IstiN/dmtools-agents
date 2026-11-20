@@ -799,14 +799,8 @@ function syncBaseAndDetectConflicts(baseBranch, customParams, config, inputFolde
 function writeReworkInputContext(inputFolder, config, scm, pr, prDetails, branchName, baseBranch, dryRun, customParams) {
     const headSha = (prDetails.head && prDetails.head.sha) || null;
     const diff = branchSetup.resolveReworkInputDiff(scm, pr, baseBranch, branchName, config, dryRun, gitOps.getPRDiff);
-    const failedChecks = gh.detectFailedChecks(
-        scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath, diff, {
-            baseBranch: baseBranch,
-            prNumber: prDetails ? prDetails.number : (pr && pr.number),
-            prDetails: prDetails,
-            workingDir: config.workingDir,
-            customParams: customParams
-        });
+    const classifyOpts = { baseBranch: baseBranch, prNumber: prDetails ? prDetails.number : (pr && pr.number), prDetails: prDetails, workingDir: config.workingDir, customParams: customParams };
+    const failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath, diff, classifyOpts);
     console.log('Fetching PR discussions...');
     const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
     gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
@@ -834,7 +828,6 @@ function postReworkStartedCommentOrSkip(prAnchor, tracker, ticketKey, customPara
         failedChecks: failedChecks
     });
 }
-
 
 function resolveReworkBaseBranch(prDetails, config) {
     return prDetails.base ? prDetails.base.ref : config.git.baseBranch;

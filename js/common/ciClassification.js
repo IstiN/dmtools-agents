@@ -61,44 +61,61 @@ function compilePatterns(list, defaults) {
     return out;
 }
 
+function readRawPatternList(primary, secondary) {
+    if (Array.isArray(primary)) return primary;
+    if (Array.isArray(secondary)) return secondary;
+    return [];
+}
+
 function resolveClassificationOptions(customParams) {
     var cp = customParams || {};
     var sub = cp.ciClassification || {};
-    var rawNames = sub.namePatterns || cp.ciInfraNamePatterns || [];
-    var rawLogs = sub.logPatterns || cp.ciInfraLogPatterns || [];
+    var rawNames = readRawPatternList(sub.namePatterns, cp.ciInfraNamePatterns);
+    var rawLogs = readRawPatternList(sub.logPatterns, cp.ciInfraLogPatterns);
     return {
         namePatterns: compilePatterns(rawNames, []),
         logPatterns: compilePatterns(rawLogs, DEFAULT_INFRA_LOG_PATTERNS)
     };
 }
 
-function matchesCheckName(name, namePatterns) {
-    var s = String(name == null ? '' : name).trim();
-    if (!s) return false;
-    if (!namePatterns || namePatterns.length === 0) return true;
-    for (var i = 0; i < namePatterns.length; i++) {
-        if (namePatterns[i].test(s)) return true;
-    }
-    return false;
-}
-
-function matchesInfraLog(logs, logPatterns) {
-    var text = String(logs == null ? '' : logs);
-    if (!text) return false;
-    var patterns = logPatterns && logPatterns.length > 0 ? logPatterns : DEFAULT_INFRA_LOG_PATTERNS;
+function testAnyPattern(text, patterns) {
     for (var i = 0; i < patterns.length; i++) {
         if (patterns[i].test(text)) return true;
     }
     return false;
 }
 
+function matchesCheckName(name, namePatterns) {
+    var s = String(name == null ? '' : name).trim();
+    if (!s) return false;
+    if (!Array.isArray(namePatterns) || namePatterns.length === 0) return true;
+    return testAnyPattern(s, namePatterns);
+}
+
+function matchesInfraLog(logs, logPatterns) {
+    var text = String(logs == null ? '' : logs);
+    if (!text) return false;
+    var patterns = Array.isArray(logPatterns) && logPatterns.length > 0 ? logPatterns : DEFAULT_INFRA_LOG_PATTERNS;
+    return testAnyPattern(text, patterns);
+}
+
+function entryNameOf(item) {
+    if (!item) return '';
+    if (typeof item === 'string') return item.trim();
+    var raw = item.name || (item.check && item.check.name) || '';
+    return String(raw).trim();
+}
+
+function entryLogsOf(item) {
+    if (!item || typeof item === 'string') return '';
+    return String(item.logs || item.log || (item.sections && item.sections.logs) || '');
+}
+
 function normalizeNameSet(items) {
     var set = {};
     var list = Array.isArray(items) ? items : [];
     for (var i = 0; i < list.length; i++) {
-        var it = list[i];
-        var name = typeof it === 'string' ? it : (it && it.name);
-        var key = String(name == null ? '' : name).trim();
+        var key = entryNameOf(list[i]);
         if (key) set[key] = true;
     }
     return set;
@@ -110,53 +127,60 @@ function confirmedByOf(name, baseSet, otherPrSet) {
     return 'none';
 }
 
-/**
- * Pure classifier (`classify(failing, baseFailing, otherPrFailing, options)`).
- *
- * @param {Array<Object|string>} failing - Failing checks on the PR head (`{ name, logs }` or `{ check: { name }, sections: { logs } }`)
- * @param {Array<Object|string>} [baseFailing] - Failing check names on the latest base-branch run
- * @param {Array<Object|string>} [otherPrFailing] - Failing check names on another open PR
- * @param {Object} [options] - `{ namePatterns, logPatterns }` or `customParams`
- * @returns {Array<{name: string, class: string, confirmedBy: string}>}
- */
-function classify(failing, baseFailing, otherPrFailing, options) {
-    var list = Array.isArray(failing) ? failing : [];
-    if (list.length === 0) return [];
-    var opts = (options && (Array.isArray(options.logPatterns) || Array.isArray(options.namePatterns)))
-        ? {
+function normalizeClassifyOptions(options) {
+    if (options && (Array.isArray(options.logPatterns) || Array.isArray(options.namePatterns))) {
+        return {
             namePatterns: compilePatterns(options.namePatterns, []),
             logPatterns: compilePatterns(options.logPatterns, DEFAULT_INFRA_LOG_PATTERNS)
-        }
-        : resolveClassificationOptions(options);
+        };
+    }
+    return resolveClassificationOptions(options);
+}
+
+function classifySingleItem(item, baseSet, otherPrSet, opts) {
+    var name = entryNameOf(item);
+    if (!name) return null;
+    var confirmedBy = confirmedByOf(name, baseSet, otherPrSet);
+    var isInfra = confirmedBy === 'base' &&
+        matchesCheckName(name, opts.namePatterns) &&
+        matchesInfraLog(entryLogsOf(item), opts.logPatterns);
+    return {
+        name: name,
+        'class': isInfra ? 'infra' : 'owned',
+        confirmedBy: confirmedBy
+    };
+}
+
+/**
+ * Pure classifier (`classify(failing, baseFailing, otherPrFailing, options)`).
+ */
+function classify(failing, baseFailing, otherPrFailing, options) {
+    if (!Array.isArray(failing) || failing.length === 0) return [];
+    var opts = normalizeClassifyOptions(options);
     var baseSet = normalizeNameSet(baseFailing);
     var otherPrSet = normalizeNameSet(otherPrFailing);
     var out = [];
-
-    for (var i = 0; i < list.length; i++) {
-        var item = list[i] || {};
-        var name = typeof item === 'string'
-            ? item
-            : ((item.name) || (item.check && item.check.name) || '');
-        name = String(name).trim();
-        if (!name) continue;
-        var logs = typeof item === 'string'
-            ? ''
-            : (item.logs || item.log || (item.sections && item.sections.logs) || '');
-        var confirmedBy = confirmedByOf(name, baseSet, otherPrSet);
-        var pairMatches = matchesCheckName(name, opts.namePatterns) && matchesInfraLog(logs, opts.logPatterns);
-        var cls = (pairMatches && confirmedBy === 'base') ? 'infra' : 'owned';
-        out.push({
-            name: name,
-            'class': cls,
-            confirmedBy: confirmedBy
-        });
+    for (var i = 0; i < failing.length; i++) {
+        var row = classifySingleItem(failing[i], baseSet, otherPrSet, opts);
+        if (row) out.push(row);
     }
     return out;
 }
 
+var FAILED_CONCLUSIONS = { failure: true, timed_out: true, failed: true };
+
 function isFailedConclusion(conclusion) {
-    var c = String(conclusion || '').toLowerCase();
-    return c === 'failure' || c === 'timed_out' || c === 'failed';
+    return Boolean(FAILED_CONCLUSIONS[String(conclusion || '').toLowerCase()]);
+}
+
+function appendUniqueNames(target, seen, names) {
+    for (var i = 0; i < names.length; i++) {
+        var n = names[i];
+        if (n && !seen[n]) {
+            seen[n] = true;
+            target.push(n);
+        }
+    }
 }
 
 function failedCheckNamesFromRuns(checkRuns) {
@@ -165,23 +189,29 @@ function failedCheckNamesFromRuns(checkRuns) {
     var seen = {};
     for (var i = 0; i < list.length; i++) {
         var c = list[i];
-        if (!c || !isFailedConclusion(c.conclusion)) continue;
-        var name = String(c.name || '').trim();
-        if (name && !seen[name]) {
-            seen[name] = true;
-            names.push(name);
+        if (c && isFailedConclusion(c.conclusion)) {
+            appendUniqueNames(names, seen, [String(c.name || '').trim()]);
         }
     }
     return names;
 }
 
+function validGitSha(candidate) {
+    var s = String(candidate || '').trim().split('\n').pop().trim();
+    return /^[0-9a-f]{7,40}$/i.test(s) ? s : null;
+}
+
+function prBaseShaOf(prDetails) {
+    var base = prDetails && prDetails.base;
+    return validGitSha(base && base.sha);
+}
+
 function resolveBaseHeadSha(baseBranch, prDetails, workingDir, runCommand) {
-    var fromPr = prDetails && prDetails.base && prDetails.base.sha ? String(prDetails.base.sha).trim() : '';
-    if (/^[0-9a-f]{7,40}$/i.test(fromPr)) return fromPr;
+    var fromPr = prBaseShaOf(prDetails);
+    if (fromPr) return fromPr;
     if (!baseBranch || typeof runCommand !== 'function') return null;
     try {
-        var out = String(runCommand('git rev-parse origin/' + baseBranch, workingDir) || '').trim().split('\n').pop().trim();
-        return /^[0-9a-f]{7,40}$/i.test(out) ? out : null;
+        return validGitSha(runCommand('git rev-parse origin/' + baseBranch, workingDir));
     } catch (e) {
         return null;
     }
@@ -197,29 +227,28 @@ function collectBaseFailingChecks(fetchCheckRuns, baseSha, explicitBaseFailing) 
     }
 }
 
+function otherPrCandidateShas(openPrs, currentPrNumber, currentHeadSha) {
+    var shas = [];
+    var list = Array.isArray(openPrs) ? openPrs : [];
+    for (var i = 0; i < list.length && shas.length < 3; i++) {
+        var pr = list[i];
+        var sha = pr && pr.head && pr.head.sha ? String(pr.head.sha).trim() : '';
+        var samePr = currentPrNumber != null && pr && String(pr.number) === String(currentPrNumber);
+        var sameSha = Boolean(currentHeadSha) && sha === String(currentHeadSha);
+        if (sha && !samePr && !sameSha) shas.push(sha);
+    }
+    return shas;
+}
+
 function collectOtherPrFailingChecks(scm, fetchCheckRuns, currentPrNumber, currentHeadSha, explicitOtherPrFailing) {
     if (Array.isArray(explicitOtherPrFailing)) return explicitOtherPrFailing;
     if (!scm || typeof scm.listPrs !== 'function' || typeof fetchCheckRuns !== 'function') return [];
     try {
-        var openPrs = scm.listPrs('open');
-        if (!Array.isArray(openPrs)) return [];
+        var shas = otherPrCandidateShas(scm.listPrs('open'), currentPrNumber, currentHeadSha);
         var names = [];
         var seen = {};
-        var scanned = 0;
-        for (var i = 0; i < openPrs.length && scanned < 3; i++) {
-            var pr = openPrs[i];
-            if (!pr) continue;
-            if (currentPrNumber != null && String(pr.number) === String(currentPrNumber)) continue;
-            var sha = pr.head && pr.head.sha ? String(pr.head.sha).trim() : '';
-            if (!sha || (currentHeadSha && sha === String(currentHeadSha))) continue;
-            scanned++;
-            var failed = failedCheckNamesFromRuns(fetchCheckRuns(sha));
-            for (var j = 0; j < failed.length; j++) {
-                if (!seen[failed[j]]) {
-                    seen[failed[j]] = true;
-                    names.push(failed[j]);
-                }
-            }
+        for (var i = 0; i < shas.length; i++) {
+            appendUniqueNames(names, seen, failedCheckNamesFromRuns(fetchCheckRuns(shas[i])));
         }
         return names;
     } catch (e) {
@@ -227,13 +256,7 @@ function collectOtherPrFailingChecks(scm, fetchCheckRuns, currentPrNumber, curre
     }
 }
 
-function writeCiClassificationJson(inputFolder, entries, writeFn, classifyOpts) {
-    if (!inputFolder || !Array.isArray(entries) || entries.length === 0 || typeof writeFn !== 'function') {
-        return [];
-    }
-    var opts = classifyOpts || {};
-    var classification = classify(entries, opts.baseFailing || [], opts.otherPrFailing || [], opts.customParams || opts);
-    if (classification.length === 0) return [];
+function tryWriteClassificationFile(inputFolder, classification, writeFn) {
     try {
         writeFn({
             path: inputFolder + '/ci_classification.json',
@@ -241,28 +264,34 @@ function writeCiClassificationJson(inputFolder, entries, writeFn, classifyOpts) 
         });
         console.log('✅ Wrote ci_classification.json (' + classification.length + ' check(s))');
     } catch (e) {
-        console.warn('Could not write ci_classification.json (non-fatal):', e && e.message ? e.message : String(e));
+        console.warn('Could not write ci_classification.json (non-fatal):', String(e && e.message || e));
+    }
+}
+
+function writeCiClassificationJson(inputFolder, entries, writeFn, classifyOpts) {
+    if (!inputFolder || typeof writeFn !== 'function') return [];
+    var opts = classifyOpts || {};
+    var classification = classify(entries, opts.baseFailing, opts.otherPrFailing, opts.customParams || opts);
+    if (classification.length > 0) {
+        tryWriteClassificationFile(inputFolder, classification, writeFn);
     }
     return classification;
 }
 
 function writeCiClassificationFromEntries(inputFolder, entries, scm, owner, repo, headSha, classifyOpts, deps) {
     var d = deps || {};
-    if (!entries || entries.length === 0 || typeof d.writeFn !== 'function') return [];
+    if (typeof d.writeFn !== 'function' || typeof d.fetchCheckRuns !== 'function') return [];
     var opts = classifyOpts || {};
     var fetchRuns = function(sha) {
-        return typeof d.fetchCheckRuns === 'function' ? (d.fetchCheckRuns(scm, owner, repo, sha) || []) : [];
+        return d.fetchCheckRuns(scm, owner, repo, sha) || [];
     };
     var baseSha = opts.baseSha || resolveBaseHeadSha(opts.baseBranch, opts.prDetails, opts.workingDir, d.runCommand);
-    var baseFailing = collectBaseFailingChecks(fetchRuns, baseSha, opts.baseFailing);
-    var otherPrFailing = collectOtherPrFailingChecks(scm, fetchRuns, opts.prNumber, headSha, opts.otherPrFailing);
     return writeCiClassificationJson(inputFolder, entries, d.writeFn, {
-        baseFailing: baseFailing,
-        otherPrFailing: otherPrFailing,
+        baseFailing: collectBaseFailingChecks(fetchRuns, baseSha, opts.baseFailing),
+        otherPrFailing: collectOtherPrFailingChecks(scm, fetchRuns, opts.prNumber, headSha, opts.otherPrFailing),
         customParams: opts.customParams || opts
     });
 }
-
 module.exports = {
     DEFAULT_INFRA_LOG_PATTERNS: DEFAULT_INFRA_LOG_PATTERNS,
     resolveClassificationOptions: resolveClassificationOptions,
