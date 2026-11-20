@@ -265,4 +265,39 @@ suite('wipSquash (gh-1472)', function () {
             ticketKey: 'PROJ-1'
         }), false);
     });
+    test('inspectSquashRange and inspectReworkSquashRange use --first-parent so foreign commits brought in by a base-branch merge do not block WIP squash (gh-1528)', function () {
+        // Simulate `git merge origin/main` during preCliReworkSetup bringing foreign main-branch
+        // commits into the second parent of the merge while first-parent has only WIP/ticket commits.
+        var reworkWithBaseMerge = wipSquash.inspectReworkSquashRange(function (cmd) {
+            if (cmd === 'git rev-list --first-parent --merges abc..HEAD') return 'merge1\n';
+            if (cmd === 'git log --first-parent --merges --format=%s abc..HEAD') {
+                return "Merge remote-tracking branch 'origin/main' into ai/PROJ-1\n";
+            }
+            if (cmd === 'git log --first-parent --no-merges --format=%s abc..HEAD') {
+                return 'PROJ-1 WIP auto-save 2\nPROJ-1 WIP auto-save 1\n';
+            }
+            if (cmd === 'git log --no-merges --format=%s abc..HEAD') {
+                return 'PROJ-1 WIP auto-save 2\nchore: unrelated main-branch commit\nPROJ-1 WIP auto-save 1\n';
+            }
+            return '';
+        }, 'abc..HEAD', 'PROJ-1', 'PROJ-1 rework');
+        assert.equal(reworkWithBaseMerge.skipReason, null, 'foreign second-parent commits must not abort rework WIP squash');
+        assert.equal(reworkWithBaseMerge.subjects.length, 2);
+
+        var devWithBaseMerge = wipSquash.inspectSquashRange(function (cmd) {
+            if (cmd === 'git rev-list --merges abc..HEAD') return 'merge1\n';
+            if (cmd === 'git log --first-parent --merges --format=%s abc..HEAD') {
+                return "Merge remote-tracking branch 'origin/main' into ai/PROJ-1\n";
+            }
+            if (cmd === 'git log --first-parent --no-merges --format=%s abc..HEAD') {
+                return 'PROJ-1 WIP auto-save 1\nPROJ-1 implement feature\n';
+            }
+            if (cmd === 'git log --no-merges --format=%s abc..HEAD') {
+                return 'PROJ-1 WIP auto-save 1\nchore: foreign commit on main\nPROJ-1 implement feature\n';
+            }
+            return '';
+        }, 'abc..HEAD', 'PROJ-1', 'PROJ-1 final');
+        assert.equal(devWithBaseMerge.skipReason, null, 'foreign second-parent commits must not abort dev WIP squash');
+        assert.equal(devWithBaseMerge.subjects.length, 2);
+    });
 });

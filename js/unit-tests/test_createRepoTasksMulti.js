@@ -881,3 +881,75 @@ suite('createRepoTasksMulti — flattenTasks edge paths', function() {
         assert.deepEqual(flat[0].repoLevelDependsOn, [], 'repoLevelDependsOn normalised');
     });
 });
+
+suite('createRepoTasksMulti — ADO & configurable workItemType / projectKey / blockedStatus (gh-1526)', function() {
+    test('resolves ADO default Task workItemType, configured projectKey, and ADO Blocked status for numeric parent IDs', function() {
+        var createdCalls = [];
+        var searchCalls = [];
+        var moveCalls = [];
+        var linkCalls = [];
+        var desc = 'Solution\n\n{code:json|title=affected_repos}\n' + JSON.stringify([
+            { name: 'repo-a', tasks: [
+                { id: 't1', title: 'Task One' },
+                { id: 't2', title: 'Task Two', depends_on: ['t1'] }
+            ] }
+        ]) + '\n{code}';
+        var adoGlobals = {
+            java: { lang: { System: { getenv: function() { return ''; } } } },
+            ado_get_work_item: function(args) {
+                if (String(args.id) === '100') {
+                    return { id: 100, fields: { 'System.Title': 'SA', 'System.State': 'Active', 'System.Description': desc, 'System.Parent': 50 } };
+                }
+                return { id: 50, fields: { 'System.Title': 'Parent Story', 'System.State': 'Active' } };
+            },
+            ado_search_by_wiql: function(args) {
+                searchCalls.push(args);
+                return { value: [] };
+            },
+            ado_create_work_item: function(args) {
+                createdCalls.push(args);
+                return { id: 200 + createdCalls.length };
+            },
+            ado_link_work_items: function(args) {
+                linkCalls.push(args);
+                return {};
+            },
+            ado_move_to_state: function(args) {
+                moveCalls.push(args);
+                return {};
+            },
+            ado_add_work_item_label: function() { return {}; },
+            ado_add_work_item_comment: function() { return {}; }
+        };
+        var mod = makeModule(adoGlobals);
+        var res = mod.action({
+            ticket: { key: '100' },
+            customParams: {
+                trackerProvider: 'ado',
+                projectKey: 'MyAdoProject'
+            }
+        });
+        assert.equal(res.success, true);
+        assert.equal(res.created, 2);
+        assert.equal(createdCalls.length, 2);
+        assert.equal(createdCalls[0].project, 'MyAdoProject', 'configured projectKey used instead of numeric parentKey split');
+        assert.equal(createdCalls[0].workItemType, 'Task', 'ADO defaults to Task instead of Jira Sub-task');
+        assert.equal(searchCalls.length, 1);
+        assert.equal(searchCalls[0].wiql.indexOf('Sub-task'), -1, 'ADO children WIQL does not filter by Jira Sub-task');
+        assert.equal(moveCalls.length, 1);
+        assert.equal(moveCalls[0].id, '202');
+    });
+
+    test('honours explicit customParams.workItemType and customParams.blockedStatus overrides', function() {
+        var shared = loadRepoTaskShared({});
+        var adoTracker = { provider: function() { return 'ado'; } };
+        var jiraTracker = { provider: function() { return 'jira'; } };
+        assert.equal(shared.resolveSubTaskIssueType(adoTracker, { jira: { issueTypes: { SUBTASK: 'Sub-task' } } }, {}), 'Task', 'ADO ignores default Jira Sub-task');
+        assert.equal(shared.resolveSubTaskIssueType(adoTracker, {}, { workItemType: 'CustomChild' }), 'CustomChild', 'explicit workItemType wins on ADO');
+        assert.equal(shared.resolveSubTaskIssueType(jiraTracker, { jira: { issueTypes: { SUBTASK: 'CustomSubtask' } } }, {}), 'CustomSubtask', 'Jira honours jira.issueTypes.SUBTASK');
+        assert.equal(shared.resolveTaskProjectKey('50', { jira: { project: 'ADO_PROJ' } }, {}), 'ADO_PROJ', 'falls back to projectConfig.jira.project');
+        assert.equal(shared.resolveTaskProjectKey('PROJ-50', {}, {}), 'PROJ', 'splits Jira key when no explicit project configured');
+        assert.equal(shared.resolveBlockedStatus({ blockedStatus: 'On Hold' }, {}, adoTracker), 'On Hold', 'explicit blockedStatus wins');
+        assert.equal(shared.resolveBlockedStatus({}, { jira: { statuses: { BLOCKED: 'Impediment' } } }, adoTracker), 'Impediment', 'projectConfig statuses.BLOCKED honoured');
+    });
+});

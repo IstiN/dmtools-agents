@@ -727,3 +727,167 @@ suite('ciViolations.extractViolations — dart format shape (gh-1134, UT-1/UT-2)
     });
 });
 
+
+// ── gh-1527: conservative CI check failure classifier (ciClassification.js) ─
+var ciClass = loadModule('js/common/ciClassification.js');
+
+suite('ciClassification.classify — conservative infra vs owned check classification (gh-1527)', function() {
+
+    test('(1) log matches concrete infra pattern AND base fails same check -> class: infra, confirmedBy: base', function() {
+        var res = ciClass.classify(
+            [{ name: 'build', logs: 'fatal: unable to access repo: Could not resolve host: github.com\n' }],
+            ['build'],
+            []
+        );
+        assert.deepEqual(res, [
+            { name: 'build', 'class': 'infra', confirmedBy: 'base' }
+        ]);
+    });
+
+    test('(2) log matches concrete infra pattern ONLY on PR (base green) -> class: owned, confirmedBy: none', function() {
+        var res = ciClass.classify(
+            [{ name: 'build', logs: 'Error: read ECONNRESET at TLSWrap.onStreamRead\n' }],
+            [],
+            []
+        );
+        assert.deepEqual(res, [
+            { name: 'build', 'class': 'owned', confirmedBy: 'none' }
+        ]);
+    });
+
+    test('(3) log does NOT match infra pattern even though base also fails -> class: owned, confirmedBy: base', function() {
+        var res = ciClass.classify(
+            [{ name: 'unit-tests', logs: 'AssertionError: expected 200 to equal 500 in test_login.js\n' }],
+            ['unit-tests'],
+            []
+        );
+        assert.deepEqual(res, [
+            { name: 'unit-tests', 'class': 'owned', confirmedBy: 'base' }
+        ]);
+    });
+
+    test('(4) generic "timeout" or "permission denied" in a test log is NOT treated as infra even when base fails', function() {
+        var res = ciClass.classify(
+            [
+                { name: 'e2e', logs: 'Error: Test timeout of 30000ms exceeded\n' },
+                { name: 'lint', logs: 'Error: permission denied while opening fixture\n' }
+            ],
+            ['e2e', 'lint'],
+            []
+        );
+        assert.deepEqual(res, [
+            { name: 'e2e', 'class': 'owned', confirmedBy: 'base' },
+            { name: 'lint', 'class': 'owned', confirmedBy: 'base' }
+        ]);
+    });
+
+    test('(5) failure confirmed only by another open PR -> class: owned, confirmedBy: other-pr', function() {
+        var res = ciClass.classify(
+            [{ name: 'build', logs: 'ETIMEDOUT connecting to registry.npmjs.org\n' }],
+            [],
+            ['build']
+        );
+        assert.deepEqual(res, [
+            { name: 'build', 'class': 'owned', confirmedBy: 'other-pr' }
+        ]);
+    });
+
+    test('(6) customParams namePatterns and logPatterns extend matching rules', function() {
+        var res = ciClass.classify(
+            [
+                { name: 'sf-deploy', logs: 'ERROR: UNABLE_TO_LOCK_ROW on sandbox org\n' },
+                { name: 'unit-tests', logs: 'ERROR: UNABLE_TO_LOCK_ROW on sandbox org\n' }
+            ],
+            ['sf-deploy', 'unit-tests'],
+            [],
+            {
+                ciClassification: {
+                    namePatterns: ['^sf-'],
+                    logPatterns: ['UNABLE_TO_LOCK_ROW']
+                }
+            }
+        );
+        assert.deepEqual(res, [
+            { name: 'sf-deploy', 'class': 'infra', confirmedBy: 'base' },
+            { name: 'unit-tests', 'class': 'owned', confirmedBy: 'base' }
+        ]);
+    });
+
+    test('(7) writeCiClassificationJson and helper functions handle base/other-PR probes and write failures gracefully', function() {
+        assert.deepEqual(ciClass.classify(null), []);
+        assert.deepEqual(ciClass.classify(['', null]), []);
+        assert.equal(ciClass.matchesCheckName('', []), false);
+        assert.equal(ciClass.matchesInfraLog('', []), false);
+        assert.deepEqual(ciClass.resolveClassificationOptions({ ciInfraLogPatterns: ['[invalid regex'] }).namePatterns, []);
+
+        var runs = [
+            { name: 'build', conclusion: 'failure' },
+            { name: 'build', conclusion: 'timed_out' },
+            { name: 'lint', conclusion: 'success' }
+        ];
+        assert.deepEqual(ciClass.failedCheckNamesFromRuns(runs), ['build']);
+        assert.equal(ciClass.resolveBaseHeadSha('main', { base: { sha: 'deadbeef1234' } }, null, null), 'deadbeef1234');
+        assert.equal(ciClass.resolveBaseHeadSha('main', null, '/repo', function() { return 'cafebabe1234\n'; }), 'cafebabe1234');
+        assert.equal(ciClass.resolveBaseHeadSha('main', null, '/repo', function() { throw new Error('no git'); }), null);
+        assert.equal(ciClass.resolveBaseHeadSha(null, null, null, null), null);
+
+        assert.deepEqual(ciClass.collectBaseFailingChecks(null, null, ['a']), ['a']);
+        assert.deepEqual(ciClass.collectBaseFailingChecks(function() { return runs; }, 'deadbeef'), ['build']);
+        assert.deepEqual(ciClass.collectBaseFailingChecks(function() { throw new Error('err'); }, 'deadbeef'), []);
+
+        var scm = {
+            listPrs: function() {
+                return [
+                    { number: 1, head: { sha: 'head1' } },
+                    { number: 2, head: { sha: 'head2' } }
+                ];
+            }
+        };
+        assert.deepEqual(ciClass.collectOtherPrFailingChecks(scm, function(sha) {
+            return sha === 'head2' ? [{ name: 'e2e', conclusion: 'failure' }] : [];
+        }, 1, 'head1'), ['e2e']);
+        assert.deepEqual(ciClass.collectOtherPrFailingChecks({ listPrs: function() { throw new Error('boom'); } }, function() { return []; }, 1, 'h1'), []);
+
+        var written = null;
+        var out = ciClass.writeCiClassificationJson(
+            'input/PROJ-1',
+            [{ check: { name: 'build' }, sections: { logs: '503 Service Unavailable\n' } }],
+            function(arg) { written = arg; },
+            { baseFailing: ['build'] }
+        );
+        assert.equal(out.length, 1);
+        assert.equal(out[0]['class'], 'infra');
+        assert.equal(written.path, 'input/PROJ-1/ci_classification.json');
+        assert.deepEqual(JSON.parse(written.content), [{ name: 'build', 'class': 'infra', confirmedBy: 'base' }]);
+
+        assert.doesNotThrow(function() {
+            ciClass.writeCiClassificationJson(
+                'input/PROJ-1',
+                [{ check: { name: 'build' }, sections: { logs: '502 Bad Gateway' } }],
+                function() { throw new Error('disk full'); },
+                { baseFailing: ['build'] }
+            );
+        });
+        assert.deepEqual(ciClass.writeCiClassificationJson(null, [], null), []);
+        var written2 = null;
+        var out2 = ciClass.writeCiClassificationFromEntries(
+            'input/PROJ-2',
+            [{ check: { name: 'build' }, sections: { logs: 'No space left on device\n' } }],
+            scm,
+            'acme',
+            'repo',
+            'head1',
+            { baseSha: 'base1', prNumber: 1 },
+            {
+                writeFn: function(arg) { written2 = arg; },
+                fetchCheckRuns: function(_s, _o, _r, sha) {
+                    return sha === 'base1' ? [{ name: 'build', conclusion: 'failure' }] : [];
+                }
+            }
+        );
+        assert.equal(out2.length, 1);
+        assert.equal(out2[0]['class'], 'infra');
+        assert.equal(written2.path, 'input/PROJ-2/ci_classification.json');
+        assert.deepEqual(ciClass.writeCiClassificationFromEntries('input/PROJ-2', [], null, null, null, null, null, null), []);
+    });
+});

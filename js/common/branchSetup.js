@@ -534,7 +534,7 @@ function runDryRunReworkSetup(params, actualParams, parsed, runtime, reviewPolic
     var target = resolveDryRunReworkTarget(parsed, runtime, deps);
     if (!target) return { success: true, dryRun: true };
     var baseBranch = deps.resolveReworkBaseBranch(target.prDetails, runtime.config);
-    var ctx = deps.writeReworkInputContext(parsed.inputFolder, runtime.config, runtime.scm, target.pr, target.prDetails, target.branchName, baseBranch, true);
+    var ctx = deps.writeReworkInputContext(parsed.inputFolder, runtime.config, runtime.scm, target.pr, target.prDetails, target.branchName, baseBranch, true, runtime.customParams);
     deps.enforceReworkInputContract(parsed.inputFolder, runtime.scm, target.prDetails, ctx.discussionData, ctx.failedChecks, reviewPolicy);
     try { deps.fetchQuestions(actualParams); } catch (e) {}
     try { deps.fetchParentContext(params); } catch (e2) {}

@@ -749,7 +749,8 @@ function squashReworkWipCommits(cmd, ticketKey, config, workingDir) {
             return cleanCommandOutput(cmd(c) || '');
         }, base + '..HEAD', ticketKey, reworkMsg);
         if (check.skipReason) {
-            console.warn('squashReworkWipCommits skipped (' + check.skipReason + ')');
+            console.log('ℹ️ squashReworkWipCommits skipped (' + check.skipReason + ') — the PR will keep its WIP auto-save commits');
+            console.warn('squashReworkWipCommits skipped (' + check.skipReason + ') — the PR will keep its WIP auto-save commits');
             return false;
         }
         cmd('git reset --soft ' + base);

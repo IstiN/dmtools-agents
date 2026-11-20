@@ -1029,7 +1029,7 @@ function _tryWriteFullLog(inputFolder, fullLogContent) {
     }
 }
 
-function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt) {
+function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt, classifyOptsOpt) {
     var args = _detectFailedCheckArgs(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt);
     var scm = args.scm;
     var owner = args.owner;
@@ -1083,9 +1083,8 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
         var fullLogWritten = _tryWriteFullLog(inputFolder, sections.fullLogContent);
 
-        // gh-1119: the full uncapped violation list lands in ci_violations.json
-        // (E2) — best-effort, a write failure never costs the leg its table.
         writeViolationsJson(inputFolder, violations);
+        if (ciViolations.writeCiClassificationFromEntries && typeof file_write === 'function') { ciViolations.writeCiClassificationFromEntries(inputFolder, entries, scm, owner, repo, headSha, classifyOptsOpt, { writeFn: file_write, fetchCheckRuns: _fetchCommitCheckRuns }); }
 
         var md = buildCiFailuresHeader(failedChecks, headSha, fullLogWritten) +
                  buildViolationsBlock(violations) +
