@@ -74,7 +74,12 @@ on:
         # when a same-signature failure streak crosses
         # failureAnalysis.afterFailures (transient vs deterministic-infra).
         # analyze: requires the factory leg (gh-1366) — no-op until it ships.
-        options: [dev, review, rework, polish, analyze]
+        # maintainer-plan / maintainer-execute: structural quality passes
+        # (plan: analysis + fix plan, no code, stops for owner approval;
+        # execute: implements the owner-approved plan, removes interim
+        # guards, opens the PR). Target repo must wire
+        # sm.runners.maintainerPlan / sm.runners.maintainerExecute.
+        options: [dev, review, rework, polish, analyze, maintainer-plan, maintainer-execute]
       reason:
         description: 'Why (audit trail)'
         type: string

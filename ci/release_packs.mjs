@@ -98,7 +98,7 @@ const SHARED_PREFIXES = ['js/', 'instructions/', 'prompts/', 'scripts/'];
  *   configs/  — the four leg entry configs the guard job names as its
  *               parent-config fallback (pack launch.json stays primary)
  */
-const FACTORY_SETUP_LEGS = ['bug_development', 'story_development', 'pr_review', 'pr_rework'];
+const FACTORY_SETUP_LEGS = ['bug_development', 'story_development', 'pr_review', 'pr_rework', 'maintainer', 'maintainer_execute'];
 const FACTORY_SETUP_SCRIPTS = [
   'git-push-guard.sh',
   'apply-review-verdict.sh',

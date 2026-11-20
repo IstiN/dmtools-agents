@@ -36,6 +36,8 @@ var TEAMMATE_LAUNCH_PACKS = {
   pr_rework: { launch: true, verdict: true },
   story_development: { launch: true },
   bug_development: { launch: true },
+  maintainer: { launch: true },
+  maintainer_execute: { launch: true },
 };
 
 /** True when [agent] is a teammate pack carrying a launch surface. */
