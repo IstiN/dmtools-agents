@@ -1524,9 +1524,8 @@ function retentionOpts(opts) {
  * stays '' (normTokenRow → null downstream; pricing skips it, tokens still
  * render). Rows without a resolvable anchor drop (never a wrong key).
  * Retention mirrors the fa producer (js/factory/token_usage.js): rows
- * older than windowDays (default 14) drop, the newest keepPerKey (default:
- * the fa producer's ROW_KEEP — 200 since the honest-cap change) survive per
- * key, sorted by at ascending. Numbers only —
+ * older than windowDays (default 14) drop, the newest keepPerKey (default
+ * ROW_KEEP = 200 — the honest cap) survive per key, at ascending. Numbers only —
  * no log text, no URLs (the snapshot's privacy invariant).
  */
 function buildTokensMap(rows, opts) {
