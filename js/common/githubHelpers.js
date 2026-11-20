@@ -948,29 +948,13 @@ function buildViolationsBlock(violations) {
 // Each helper keeps the exact calls, order, logs and fallback semantics of the
 // inline block it replaces — pinned by the detectFailedChecks suites above.
 
-// Calling-convention split: (scm, headSha, inputFolder[, jenkinsBasePath[, diffText]])
+// Calling-convention split: (scm, headSha, inputFolder[, jenkinsBasePath[, diffText[, classifyOpts]]])
 // vs the legacy (owner, repo, headSha, inputFolder[, ...]) form.
-function _detectFailedCheckArgs(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt) {
+function _detectFailedCheckArgs(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt, classifyOptsOpt) {
     if (_isScm(scmOrOwner)) {
-        return {
-            scm: scmOrOwner,
-            owner: null,
-            repo: null,
-            headSha: repoOrHeadSha,
-            inputFolder: headShaOrInputFolder,
-            jenkinsBasePath: inputFolderOpt,
-            diffText: diffTextOpt
-        };
+        return { scm: scmOrOwner, owner: null, repo: null, headSha: repoOrHeadSha, inputFolder: headShaOrInputFolder, jenkinsBasePath: inputFolderOpt, diffText: jenkinsBasePathOpt, classifyOpts: diffTextOpt };
     }
-    return {
-        scm: null,
-        owner: scmOrOwner,
-        repo: repoOrHeadSha,
-        headSha: headShaOrInputFolder,
-        inputFolder: inputFolderOpt,
-        jenkinsBasePath: jenkinsBasePathOpt,
-        diffText: diffTextOpt
-    };
+    return { scm: null, owner: scmOrOwner, repo: repoOrHeadSha, headSha: headShaOrInputFolder, inputFolder: inputFolderOpt, jenkinsBasePath: jenkinsBasePathOpt, diffText: diffTextOpt, classifyOpts: classifyOptsOpt };
 }
 
 // Commit check-runs for the head — scm-object form first, legacy github_* form
@@ -1030,7 +1014,7 @@ function _tryWriteFullLog(inputFolder, fullLogContent) {
 }
 
 function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt, classifyOptsOpt) {
-    var args = _detectFailedCheckArgs(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt);
+    var args = _detectFailedCheckArgs(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt, classifyOptsOpt);
     var scm = args.scm;
     var owner = args.owner;
     var repo = args.repo;
@@ -1038,7 +1022,6 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
     var inputFolder = args.inputFolder;
     var jenkinsBasePath = args.jenkinsBasePath;
     var diffText = args.diffText;
-
     try {
         if (!headSha) {
             console.warn('detectFailedChecks: no headSha provided, skipping');
@@ -1083,7 +1066,7 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
         var fullLogWritten = _tryWriteFullLog(inputFolder, sections.fullLogContent);
 
-        writeViolationsJson(inputFolder, violations, function(writeFn) { ciViolations.writeCiClassificationFromEntries(inputFolder, entries, scm, owner, repo, headSha, classifyOptsOpt, { writeFn: writeFn, fetchCheckRuns: _fetchCommitCheckRuns }); });
+        writeViolationsJson(inputFolder, violations, function(writeFn) { ciViolations.writeCiClassificationFromEntries(inputFolder, entries, scm, owner, repo, headSha, args.classifyOpts, { writeFn: writeFn, fetchCheckRuns: _fetchCommitCheckRuns }); });
 
         var md = buildCiFailuresHeader(failedChecks, headSha, fullLogWritten) +
                  buildViolationsBlock(violations) +

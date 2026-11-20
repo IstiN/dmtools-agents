@@ -333,7 +333,7 @@ function resolveTaskOptions(params) {
     return {
         customParams: customParams,
         blocksRelationship: customParams.blocksRelationship || 'Blocks',
-        blockedStatus:      customParams.blockedStatus      || 'Blocked',
+        blockedStatus:      customParams.blockedStatus      || 'Blocked', // legacy fallback for direct resolveTaskOptions callers
         ticketLabels:       customParams.labels             || ['development']
     };
 }

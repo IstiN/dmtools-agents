@@ -26,7 +26,7 @@ function loadGithubHelpers(mocks) {
             './machineNotice.js': machineNoticeModule,
             './reviewThreadInventory.js': reviewThreadInventoryModule,
             './ci.js': loadModule('js/common/ci.js'),
-            './ciViolations.js': loadModule('js/common/ciViolations.js'),
+            './ciViolations.js': loadModule('js/common/ciViolations.js', makeRequire({})),
             // gh-1248: githubHelpers delegates the review-discussion
             // fetch/render blocks to it — the canonical copy must be mapped.
             './githubReviewFetch.js': githubReviewFetchReal(mocks)
@@ -2755,6 +2755,59 @@ suite('githubHelpers.detectFailedChecks — owned/foreign violations block (gh-1
         var sections = gh.buildLogSections({ name: 'gate', details_url: 'u' }, 'a\nb\n', 'Error log');
         assert.equal(sections.logs, 'a\nb\n');
         assert.equal(gh.buildLogSections({ name: 'g' }, null, 'Error log'), null);
+    });
+
+    test('SCM 6-arg call maps diffText (5th) and classifyOpts (6th): tags diff-file violation owned and probes prDetails.base.sha for infra classification (gh-1527)', function() {
+        var writes = [];
+        var queriedShas = [];
+        var gateLog = file_read({ path: 'js/unit-tests/fixtures/ci_logs/gate_crap4dart.log' });
+        var diff = file_read({ path: 'js/unit-tests/fixtures/ci_logs/diff_pr_433.txt' });
+        var scm = {
+            listPrs: function() { return []; },
+            getCommitCheckRuns: function(sha) {
+                queriedShas.push(sha);
+                if (sha === 'ba5e00001') {
+                    return {
+                        check_runs: [
+                            { name: 'deploy', conclusion: 'failure' }
+                        ]
+                    };
+                }
+                return {
+                    check_runs: [
+                        { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/acme/widgets/actions/runs/1/job/111' },
+                        { name: 'deploy', conclusion: 'failure', details_url: 'https://github.com/acme/widgets/actions/runs/1/job/222' }
+                    ]
+                };
+            },
+            getJobLogs: function(jobId) {
+                if (String(jobId) === '222') return 'Error: connect ECONNRESET 10.0.0.1:443\n';
+                return gateLog;
+            }
+        };
+        var gh = loadGithubHelpers({
+            file_write: function(args) { writes.push(args); }
+        });
+
+        var failed = gh.detectFailedChecks(scm, '11ead0001', '/tmp/input', null, diff, {
+            baseBranch: 'main',
+            prNumber: 433,
+            prDetails: { number: 433, base: { sha: 'ba5e00001' } }
+        });
+        assert.equal(failed.length, 2);
+        assert.deepEqual(queriedShas, ['11ead0001', 'ba5e00001']);
+
+        var violationsWrite = findWrite(writes, '/tmp/input/ci_violations.json');
+        assert.ok(violationsWrite, 'ci_violations.json written');
+        var vJson = JSON.parse(violationsWrite.content);
+        assert.ok(vJson.owned >= 1, 'diff-file violation tagged owned, not foreign');
+
+        var classWrite = findWrite(writes, '/tmp/input/ci_classification.json');
+        assert.ok(classWrite, 'ci_classification.json written');
+        assert.deepEqual(JSON.parse(classWrite.content), [
+            { name: 'gate', 'class': 'owned', confirmedBy: 'none' },
+            { name: 'deploy', 'class': 'infra', confirmedBy: 'base' }
+        ]);
     });
 });
 

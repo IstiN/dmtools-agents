@@ -893,5 +893,6 @@ suite('ciClassification.classify — conservative infra vs owned check classific
         assert.deepEqual(ciClass.collectOtherPrFailingChecks({ listPrs: function() { return null; } }, function() { return []; }, 1, 'h1'), []);
         assert.deepEqual(ciClass.writeCiClassificationJson('input/PROJ-1', [], function() {}, {}), []);
         assert.deepEqual(ciClass.classify(['only-name'], ['only-name'], [], { logPatterns: ['503'] }), [{ name: 'only-name', 'class': 'owned', confirmedBy: 'base' }]);
+        assert.deepEqual(ciClass.classify([{ name: 'constructor', logs: '503 Service Unavailable' }], [], []), [{ name: 'constructor', 'class': 'owned', confirmedBy: 'none' }]);
     });
 });

@@ -112,7 +112,7 @@ function entryLogsOf(item) {
 }
 
 function normalizeNameSet(items) {
-    var set = {};
+    var set = Object.create(null);
     var list = Array.isArray(items) ? items : [];
     for (var i = 0; i < list.length; i++) {
         var key = entryNameOf(list[i]);
