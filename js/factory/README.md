@@ -55,6 +55,12 @@ pack config: `token_usage.DEFAULT_DATA_PATH` is the single JS constant,
 `agents-tokens.json` pin). The stream is a flat `data/<name>.json` file —
 the Contents API has no subdirectories.
 
+The invariant is machine-checked: the AC3 consistency suite in
+`js/unit-tests/test_factoryTokenUsage.js` pins the path across the JS
+producer, the tick reader and the script (plus the sh counter hand-off
+arity and the ROW_KEEP cap parity), and the script carries a `--self-test`
+counter-level check (six-field sentinel hand-off + retention cap).
+
 ### Env/file contract (what the awf side passes today)
 
 | env name      | param        | meaning                                        | default              |

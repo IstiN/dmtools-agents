@@ -36,8 +36,10 @@
  * repo variable. The factory-data stream is a flat `data/<name>.json` file
  * (the Contents API has no subdirectories). js/factoryState.js
  * (FACTORY_TOKENS_ASSET) and scripts/publish-token-usage.sh carry the same
- * literal pinned by the AC3 consistency test in
- * js/unit-tests/test_factoryTokenUsage.js.
+ * literal — the single-source invariant is machine-checked by the AC3
+ * consistency suite in js/unit-tests/test_factoryTokenUsage.js (path parity
+ * producer ↔ tick reader ↔ sh, the sh counter hand-off arity, and ROW_KEEP
+ * cap parity; the sh counter additionally carries a `--self-test`).
  *
  * Transport mirrors factoryState.js: every command starts with `gh` (the
  * executor whitelists the first token); base64 stays in-shell
@@ -315,11 +317,12 @@ function retainedRowsOf(rows, cutoff) {
 
 /**
  * `.[$key] = ((.[$key] // []) + [$row])
- *  | with_entries(.value |= (map(select((.at // "") >= $cutoff)) | .[-40:]))
- *  | with_entries(select(.value | length > 0))`
+ *  | with_entries(.value |= (map(select((.at // "") >= $cutoff)) | .[-$keep:]))
+ *  | with_entries(select(.value | length > 0))`   (keep = ROW_KEEP)
  *
  * Appends under the key, drops rows older than cutoff (string compare —
- * Z stamps sort), keeps the LAST 40 per key, drops emptied keys. Corrupt
+ * Z stamps sort), keeps the LAST ROW_KEEP per key (the honest 200-cap —
+ * 40 silently ate a real leg's tail), drops emptied keys. Corrupt
  * shapes degrade to {} exactly like the `jq empty` guard.
  */
 function mergeTokenRows(cur, key, row, cutoff) {

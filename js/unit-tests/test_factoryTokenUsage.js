@@ -16,6 +16,19 @@ var assert = globalThis.assert;
 
 var tuModule = loadModule('js/factory/token_usage.js', makeRequire({}), {});
 
+// gh-1521 AC3: the SM tick reader — loaded with the same dep wiring as
+// test_factoryState.js so the single-source pins can probe the reader's
+// resolved token fetch behaviorally (the canonical-path invariant, without
+// touching the module-size ratchet pin on factoryState.js).
+var fsModule = loadModule('js/factoryState.js',
+    makeRequire({
+        './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+        './common/reworkLatch.js': loadModule('js/common/reworkLatch.js',
+            makeRequire({ './legRunVocab.js': legRunVocabReal() }), {}),
+        './common/mergeStateReconcile.js': loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {}),
+        './common/probeCache.js': loadModule('js/common/probeCache.js')
+    }), {});
+
 // Fixed clock for every timestamp-sensitive assertion: 2026-10-13T12:34:56Z.
 var NOW = '2026-10-13T12:34:56Z';
 
@@ -901,5 +914,95 @@ suite('factoryTokenUsage — balanced-payload scan helpers (gh-1225)', function 
     var sums = { input: 4, output: 4, cacheRead: 0, requests: 0, model: '', sources: {} };
     tuModule.applyLedgerRecord(sums, { input: '1e3', output: 2 });
     assert.deepEqual(sums, { input: 4, output: 4, cacheRead: 0, requests: 0, model: '', sources: {} });
+  });
+});
+
+// ── AC3 — the one canonical path, pinned across all three sides ─────────────
+// gh-1521 review: the single-source invariant was documented but never
+// machine-checked — each side carried its own string copy and a rename on
+// any one of them passed the whole suite. These pins fail the suite the
+// moment any side drifts: JS producer ↔ tick reader ↔ sh producer.
+
+/* global file_read, cli_execute_command */
+
+var TOKENS_SCRIPT = 'scripts/publish-token-usage.sh';
+
+function tokensScriptBody() {
+    return file_read({ path: TOKENS_SCRIPT }) || '';
+}
+
+// The behavioral counter-level probe (test_ghTokenKeeper convention): bash
+// is not whitelisted in every dmtools env — skip it there; the static pins
+// above still hold the script's contract text.
+var _ftuCanRunBash_ = typeof cli_execute_command === 'function';
+if (_ftuCanRunBash_) {
+    try {
+        cli_execute_command({ command: 'bash -c "echo __ftu_probe__"' });
+    } catch (e) {
+        _ftuCanRunBash_ = false; // bash not whitelisted in this dmtools env
+    }
+}
+
+suite('factoryTokenUsage — AC3 single-source pins (path, hand-off, retention)', function () {
+
+  test('AC3 path: the tick reader fetches exactly the producer’s canonical path', function () {
+    var seen = [];
+    fsModule.fetchTokensFromBranch('o/r', { tag: 'factory-data' }, function (a) {
+      seen.push(String(a.command));
+      return { output: '{}' }; // an empty map is a valid (token-less) read
+    });
+    assert.equal(seen.length, 1, 'one gh probe');
+    var m = String(seen[0]).match(/contents\/([^?]+)\?/);
+    assert.ok(m, 'the probe names the fetched contents path: ' + seen[0]);
+    assert.equal(m[1], tuModule.DEFAULT_DATA_PATH,
+        'the reader’s resolved fetch path === the producer’s DEFAULT_DATA_PATH');
+    assert.equal(m[1], 'data/agents-tokens.json');
+  });
+
+  test('AC3 path: the sh producer pins the same canonical path on GET and PUT', function () {
+    var body = tokensScriptBody();
+    assert.ok(body.length > 0, TOKENS_SCRIPT + ' must exist');
+    assert.equal((body.match(/contents\/data\/agents-tokens\.json/g) || []).length, 2,
+        'exactly the GET (?ref=factory-data) and the PUT hit data/agents-tokens.json');
+    assert.ok(body.indexOf('contents/data/fa-tokens.json') === -1,
+        'no legacy fa-tokens.json file path survives (the fa-tokens: ledger marker is not a path)');
+  });
+
+  test('AC3 hand-off: the sh read declares six fields and the counter prints them sentinel-padded', function () {
+    var body = tokensScriptBody();
+    var readLine = body.split('\n').filter(function (line) {
+        return line.indexOf('read -r SUM_IN') !== -1;
+    })[0] || '';
+    assert.ok(readLine.indexOf('SUM_IN SUM_OUT SUM_CR SUM_REQ SOURCE MODEL') !== -1,
+        'the read hand-off consumes requests/source/model too: ' + readLine);
+    assert.ok(body.indexOf('read -r SUM_IN SUM_OUT SUM_CR MODEL') === -1,
+        'the old four-field read is gone');
+    assert.ok(body.indexOf("src or '-'") !== -1 && body.indexOf("model or '-'") !== -1,
+        "the counter prints '-' sentinels so empty fields survive the whitespace split");
+    assert.ok(body.indexOf('print(0, 0, 0, 0') !== -1,
+        'the OSError early exit carries the same six-field arity');
+  });
+
+  test('AC3 retention: the sh cap derives from ROW_KEEP and equals the JS cap (200)', function () {
+    var body = tokensScriptBody();
+    assert.equal(body.indexOf('.[-40:]'), -1, 'the silent 40-cap is gone');
+    assert.ok(body.indexOf('--argjson keep "${ROW_KEEP}"') !== -1,
+        'the publish jq derives the tail cap from the ROW_KEEP literal');
+    assert.ok(body.indexOf('.[-$keep:]') !== -1, 'the jq tail slice uses the derived keep');
+    var m = body.match(/^ROW_KEEP=(\d+)$/m);
+    assert.ok(m, 'the script declares a ROW_KEEP literal');
+    assert.equal(Number(m[1]), tuModule.ROW_KEEP, 'sh ROW_KEEP === JS ROW_KEEP');
+    assert.equal(tuModule.ROW_KEEP, 200, 'the honest cap');
+  });
+
+  test('AC3 self-test: the sh counter hand-off passes its counter-level self-test', function () {
+    if (!_ftuCanRunBash_) {
+        console.log('  ⏭️  skipped — bash not executable here');
+        return;
+    }
+    var out = cli_execute_command({ command: 'bash ' + TOKENS_SCRIPT + ' --self-test' }) || '';
+    assert.ok(String(out).indexOf('publish-token-usage self-test: PASS') !== -1,
+        'counter-level self-test must pass — got: ' + String(out).slice(-300));
+    assert.equal(String(out).indexOf('self-test: FAIL'), -1, 'got:\n' + out);
   });
 });
