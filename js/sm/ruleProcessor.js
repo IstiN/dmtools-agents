@@ -367,17 +367,12 @@ function processRule(deps, rule, globalRepoInfo, ruleIndex, workflowBudget, effe
   }
   var prep = queryAndPrepareRuleTickets(deps, rule, effectiveConfig, effectiveRepoInfo, interpolatedJql, workflowBudget, budgetCapped);
   if (prep.earlyExit) {
-    if (prep.publishEmpty) {
-      localAndStateRunnerModule.maybePublishFactoryState(deps.buildStatePublishDeps(effectiveConfig), rule, effectiveConfig, effectiveRepoInfo, []);
-    }
     return {
       processedKeys: [],
       skippedKeys: []
     };
   }
-  var res = runTicketsLoop(deps, rule, prep, effectiveConfig, effectiveRepoInfo, workflowBudget);
-  localAndStateRunnerModule.maybePublishFactoryState(deps.buildStatePublishDeps(effectiveConfig), rule, effectiveConfig, effectiveRepoInfo, res.processedKeys);
-  return res;
+  return runTicketsLoop(deps, rule, prep, effectiveConfig, effectiveRepoInfo, workflowBudget);
 }
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {

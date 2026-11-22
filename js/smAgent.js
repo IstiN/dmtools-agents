@@ -431,6 +431,7 @@ function buildTickOrchestratorDeps() {
     d.runNakedPrSweep = function (ri) { return verdictAndFailStateModule.runNakedPrSweep(rvDeps, ri); };
     d.getTickStampsFailed = function () { return tickStampsFailed; };
     d.ensureDeadZoneScan = function (ma) { return localAndStateRunnerModule.ensureDeadZoneScan(lsDeps, ma); };
+    d.publishFactoryStateOnce = function (rule, cfg, ri, keys) { localAndStateRunnerModule.maybePublishFactoryState(buildLocalAndStateDeps(cfg), rule, cfg, ri, keys); };
     return d;
 }
 

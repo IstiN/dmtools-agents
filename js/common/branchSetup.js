@@ -274,6 +274,16 @@ function ensureLegContextLocalExcludes() {
         '# DMTools Basic* client caches (gh-1505 / epam/dm.ai#868) - must never be committed',
         'Could not add cacheBasic*/ to .git/info/exclude:'
     );
+    ensureGitInfoExclude(
+        '.dmtools-target-workingdir',
+        '# DMTools workingDir marker (epam/dm.ai#875) - must never be committed',
+        'Could not add .dmtools-target-workingdir to .git/info/exclude:'
+    );
+    ensureGitInfoExclude(
+        '.fah/trajectories/',
+        '# FA session trajectories (epam/dm.ai#875) - must never be committed',
+        'Could not add .fah/trajectories/ to .git/info/exclude:'
+    );
 }
 
 /**
