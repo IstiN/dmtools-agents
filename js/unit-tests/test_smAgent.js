@@ -14373,6 +14373,30 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
             'the cite carries the audit fields');
     });
 
+    test('statePublish runs ONCE per tick at end of runAction instead of per-rule (38x -> 1x)', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            github: {
+                items: [{ key: 'T-1', labels: [], pr: null }],
+                prList: PR31,
+                workflowApiRuns: []
+            },
+            onCliExecute: branchServes(BRANCH_TOKENS)
+        });
+        sm.action({
+            jobParams: {
+                owner: 'o',
+                repo: 'r',
+                rules: [makeRule('project = T1'), makeRule('project = T2'), makeRule('project = T3')],
+                statePublish: SP
+            }
+        });
+        var puts = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PUT repos/o/r/contents/data/fa-state.json ') !== -1;
+        });
+        assert.equal(puts.length, 1, 'fa-state.json is published once per tick across multiple rules');
+    });
+
     // ── gh-825: model pricing — the hardcoded table prices the ledger ─────
     // data/model-pricing.json in the tick's checkout (statePublish.pricingFile
     // repoints it). Absent file = quiet; PRESENT-but-unusable warns and the

@@ -766,17 +766,19 @@ suite('branchSetup.ensureLegContextLocalExcludes (gh-1318)', function() {
     test('seeds both input/ and outputs/ into .git/info/exclude when empty', function() {
         var mocks = makeFileMocks('');
         loadBranchSetup(mocks).ensureLegContextLocalExcludes();
-        assert.equal(mocks.writes.length, 6, 'input/, outputs/, the stash dir, cache*Client/, cacheTestRail/, and cacheBasic*/');
+        assert.equal(mocks.writes.length, 8, 'input/, outputs/, the stash dir, cache*Client/, cacheTestRail/, cacheBasic*/, .dmtools-target-workingdir, and .fah/trajectories/');
         assert.contains(mocks.writes[3].content, 'cache*Client/');
         assert.contains(mocks.writes[4].content, 'cacheTestRail/');
         assert.contains(mocks.writes[5].content, 'cacheBasic*/');
+        assert.contains(mocks.writes[6].content, '.dmtools-target-workingdir');
+        assert.contains(mocks.writes[7].content, '.fah/trajectories/');
         assert.equal(mocks.writes[0].path, '.git/info/exclude');
         assert.contains(mocks.writes[0].content, 'input/');
         assert.contains(mocks.writes[1].content, 'outputs/');
     });
 
     test('idempotent: entries already present → no write', function() {
-        var existing = '# x\ninput/\noutputs/\n.input.branch-setup-bak/\ncache*Client/\ncacheTestRail/\ncacheBasic*/\n';
+        var existing = '# x\ninput/\noutputs/\n.input.branch-setup-bak/\ncache*Client/\ncacheTestRail/\ncacheBasic*/\n.dmtools-target-workingdir\n.fah/trajectories/\n';
         var mocks = makeFileMocks(existing);
         loadBranchSetup(mocks).ensureLegContextLocalExcludes();
         assert.equal(mocks.writes.length, 0, 'all entries present, nothing to do');
@@ -785,10 +787,12 @@ suite('branchSetup.ensureLegContextLocalExcludes (gh-1318)', function() {
     test('partial state: only outputs/ present → the missing entries are appended', function() {
         var mocks = makeFileMocks('# keep\noutputs/\n');
         loadBranchSetup(mocks).ensureLegContextLocalExcludes();
-        assert.equal(mocks.writes.length, 5);
+        assert.equal(mocks.writes.length, 7);
         assert.contains(mocks.writes[2].content, 'cache*Client/');
         assert.contains(mocks.writes[3].content, 'cacheTestRail/');
         assert.contains(mocks.writes[4].content, 'cacheBasic*/');
+        assert.contains(mocks.writes[5].content, '.dmtools-target-workingdir');
+        assert.contains(mocks.writes[6].content, '.fah/trajectories/');
         var all = mocks.writes.map(function(w) { return w.content; }).join('');
         assert.contains(all, 'input/');
         assert.contains(all, '.input.branch-setup-bak/');
@@ -860,5 +864,24 @@ suite('branchSetup.ensureLegContextLocalExcludes (gh-1318)', function() {
             authorName: 'PostNL-AI',
             authorEmail: 'ai@postnl.nl'
         });
+        assert.equal(bs.findMergedPrForBranch({ listPrs: function() { return null; } }, 'feat'), null);
+        assert.deepEqual(bs.findMergedPrForBranch({
+            listPrs: function() {
+                return [{ head: { ref: 'feat' }, merged_at: '2026-01-01T00:00:00Z' }];
+            }
+        }, 'feat'), { head: { ref: 'feat' }, merged_at: '2026-01-01T00:00:00Z' });
+        var tCmds = [];
+        var tHead = bs.checkoutTestBranchHead('PROJ-1', {
+            git: { branchPrefix: { test: 'test/' }, baseBranch: 'main' },
+            workingDir: '/tmp/wd'
+        }, {
+            configLoader: { formatBranchName: function(p, k) { return p + k; } },
+            prHelper: { buildTargetedOriginFetchCommand: function() { return 'git fetch origin'; } },
+            runGit: function(c, wd) { tCmds.push({ c: c, wd: wd }); return ''; }
+        });
+        assert.equal(tHead.branchName, 'test/PROJ-1');
+        assert.equal(tHead.workingDir, '/tmp/wd');
+        tHead.exec('git status');
+        assert.ok(tCmds.some(function(x) { return x.c === 'git status' && x.wd === '/tmp/wd'; }));
     });
 });

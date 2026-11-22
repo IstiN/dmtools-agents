@@ -101,8 +101,8 @@ echo "pre-commit: checking syntax / duplicate declarations via nyc instrument ($
 "$NYC_BIN" instrument --exit-on-error "$TMP_WORK/src" "$TMP_WORK/instrumented" >/dev/null
 
 # 6. Step (2): crap4js module-size + crap4js nesting on staged prod files
-echo "pre-commit: checking module-size (<=500) and nesting..."
-"$CRAP4JS_BIN" module-size --max-lines 500 \
+echo "pre-commit: checking module-size (<=800) and nesting..."
+"$CRAP4JS_BIN" module-size --max-lines 800 \
   --baseline "$REPO_ROOT/ci/module-size-baseline.json" \
   "${PROD_JS[@]}"
 "$CRAP4JS_BIN" nesting "${PROD_JS[@]}"

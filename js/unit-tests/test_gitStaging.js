@@ -27,6 +27,9 @@ var ALL_ARTIFACTS = [
     '.dmtools/development-mode-plan-appendix.md',
     '.dmtools-session-output.log',
     '.claude-session-id',
+    '.dmtools-target-workingdir',
+    '.fah/trajectories',
+    '.fah/bash_jobs',
     // gh-1505 / epam/dm.ai#868: legacy dmtools REST-client cache folders.
     'cache*Client',
     'cacheTestRail',

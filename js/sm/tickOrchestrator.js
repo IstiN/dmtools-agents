@@ -384,6 +384,7 @@ function runTickSetupAndRules(deps, p, projectConfig, rules, workflowBudget, glo
   var validationCost = deps.reportValidationCost(globalRepoInfo, validationConcurrencyCfg, validationMutexMax);
   var stampsFailed = deps.getTickStampsFailed();
   var dzScan = deps.ensureDeadZoneScan(machineAuthorModule.resolveMachineAuthor(p, projectConfig));
+  deps.publishFactoryStateOnce(rules[rules.length - 1], projectConfig, globalRepoInfo, allProcessedKeys);
   var dzCount = logCompletionBanner(deps, allProcessedKeys, allSkippedKeys, stampsFailed, dzScan);
   return {
     success: true,

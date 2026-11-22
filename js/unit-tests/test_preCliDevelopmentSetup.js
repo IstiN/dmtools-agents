@@ -1506,6 +1506,23 @@ suite('preCliDevelopmentSetup.checkoutBranch — seam helpers (gh-1190)', functi
         }
     });
 
+    test('discardRuntimeArtifactModifications deletes untracked .dmtools-target-workingdir before checkout (epam/dm.ai#875)', function() {
+        var calls = [];
+        var deleted = [];
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'master', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: function(opts) {
+                calls.push(opts && opts.command);
+                return '';
+            },
+            file_delete: function(args) {
+                deleted.push(args && args.path);
+            }
+        });
+        mod.checkoutLocalBranchWithAlign('PROJ-1', 'ai/PROJ-1', 'master');
+        assert.deepEqual(deleted, ['.dmtools-target-workingdir']);
+    });
+
 });
 
 // ── gh-1229 characterization: reportExistingDevBranch degradation branches

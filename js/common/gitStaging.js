@@ -44,6 +44,9 @@ var RUNTIME_ARTIFACT_PATHS = [
     '.dmtools/development-mode-plan-appendix.md',
     '.dmtools-session-output.log',
     '.claude-session-id',
+    '.dmtools-target-workingdir',
+    '.fah/trajectories',
+    '.fah/bash_jobs',
     // gh-1505 / epam/dm.ai#868: legacy dmtools REST-client cache folders
     // created in the working directory before DMTOOLS_CACHE_DIR defaulted to
     // ~/.dmtools/cache (plus any custom cache*Client / cacheTestRail dirs).

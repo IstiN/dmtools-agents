@@ -258,6 +258,7 @@ function discardRuntimeArtifactModifications() {
     PIPELINE_RUNTIME_ARTIFACTS.forEach(function (artifact) {
         try { runCmd({ command: 'git checkout -- ' + artifact }); } catch (e) { console.warn('Could not reset runtime artifact', artifact + ':', e); }
         try { runCmd({ command: 'git rm --cached --ignore-unmatch ' + artifact }); } catch (e2) { console.warn('Could not untrack runtime artifact', artifact + ':', e2); }
+        try { if (typeof file_delete === 'function') file_delete({ path: artifact }); } catch (e3) { }
     });
 }
 
@@ -317,11 +318,10 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     ticket = ticket || { key: ticketKey, fields: {} };
     customParams = customParams || {};
     _workingDir = config.workingDir || null;
-    // Write workingDir to a known file so CLI shell scripts (e.g. create_test_commit.sh)
-    // can discover the correct dependency dir without duplicating resolution logic.
-    if (_workingDir) {
-        try { file_write({ path: '.dmtools-target-workingdir', content: _workingDir }); } catch (e) { }
-    }
+    // Seed local excludes before writing .dmtools-target-workingdir so an untracked marker
+    // is ignored before git checkout (and written again after checkout in case checkout overwrote it).
+    branchSetup.ensureLegContextLocalExcludes();
+    if (_workingDir) { file_write({ path: '.dmtools-target-workingdir', content: _workingDir }); }
     var branchName = configLoader.resolveBranchName(config, ticket, 'development');
     var rebaseBase = configLoader.resolvePRTargetBranch(config, ticket);
     console.log('Setting up branch:', branchName);
@@ -352,11 +352,11 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
         }
 
         console.log('Branch ready:', branchName);
-        // gh-1318 root-cause heal: seed input//outputs into .git/info/exclude
-        // and untrack what the branch already carries — best-effort, only on
-        // a successful checkout (nothing was checked out otherwise).
+        // gh-1318 / epam/dm.ai#875: seed excludes, untrack poisoned leg/runtime artifacts, and restore marker.
         branchSetup.healLegContextArtifacts(runCommandStr, gitStaging.untrackLegContextArtifacts);
+        gitStaging.untrackRuntimeArtifacts(runCommandStr);
     } finally {
+        if (_workingDir) { file_write({ path: '.dmtools-target-workingdir', content: _workingDir }); }
         restoreGeneratedIndex();
         branchSetup.restoreFreshInput(runCommandStr, stashedFreshInput);
     }
