@@ -11,6 +11,10 @@
       "lines": 1924,
       "functions": 158
     },
+    "js/common/branchSetup.js": {
+      "lines": 613,
+      "functions": 32
+    },
     "js/common/contentOutput.js": {
       "lines": 598,
       "functions": 42
