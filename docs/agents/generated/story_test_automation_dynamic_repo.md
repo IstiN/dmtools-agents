@@ -36,6 +36,10 @@ _Human doc: [`agents/docs/agents/story_test_automation_dynamic_repo.md`](agents/
 | outputType | `—` |
 | skipAIProcessing | `false` |
 
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/story_test_automation_dynamic_repo.md`](agents/snapshots/story_test_automation_dynamic_repo.md)
+
 ## Actions
 
 
@@ -87,6 +91,7 @@ _Post-Action Story Test Automation — Dynamic Repository variant_
 ## LLM step
 
 - outputType: `none`
+- Prompt snapshot: `agents/snapshots/story_test_automation_dynamic_repo.md`
 
 ## Custom params
 
