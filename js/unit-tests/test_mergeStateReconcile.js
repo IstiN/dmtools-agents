@@ -295,6 +295,19 @@ suite('mergeStateReconcile — latestConclusions census mechanics', function () 
     test('no checkConclusion on the input → the fold label is empty → no reconcile', function () {
         assert.equal(mrReal().reconcileDecision({ rawMergeState: 'UNSTABLE', rollup: [] }), null);
     });
+
+    test('latestEntries: preserves first-appearance context order, breaks ties by id/position, and appends anonymous entries', function () {
+        var anon1 = { conclusion: 'SUCCESS' };
+        var anon2 = { name: '', conclusion: 'FAILURE' };
+        var aOld = { name: 'alpha', conclusion: 'FAILURE', completed_at: '2026-11-06T09:00:00Z', id: 1 };
+        var bOnly = { context: 'beta', state: 'SUCCESS', completed_at: '2026-11-06T09:30:00Z', id: 2 };
+        var aNew = { name: 'alpha', conclusion: 'SUCCESS', completed_at: '2026-11-06T09:00:00Z', id: 5 };
+        var c1 = { name: 'gamma', conclusion: 'FAILURE', id: 7 };
+        var c2 = { name: 'gamma', conclusion: 'SUCCESS', id: 7 };
+        var out = mrReal().latestEntries([anon1, aOld, bOnly, aNew, c1, c2, anon2]);
+        assert.deepEqual(out, [aNew, bOnly, c2, anon1, anon2]);
+        assert.deepEqual(mrReal().latestEntries(null), []);
+    });
 });
 
 suite('mergeStateReconcile — reconcileDecision (the AC matrix)', function () {

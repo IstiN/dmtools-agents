@@ -170,6 +170,30 @@ function latestConclusions(rollup) {
 }
 
 /**
+ * Collapse multiple check-runs per context name to the LATEST entry (#695
+ * branch-protection semantics) while keeping anonymous entries intact.
+ * Note: GitHub stamps started_at on check-run creation (including queued
+ * re-runs), so sortTimeOf + idOf order queued re-runs ahead of older runs.
+ */
+function latestEntries(rollup) {
+    var latest = {};
+    var order = [];
+    var anon = [];
+    (rollup || []).forEach(function (r, pos) {
+        var name = r && (r.name || r.context);
+        if (!name) { anon.push(r); return; }
+        var t = sortTimeOf(r);
+        var id = idOf(r);
+        var prev = latest[name];
+        if (!prev) order.push(name);
+        if (winsLatest(t, id, pos, prev)) {
+            latest[name] = { t: t, id: id, pos: pos, entry: r };
+        }
+    });
+    return order.map(function (n) { return latest[n].entry; }).concat(anon);
+}
+
+/**
  * The actually-failing check names on a head: latest-per-context
  * FAILURE/TIMED_OUT conclusions, the machine's own bookeeping stamps folded
  * out. GraphQL StatusContext nodes (context/state spelling) count too — a
@@ -244,5 +268,6 @@ module.exports = {
     isReconcilableVerdict: isReconcilableVerdict,
     failingCheckNames: failingCheckNames,
     latestConclusions: latestConclusions,
+    latestEntries: latestEntries,
     reconcileDecision: reconcileDecision
 };

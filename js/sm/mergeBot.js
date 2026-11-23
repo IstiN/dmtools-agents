@@ -52,8 +52,8 @@ var mergeBackstop = require('../common/mergeBackstop.js');
 // escalation valve past mergeGate.humanHoldHours). The ONE shared helper
 // all three merge funnels call; human threads are never machine-resolved
 // (gh-744 unchanged) — the gate only waits for them.
+var mergeStateReconcile = require('../common/mergeStateReconcile.js');
 var mergeGate = require('../common/mergeGate.js');
-
 // gh-1416: the verdict-freshness probe rides every squash-merge — the
 // newest dmtools:review-verdict record for the CURRENT head being
 // REQUEST_CHANGES/BLOCK defers the merge and stamps a deduped
@@ -233,7 +233,7 @@ function rollupDetail(commitSha, pr, job, owner, name) {
         return { state: 'none', pendingSince: null };
     }
     if (!runs.length) return { state: 'none', pendingSince: null };
-    return combineRunStates(runs.map(decideRunState));
+    return combineRunStates(mergeStateReconcile.latestEntries(runs).map(decideRunState));
 }
 
 /**

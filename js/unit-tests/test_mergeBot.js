@@ -5,6 +5,7 @@
 // every loadModule of js/sm/mergeBot.js must map the helper in makeRequire
 // (it throws on unmapped ids).
 var mcpParseModule = loadModule('js/common/mcpParse.js', makeRequire({}), {});
+var mergeStateReconcileModule = loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {});
 
 // gh-1353: the merge backstop rides mergeApprovedHead. The wiring's require
 // needs the module's full dependency closure, with configLoader stubbed.
@@ -153,6 +154,7 @@ function loadMergeBot(mods) {
     var backstop = mergeBackstopModuleFor(mods);
     return loadModule('js/sm/mergeBot.js',
         makeRequire({
+            '../common/mergeStateReconcile.js': mergeStateReconcileModule,
             '../common/mcpParse.js': mcpParseModule,
             '../common/mergeBackstop.js': backstop,
             '../common/mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop),
@@ -1242,6 +1244,20 @@ suite('mergeBot: rollupDetail evidence edge paths (gh-1040 characterization)', f
             { status: 'completed', conclusion: 'neutral' }
         ] }), JSON.stringify({ workflow_runs: [] }));
         assert.equal(detailOf(fx2).state, 'green', 'a concluded non-failure run is not pending');
+    });
+
+    test('rollupDetail deduplicates check-runs per context name: newer SUCCESS overrides older FAILURE, and newer timestamp wins regardless of arrival order (fa#2366)', function () {
+        var fx = rollupFixture(JSON.stringify({ check_runs: [
+            { id: 10, name: 'Quality gate', status: 'completed', conclusion: 'failure', completed_at: '2026-11-22T23:28:49Z' },
+            { id: 20, name: 'Quality gate', status: 'completed', conclusion: 'success', completed_at: '2026-11-22T23:56:52Z' }
+        ] }), JSON.stringify({ workflow_runs: [] }));
+        assert.equal(detailOf(fx).state, 'green', 'newer SUCCESS for the same check name supersedes older FAILURE');
+
+        var fxInverse = rollupFixture(JSON.stringify({ check_runs: [
+            { id: 20, name: 'Quality gate', status: 'completed', conclusion: 'failure', completed_at: '2026-11-22T23:56:52Z' },
+            { id: 10, name: 'Quality gate', status: 'completed', conclusion: 'success', completed_at: '2026-11-22T23:28:49Z' }
+        ] }), JSON.stringify({ workflow_runs: [] }));
+        assert.equal(detailOf(fxInverse).state, 'red', 'first entry with newer timestamp wins over later older entry');
     });
 });
 
