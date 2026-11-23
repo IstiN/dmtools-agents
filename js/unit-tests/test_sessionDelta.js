@@ -1038,8 +1038,8 @@ if (_sdHasNodeProcess_) {
 // payloads — 200 healthy / 200 exhausted / 500 no-plan / 401 / timeout /
 // shape-changed — and logs every invocation, so NO test ever hits the live
 // endpoint. The API key is handed to the fake curl via stdin config, never
-// argv. A live IT (AC2) is OPT-IN: it runs only with FA_QUOTA_LIVE_IT=on,
-// otherwise it reports QUOTA_LIVE_SKIPPED — runner creds in the environment
+// argv. A live IT (AC2) is OPT-IN: it runs only with FA_QUOTA_LIVE_IT=on or
+// QUOTA_LIVE_IT=on (gh-1534), otherwise it reports QUOTA_LIVE_SKIPPED — runner creds in the environment
 // must not turn the shared suite into live HTTP (gh-1385 rework).
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1050,7 +1050,7 @@ var _sdFaQuotaSharedBash_ = [
     'trap "rm -rf \\"$TMP\\"" EXIT',
     'BIN="$TMP/bin"; FX="$TMP/fixtures"; mkdir -p "$BIN" "$FX"',
     'cat > "$FX/healthy.json" << "JSONEOF"',
-    '{"code":200,"success":true,"data":{"level":"max","limits":[{"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":28000,"currentValue":1382,"remaining":2617,"percentage":4,"nextResetTime":179394845215},{"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":140000,"currentValue":11896,"remaining":128103,"percentage":8,"nextResetTime":1794278259998}]}}',
+    '{"code":200,"success":true,"data":{"level":"max","limits":[{"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":28000,"currentValue":3000,"remaining":25000,"percentage":47,"nextResetTime":179394845215},{"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":140000,"currentValue":11896,"remaining":128103,"percentage":8,"nextResetTime":1794278259998}]}}',
     'JSONEOF',
     'cat > "$FX/exhausted.json" << "JSONEOF"',
     '{"code":200,"success":true,"data":{"level":"max","limits":[{"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":28000,"currentValue":28000,"remaining":0,"percentage":100,"nextResetTime":179394845215},{"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":140000,"currentValue":11896,"remaining":128103,"percentage":8,"nextResetTime":1794278259998}]}}',
@@ -1061,6 +1061,103 @@ var _sdFaQuotaSharedBash_ = [
     'export FAKE_FIXTURES="$FX" FAKE_CURL_LOG="$TMP/calls.log" FAKE_CURL_ARGV_LOG="$TMP/curl-argv.log"',
     ': > "$FAKE_CURL_LOG"',
     ': > "$FAKE_CURL_ARGV_LOG"'
+];
+
+// gh-1534 — v2 FEFO-rate ordering fixtures share this preamble: reset env,
+// scaffold a tmp dir with a fixtures dir and a call log, and derive reset
+// timestamps relative to "now" so tW (time to weekly reset) is realistic.
+var _sdFaQuotaV2Bash_ = [
+    'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG FA_PROVIDERS_QUEUE FA_QUOTA_PROBE',
+    'unset QUOTA_FLOOR_5H_PCT QUOTA_FLOOR_WEEKLY_PCT',
+    'unset ZAI_CODE_KEY ZAI_CODE_KEY_1 ZAI_CODE_KEY_2 ZAI_CODE_KEY_3 ZAI_CODE_KEY_4 ZAI_CODE_KEY_5 ENV_VAR_DEV_QUEUE',
+    'TMP="$(mktemp -d)"',
+    'trap "rm -rf \\"$TMP\\"" EXIT',
+    'BIN="$TMP/bin"; FX="$TMP/fixtures"; mkdir -p "$BIN" "$FX"',
+    'NOW_MS=$(( $(date +%s) * 1000 ))',
+    'T2M=$((NOW_MS + 120000)); T5M=$((NOW_MS + 300000)); T10M=$((NOW_MS + 600000)); T1D=$((NOW_MS + 86400000)); T5D=$((NOW_MS + 432000000)); T6D=$((NOW_MS + 518400000))',
+    'export FAKE_FIXTURES="$FX" FAKE_CURL_LOG="$TMP/calls.log"',
+    ': > "$FAKE_CURL_LOG"'
+];
+
+// gh-1534 rework — the IT-2e live-IT verdict mirror, shared verbatim with the
+// offline parity test IT-2p (single source of truth). The mirror MUST stay
+// comparator-identical to _fa_order_queue_by_quota in scripts/providers/fa.sh:
+// pct floors (of own cap5/capW) -> leg-fit vs derived reserve 0.75 x max cap5 ->
+// lead by FEFO rate (RW / time-to-weekly-reset) desc, filler by usable desc,
+// exhausted tail by severity asc then nextResetTime asc (usable never enters).
+var _sdFaQuotaMirrorHeredoc_ = [
+    'cat > "$TMP/measure.js" << "MEOF"',
+    'const cp = require("child_process");',
+    'const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);',
+    'const capOf = (remaining, usage) => { const u = num(usage); return remaining + (u !== null && u >= 0 ? u : 0); };',
+    'function limitsOf(key) {',
+    ' let out = null;',
+    ' try {',
+    '  out = cp.execFileSync("curl", ["-sS", "-m", "8", "-H", "Authorization: Bearer " + key, "-w", "\\n%{http_code}", "https://api.z.ai/api/monitor/usage/quota/limit"], { encoding: "utf8", timeout: 12000, stdio: ["ignore", "pipe", "pipe"] });',
+    ' } catch (e) { return null; }',
+    ' const nl = out.lastIndexOf("\\n");',
+    ' if (parseInt(out.slice(nl + 1).trim(), 10) !== 200) return null;',
+    ' try {',
+    '  const limits = JSON.parse(out.slice(0, nl)).data.limits;',
+    '  return limits && Array.isArray(limits) ? limits : null;',
+    ' } catch (e) { return null; }',
+    '}',
+    'function derive(limits, now) {',
+    ' let r5 = null;',
+    ' for (const l of limits) { if (l && l.number === 5 && l.unit === 3) { r5 = l; break; } }',
+    ' if (!r5) {',
+    '  const rs = limits.filter((l) => l && num(l.nextResetTime) !== null).sort((a, b) => a.nextResetTime - b.nextResetTime);',
+    '  if (rs.length > 0) r5 = rs[0];',
+    ' }',
+    ' if (!r5 || num(r5.remaining) === null) return null;',
+    ' const R5 = r5.remaining;',
+    ' const cap5 = capOf(R5, r5.usage);',
+    ' const t5 = num(r5.nextResetTime);',
+    ' const wrow = limits.filter((l) => l && l.number === 1 && l.unit === 6 && num(l.remaining) !== null)[0] || null;',
+    ' let RW = null;',
+    ' let capW = null;',
+    ' let tW = null;',
+    ' if (wrow) {',
+    '  RW = wrow.remaining;',
+    '  capW = capOf(RW, wrow.usage);',
+    '  const tWabs = num(wrow.nextResetTime);',
+    '  tW = tWabs !== null ? tWabs : t5;',
+    ' } else {',
+    '  RW = R5; capW = cap5; tW = t5;',
+    ' }',
+    ' const resets = [t5, wrow ? num(wrow.nextResetTime) : null].filter((v) => v !== null);',
+    ' const below5 = R5 < 0.10 * cap5;',
+    ' const belowW = RW < 0.02 * capW;',
+    ' return { cap5: cap5, usable: Math.min(R5, RW), below5: below5, belowW: belowW,',
+    '  severity: (below5 ? 1 : 0) + (belowW ? 1 : 0),',
+    '  nextReset: resets.length > 0 ? Math.min.apply(null, resets) : null,',
+    '  rate: tW !== null ? RW / Math.max(tW - now, 1) : null };',
+    '}',
+    'const da = derive(limitsOf(process.env.FA_PROBE_KEY_A), Date.now());',
+    'const db = derive(limitsOf(process.env.FA_PROBE_KEY_B), Date.now());',
+    'function verdict(da, db) {',
+    ' if (!da || !db) return "EQ_OR_UNKNOWN";',
+    ' const maxCap5 = Math.max(da.cap5, db.cap5);',
+    ' const reserve = maxCap5 > 0 ? 0.75 * maxCap5 : Infinity;',
+    ' const clsOf = (m) => (m.below5 || m.belowW) ? 4 : (m.usable >= reserve ? 1 : 2);',
+    ' const ca = clsOf(da);',
+    ' const cb = clsOf(db);',
+    ' if (ca !== cb) return ca < cb ? "A_FIRST" : "B_FIRST";',
+    ' if (ca === 1 && da.rate !== null && db.rate !== null && da.rate !== db.rate) return da.rate > db.rate ? "A_FIRST" : "B_FIRST";',
+    ' // exhausted tail (gh-1534 rework): severity asc, then nextResetTime asc —',
+    ' // usable never enters the cls-4 comparison (mirrors the fa.sh cls===4 branch).',
+    ' if (ca === 4) {',
+    '  if (da.severity !== db.severity) return da.severity < db.severity ? "A_FIRST" : "B_FIRST";',
+    '  const na = da.nextReset !== null ? da.nextReset : Infinity;',
+    '  const nb = db.nextReset !== null ? db.nextReset : Infinity;',
+    '  if (na !== nb) return na < nb ? "A_FIRST" : "B_FIRST";',
+    '  return "EQ_OR_UNKNOWN";',
+    ' }',
+    ' if (da.usable !== db.usable) return da.usable > db.usable ? "A_FIRST" : "B_FIRST";',
+    ' return "EQ_OR_UNKNOWN";',
+    '}',
+    'process.stdout.write(verdict(da, db));',
+    'MEOF'
 ];
 
 if (_sdCanBash_) {
@@ -1320,7 +1417,7 @@ if (_sdCanBash_) {
             assert.contains(out, 'QUOTA_BUDGET_OK', 'probe-budget test failed: ' + out);
         });
 
-        test('IT-2e (live IT, opt-in FA_QUOTA_LIVE_IT=on): real endpoint re-orders when two keys have different remaining (skipped otherwise)', function() {
+        test('IT-2e (live IT, opt-in FA_QUOTA_LIVE_IT=on / QUOTA_LIVE_IT=on): real endpoint re-orders by the v2 FEFO decision (skipped otherwise)', function() {
             var out = cli_execute_command({
                 command: [
                     'bash -c \'set -euo pipefail',
@@ -1329,7 +1426,7 @@ if (_sdCanBash_) {
                     'unset ZAI_CODE_KEY_2 ZAI_CODE_KEY_3 ZAI_CODE_KEY_4 ZAI_CODE_KEY_5 ENV_VAR_DEV_QUEUE',
                     '# opt-in gate (gh-1385 rework): exported runner creds must NOT turn the shared suite',
                     '# into live third-party HTTP on every run — the offline matrix pins the logic.',
-                    'if [ "${FA_QUOTA_LIVE_IT:-off}" != "on" ]; then echo "QUOTA_LIVE_SKIPPED"; exit 0; fi',
+                    'if [ "${FA_QUOTA_LIVE_IT:-off}" != "on" ] && [ "${QUOTA_LIVE_IT:-off}" != "on" ]; then echo "QUOTA_LIVE_SKIPPED"; exit 0; fi',
                     'TMP="$(mktemp -d)"',
                     'trap "rm -rf \\"$TMP\\"" EXIT',
                     'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}}]"',
@@ -1337,30 +1434,11 @@ if (_sdCanBash_) {
                     'source "$REPO_ROOT/scripts/providers/fa.sh"',
                     '_fa_resolve_env',
                     'FIRST="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | head -1 | sed "s/^.*://;s/\\"//g")"',
-                    'cat > "$TMP/measure.js" << "MEOF"',
-                    'const cp = require("child_process");',
-                    'function remaining(key) {',
-                    ' let out = null;',
-                    ' try {',
-                    '  out = cp.execFileSync("curl", ["-sS", "-m", "8", "-H", "Authorization: Bearer " + key, "-w", "\\n%{http_code}", "https://api.z.ai/api/monitor/usage/quota/limit"], { encoding: "utf8", timeout: 12000, stdio: ["ignore", "pipe", "pipe"] });',
-                    ' } catch (e) { return null; }',
-                    ' const nl = out.lastIndexOf("\\n");',
-                    ' if (parseInt(out.slice(nl + 1).trim(), 10) !== 200) return null;',
-                    ' try {',
-                    '  const limits = JSON.parse(out.slice(0, nl)).data.limits;',
-                    '  let win = null;',
-                    '  for (const l of limits) { if (l && l.number === 5 && l.unit === 3) { win = l; break; } }',
-                    '  if (!win) {',
-                    '   const rs = limits.filter(l => l && typeof l.nextResetTime === "number").sort((a, b) => a.nextResetTime - b.nextResetTime);',
-                    '   if (rs.length > 0) win = rs[0];',
-                    '  }',
-                    '  return win && typeof win.remaining === "number" ? win.remaining : null;',
-                    ' } catch (e) { return null; }',
-                    '}',
-                    'const a = remaining(process.env.FA_PROBE_KEY_A);',
-                    'const b = remaining(process.env.FA_PROBE_KEY_B);',
-                    'process.stdout.write(a === null || b === null || a === b ? "EQ_OR_UNKNOWN" : (a > b ? "A_FIRST" : "B_FIRST"));',
-                    'MEOF',
+                    '# v2 mirror (gh-1534): re-derive the FEFO decision the queue function makes —',
+                    '# floors (10% of own cap5 / 2% of own capW) -> leg-fit vs reserve 0.75 x max cap5 ->',
+                    '# lead by rate = RW / time-to-weekly-reset, filler by usable desc; exhausted tail by',
+                    '# severity asc then nextResetTime asc (source shared with the offline IT-2p parity test).',
+                ].concat(_sdFaQuotaMirrorHeredoc_).concat([
                     'VERDICT="$(FA_PROBE_KEY_A="$ZAI_CODE_KEY" FA_PROBE_KEY_B="$ZAI_CODE_KEY_1" node "$TMP/measure.js")"',
                     'case "$VERDICT" in',
                     ' A_FIRST) [ "$FIRST" = "ZAI_CODE_KEY" ] || { echo "VERDICT=$VERDICT FIRST=$FIRST"; exit 1; } ;;',
@@ -1368,10 +1446,516 @@ if (_sdCanBash_) {
                     ' *) echo "live probe inconclusive — static order accepted (FIRST=$FIRST)" ;;',
                     'esac',
                     'echo "QUOTA_LIVE_OK"\''
-                ].join('\n')
+                ]).join('\n')
             });
             assert.ok(out.indexOf('QUOTA_LIVE_OK') !== -1 || out.indexOf('QUOTA_LIVE_SKIPPED') !== -1,
                 'live IT failed: ' + out);
+        });
+    });
+}
+
+// gh-1534 — provider queue ordering v2: FEFO rate scoring across mixed plan
+// tiers. The weekly row is the actual balance (rate = RW / time-to-weekly-
+// reset, descending = burn the soonest-refreshing budget first); percentage
+// floors relative to the key's OWN capacity (derived from the probe response:
+// cap = remaining + usage) demote functionally exhausted keys; ranking stays
+// in absolute tokens so mixed max/cheap pools stay comparable. Same offline
+// IT-2 style: fake curl on PATH serving per-key fixture JSON, no live HTTP.
+if (_sdCanBash_) {
+    suite('fa provider quota ordering v2 (gh-1534) — FEFO rate, floors, mixed tiers', function() {
+
+        test('IT-2h (bash): v2 tier mix — a cheap fresh key never leads a max 50%-full key; filler order by usable', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaV2Bash_).concat([
+                    'K_CHEAP="zt-v2-cheap-01"; K_MAX="zt-v2-max-02"',
+                    'export K_CHEAP K_MAX',
+                    '# max plan 50% full: cap5 = 14000+14000 = 28000, capW = 140000',
+                    'cat > "$FX/max50.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"max","limits":[{"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":14000,"remaining":14000,"nextResetTime":$T1D},{"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":700,"remaining":700,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    '# cheap plan fresh: cap5 = 200, capW = 100 (100% of its own tier)',
+                    'cat > "$FX/cheapfresh.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":0,"remaining":200,"nextResetTime":$T1D},{"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":0,"remaining":100,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\\"}"',
+                    '[ -n "$KEY" ] || exit 2',
+                    'printf "%s\\n" "$KEY" >> "${FAKE_CURL_LOG:?}"',
+                    'case "$KEY" in',
+                    ' "$K_CHEAP") cat "$FAKE_FIXTURES/cheapfresh.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_MAX") cat "$FAKE_FIXTURES/max50.json" ; printf "\\n200"; exit 0 ;;',
+                    'esac',
+                    'printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}}]"',
+                    '# static order: cheap first, max second — v2 must put the max key in the lead slot',
+                    'export ZAI_CODE_KEY="$K_CHEAP" ZAI_CODE_KEY_1="$K_MAX"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    'exec 2> "$TMP/stderr.log"',
+                    '_fa_resolve_env',
+                    '# reserve = 0.75 x max(cap5) = 21000 -> neither key is leg-fit (usable 200 / 14000);',
+                    '# the gates are transparent: the most usable above-floor key (max) takes the lead slot',
+                    'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER" = "ZAI_CODE_KEY_1-ZAI_CODE_KEY-" ] || { echo "ORDER=$ORDER"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY_1=usable=700" "$TMP/stderr.log" || { echo "NO_MAX_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY=usable=100" "$TMP/stderr.log" || { echo "NO_CHEAP_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    'CALLS="$(wc -l < "$FAKE_CURL_LOG" | tr -d " ")"',
+                    '[ "$CALLS" = "2" ] || { echo "CALLS=$CALLS"; exit 1; }',
+                    'echo "QUOTA_V2_TIER_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_V2_TIER_OK', 'v2 tier mix test failed: ' + out);
+        });
+
+        test('IT-2i (bash): v2 floors — R5=8% demoted, RW=1% demoted; a cheap key alive at 10%+ of its own tier never leads while a max key is leg-fit', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaV2Bash_).concat([
+                    'K_CHEAP="zt-v2f-cheap-01"; K_RWLOW="zt-v2f-rwlow-02"; K_R5LOW="zt-v2f-r5low-03"; K_MAX="zt-v2f-max-04"',
+                    'export K_CHEAP K_RWLOW K_R5LOW K_MAX',
+                    'cat > "$FX/cheap10.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":100,"remaining":100,"nextResetTime":$T1D},{"unit":6,"number":1,"usage":100,"remaining":900,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$FX/rwlow.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":500,"remaining":500,"nextResetTime":$T5D},{"unit":6,"number":1,"usage":9990,"remaining":10,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$FX/r5low.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":920,"remaining":80,"nextResetTime":$T1D},{"unit":6,"number":1,"usage":500,"remaining":500,"nextResetTime":$T5D}]}}',
+                    'EOF',
+                    'cat > "$FX/maxfresh.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"max","limits":[{"unit":3,"number":5,"usage":0,"remaining":28000,"nextResetTime":$T1D},{"unit":6,"number":1,"usage":0,"remaining":140000,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\\"}"',
+                    '[ -n "$KEY" ] || exit 2',
+                    'printf "%s\\n" "$KEY" >> "${FAKE_CURL_LOG:?}"',
+                    'case "$KEY" in',
+                    ' "$K_CHEAP") cat "$FAKE_FIXTURES/cheap10.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_RWLOW") cat "$FAKE_FIXTURES/rwlow.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_R5LOW") cat "$FAKE_FIXTURES/r5low.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_MAX") cat "$FAKE_FIXTURES/maxfresh.json" ; printf "\\n200"; exit 0 ;;',
+                    'esac',
+                    'printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_2\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_3\\"}}]"',
+                    'export ZAI_CODE_KEY="$K_CHEAP" ZAI_CODE_KEY_1="$K_RWLOW" ZAI_CODE_KEY_2="$K_R5LOW" ZAI_CODE_KEY_3="$K_MAX"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    'exec 2> "$TMP/stderr.log"',
+                    '_fa_resolve_env',
+                    '# reserve = 0.75 x max(cap5)=28000 -> 21000; max leg-fit (usable 140000) leads;',
+                    '# cheap (usable 100, 50% of its own cap5 -> alive) fills; R5=8% and RW=1% demote',
+                    'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER" = "ZAI_CODE_KEY_3-ZAI_CODE_KEY-ZAI_CODE_KEY_2-ZAI_CODE_KEY_1-" ] || { echo "ORDER=$ORDER"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY_3=lead:rate=" "$TMP/stderr.log" || { echo "NO_LEAD_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY=usable=100" "$TMP/stderr.log" || { echo "NO_CHEAP_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY_2=exhausted:5h" "$TMP/stderr.log" || { echo "NO_R5LOW_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY_1=exhausted:weekly" "$TMP/stderr.log" || { echo "NO_RWLOW_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    'echo "QUOTA_V2_FLOOR_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_V2_FLOOR_OK', 'v2 floors test failed: ' + out);
+        });
+
+        test('IT-2j (bash): v2 dead-zone severity — below both floors ranks below below-just-one at the same refill clock; nextResetTime asc within a severity', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaV2Bash_).concat([
+                    'K_BOTH="zt-v2j-both-01"; K_LATE="zt-v2j-late-02"; K_ONE="zt-v2j-one-03"',
+                    'export K_BOTH K_LATE K_ONE',
+                    'cat > "$FX/both.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":950,"remaining":50,"nextResetTime":$T2M},{"unit":6,"number":1,"usage":9990,"remaining":10,"nextResetTime":$T2M}]}}',
+                    'EOF',
+                    'cat > "$FX/late.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":920,"remaining":80,"nextResetTime":$T5D},{"unit":6,"number":1,"usage":500,"remaining":500,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$FX/one.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":920,"remaining":80,"nextResetTime":$T2M},{"unit":6,"number":1,"usage":500,"remaining":500,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\\"}"',
+                    '[ -n "$KEY" ] || exit 2',
+                    'printf "%s\\n" "$KEY" >> "${FAKE_CURL_LOG:?}"',
+                    'case "$KEY" in',
+                    ' "$K_BOTH") cat "$FAKE_FIXTURES/both.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_LATE") cat "$FAKE_FIXTURES/late.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_ONE") cat "$FAKE_FIXTURES/one.json" ; printf "\\n200"; exit 0 ;;',
+                    'esac',
+                    'printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_2\\"}}]"',
+                    '# static order: both-floors first, late-reset second, one-floor-soonest last',
+                    'export ZAI_CODE_KEY="$K_BOTH" ZAI_CODE_KEY_1="$K_LATE" ZAI_CODE_KEY_2="$K_ONE"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    'exec 2> "$TMP/stderr.log"',
+                    '_fa_resolve_env',
+                    '# sev-1 keys first, soonest refill (T2M) before late refill (T5D); sev-2 key ranks BELOW sev-1',
+                    'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER" = "ZAI_CODE_KEY_2-ZAI_CODE_KEY_1-ZAI_CODE_KEY-" ] || { echo "ORDER=$ORDER"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY=exhausted:5h+weekly" "$TMP/stderr.log" || { echo "NO_BOTH_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    'echo "QUOTA_V2_SEVERITY_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_V2_SEVERITY_OK', 'v2 dead-zone severity test failed: ' + out);
+        });
+
+        test('IT-2k (bash): v2 exhausted tail — ordered by nextResetTime asc (soonest refill first); 401 stays below exhausted', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaV2Bash_).concat([
+                    'K_FAR="zt-v2k-far-01"; K_AUTH="zt-v2k-auth-02"; K_SOON="zt-v2k-soon-03"',
+                    'export K_FAR K_AUTH K_SOON',
+                    'cat > "$FX/far.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":100,"remaining":0,"nextResetTime":$T5D},{"unit":6,"number":1,"usage":500,"remaining":500,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$FX/soon.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":100,"remaining":0,"nextResetTime":$T2M},{"unit":6,"number":1,"usage":500,"remaining":500,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\\"}"',
+                    '[ -n "$KEY" ] || exit 2',
+                    'printf "%s\\n" "$KEY" >> "${FAKE_CURL_LOG:?}"',
+                    'case "$KEY" in',
+                    ' "$K_FAR") cat "$FAKE_FIXTURES/far.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_SOON") cat "$FAKE_FIXTURES/soon.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_AUTH") printf "%s" "{}"; printf "\\n401"; exit 0 ;;',
+                    'esac',
+                    'printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_2\\"}}]"',
+                    '# static order: +5d-exhausted, 401, +2min-exhausted — v2 must refill-order the tail',
+                    'export ZAI_CODE_KEY="$K_FAR" ZAI_CODE_KEY_1="$K_AUTH" ZAI_CODE_KEY_2="$K_SOON"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    'exec 2> "$TMP/stderr.log"',
+                    '_fa_resolve_env',
+                    'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER" = "ZAI_CODE_KEY_2-ZAI_CODE_KEY-ZAI_CODE_KEY_1-" ] || { echo "ORDER=$ORDER"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY_1=unauthorized" "$TMP/stderr.log" || { echo "NO_AUTH_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    'echo "QUOTA_V2_TAIL_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_V2_TAIL_OK', 'v2 exhausted tail test failed: ' + out);
+        });
+
+        test('IT-2l (bash): v2 rate trap — tiny weekly remainder with an imminent reset is demoted by the weekly floor (and leads when the floor is off)', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaV2Bash_).concat([
+                    'K_TRAP="zt-v2l-trap-01"; K_HEALTHY="zt-v2l-healthy-02"',
+                    'export K_TRAP K_HEALTHY',
+                    '# trap: R5 fresh (200/200) but RW=160 of capW=1000 (1.6% < 2% floor) resetting in 10 min ->',
+                    '# rate 960/h would top the FEFO ranking without the floor',
+                    'cat > "$FX/trap.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":0,"remaining":200,"nextResetTime":$T5M},{"unit":6,"number":1,"usage":9840,"remaining":160,"nextResetTime":$T10M}]}}',
+                    'EOF',
+                    'cat > "$FX/slow.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":0,"remaining":200,"nextResetTime":$T5M},{"unit":6,"number":1,"usage":100,"remaining":900,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\\"}"',
+                    '[ -n "$KEY" ] || exit 2',
+                    'printf "%s\\n" "$KEY" >> "${FAKE_CURL_LOG:?}"',
+                    'case "$KEY" in',
+                    ' "$K_TRAP") cat "$FAKE_FIXTURES/trap.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_HEALTHY") cat "$FAKE_FIXTURES/slow.json" ; printf "\\n200"; exit 0 ;;',
+                    'esac',
+                    'printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}}]"',
+                    'export ZAI_CODE_KEY="$K_TRAP" ZAI_CODE_KEY_1="$K_HEALTHY"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    'exec 2> "$TMP/stderr.log"',
+                    '_fa_resolve_env',
+                    '# run 1 (defaults): weekly floor demotes the trap -> the 6-day-budget key leads',
+                    'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER" = "ZAI_CODE_KEY_1-ZAI_CODE_KEY-" ] || { echo "RUN1_ORDER=$ORDER"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY=exhausted:weekly" "$TMP/stderr.log" || { echo "NO_TRAP_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    '# run 2 (weekly floor disabled): pure FEFO rate lets the trap lead — the floor is the demoter',
+                    'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG',
+                    'export QUOTA_FLOOR_WEEKLY_PCT=0',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    ': > "$FAKE_CURL_LOG"',
+                    '_fa_resolve_env',
+                    'ORDER2="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER2" = "ZAI_CODE_KEY-ZAI_CODE_KEY_1-" ] || { echo "RUN2_ORDER=$ORDER2"; exit 1; }',
+                    'echo "QUOTA_V2_TRAP_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_V2_TRAP_OK', 'v2 rate trap test failed: ' + out);
+        });
+
+        test('IT-2m (bash): v2 missing weekly row — degrades to 5h-only scoring, non-fatal, still FEFO-leads by its 5h reset clock', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaV2Bash_).concat([
+                    'K_FULL="zt-v2m-full-01"; K_ONLY5H="zt-v2m-5h-02"',
+                    'export K_FULL K_ONLY5H',
+                    'cat > "$FX/full.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"max","limits":[{"unit":3,"number":5,"usage":0,"remaining":28000,"nextResetTime":$T5M},{"unit":6,"number":1,"usage":0,"remaining":140000,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$FX/only5h.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"max","limits":[{"unit":3,"number":5,"usage":0,"remaining":28000,"nextResetTime":$T5M}]}}',
+                    'EOF',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\\"}"',
+                    '[ -n "$KEY" ] || exit 2',
+                    'printf "%s\\n" "$KEY" >> "${FAKE_CURL_LOG:?}"',
+                    'case "$KEY" in',
+                    ' "$K_FULL") cat "$FAKE_FIXTURES/full.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_ONLY5H") cat "$FAKE_FIXTURES/only5h.json" ; printf "\\n200"; exit 0 ;;',
+                    'esac',
+                    'printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}}]"',
+                    'export ZAI_CODE_KEY="$K_FULL" ZAI_CODE_KEY_1="$K_ONLY5H"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    'exec 2> "$TMP/stderr.log"',
+                    '_fa_resolve_env',
+                    '# both leg-fit (reserve 21000); degraded rate = 28000/5min = 336000/h beats the weekly 972/h',
+                    'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER" = "ZAI_CODE_KEY_1-ZAI_CODE_KEY-" ] || { echo "ORDER=$ORDER"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY_1=lead:rate=" "$TMP/stderr.log" || { echo "NO_DEGRADED_LEAD"; cat "$TMP/stderr.log"; exit 1; }',
+                    '# AC3 digest: the lead rate is printed in TRUE tokens/hour (rate tokens/ms x 3600000)',
+                    'RATEDIG="$(sed -n "s/.*ZAI_CODE_KEY_1=lead:rate=\\([0-9]*\\)\\/h.*/\\1/p" "$TMP/stderr.log" | head -1)"',
+                    '[ -n "$RATEDIG" ] || { echo "NO_RATE_DIG"; cat "$TMP/stderr.log"; exit 1; }',
+                    '[ "$RATEDIG" -ge 100000 ] || { echo "RATE_UNDER_HOUR=$RATEDIG (expected ~336000/h nominal: 28000/5min x 3600000)"; exit 1; }',
+                    'if grep -q "ZAI_CODE_KEY_1=shape" "$TMP/stderr.log"; then echo "DEGRADED_AS_SHAPE"; exit 1; fi',
+                    '[ "$FA_PROVIDER_TYPE" = "zai" ]',
+                    'echo "QUOTA_V2_DEGRADE_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_V2_DEGRADE_OK', 'v2 missing-weekly test failed: ' + out);
+        });
+
+        test('IT-2n (bash): v2 single-key queue — byte-identical for healthy and exhausted keys, no probe-driven churn', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaV2Bash_).concat([
+                    'K_A="zt-v2n-a-01"; K_B="zt-v2n-b-02"',
+                    'export K_A K_B',
+                    'cat > "$FX/fresh.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":0,"remaining":200,"nextResetTime":$T1D},{"unit":6,"number":1,"usage":100,"remaining":900,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$FX/drained.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":200,"remaining":0,"nextResetTime":$T1D},{"unit":6,"number":1,"usage":100,"remaining":900,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\\"}"',
+                    '[ -n "$KEY" ] || exit 2',
+                    'printf "%s\\n" "$KEY" >> "${FAKE_CURL_LOG:?}"',
+                    'case "$KEY" in',
+                    ' "$K_A") cat "$FAKE_FIXTURES/fresh.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_B") cat "$FAKE_FIXTURES/drained.json" ; printf "\\n200"; exit 0 ;;',
+                    'esac',
+                    'printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}}]"',
+                    'export ZAI_CODE_KEY="$K_A"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    '_fa_resolve_env',
+                    '[ "$FA_PROVIDERS_QUEUE" = "$ENV_VAR_DEV_QUEUE" ] || { echo "CHURN_A=$FA_PROVIDERS_QUEUE"; exit 1; }',
+                    '[ "$(wc -l < "$FAKE_CURL_LOG" | tr -d " ")" = "1" ] || { echo "CALLS_A"; exit 1; }',
+                    'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG',
+                    'export ZAI_CODE_KEY="$K_B"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    ': > "$FAKE_CURL_LOG"',
+                    '_fa_resolve_env',
+                    '[ "$FA_PROVIDERS_QUEUE" = "$ENV_VAR_DEV_QUEUE" ] || { echo "CHURN_B=$FA_PROVIDERS_QUEUE"; exit 1; }',
+                    '[ "$(wc -l < "$FAKE_CURL_LOG" | tr -d " ")" = "1" ] || { echo "CALLS_B"; exit 1; }',
+                    'echo "QUOTA_V2_SINGLE_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_V2_SINGLE_OK', 'v2 single-key test failed: ' + out);
+        });
+
+        test('IT-2o (bash): floor knobs — QUOTA_FLOOR_WEEKLY_PCT raises the weekly floor and flips the filler order', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaV2Bash_).concat([
+                    'K_A="zt-v2o-a-01"; K_B="zt-v2o-b-02"',
+                    'export K_A K_B',
+                    'cat > "$FX/a.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":500,"remaining":500,"nextResetTime":$T1D},{"unit":6,"number":1,"usage":800,"remaining":200,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$FX/b.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":850,"remaining":150,"nextResetTime":$T1D},{"unit":6,"number":1,"usage":600,"remaining":400,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'IFS= read -r CFG || true',
+                    'KEY="${CFG#*Bearer }"',
+                    'KEY="${KEY%\\"}"',
+                    '[ -n "$KEY" ] || exit 2',
+                    'printf "%s\\n" "$KEY" >> "${FAKE_CURL_LOG:?}"',
+                    'case "$KEY" in',
+                    ' "$K_A") cat "$FAKE_FIXTURES/a.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_B") cat "$FAKE_FIXTURES/b.json" ; printf "\\n200"; exit 0 ;;',
+                    'esac',
+                    'printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}}]"',
+                    'export ZAI_CODE_KEY="$K_A" ZAI_CODE_KEY_1="$K_B"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    'exec 2> "$TMP/stderr.log"',
+                    '_fa_resolve_env',
+                    '# run 1 (defaults): both above floors, reserve 750 -> filler order usable desc: A(200), B(150)',
+                    'ORDER="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER" = "ZAI_CODE_KEY-ZAI_CODE_KEY_1-" ] || { echo "RUN1_ORDER=$ORDER"; exit 1; }',
+                    '# run 2: weekly floor 0.30 -> A (RW 200 < 300 = 0.30 x capW 1000) demotes, B (RW 400 >= 300) stays alive',
+                    'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG',
+                    'export QUOTA_FLOOR_WEEKLY_PCT=0.30',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    ': > "$FAKE_CURL_LOG"',
+                    '_fa_resolve_env',
+                    'ORDER2="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER2" = "ZAI_CODE_KEY_1-ZAI_CODE_KEY-" ] || { echo "RUN2_ORDER=$ORDER2"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY=exhausted:weekly" "$TMP/stderr.log" || { echo "NO_DEMOTED_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    'echo "QUOTA_V2_KNOB_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_V2_KNOB_OK', 'v2 floor knob test failed: ' + out);
+        });
+
+        test('IT-2p (bash): v2 verdict-mirror parity — the IT-2e mirror re-derives the exhausted tail exactly like fa.sh: severity asc, then nextResetTime asc; usable never enters (gh-1534 rework)', function() {
+            var out = cli_execute_command({
+                command: [
+                    'bash -c \'set -euo pipefail',
+                    'REPO_ROOT="$(pwd)"'
+                ].concat(_sdFaQuotaV2Bash_).concat([
+                    'K_SON="zt-v2p-son-01"; K_LATE="zt-v2p-late-02"; K_SEV2="zt-v2p-sev2-03"; K_SEV1="zt-v2p-sev1-04"',
+                    'export K_SON K_LATE K_SEV2 K_SEV1',
+                    '# scenario 1 (gh-1534 review repro): both below the 5h floor only (sev 1); usable',
+                    '# favors LATE (80) but nextReset favors SON (+2min) — fa.sh must lead with SON',
+                    'cat > "$FX/son.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":950,"remaining":50,"nextResetTime":$T2M},{"unit":6,"number":1,"usage":100,"remaining":900,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$FX/late.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":920,"remaining":80,"nextResetTime":$T5D},{"unit":6,"number":1,"usage":100,"remaining":900,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    '# scenario 2: sev 2 (below both floors) vs sev 1 — SEV2 has BOTH the higher usable',
+                    '# (80 vs 79) and the sooner refill, and still must rank below SEV1',
+                    'cat > "$FX/sev2.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":920,"remaining":80,"nextResetTime":$T2M},{"unit":6,"number":1,"usage":9801,"remaining":199,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    'cat > "$FX/sev1.json" << EOF',
+                    '{"code":200,"success":true,"data":{"level":"cheap","limits":[{"unit":3,"number":5,"usage":921,"remaining":79,"nextResetTime":$T5D},{"unit":6,"number":1,"usage":100,"remaining":900,"nextResetTime":$T6D}]}}',
+                    'EOF',
+                    '# fake curl serves both call shapes: fa.sh probes via -K (config on stdin),',
+                    '# the IT-2e mirror probes via -H argv — same fixtures for both comparators',
+                    'cat > "$BIN/curl" << "CUREOF"',
+                    '#!/bin/bash',
+                    'if [ "${4:-}" = "-K" ]; then',
+                    ' IFS= read -r CFG || true',
+                    ' KEY="${CFG#*Bearer }"',
+                    ' KEY="${KEY%\\"}"',
+                    'else',
+                    ' KEY="${5#Authorization: Bearer }"',
+                    'fi',
+                    '[ -n "$KEY" ] || exit 2',
+                    'printf "%s\\n" "$KEY" >> "${FAKE_CURL_LOG:?}"',
+                    'case "$KEY" in',
+                    ' "$K_SON") cat "$FAKE_FIXTURES/son.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_LATE") cat "$FAKE_FIXTURES/late.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_SEV2") cat "$FAKE_FIXTURES/sev2.json" ; printf "\\n200"; exit 0 ;;',
+                    ' "$K_SEV1") cat "$FAKE_FIXTURES/sev1.json" ; printf "\\n200"; exit 0 ;;',
+                    'esac',
+                    'printf "\\n200"',
+                    'CUREOF',
+                    'chmod +x "$BIN/curl"',
+                    'export PATH="$BIN:$PATH"',
+                    'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}},{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-test\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY_1\\"}}]"',
+                    '# write the IT-2e verdict mirror (shared source of truth) so both comparators run',
+                ]).concat(_sdFaQuotaMirrorHeredoc_).concat([
+                    'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                    '# scenario 1: static order LATE first — fa.sh re-orders to SON first (nextReset asc)',
+                    'export ZAI_CODE_KEY="$K_LATE" ZAI_CODE_KEY_1="$K_SON"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    'exec 2> "$TMP/stderr.log"',
+                    '_fa_resolve_env',
+                    'ORDER1="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER1" = "ZAI_CODE_KEY_1-ZAI_CODE_KEY-" ] || { echo "ORDER1=$ORDER1"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY_1=exhausted:5h" "$TMP/stderr.log" || { echo "NO_SON_WHY"; cat "$TMP/stderr.log"; exit 1; }',
+                    '# the IT-2e mirror (shared source) MUST agree with fa.sh on the same fixtures:',
+                    '# A=ZAI_CODE_KEY (LATE), B=ZAI_CODE_KEY_1 (SON) -> B_FIRST, matching FIRST=ZAI_CODE_KEY_1',
+                    'V1="$(FA_PROBE_KEY_A="$K_LATE" FA_PROBE_KEY_B="$K_SON" node "$TMP/measure.js")"',
+                    '[ "$V1" = "B_FIRST" ] || { echo "V1=$V1 (fa.sh leads SON: severity tie, nextReset asc; usable must not enter the exhausted tail)"; exit 1; }',
+                    '# scenario 2: severity asc precedes nextResetTime AND usable — sev-2 leads nothing',
+                    'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG',
+                    'export ZAI_CODE_KEY="$K_SEV2" ZAI_CODE_KEY_1="$K_SEV1"',
+                    'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                    ': > "$FAKE_CURL_LOG"',
+                    'exec 2> "$TMP/stderr2.log"',
+                    '_fa_resolve_env',
+                    'ORDER2="$(printf "%s" "$FA_PROVIDERS_QUEUE" | grep -o "\\"apiKeyEnv\\":\\"ZAI_CODE_KEY[0-9_]*\\"" | sed "s/^.*://;s/\\"//g" | tr "\\n" "-")"',
+                    '[ "$ORDER2" = "ZAI_CODE_KEY_1-ZAI_CODE_KEY-" ] || { echo "ORDER2=$ORDER2"; exit 1; }',
+                    'grep -q "ZAI_CODE_KEY=exhausted:5h+weekly" "$TMP/stderr2.log" || { echo "NO_SEV2_WHY"; cat "$TMP/stderr2.log"; exit 1; }',
+                    'V2="$(FA_PROBE_KEY_A="$K_SEV2" FA_PROBE_KEY_B="$K_SEV1" node "$TMP/measure.js")"',
+                    '[ "$V2" = "B_FIRST" ] || { echo "V2=$V2 (fa.sh leads SEV1: severity asc before usable/nextReset)"; exit 1; }',
+                    'echo "QUOTA_V2_MIRROR_OK"\''
+                ]).join('\n')
+            });
+            assert.contains(out, 'QUOTA_V2_MIRROR_OK', 'v2 verdict-mirror parity test failed: ' + out);
         });
     });
 }
