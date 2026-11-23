@@ -368,7 +368,7 @@ _fa_order_queue_by_quota() {
         d.why = "exhausted:" + (m.below5 && m.belowW ? "5h+weekly" : (m.below5 ? "5h" : "weekly"));
       } else if (m.usable >= reserve) {
         d.cls = 1;
-        d.why = m.rate !== null ? "lead:rate=" + Math.round(m.rate * 360000) + "/h" : "lead:usable=" + m.usable;
+        d.why = m.rate !== null ? "lead:rate=" + Math.round(m.rate * 3600000) + "/h" : "lead:usable=" + m.usable;
       } else {
         d.cls = 2;
         d.why = "usable=" + m.usable;
