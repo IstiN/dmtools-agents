@@ -11,33 +11,32 @@
 var branchSetup = loadModule('js/common/branchSetup.js', makeRequire({}));
 
 /** Load the shared helper with the resolver stubbed and writes captured. */
-function makeHelper(resolveResult, writes) {
+function makeHelper(resolveResult, writes, writeImpl) {
     return loadModule('js/common/dynamicRepoSetup.js', makeRequire({
         '../resolveRepoFromTicket.js': {
             action: function(params) {
                 if (resolveResult === false) return false;
                 if (!params.customParams) params.customParams = {};
-                params.customParams.targetRepository = {
-                    repo: 'my-repo', baseBranch: 'develop', owner: 'org/dev',
-                    workingDir: './dependencies/my-repo'
-                };
+                params.customParams.targetRepository = resolveResult === 'no-workingdir'
+                    ? { repo: 'my-repo' }
+                    : { repo: 'my-repo', baseBranch: 'develop', owner: 'org/dev', workingDir: './dependencies/my-repo' };
                 return true;
             }
         },
         './branchSetup.js': branchSetup
     }), {
-        file_write: function(writeOpts) { writes.push(writeOpts); }
+        file_write: writeImpl || function(writeOpts) { writes.push(writeOpts); }
     });
 }
 
 /** The module under test with the shared helper injected. */
-function makeModule(resolveResult, setupResult) {
+function makeModule(resolveResult, setupResult, writeImpl) {
     var writes = [];
     var setupCalls = [];
     var mod = loadModule(
         'js/preCliStoryTestAutomationSetupDynamicRepo.js',
         makeRequire({
-            './common/dynamicRepoSetup.js': makeHelper(resolveResult, writes),
+            './common/dynamicRepoSetup.js': makeHelper(resolveResult, writes, writeImpl),
             './preCliStoryTestAutomationSetup.js': {
                 action: function(params) {
                     setupCalls.push({
@@ -48,7 +47,7 @@ function makeModule(resolveResult, setupResult) {
                 }
             }
         }),
-        { file_write: function(writeOpts) { writes.push(writeOpts); } }
+        { file_write: writeImpl || function(writeOpts) { writes.push(writeOpts); } }
     );
     mod._setupCalls = setupCalls;
     mod._writes = writes;
@@ -89,6 +88,22 @@ suite('preCliStoryTestAutomationSetupDynamicRepo — action', function() {
         mod.action({ ticket: { key: 'PROJ-1', fields: { summary: '[my-repo] x' } }, dryRun: true });
         assert.equal(findWrite(mod._writes, '.dmtools-target-workingdir'), null);
         assert.equal(mod._setupCalls.length, 1);
+    });
+
+    test('skips the marker when the resolved repo carries no workingDir (repo not in repositories file)', function() {
+        var mod = makeModule('no-workingdir');
+        var params = { ticket: { key: 'PROJ-1', fields: { summary: '[my-repo] x' } } };
+        mod.action(params);
+        assert.equal(findWrite(mod._writes, '.dmtools-target-workingdir'), null, 'no marker without a workingDir');
+        assert.equal(mod._setupCalls.length, 1, 'setup still runs with project defaults');
+        assert.equal(mod._setupCalls[0].customParams.targetRepository.repo, 'my-repo');
+    });
+
+    test('tolerates a failing marker write (non-fatal): setup still runs', function() {
+        var mod = makeModule(true, undefined, function() { throw new Error('disk full'); });
+        var result = mod.action({ ticket: { key: 'PROJ-1', fields: { summary: '[my-repo] x' } } });
+        assert.deepEqual(result, { success: true });
+        assert.equal(mod._setupCalls.length, 1, 'setup runs after the marker write failed');
     });
 
     test('aborts without running setup when resolveRepo returns false', function() {
