@@ -1,0 +1,17 @@
+{
+  "name": "Teammate",
+  "parent": {
+    "path": "story_test_automation.json",
+    "merge": [
+      "params.cliPrompts"
+    ]
+  },
+  "params": {
+    "metadata": {
+      "contextId": "story_test_automation_dynamic_repo",
+      "descriptionPath": "agents/docs/agents/story_test_automation_dynamic_repo.md"
+    },
+    "preCliJSAction": "agents/js/preCliStoryTestAutomationSetupDynamicRepo.js",
+    "postJSAction": "agents/js/postStoryTestAutomationResultsDynamicRepo.js"
+  }
+}

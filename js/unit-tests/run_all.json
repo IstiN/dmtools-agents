@@ -162,6 +162,7 @@
         "js/unit-tests/test_preCliSnapshotSetup.js",
         "js/unit-tests/test_preCliSolutionSetup.js",
         "js/unit-tests/test_preCliStoryTestAutomationSetup.js",
+        "js/unit-tests/test_preCliStoryTestAutomationSetupDynamicRepo.js",
         "js/unit-tests/test_preCliTestAutomationSetup.js",
         "js/unit-tests/test_preCliTestReworkSetup.js",
         "js/unit-tests/test_preCommitGate.js",

@@ -1,7 +1,8 @@
 /**
  * Unit tests: thin action wrappers that delegate to shared modules
  * (js/requireTicket.js, js/assignForReview.js,
- * js/postDevelopTicketDynamicRepo.js, js/branchNaming/issueType_naming.js).
+ * js/postDevelopTicketDynamicRepo.js, js/postStoryTestAutomationResultsDynamicRepo.js,
+ * js/branchNaming/issueType_naming.js).
  * They keep every production function under the CRAP gate's coverage.
  *
  * Uses: loadModule, makeRequire, assert, test(), suite()
@@ -59,6 +60,27 @@ suite('postDevelopTicketDynamicRepo.action', function() {
         }));
         assert.equal(mod.action({}), 'ok');
         assert.deepEqual(order, ['resolve', 'develop:true']);
+    });
+});
+
+suite('postStoryTestAutomationResultsDynamicRepo.action', function() {
+    test('resolves the repo first, then runs the results post-action with the same params', function() {
+        var order = [];
+        var mod = loadModule('js/postStoryTestAutomationResultsDynamicRepo.js', makeRequire({
+            './resolveRepoFromTicket.js': { action: function(p) { order.push('resolve'); p.resolved = true; return true; } },
+            './postStoryTestAutomationResults.js': { action: function(p) { order.push('results:' + p.resolved); return 'ok'; } }
+        }));
+        assert.equal(mod.action({}), 'ok');
+        assert.deepEqual(order, ['resolve', 'results:true']);
+    });
+
+    test('propagates the post-action failure result unchanged', function() {
+        var failure = { success: false, error: 'boom' };
+        var mod = loadModule('js/postStoryTestAutomationResultsDynamicRepo.js', makeRequire({
+            './resolveRepoFromTicket.js': { action: function() { return true; } },
+            './postStoryTestAutomationResults.js': { action: function() { return failure; } }
+        }));
+        assert.equal(mod.action({}), failure);
     });
 });
 
