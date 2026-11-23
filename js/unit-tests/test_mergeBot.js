@@ -1245,6 +1245,20 @@ suite('mergeBot: rollupDetail evidence edge paths (gh-1040 characterization)', f
         ] }), JSON.stringify({ workflow_runs: [] }));
         assert.equal(detailOf(fx2).state, 'green', 'a concluded non-failure run is not pending');
     });
+
+    test('rollupDetail deduplicates check-runs per context name: newer SUCCESS overrides older FAILURE, and newer timestamp wins regardless of arrival order (fa#2366)', function () {
+        var fx = rollupFixture(JSON.stringify({ check_runs: [
+            { id: 10, name: 'Quality gate', status: 'completed', conclusion: 'failure', completed_at: '2026-11-22T23:28:49Z' },
+            { id: 20, name: 'Quality gate', status: 'completed', conclusion: 'success', completed_at: '2026-11-22T23:56:52Z' }
+        ] }), JSON.stringify({ workflow_runs: [] }));
+        assert.equal(detailOf(fx).state, 'green', 'newer SUCCESS for the same check name supersedes older FAILURE');
+
+        var fxInverse = rollupFixture(JSON.stringify({ check_runs: [
+            { id: 20, name: 'Quality gate', status: 'completed', conclusion: 'failure', completed_at: '2026-11-22T23:56:52Z' },
+            { id: 10, name: 'Quality gate', status: 'completed', conclusion: 'success', completed_at: '2026-11-22T23:28:49Z' }
+        ] }), JSON.stringify({ workflow_runs: [] }));
+        assert.equal(detailOf(fxInverse).state, 'red', 'first entry with newer timestamp wins over later older entry');
+    });
 });
 
 suite('mergeBot: hasActiveSmRun probe edge paths via the self-tick gate (gh-1040 characterization)', function () {

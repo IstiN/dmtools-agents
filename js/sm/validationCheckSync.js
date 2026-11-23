@@ -163,6 +163,9 @@ function hasSyncTargetLabel(l) {
   var name = l && l.name;
   return name === 'ai_validating' || name === 'validation_failed';
 }
+// Also matches open PRs with a workflow_dispatch run on pr.head.sha (machine or
+// manual dispatch) so umbrella checks re-stamp even if validation_failed was
+// cleared while an in-place re-run was still in flight (live: fa#2366).
 function hasAnyDispatchedRunOnHead(pr, runList) {
   var headSha = pr && pr.head && pr.head.sha;
   if (!headSha || !Array.isArray(runList)) {

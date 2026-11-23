@@ -351,7 +351,7 @@ function _ghAccumulateCheck(acc, c) {
 // Rollup tally (latest per context via mergeStateReconcile.latestEntries).
 // Cancelled forces pending; bookkeeping alone stays pending (validate-fresh).
 function _ghTallyRollup(rollup) {
-    var deduped = mergeStateReconcile.latestEntries ? mergeStateReconcile.latestEntries(rollup) : rollup;
+    var deduped = mergeStateReconcile.latestEntries(rollup);
     var acc = { red: false, pending: false, ignored: 0, bookept: 0 };
     deduped.forEach(function (c) { _ghAccumulateCheck(acc, c); });
     var realCount = deduped.length - acc.ignored - acc.bookept;

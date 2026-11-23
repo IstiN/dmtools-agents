@@ -172,6 +172,8 @@ function latestConclusions(rollup) {
 /**
  * Collapse multiple check-runs per context name to the LATEST entry (#695
  * branch-protection semantics) while keeping anonymous entries intact.
+ * Note: GitHub stamps started_at on check-run creation (including queued
+ * re-runs), so sortTimeOf + idOf order queued re-runs ahead of older runs.
  */
 function latestEntries(rollup) {
     var latest = {};
