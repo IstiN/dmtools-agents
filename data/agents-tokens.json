@@ -116,5 +116,18 @@
       "source": "reported",
       "model": "glm-5.3-flash"
     }
+  ],
+  "pr-1536": [
+    {
+      "leg": "review",
+      "at": "2026-11-23T13:43:47Z",
+      "prompt": 88193,
+      "completion": 34204,
+      "total": 122397,
+      "cacheRead": 1603968,
+      "requests": 29,
+      "source": "reported",
+      "model": "glm-5.3-flash"
+    }
   ]
 }
