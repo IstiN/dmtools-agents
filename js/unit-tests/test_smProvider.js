@@ -237,6 +237,33 @@ suite('smProvider', function () {
         assert.equal(empty.lastReview(9), null);
     });
 
+    test('github: prStatus deduplicates check-runs per context name so a newer re-run/re-stamp overrides an older FAILURE (fa#2366)', function () {
+        var p = loadProvider('github', {
+            github_get_pr: function () {
+                return {
+                    state: 'open',
+                    mergeable: true,
+                    mergeable_state: 'blocked',
+                    head: { sha: 'b974bbe090' }
+                };
+            },
+            github_get_commit_check_runs: function () {
+                return {
+                    total_count: 4,
+                    check_runs: [
+                        { id: 100, name: 'Quality gate', status: 'completed', conclusion: 'failure', completed_at: '2026-11-22T23:28:49Z' },
+                        { id: 101, name: 'Binaries smoke gate', status: 'completed', conclusion: 'failure', completed_at: '2026-11-22T23:28:49Z' },
+                        { id: 200, name: 'Quality gate', status: 'completed', conclusion: 'success', completed_at: '2026-11-22T23:56:52Z' },
+                        { id: 201, name: 'Binaries smoke gate', status: 'completed', conclusion: 'success', completed_at: '2026-11-22T23:56:52Z' }
+                    ]
+                };
+            }
+        });
+        var st = p.prStatus(2366);
+        assert.equal(st.checkConclusion, 'green');
+        assert.equal(st.trackedVerdict, 'green');
+    });
+
     test('UT-prov-1: github lastReview ignores trailing empty-body COMMENTED inline replies so stale CHANGES_REQUESTED is preserved', function () {
         var p = loadProvider('github', {
             github_list_pr_reviews: function () {

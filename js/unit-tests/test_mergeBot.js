@@ -5,6 +5,7 @@
 // every loadModule of js/sm/mergeBot.js must map the helper in makeRequire
 // (it throws on unmapped ids).
 var mcpParseModule = loadModule('js/common/mcpParse.js', makeRequire({}), {});
+var mergeStateReconcileModule = loadModule('js/common/mergeStateReconcile.js', makeRequire({}), {});
 
 // gh-1353: the merge backstop rides mergeApprovedHead. The wiring's require
 // needs the module's full dependency closure, with configLoader stubbed.
@@ -153,6 +154,7 @@ function loadMergeBot(mods) {
     var backstop = mergeBackstopModuleFor(mods);
     return loadModule('js/sm/mergeBot.js',
         makeRequire({
+            '../common/mergeStateReconcile.js': mergeStateReconcileModule,
             '../common/mcpParse.js': mcpParseModule,
             '../common/mergeBackstop.js': backstop,
             '../common/mergeVerdictGate.js': mergeVerdictGateModuleFor(mods, backstop),

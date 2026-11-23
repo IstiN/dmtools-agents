@@ -20289,6 +20289,54 @@ suite('smAgent: rework-loop-escalated head-move reset + machine unpark on dispat
         assert.equal(sm.capturedPrLabelRemoves[0].label, 'validation_failed');
         assert.ok(sm.capturedPrComments[0].body.indexOf('dispatched validation run on the current head concluded SUCCESS') !== -1);
     });
+
+    test('syncValidationChecks restamps umbrella checks even after validation_failed was stripped by park-reset on an unlatched PR with a dispatched run (fa#2366)', function () {
+        var stamped = [];
+        var stampBodies = [];
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            captureConsole: true,
+            onFileWrite: function (w) {
+                if (w && String(w.path).indexOf('/tmp/sm-check-run-') === 0) {
+                    stampBodies.push(JSON.parse(w.content));
+                }
+            },
+            github: {
+                items: [],
+                prList: [{
+                    number: 2366,
+                    head: { sha: NEW_HEAD, ref: 'feat/product-browser-foundation' },
+                    labels: [{ name: 'ai_pr_reviewed' }, { name: 'review-round-3' }]
+                }],
+                workflowApiRuns: [{
+                    id: 45081534926,
+                    event: 'workflow_dispatch',
+                    head_sha: NEW_HEAD,
+                    status: 'completed',
+                    conclusion: 'success',
+                    html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45081534926'
+                }]
+            },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('/check-runs ') !== -1) {
+                    stamped.push(cmdOpts.command);
+                    return '{}';
+                }
+                return '';
+            }
+        });
+
+        sm.action({ jobParams: {
+            owner: 'IstiN',
+            repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml',
+            validationChecks: ['Quality gate', 'Binaries smoke gate', 'JS engine integration (quickjs-ng)'],
+            machineAuthor: 'dmtools-factory-bot[bot]',
+            rules: [PARK_RULE]
+        } });
+        assert.equal(stamped.length, 3, 'syncValidationChecks restamps all 3 umbrella check-runs on PR with a dispatched run on head');
+        assert.ok(stampBodies.every(function (b) { return b.conclusion === 'success' && b.status === 'completed'; }));
+    });
 });
 
 test('applyTickTunings: ioCacheTtlMs rides jobParams into the smProvider holder (pr #1514 F5)', function () {

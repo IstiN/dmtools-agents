@@ -163,12 +163,21 @@ function hasSyncTargetLabel(l) {
   var name = l && l.name;
   return name === 'ai_validating' || name === 'validation_failed';
 }
-function isArmedValidatingPr(pr) {
+function hasAnyDispatchedRunOnHead(pr, runList) {
+  var headSha = pr && pr.head && pr.head.sha;
+  if (!headSha || !Array.isArray(runList)) {
+    return false;
+  }
+  return runList.some(function (r) {
+    return r.event === 'workflow_dispatch' && r.head_sha === headSha;
+  });
+}
+function isArmedValidatingPr(pr, runList) {
   var head = pr && pr.head;
   if (!head || !head.sha || !head.ref) {
     return false;
   }
-  return (pr.labels || []).some(hasSyncTargetLabel);
+  return (pr.labels || []).some(hasSyncTargetLabel) || hasAnyDispatchedRunOnHead(pr, runList);
 }
 function extractOpenPrList(prsRaw) {
   var prs = mcpParse(prsRaw);
@@ -264,11 +273,17 @@ function syncValidationChecks(deps, repoInfo, stampFn) {
     return;
   }
   var ciWorkflow = (deps.jobParams || {}).ciWorkflow || 'quality.yml';
-  var armed = extractOpenPrList(deps.listOpenPrs(repoInfo)).filter(isArmedValidatingPr);
-  if (!armed.length) {
+  var openPrs = extractOpenPrList(deps.listOpenPrs(repoInfo));
+  if (!openPrs.length) {
     return;
   }
   var runList = fetchSyncWorkflowRuns(deps, repoInfo, ciWorkflow);
+  var armed = openPrs.filter(function (pr) {
+    return isArmedValidatingPr(pr, runList);
+  });
+  if (!armed.length) {
+    return;
+  }
   armed.forEach(function (pr) {
     syncSingleArmedPr(deps, pr, runList, stampFn);
   });

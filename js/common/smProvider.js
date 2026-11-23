@@ -348,25 +348,25 @@ function _ghAccumulateCheck(acc, c) {
     else if (outcome === 'pending') acc.pending = true;
 }
 
-// Rollup tally. Cancelled still forces 'no verdict yet' even next to
-// green (a cancelled validation IS the missing verdict); bookkeeping
-// checks must NOT: green validation + kicker noise stays green, or
-// every pushed-branch PR would re-validate forever. A head with ONLY
-// bookkeeping checks has no verdict at all → pending, which is exactly
-// what validate-fresh (none|pending) arms on.
+// Rollup tally (latest per context via mergeStateReconcile.latestEntries).
+// Cancelled forces pending; bookkeeping alone stays pending (validate-fresh).
 function _ghTallyRollup(rollup) {
+    var deduped = mergeStateReconcile.latestEntries ? mergeStateReconcile.latestEntries(rollup) : rollup;
     var acc = { red: false, pending: false, ignored: 0, bookept: 0 };
-    rollup.forEach(function (c) { _ghAccumulateCheck(acc, c); });
-    var realCount = rollup.length - acc.ignored - acc.bookept;
+    deduped.forEach(function (c) { _ghAccumulateCheck(acc, c); });
+    var realCount = deduped.length - acc.ignored - acc.bookept;
     if (acc.ignored > 0 || (realCount === 0 && acc.bookept > 0)) acc.pending = true;
     return acc;
 }
 
 function _ghNormalizeCheckRun(r) {
     return {
-        name: r.name || null,
+        id: r.id, databaseId: r.databaseId,
+        name: r.name || null, context: r.context || null,
         conclusion: r.conclusion ? String(r.conclusion).toUpperCase() : null,
-        status: r.status ? String(r.status).toUpperCase() : null
+        status: r.status ? String(r.status).toUpperCase() : null,
+        completed_at: r.completed_at, completedAt: r.completedAt,
+        started_at: r.started_at, startedAt: r.startedAt
     };
 }
 
