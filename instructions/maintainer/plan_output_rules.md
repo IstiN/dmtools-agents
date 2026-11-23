@@ -18,7 +18,7 @@ flowchart TD
 
     subgraph PLAN["maintainer-plan.md format"]
         P1["Header: scope window (commits/dates analyzed), signals consumed (gate reports, issue cluster)"]
-        P2["Numbered steps — each independently landable:<br/>action, files touched, what dies, what moves"]
+        P2["Numbered steps in execution order; mark the landable milestone groups:<br/>action, files touched, what dies, what moves"]
         P3["Deletions list: guards, copies, single-caller helpers, dead flags"]
         P4["Test changes: what gets updated, what gets deleted, what new property tests appear"]
         P5["Risks + verification: what watches for breakage"]

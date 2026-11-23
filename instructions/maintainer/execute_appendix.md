@@ -8,8 +8,9 @@ the plan. From here:
    version wins over the original posted plan in every disagreement. If the
    input does not contain the plan, do not guess: post ONE comment asking
    for it, write `outputs/blocked.json`, and stop.
-2. **Execute the approved steps in order.** Each step is independently
-   landable — finish a step completely before starting the next. Do not
+2. **Execute the approved steps in order.** Finish a step completely before
+   starting the next. Landable units are the milestone GROUPS the plan
+   marks — an individual step is transit, not a landing. Do not
    improve beyond the plan: the scope rule in
    `instructions/maintainer/general_guidelines.md` applies (tiny adjacent
    fix → take and list; bigger → file an issue).
@@ -24,7 +25,17 @@ the plan. From here:
 5. **Hygiene in the same branch:** remove interim guards and absorbed
    tests; update or delete tests that pin the old structure per
    `instructions/maintainer/test_guidelines.md`.
-6. **Keep the suite green.** Run it — do not assume.
+6. **Verification cadence — mid-rework states are transit, not
+   architecture:**
+   - Per step: `dart analyze` (whole-tree, seconds). Nothing else — do not
+     try to select "affected" tests: the affected set is transitive and
+     any selection is a guess.
+   - Full suite: at the milestones the plan marks as landable groups, and
+     always before finishing. Never after each step. Run it — do not
+     assume.
+   - A red suite at a milestone is reconciled there by the test_guidelines
+     case-1/case-2 rule. Do not chase green on transit: a mid-rework fix
+     lands in a shape the next step demolishes.
 7. **PR description (`outputs/response.md`) must contain:**
    - reference to the approved plan (ticket key + step list covered),
    - per-finding one-liner: finding → unrepresentability mechanism,

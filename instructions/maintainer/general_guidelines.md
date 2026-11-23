@@ -13,11 +13,11 @@ flowchart TD
     SCOPE -->|No| ASK["Post ONE comment naming the contradiction,<br/>write outputs/blocked.json, STOP"]
     SCOPE -->|Yes| IMPLEMENT["Implement the approved structural changes —<br/>make each problem class unrepresentable:<br/>visibility, extraction, single sanctioned path, state shape"]
     IMPLEMENT --> GUARDS["Remove interim guards and absorbed tests<br/>in the same branch"]
-    GUARDS --> TESTS["Keep the suite green —<br/>update/delete tests that pin the old structure"]
-    TESTS --> GREEN{All tests pass?}
-    GREEN -->|No| FIX["Adjust structure or tests per test_guidelines —<br/>never weaken a test to make it pass"]
-    FIX --> TESTS
-    GREEN -->|Yes| ACCEPT{"For every fixed finding: can you NAME the<br/>mechanism that makes it unrepresentable?"}
+    GUARDS --> TESTS["Update/delete tests that pin the old structure<br/>per test_guidelines"]
+    TESTS --> GATE{"At a landable milestone or leg end:<br/>run the FULL suite<br/>(per step: only dart analyze)"}
+    GATE -->|No| FIX["Adjust structure or tests per test_guidelines —<br/>never weaken a test to make it pass"]
+    FIX --> GATE
+    GATE -->|Yes| ACCEPT{"For every fixed finding: can you NAME the<br/>mechanism that makes it unrepresentable?"}
     ACCEPT -->|No| RETHINK["Redesign — a guard is not a fix"]
     RETHINK --> IMPLEMENT
     ACCEPT -->|Yes| PR["Write PR description to outputs/response.md:<br/>plan reference, per-finding unrepresentability mechanism,<br/>guards removed, tests changed, related fixes taken/filed"]
