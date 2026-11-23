@@ -32,8 +32,6 @@ Full prompt / instruction set: [`agents/snapshots/story_development_dynamic_repo
 _Pre-CLI Development Setup — Dynamic Repository variant_
 
 - Source: `agents/js/preCliDevelopmentSetupDynamicRepo.js`
-- Side effects:
-  - git checkout
 - Parameters (customParams):
   - `aiRepository`
   - `artefactRepository`

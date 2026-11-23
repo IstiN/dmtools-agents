@@ -74,33 +74,45 @@ function stubFileRead(files, readOpts) {
 function makeModule(fileMap, setupResult) {
     var files = fileMap || {};
     var setupCalls = [];
+    var mocks = {
+        './resolveRepoFromTicket.js': {
+            action: function(params) {
+                // simulate resolveRepoFromTicket: write targetRepository into params
+                return groupedRepoLookup(files, params);
+            },
+            STRATEGIES: {},
+            findRepoEntry: function() { return null; }
+        },
+        './preCliDevelopmentSetup.js': {
+            action: function(params) {
+                return recordSetupCall(setupCalls, setupResult, params);
+            }
+        }
+    };
+    var globalMocks = {
+        file_read: function(readOpts) {
+            return stubFileRead(files, readOpts);
+        }
+    };
 
     var mod = loadModule(
         'js/preCliDevelopmentSetupDynamicRepo.js',
-        makeRequire({
-            './resolveRepoFromTicket.js': {
-                action: function(params) {
-                    // simulate resolveRepoFromTicket: write targetRepository into params
-                    return groupedRepoLookup(files, params);
-                },
-                STRATEGIES: {},
-                findRepoEntry: function() { return null; }
-            },
-            './preCliDevelopmentSetup.js': {
-                action: function(params) {
-                    return recordSetupCall(setupCalls, setupResult, params);
-                }
-            }
-        }),
-        {
-            file_read: function(readOpts) {
-                return stubFileRead(files, readOpts);
-            }
-        }
+        makeModuleRequire(mocks, globalMocks),
+        globalMocks
     );
 
     mod._setupCalls = setupCalls;
     return mod;
+}
+
+/** The wrapper requires the shared helper; load it with the same mocks. */
+function makeModuleRequire(mocks, globalMocks) {
+    mocks['./common/dynamicRepoSetup.js'] = loadModule(
+        'js/common/dynamicRepoSetup.js',
+        makeRequire(mocks),
+        globalMocks
+    );
+    return makeRequire(mocks);
 }
 
 // ── gh-1200 characterization: the extracted stub helpers, every branch ──────
@@ -198,10 +210,10 @@ suite('preCliDevelopmentSetupDynamicRepo — action', function() {
         var setupCalls = [];
         var mod = loadModule(
             'js/preCliDevelopmentSetupDynamicRepo.js',
-            makeRequire({
+            makeModuleRequire({
                 './resolveRepoFromTicket.js': { action: function() { return false; } },
                 './preCliDevelopmentSetup.js': { action: function() { setupCalls.push(1); return true; } }
-            }),
+            }, { file_read: function() { return null; } }),
             { file_read: function() { return null; } }
         );
         var result = mod.action({ ticket: { key: 'PROJ-3', fields: { summary: '[x] y' } } });

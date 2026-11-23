@@ -2032,16 +2032,18 @@ suite('preCliDevelopmentSetup.action — dryRun guard (gh-1356)', function() {
         assert.equal(bs.isDryRunParams({ jobParams: { customParams: { dryRun: false } } }), false);
 
         var writes = [];
-        var dynMod = loadModule('js/preCliDevelopmentSetupDynamicRepo.js', makeRequire({
+        var dynMocks = {
             './resolveRepoFromTicket.js': { action: function(p) {
                 p.customParams = Object.assign({}, p.customParams || {}, { targetRepository: { workingDir: '/tmp/wt' } });
                 return true;
             } },
             './preCliDevelopmentSetup.js': { action: function(p) { return { success: true, dryRun: bs.isDryRunParams(p) }; } },
             './common/branchSetup.js': bs
-        }), {
-            file_write: function(args) { writes.push(args); }
-        });
+        };
+        var dynGlobals = { file_write: function(args) { writes.push(args); } };
+        dynMocks['./common/dynamicRepoSetup.js'] = loadModule(
+            'js/common/dynamicRepoSetup.js', makeRequire(dynMocks), dynGlobals);
+        var dynMod = loadModule('js/preCliDevelopmentSetupDynamicRepo.js', makeRequire(dynMocks), dynGlobals);
         var dynRes = dynMod.action({ jobParams: { customParams: { dryRun: true } } });
         assert.deepEqual(dynRes, { success: true, dryRun: true });
         assert.equal(writes.length, 0, 'preCliDevelopmentSetupDynamicRepo must not write .dmtools-target-workingdir in dryRun');

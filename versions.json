@@ -59,6 +59,7 @@
   "story_solution_e2e": "0.1.365",
   "story_solution_e2e_multi": "0.1.365",
   "story_test_automation": "0.1.365",
+  "story_test_automation_dynamic_repo": "0.1.365",
   "story_test_automation_merge": "0.1.365",
   "story_test_automation_rework": "0.1.365",
   "task_done_check": "0.1.365",
