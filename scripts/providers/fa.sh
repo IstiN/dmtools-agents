@@ -19,10 +19,17 @@
 #                        the config's apiKeyEnvVar names — ONLY inside
 #                        the fa subprocess scope
 #   FA_QUOTA_PROBE       (optional, default on) set `off`/`0`/`false` to
-#                        skip the pre-leg z.ai quota probe (gh-1385) that
-#                        re-orders the queue most-unspent-first by each
-#                        key's remaining 5-hour-window quota; any probe
-#                        failure keeps the static order — never fatal
+#                        skip the pre-leg z.ai quota probe (gh-1385/gh-1534)
+#                        that re-orders the queue FEFO-rate-first (weekly
+#                        remaining / time-to-weekly-reset) with per-key
+#                        percentage floors; any probe failure keeps the
+#                        static order — never fatal
+#   QUOTA_FLOOR_5H_PCT   (optional, default 0.10) 5h functional-exhaustion
+#                        floor, fraction of the key's OWN cap5 — keys below
+#                        it are demoted to the refill-ordered tail
+#   QUOTA_FLOOR_WEEKLY_PCT (optional, default 0.02) weekly floor, fraction
+#                        of the key's OWN capW; the leg reserve is derived
+#                        only (0.75 x max cap5 across the queue), no knob
 #
 # Sessions (when agents/setup/fa-session.sh is present, e.g. AI Teammate
 # runs): --session "$FA_SESSION_NAME" --session-root "$FA_SESSION_ROOT"
@@ -170,29 +177,47 @@ _fa_append_fallback_keys() {
   return 0
 }
 
-# gh-1385: quota-aware provider ordering — probe every zai queue entry's key
-# ONCE against the coding-plan quota endpoint and re-order the queue
-# most-unspent-first (score = `remaining` of the rolling 5-hour window — the
-# window provider storms exhaust). Key topology note: entries are keyed by
-# the KEY VALUE, so same-account key sets collapse to one probe and equal
-# scores keep the static order (no churn). Score-0 (exhausted) and 401/403
-# keys move to the END (not dropped — a reset may be nearer than a cold
-# key); every other probe failure (non-200, timeout, unparseable/changed
-# shape, missing curl/node) leaves that entry at its static position and
-# NEVER fails the leg — the endpoint is undocumented, its shape can change
-# without notice. Kill switch: FA_QUOTA_PROBE=off (or 0/false, any case)
-# skips probing entirely; default ON, zai entries only — other providers are
-# never probed. One HTTP call per distinct key per resolution, single
-# attempt, short timeout (no retry storms). Entries whose baseUrl leaves
-# api.z.ai (e.g. china-platform keys) are not probed — out of scope (the
-# host check is boundary-exact: only https://api.z.ai or https://api.z.ai/
-# prefixed baseUrls are probed, never api.z.ai.cn or other siblings).
-# The whole probe step runs under an aggregate per-leg budget (default 10 s,
-# override with FA_QUOTA_PROBE_BUDGET_MS, clamped to 500 ms..120 s) — once
-# spent, unprobed keys keep their static slot ("probe-budget"), so a slow or
-# unreachable endpoint costs every leg at most the budget, not N x timeout.
-# The API key is handed to curl via a stdin config (-K -), never as an argv
-# element, so it cannot leak through ps / /proc cmdline.
+# gh-1385 + gh-1534: quota-aware provider ordering — probe every zai queue
+# entry's key ONCE against the coding-plan quota endpoint and re-order the
+# queue FEFO-rate-first (gh-1534). Per key derive R5/RW (5-hour / weekly
+# remaining), cap5/capW (the key's OWN plan capacity = remaining + usage —
+# plan tier is never hardcoded, mixed max/cheap pools need no config) and
+# tW (time to weekly reset). Score = RW / tW descending — FEFO for quota:
+# burn the budget that refreshes soonest first, keep freshly refreshed
+# balances intact. Percentage floors relative to the key's OWN capacity
+# (QUOTA_FLOOR_5H_PCT=0.10, QUOTA_FLOOR_WEEKLY_PCT=0.02) demote keys that
+# are functionally exhausted for their tier to a severity- then refill-
+# ordered tail, while ranking stays in absolute tokens (rate, usable) so a
+# cheap key's 200-token remainder can never outrank a max key's 2800.
+# Lead tier = keys whose min(R5, RW) covers the derived reserve 0.75 x
+# max(cap5) across the queue (no env knob — scales itself down for cheap-
+# only pools); above-floor keys that cannot cover a leg fill after the
+# leader by usable desc (failover filler); if NO key is leg-fit the gates
+# are transparent — the most usable above-floor key takes the lead slot,
+# the gates order the queue, they never block a leg. Functionally
+# exhausted keys order by severity (below both windows' floors ranks below
+# below-just-one) then nextResetTime ascending (soonest refill first — the
+# best mid-leg failover ticket); 401/403 rank below the exhausted tail
+# (static order); every other probe failure (non-200, timeout,
+# unparseable/changed shape, missing curl/node) keeps the static position
+# and NEVER fails the leg — the endpoint is undocumented, its shape can
+# change without notice. A missing weekly row degrades to 5h-only scoring
+# (non-fatal). Key topology note: entries are keyed by the KEY VALUE, so
+# same-account key sets collapse to one probe and full-equal scores keep
+# the static order (no churn). Kill switch: FA_QUOTA_PROBE=off (or 0/false,
+# any case) skips probing entirely; default ON, zai entries only — other
+# providers are never probed. One HTTP call per distinct key per
+# resolution, single attempt, short timeout (no retry storms). Entries
+# whose baseUrl leaves api.z.ai (e.g. china-platform keys) are not probed
+# — out of scope (the host check is boundary-exact: only https://api.z.ai
+# or https://api.z.ai/ prefixed baseUrls are probed, never api.z.ai.cn or
+# other siblings). The whole probe step runs under an aggregate per-leg
+# budget (default 10 s, override with FA_QUOTA_PROBE_BUDGET_MS, clamped to
+# 500 ms..120 s) — once spent, unprobed keys keep their static slot
+# ("probe-budget"), so a slow or unreachable endpoint costs every leg at
+# most the budget, not N x timeout. The API key is handed to curl via a
+# stdin config (-K -), never as an argv element, so it cannot leak through
+# ps / /proc cmdline.
 _fa_order_queue_by_quota() {
   [ -n "${FA_PROVIDERS_QUEUE:-}" ] || return 0
   case "$(printf '%s' "${FA_QUOTA_PROBE:-on}" | tr '[:upper:]' '[:lower:]')" in
@@ -213,8 +238,13 @@ _fa_order_queue_by_quota() {
     const PROBE_TIMEOUT_S = 5;
     const BUDGET_RAW = parseInt(process.env.FA_QUOTA_PROBE_BUDGET_MS || "", 10);
     const BUDGET_MS = isFinite(BUDGET_RAW) && BUDGET_RAW >= 500 ? Math.min(BUDGET_RAW, 120000) : 10000;
+    const pctOf = (v, dflt) => { const n = parseFloat(v); return isFinite(n) && n >= 0 && n <= 1 ? n : dflt; };
+    const FLOOR5_PCT = pctOf(process.env.QUOTA_FLOOR_5H_PCT, 0.10);
+    const FLOORW_PCT = pctOf(process.env.QUOTA_FLOOR_WEEKLY_PCT, 0.02);
     const startedAt = Date.now();
     const cache = new Map();
+    const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+    const capOf = (remaining, usage) => { const u = num(usage); return remaining + (u !== null && u >= 0 ? u : 0); };
     const keyOf = (entry) => {
       const cfg = entry && entry.provider_config;
       if (!cfg) return null;
@@ -225,16 +255,46 @@ _fa_order_queue_by_quota() {
       if (!b64) return null;
       try { return Buffer.from(b64, "base64").toString("utf8"); } catch (e) { return null; }
     };
-    const scoreOf = (limits) => {
-      let win = null;
-      for (const l of limits) { if (l && l.number === 5 && l.unit === 3) { win = l; break; } }
-      if (!win) {
-        const rs = limits.filter(l => l && typeof l.nextResetTime === "number").sort((a, b) => a.nextResetTime - b.nextResetTime);
-        if (rs.length > 0) win = rs[0];
+    // Both limit rows feed the score (gh-1534): the weekly row is the
+    // balance, the 5-hour row the burst constraint inside it. A missing
+    // weekly row degrades to 5h-only scoring (non-fatal); a missing 5h
+    // row falls back to the soonest-resetting row (shape drift, as before).
+    const row5Of = (limits) => {
+      for (const l of limits) { if (l && l.number === 5 && l.unit === 3) return l; }
+      const rs = limits.filter((l) => l && num(l.nextResetTime) !== null).sort((a, b) => a.nextResetTime - b.nextResetTime);
+      if (rs.length > 0) return rs[0];
+      for (const l of limits) { if (l && num(l.remaining) !== null) return l; }
+      return null;
+    };
+    const deriveOf = (limits, now) => {
+      const r5 = row5Of(limits);
+      const R5 = r5 ? num(r5.remaining) : null;
+      if (R5 === null) return null;
+      const cap5 = capOf(R5, r5.usage);
+      const t5 = num(r5.nextResetTime);
+      const wrow = limits.filter((l) => l && l.number === 1 && l.unit === 6 && num(l.remaining) !== null)[0] || null;
+      let RW = null;
+      let capW = null;
+      let tW = null;
+      let degraded = false;
+      if (wrow) {
+        RW = wrow.remaining;
+        capW = capOf(RW, wrow.usage);
+        const tWabs = num(wrow.nextResetTime);
+        tW = tWabs !== null ? tWabs : t5;
+      } else {
+        degraded = true;
+        RW = R5;
+        capW = cap5;
+        tW = t5;
       }
-      if (!win) { for (const l of limits) { if (l && typeof l.remaining === "number") { win = l; break; } } }
-      if (!win || typeof win.remaining !== "number" || !isFinite(win.remaining)) return null;
-      return win.remaining;
+      const usable = Math.min(R5, RW);
+      const below5 = R5 < FLOOR5_PCT * cap5;
+      const belowW = RW < FLOORW_PCT * capW;
+      const resets = [t5, wrow ? num(wrow.nextResetTime) : null].filter((v) => v !== null);
+      const nextReset = resets.length > 0 ? Math.min.apply(null, resets) : null;
+      const rate = tW !== null ? RW / Math.max(tW - now, 1) : null;
+      return { R5: R5, RW: RW, cap5: cap5, capW: capW, usable: usable, below5: below5, belowW: belowW, severity: (below5 ? 1 : 0) + (belowW ? 1 : 0), nextReset: nextReset, rate: rate, degraded: degraded };
     };
     const probe = (key) => {
       let out = null;
@@ -248,23 +308,22 @@ _fa_order_queue_by_quota() {
         else if (e && typeof e.status === "number" && e.status > 0) errWhy = "curl-exit " + e.status;
         else errWhy = "timeout";
       }
-      if (out === null) return { group: 2, score: null, why: errWhy };
+      if (out === null) return { kind: "fail", why: errWhy };
       const nl = out.lastIndexOf("\n");
       const status = parseInt(out.slice(nl + 1).trim(), 10);
       const body = out.slice(0, nl);
-      if (status === 401 || status === 403) return { group: 3, score: null, why: "unauthorized" };
-      if (status !== 200) return { group: 2, score: null, why: "http " + (isNaN(status) ? "?" : status) };
+      if (status === 401 || status === 403) return { kind: "auth", why: "unauthorized" };
+      if (status !== 200) return { kind: "fail", why: "http " + (isNaN(status) ? "?" : status) };
       let limits = null;
       try {
         const parsed = JSON.parse(body);
         limits = parsed && parsed.data && Array.isArray(parsed.data.limits) ? parsed.data.limits : null;
       } catch (e) { limits = null; }
-      if (!limits) return { group: 2, score: null, why: "shape" };
-      const score = scoreOf(limits);
-      if (score === null) return { group: 2, score: null, why: "shape" };
-      if (score > 0) return { group: 1, score: score, why: String(score) };
-      return { group: 3, score: 0, why: "exhausted" };
+      if (!limits) return { kind: "fail", why: "shape" };
+      return { kind: "ok", limits: limits };
     };
+    const now = Date.now();
+    const derived = new Map();
     const decorated = arr.map((entry, idx) => {
       const cfg = entry && entry.provider_config;
       const baseUrl = cfg ? (cfg.baseUrl || "") : "";
@@ -272,28 +331,75 @@ _fa_order_queue_by_quota() {
         baseUrl === "https://api.z.ai" ||
         baseUrl.indexOf("https://api.z.ai/") === 0;
       const key = entry && entry.provider_type === "zai" && sameHost ? keyOf(entry) : null;
-      let cls = { group: 2, score: null, why: "not-probed" };
+      let cls = 3;
+      let why = "not-probed";
+      let m = null;
       if (key) {
         if (!cache.has(key)) {
           if (cache.size > 0 && Date.now() - startedAt >= BUDGET_MS) {
-            cache.set(key, { group: 2, score: null, why: "probe-budget" });
+            cache.set(key, { kind: "fail", why: "probe-budget" });
           } else {
             cache.set(key, probe(key));
           }
         }
-        cls = cache.get(key);
+        const res = cache.get(key);
+        if (res.kind === "auth") { cls = 5; why = res.why; }
+        else if (res.kind === "fail") { cls = 3; why = res.why; }
+        else {
+          if (!derived.has(key)) derived.set(key, deriveOf(res.limits, now));
+          m = derived.get(key);
+          if (!m) { cls = 3; why = "shape"; }
+        }
       }
       const ref = (cfg && (cfg.apiKeyEnv || cfg.apiKeyEnvVar)) || ("#" + idx);
-      return { entry: entry, idx: idx, group: cls.group, score: cls.score, why: cls.why, ref: entry && entry.name ? entry.name : ref };
+      return { entry: entry, idx: idx, cls: cls, why: why, m: m, ref: entry && entry.name ? entry.name : ref };
     });
+    // Derived leg reserve: 0.75 x max(cap5) across the queue — no env knob,
+    // scales itself down for cheap-only pools (mixed-tier safety: the lead
+    // tier must be able to cover a whole leg).
+    let maxCap5 = 0;
+    for (const d of decorated) { if (d.m && d.m.cap5 > maxCap5) maxCap5 = d.m.cap5; }
+    const reserve = maxCap5 > 0 ? 0.75 * maxCap5 : Infinity;
+    for (const d of decorated) {
+      const m = d.m;
+      if (!m) continue;
+      if (m.below5 || m.belowW) {
+        d.cls = 4;
+        d.why = "exhausted:" + (m.below5 && m.belowW ? "5h+weekly" : (m.below5 ? "5h" : "weekly"));
+      } else if (m.usable >= reserve) {
+        d.cls = 1;
+        d.why = m.rate !== null ? "lead:rate=" + Math.round(m.rate * 360000) + "/h" : "lead:usable=" + m.usable;
+      } else {
+        d.cls = 2;
+        d.why = "usable=" + m.usable;
+      }
+      if (m.degraded && d.cls !== 4) d.why += " (5h-only)";
+    }
+    // Class order: lead (FEFO rate desc, tie usable desc) < filler (usable
+    // desc) < probe failures (static slot) < exhausted (severity asc, then
+    // nextResetTime asc) < 401/403 (static, below exhausted). Full-equal
+    // comparisons fall through to the static index — no churn.
     decorated.sort((a, b) => {
-      if (a.group !== b.group) return a.group - b.group;
-      if (a.group === 1 && a.score !== b.score) return b.score - a.score;
+      if (a.cls !== b.cls) return a.cls - b.cls;
+      if (a.cls === 1) {
+        const ra = a.m && a.m.rate !== null ? a.m.rate : -Infinity;
+        const rb = b.m && b.m.rate !== null ? b.m.rate : -Infinity;
+        if (ra !== rb) return rb - ra;
+      }
+      if (a.cls === 1 || a.cls === 2) {
+        if (a.m.usable !== b.m.usable) return b.m.usable - a.m.usable;
+      }
+      if (a.cls === 4) {
+        if (a.m.severity !== b.m.severity) return a.m.severity - b.m.severity;
+        const na = a.m.nextReset !== null ? a.m.nextReset : Infinity;
+        const nb = b.m.nextReset !== null ? b.m.nextReset : Infinity;
+        if (na !== nb) return na - nb;
+      }
       return a.idx - b.idx;
     });
     if (decorated.every((d, i) => d.idx === i)) process.exit(0);
-    process.stderr.write("[providers/fa.sh] queue re-ordered by remaining z.ai quota (5h window first): " + decorated.map(d => d.ref + "=" + d.why).join(", ") + "\n");
-    process.stdout.write(JSON.stringify(decorated.map(d => d.entry)));
+    process.stderr.write("[providers/fa.sh] queue re-ordered by remaining z.ai quota (FEFO: soonest-refreshing weekly budget first): " + decorated.map((d) => d.ref + "=" + d.why).join(", ") + "\n");
+    process.stdout.write(JSON.stringify(decorated.map((d) => d.entry)));
   ')" || return 0
   if [ -n "${ordered}" ]; then
     export FA_PROVIDERS_QUEUE="${ordered}"
