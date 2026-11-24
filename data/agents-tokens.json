@@ -129,5 +129,18 @@
       "source": "reported",
       "model": "glm-5.3-flash"
     }
+  ],
+  "pr-1538": [
+    {
+      "leg": "review",
+      "at": "2026-11-24T12:26:43Z",
+      "prompt": 81048,
+      "completion": 23177,
+      "total": 104225,
+      "cacheRead": 2374208,
+      "requests": 42,
+      "source": "reported",
+      "model": "glm-5.3-flash"
+    }
   ]
 }
