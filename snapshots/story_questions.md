@@ -32,6 +32,14 @@ flowchart TD
         CG5["Questions already answered by the code = stupid questions — FORBIDDEN"]
     end
 
+    subgraph SPEC_HYGIENE["⚠️ Spec Open Questions, Strikethroughs & Summary Clarity"]
+        SH1["Ignore struck-through text (~~...~~) in specs/tickets as already resolved or withdrawn"]
+        SH2["Do NOT duplicate items from a spec's own 'Open Questions' section as generic questions"]
+        SH3["Only raise a question on a spec Open Question if codebase analysis adds concrete constraints, options, or a proposed answer — and explicitly cite 'Spec Open Question #N'"]
+        SH4["When contrasting a spec number with a codebase constant/limit, state BOTH in summary:<br/>e.g. 'Confirm batch limit: 96 in spec vs 30 in SamplesCountValidator'"]
+        SH5["One topic per question subtask — never bundle unrelated decisions into one question"]
+    end
+
     subgraph VALIDATE["⚠️ MANDATORY: Post-validation — check each question before output"]
         V1["For each draft question: search codebase for the answer"]
         V2["codegraph query 'keyword from the question'"]
@@ -53,7 +61,7 @@ flowchart TD
         GQ3["Edge case with multiple valid approaches not addressed anywhere"]
     end
 
-    CODEGRAPH --> VALIDATE --> BAD
+    CODEGRAPH --> SPEC_HYGIENE --> VALIDATE --> BAD
     VALIDATE --> GOOD
 ```
 
@@ -114,8 +122,8 @@ flowchart TD
     O4 --> O5["⚠️ MANDATORY when writing []: also write outputs/response.md"]
     O5 --> O6["response.md must explain WHY no questions were needed:<br/>what was investigated, what confirmed the story is fully clear,<br/>which files/specs/code answered every open point"]
     O6 --> O7["A human reviewer reads response.md as a tracker comment —<br/>it must be a real justification, not a one-line 'looks clear'"]
+    O7 --> O8["⚠️ Spec vs. Implementation Drift (when feature is already in code):<br/>if the codebase implementation evolved beyond or differs from the original<br/>ticket/comment wording (e.g. via follow-up CRs), include an explicit<br/>'Spec vs. Implementation Drift' section in response.md instead of claiming 100% alignment"]
 ```
-
 
 
 ---
@@ -143,24 +151,34 @@ The block below is a **structural template / example only**. The tags such as `<
 
 Structure:
 ```
-<bold>Background</bold>: [Brief context — 1-2 sentences explaining why this matters]
+<bold>Background</bold>:
+<bullet> <bold>Spec</bold>: [1 short sentence quoting or summarizing the exact requirement/AC/comment, with link if available]
+<bullet> <bold>Codebase / Gap</bold>: [1 short sentence stating what the code currently does or where the conflict/gap is, keeping class/constant names concise in parentheses]
 
-<bold>Question</bold>: [Clear, specific question]
+<bold>Question</bold>: [Single clear, business-first question stating what decision is needed for user/system behavior — understandable on first read]
 
 <bold>Options</bold>:
-<bullet> Option A: [Brief description]
-<bullet> Option B: [Brief description]
-<bullet> Option C: [Brief description if needed]
+<bullet> Option A: [Brief description of behavior and impact]
+<bullet> Option B: [Brief description of behavior and impact — include ONLY when a genuine trade-off exists]
 
-<bold>Recommended Decision</bold>: [Write your proposed answer here]
+<bold>Recommended Decision</bold>: [Write your proposed answer here, grounded in existing codebase conventions and updated AC/mockups]
 ```
 
 Rules:
-- Do NOT repeat the summary in the description — start directly with <bold>Background</bold>
-- <bold>Recommended Decision</bold> is required — always provide your best guess even if uncertain
-- Keep options focused: 2–3 max; omit if only one valid path exists
-- Replace every placeholder tag with the equivalent markup defined in the tracker-specific transformation table
-- Do NOT leave literal XML-style tags such as `<bold>` or `<bullet>` in the final question description
+- Do NOT repeat the summary in the description — start directly with `<bold>Background</bold>`.
+- **Scannable `<bold>Background</bold>` (no "wall of text")**: use 2–3 short bullets (`Spec:` / `Codebase / Gap:`) instead of a long narrative paragraph. Put code identifiers (class, method, constant, file) concisely in parentheses rather than writing code-heavy prose.
+- **Business-first `<bold>Question</bold>` & one topic per question**: phrase the question in terms of user or system behavior so a Business Analyst or Product Owner understands the decision on the first read. Strictly **one decision topic per question subtask** — never bundle unrelated decisions (e.g., workflow step existence + ID naming format) into one question.
+- **Grounded `<bold>Options</bold>` (no artificial choices)**:
+  - Present multiple options (`Option A` / `Option B`, max 2–3) **only** when there is a genuine product or technical trade-off.
+  - When the existing codebase already handles all comparable fields or flows with a single uniform convention (e.g., audit/history logging format, standard field validation limits), do **not** invent artificial alternatives just to fill Option B/C. Cite the existing codebase pattern and present a single confirmation option (or omit `<bold>Options</bold>` and state the confirmation directly in `<bold>Recommended Decision</bold>`).
+- **Self-contained citations (never bare numeric IDs)**:
+  - Never cite a bare inline comment ID (e.g., `inline comment 7065501717`) or an unquoted section/AC number by itself — a reviewer cannot locate a comment by numeric ID alone.
+  - Always include the **short quoted text** of the inline comment, open question, or Acceptance Criterion (plus a direct link when available in the input context).
+- **Evidence weighting in `<bold>Recommended Decision</bold>`**:
+  - `<bold>Recommended Decision</bold>` is required — always provide a concrete recommendation.
+  - Updated Acceptance Criteria and current UI mockups carry higher weight than older notes in `Assumptions` or `Open Questions` sections. When a stale note conflicts with updated AC or mockups, flag the discrepancy so the spec can be cleaned up, but base your `<bold>Recommended Decision</bold>` on the updated AC and mockups.
+- Replace every placeholder tag with the equivalent markup defined in the tracker-specific transformation table.
+- Do NOT leave literal XML-style tags such as `<bold>` or `<bullet>` in the final question description.
 
 
 ---
@@ -346,6 +364,7 @@ flowchart TD
         O2["outputs/questions.json — plain JSON array [ ... ]"]
         O3["No questions → write []"]
         O3 --> O4["⚠️ MANDATORY when writing []: also write outputs/response.md<br/>explaining WHY no questions were needed — what was<br/>investigated and what confirmed the story is fully clear"]
+        O4 --> O5["If the feature is already implemented in code and evolved beyond<br/>original ticket/comment text, include a 'Spec vs. Implementation Drift'<br/>section in outputs/response.md noting each difference for BA/QA"]
     end
 
     subgraph FORMAT["JSON Format"]
