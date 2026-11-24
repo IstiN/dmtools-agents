@@ -6,6 +6,7 @@ Retries merging an approved single-Test-Case automation pull request (`retryMerg
 
 - `removeLabel` — removes `sm_retry_merge_test_triggered` once the retry completes.
 - `checkOpenPR` — skips tickets without an open test-case PR.
+- `moveOnStart` — per-agent override for `jira.moveOnStart` (`false` prevents moving the ticket back to `In Progress` when merge retry starts).
 - `testCaseMerge` — test-case PR merge configuration overrides.
 - `autoStartRework` / `autoStartReworkConfigFile` — triggers `pr_test_automation_rework` when the test PR cannot be merged cleanly.
 - `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
@@ -74,6 +75,7 @@ _retryMergePR.js_
 - `removeLabel`: `"sm_test_merge_triggered"`
 - `testCaseMerge`: `true`
 - `checkOpenPR`: `true`
+- `moveOnStart`: `false`
 - `branchCreateFnPath` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `aiRepository` _(used by JS action)_

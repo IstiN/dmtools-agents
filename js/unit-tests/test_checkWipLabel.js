@@ -611,5 +611,37 @@ suite('checkWipLabel — moveOnStart transition', function() {
         assert.equal(mod.resolveOnStartStatusName(false, {}), null);
         assert.equal(mod.resolveOnStartStatusName('false', {}), null);
     });
+
+    test('customParams.moveOnStart and review/merge contextId suppress or override jira.moveOnStart', function() {
+        var moved = [];
+        var mod = loadCheckWipWithConfig(
+            { jira: { moveOnStart: true, statuses: { IN_DEVELOPMENT: 'In Progress' } } },
+            { jira_move_to_status: function(args) { moved.push(args); } }
+        );
+        ['pr_review', 'pr_bug_test_automation_review', 'pr_story_test_automation_review', 'retry_merge', 'retry_merge_test'].forEach(function(ctx) {
+            assert.equal(mod.action({
+                ticket: makeTicket('MAPC-14'),
+                metadata: { contextId: ctx }
+            }), true);
+        });
+        assert.equal(mod.action({
+            ticket: makeTicket('MAPC-14'),
+            metadata: { contextId: 'story_development' },
+            jobParams: { customParams: { moveOnStart: false } }
+        }), true);
+        assert.equal(mod.action({
+            ticket: makeTicket('MAPC-14'),
+            metadata: { contextId: 'story_development' },
+            jobParams: { customParams: { moveOnStart: 'false' } }
+        }), true);
+        assert.equal(moved.length, 0);
+
+        assert.equal(mod.action({
+            ticket: makeTicket('MAPC-15'),
+            metadata: { contextId: 'pr_review' },
+            jobParams: { customParams: { moveOnStart: 'In Review' } }
+        }), true);
+        assert.deepEqual(moved, [{ key: 'MAPC-15', statusName: 'In Review' }]);
+    });
 });
 });

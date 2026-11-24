@@ -13,7 +13,8 @@
     "postJSAction": "agents/js/retryMergePR.js",
     "customParams": {
       "removeLabel": "sm_pr_merge_triggered",
-      "checkOpenPR": true
+      "checkOpenPR": true,
+      "moveOnStart": false
     },
     "inputJql": "key = PROJ-1"
   }

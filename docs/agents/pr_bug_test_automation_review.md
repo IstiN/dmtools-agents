@@ -6,6 +6,7 @@ Reviews the bulk test automation PR for a Bug (`test/{BUG_KEY}`), checking that 
 
 - `removeLabel` — clears `sm_bug_test_review_triggered` after posting the review.
 - `checkOpenPR` — requires an open bug test PR.
+- `moveOnStart` — per-agent override for `jira.moveOnStart` (`false` prevents moving the ticket back to `In Progress` when review starts).
 - `autoStartMerge` / `autoStartMergeConfigFile` — dispatches `bug_test_automation_merge` on `APPROVE`.
 - `autoStartRework` / `autoStartReworkConfigFile` — dispatches `bug_test_automation_rework` on `REQUEST_CHANGES`.
 - `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.

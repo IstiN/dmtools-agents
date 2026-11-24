@@ -6,6 +6,7 @@ Retries merging an approved feature or bug-fix pull request that was blocked by 
 
 - `removeLabel` — clears `sm_retry_merge_triggered` after the retry finishes.
 - `checkOpenPR` — confirms the PR is still open before attempting the merge.
+- `moveOnStart` — per-agent override for `jira.moveOnStart` (`false` prevents moving the ticket back to `In Progress` when merge retry starts).
 - `testCaseMerge` — merge options shared with test-case PR merge handlers.
 - `autoStartRework` / `autoStartReworkConfigFile` — routes the PR to rework if merge conflicts or checks fail.
 - `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
@@ -73,6 +74,7 @@ _retryMergePR.js_
 
 - `removeLabel`: `"sm_pr_merge_triggered"`
 - `checkOpenPR`: `true`
+- `moveOnStart`: `false`
 - `branchCreateFnPath` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
