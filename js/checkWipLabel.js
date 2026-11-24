@@ -113,7 +113,15 @@ function loadConfigBestEffort(params) {
     }
 }
 
-function resolveMoveOnStartFlag(config) {
+function isReviewOrMergeContext(contextId) {
+    return /(?:^|_)(?:review|merge)(?:$|_)/i.test(String(contextId || ''));
+}
+
+function resolveMoveOnStartFlag(config, overrides, contextId) {
+    if (overrides && overrides.moveOnStart !== undefined && overrides.moveOnStart !== null && overrides.moveOnStart !== '') {
+        return overrides.moveOnStart;
+    }
+    if (isReviewOrMergeContext(contextId)) return false;
     return config && config.jira ? config.jira.moveOnStart : false;
 }
 
@@ -128,9 +136,9 @@ function resolveOnStartStatusName(flag, config) {
     return defaultOnStartStatus(config);
 }
 
-function moveTicketOnStartIfConfigured(ticketKey, config, dryRun) {
+function moveTicketOnStartIfConfigured(ticketKey, config, dryRun, overrides, contextId) {
     if (dryRun || /^pr-\d+$/i.test(String(ticketKey || ''))) return false;
-    var statusName = resolveOnStartStatusName(resolveMoveOnStartFlag(config), config);
+    var statusName = resolveOnStartStatusName(resolveMoveOnStartFlag(config, overrides, contextId), config);
     if (!statusName) return false;
     try {
         getTracker().moveToStatus(ticketKey, statusName);
@@ -198,7 +206,7 @@ function action(params) {
             return false;
         }
 
-        moveTicketOnStartIfConfigured(ticket.key, projectConfig, dryRun);
+        moveTicketOnStartIfConfigured(ticket.key, projectConfig, dryRun, customParams, metadata.contextId);
         console.log('checkWipLabel result: continue processing');
         return true; // Continue processing
 

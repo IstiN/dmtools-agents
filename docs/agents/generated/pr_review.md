@@ -23,6 +23,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `onApproved` — action to run when the review approves (e.g. trigger merge).
 - `projectKey` — tracker project key override.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
+- `moveOnStart` — per-agent override for `jira.moveOnStart` (`false` prevents moving the ticket back to `In Progress` when review starts).
 
 ## Review policy: `reviewPolicy.verification`
 
@@ -155,6 +156,7 @@ _Post PR Review Comments Action — posts the assembled review._
 - `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_story_review_triggered"`
 - `checkOpenPR`: `true`
+- `moveOnStart`: `false`
 - `branchCreateFnPath` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `allowApproveWithSuggestions` _(used by JS action)_

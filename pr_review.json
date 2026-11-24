@@ -23,7 +23,8 @@
     "customParams": {
       "responseTarget": "scm",
       "removeLabel": "sm_story_review_triggered",
-      "checkOpenPR": true
+      "checkOpenPR": true,
+      "moveOnStart": false
     },
     "outputSchemas": {
       "pr_review.json": {

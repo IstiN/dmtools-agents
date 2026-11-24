@@ -6,6 +6,7 @@ Reviews a Story bulk test automation PR (`test/{STORY_KEY}`) against the Story's
 
 - `removeLabel` — removes `sm_story_test_review_triggered` once the review completes.
 - `checkOpenPR` — verifies an open story test PR exists.
+- `moveOnStart` — per-agent override for `jira.moveOnStart` (`false` prevents moving the ticket back to `In Progress` when review starts).
 - `autoStartMerge` / `autoStartMergeConfigFile` — triggers `story_test_automation_merge` when approved.
 - `autoStartRework` / `autoStartReworkConfigFile` — triggers `story_test_automation_rework` when changes are requested.
 - `maxAutoReworkRounds` — maximum auto-started rework rounds (`rework-round-N` on the ticket, default `3`) before the ticket is labeled `needs-human` and no further rework is chained.
@@ -98,6 +99,7 @@ _Post Story Test Automation Review Comments Action_
 - `responseTarget`: `"scm"`
 - `removeLabel`: `"sm_story_test_review_triggered"`
 - `checkOpenPR`: `true`
+- `moveOnStart`: `false`
 - `branchCreateFnPath` _(used by JS action)_
 - `dryRun` _(used by JS action)_
 - `allowApproveWithSuggestions` _(used by JS action)_

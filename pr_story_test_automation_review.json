@@ -18,7 +18,8 @@
     "customParams": {
       "responseTarget": "scm",
       "removeLabel": "sm_story_test_review_triggered",
-      "checkOpenPR": true
+      "checkOpenPR": true,
+      "moveOnStart": false
     },
     "inputJql": "key = JD-111",
     "cliPrompts": [

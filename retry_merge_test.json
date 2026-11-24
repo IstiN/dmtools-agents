@@ -14,7 +14,8 @@
     "customParams": {
       "removeLabel": "sm_test_merge_triggered",
       "testCaseMerge": true,
-      "checkOpenPR": true
+      "checkOpenPR": true,
+      "moveOnStart": false
     },
     "inputJql": "key = PROJ-1"
   }
