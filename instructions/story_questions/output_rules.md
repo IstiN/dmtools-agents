@@ -7,5 +7,5 @@ flowchart TD
     O4 --> O5["⚠️ MANDATORY when writing []: also write outputs/response.md"]
     O5 --> O6["response.md must explain WHY no questions were needed:<br/>what was investigated, what confirmed the story is fully clear,<br/>which files/specs/code answered every open point"]
     O6 --> O7["A human reviewer reads response.md as a tracker comment —<br/>it must be a real justification, not a one-line 'looks clear'"]
+    O7 --> O8["⚠️ Spec vs. Implementation Drift (when feature is already in code):<br/>if the codebase implementation evolved beyond or differs from the original<br/>ticket/comment wording (e.g. via follow-up CRs), include an explicit<br/>'Spec vs. Implementation Drift' section in response.md instead of claiming 100% alignment"]
 ```
-

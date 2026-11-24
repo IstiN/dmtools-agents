@@ -11,6 +11,14 @@ flowchart TD
         CG5["Questions already answered by the code = stupid questions — FORBIDDEN"]
     end
 
+    subgraph SPEC_HYGIENE["⚠️ Spec Open Questions, Strikethroughs & Summary Clarity"]
+        SH1["Ignore struck-through text (~~...~~) in specs/tickets as already resolved or withdrawn"]
+        SH2["Do NOT duplicate items from a spec's own 'Open Questions' section as generic questions"]
+        SH3["Only raise a question on a spec Open Question if codebase analysis adds concrete constraints, options, or a proposed answer — and explicitly cite 'Spec Open Question #N'"]
+        SH4["When contrasting a spec number with a codebase constant/limit, state BOTH in summary:<br/>e.g. 'Confirm batch limit: 96 in spec vs 30 in SamplesCountValidator'"]
+        SH5["One topic per question subtask — never bundle unrelated decisions into one question"]
+    end
+
     subgraph VALIDATE["⚠️ MANDATORY: Post-validation — check each question before output"]
         V1["For each draft question: search codebase for the answer"]
         V2["codegraph query 'keyword from the question'"]
@@ -32,6 +40,6 @@ flowchart TD
         GQ3["Edge case with multiple valid approaches not addressed anywhere"]
     end
 
-    CODEGRAPH --> VALIDATE --> BAD
+    CODEGRAPH --> SPEC_HYGIENE --> VALIDATE --> BAD
     VALIDATE --> GOOD
 ```

@@ -24,6 +24,7 @@ flowchart TD
         O2["outputs/questions.json — plain JSON array [ ... ]"]
         O3["No questions → write []"]
         O3 --> O4["⚠️ MANDATORY when writing []: also write outputs/response.md<br/>explaining WHY no questions were needed — what was<br/>investigated and what confirmed the story is fully clear"]
+        O4 --> O5["If the feature is already implemented in code and evolved beyond<br/>original ticket/comment text, include a 'Spec vs. Implementation Drift'<br/>section in outputs/response.md noting each difference for BA/QA"]
     end
 
     subgraph FORMAT["JSON Format"]

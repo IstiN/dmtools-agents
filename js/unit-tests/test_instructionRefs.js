@@ -500,6 +500,36 @@ suite('instructionRefs — pack reference integrity', function () {
             'instructions/story_questions/general_guidelines.md must not instruct putting ticket-key in codegraph context');
     });
 
+    test('R13 (gh-1537): story_questions instructions enforce scannable background bullets, quoted citations, grounded options, spec Open Questions hygiene, and Spec vs. Implementation Drift', function () {
+        var descTemplate = readText('instructions/story_questions/description_template.md') || '';
+        var guidelines = readText('instructions/story_questions/general_guidelines.md') || '';
+        var outputRules = readText('instructions/story_questions/output_rules.md') || '';
+        var questionsPrompt = readText('prompts/questions_prompt.md') || '';
+
+        assert.ok(descTemplate.indexOf('Codebase / Gap') !== -1,
+            'description_template.md must structure Background into Spec vs Codebase / Gap bullets');
+        assert.ok(descTemplate.indexOf('one decision topic per question subtask') !== -1,
+            'description_template.md must enforce one topic per question subtask');
+        assert.ok(descTemplate.indexOf('Never cite a bare inline comment ID') !== -1,
+            'description_template.md must prohibit bare numeric inline comment IDs');
+        assert.ok(descTemplate.indexOf('do **not** invent artificial alternatives') !== -1,
+            'description_template.md must prohibit artificial options when a codebase convention exists');
+        assert.ok(descTemplate.indexOf('Updated Acceptance Criteria and current UI mockups carry higher weight') !== -1,
+            'description_template.md must weight updated AC and mockups over stale Assumptions/Open Questions notes');
+
+        assert.ok(guidelines.indexOf('Ignore struck-through text') !== -1,
+            'general_guidelines.md must ignore struck-through text');
+        assert.ok(guidelines.indexOf('Spec Open Question #N') !== -1,
+            'general_guidelines.md must require citing Spec Open Question #N and not duplicating spec open questions');
+        assert.ok(guidelines.indexOf('Confirm batch limit: 96 in spec vs 30 in SamplesCountValidator') !== -1,
+            'general_guidelines.md must require contrasting spec vs codebase values in summary');
+
+        assert.ok(outputRules.indexOf('Spec vs. Implementation Drift') !== -1,
+            'output_rules.md must require Spec vs. Implementation Drift in response.md when code evolved beyond original ticket wording');
+        assert.ok(questionsPrompt.indexOf('Spec vs. Implementation Drift') !== -1,
+            'questions_prompt.md must require Spec vs. Implementation Drift in response.md when code evolved beyond original ticket wording');
+    });
+
     test('R12 (gh-1412): generated review policy, filter, and finding-registry markdown/comments contain no repo-specific gh-NNN references', function () {
         var rvStub = { censusCount: function (v) { return Number(v) || 0; }, fnv1a: function () { return 0; }, hex8: function () { return '00000000'; }, markerSafe: function (s) { return String(s || ''); }, parseMarkerComments: function () { return []; } };
         var reviewPolicy = loadModule('js/common/reviewPolicy.js', makeRequire({ './reviewVerdicts.js': rvStub }));
