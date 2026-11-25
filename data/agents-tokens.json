@@ -179,5 +179,18 @@
       "source": "reported",
       "model": "glm-5.3-flash"
     }
+  ],
+  "pr-1541": [
+    {
+      "leg": "rework",
+      "at": "2026-11-25T10:53:31Z",
+      "prompt": 994282,
+      "completion": 118425,
+      "total": 1112707,
+      "cacheRead": 37431872,
+      "requests": 234,
+      "source": "",
+      "model": "glm-5.3-flash"
+    }
   ]
 }
