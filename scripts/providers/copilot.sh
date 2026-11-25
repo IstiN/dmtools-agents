@@ -1,6 +1,138 @@
 #!/bin/bash
 # Copilot provider for run-agent.sh
 
+# split_copilot_list "a, b,c" -> prints one trimmed, non-empty item per line.
+split_copilot_list() {
+  local item
+  local items=()
+  # read -a avoids pathname expansion of patterns such as shell(git:*).
+  IFS=',' read -r -a items <<< "$1"
+  for item in "${items[@]+"${items[@]}"}"; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    [ -n "${item}" ] && printf '%s\n' "${item}"
+  done
+  return 0
+}
+
+# Returns 0 when the Copilot CLI (given as argv) supports --sandbox and the host
+# has the OS backend it needs (Seatbelt on macOS, bwrap on Linux).
+# COPILOT_SANDBOX_AVAILABLE=true|false overrides the detection.
+copilot_sandbox_available() {
+  case "${COPILOT_SANDBOX_AVAILABLE:-}" in
+    true) return 0 ;;
+    false) return 1 ;;
+  esac
+  "$@" --help 2>/dev/null | grep -q -- "--sandbox" || return 1
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) return 0 ;;
+    Linux) command -v bwrap >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Single source of truth for the Copilot CLI permission/sandbox flags used by
+# the auth probe and every run path. Arguments: the copilot command argv (used
+# only to detect --sandbox support). Sets:
+#   COPILOT_PERMISSION_ARGS - flags placed right after the copilot command
+#   COPILOT_ENV_PREFIX      - optional `env -i ...` prefix (empty by default)
+# With no COPILOT_PERMISSION_MODE/COPILOT_*_TOOLS/COPILOT_ENV_ALLOWLIST/
+# COPILOT_SANDBOX set this yields exactly (--allow-all) and an empty prefix,
+# i.e. the historical command line. Returns 1 (fail closed) on invalid settings
+# or when COPILOT_SANDBOX=required cannot be honoured.
+build_copilot_permission_args() {
+  COPILOT_PERMISSION_ARGS=()
+  COPILOT_ENV_PREFIX=()
+  local mode="${COPILOT_PERMISSION_MODE:-allow_all}"
+  local sandbox="${COPILOT_SANDBOX:-off}"
+  local item
+
+  case "${mode}" in
+    allow_all) COPILOT_PERMISSION_ARGS=(--allow-all) ;;
+    restricted) COPILOT_PERMISSION_ARGS=(--disallow-temp-dir) ;;
+    *)
+      echo "Error: COPILOT_PERMISSION_MODE must be allow_all or restricted (got '${mode}')" >&2
+      return 1
+      ;;
+  esac
+
+  while IFS= read -r item; do
+    [ -n "${item}" ] && COPILOT_PERMISSION_ARGS+=("--allow-tool=${item}")
+  done < <(split_copilot_list "${COPILOT_ALLOW_TOOLS:-}")
+  while IFS= read -r item; do
+    [ -n "${item}" ] && COPILOT_PERMISSION_ARGS+=("--deny-tool=${item}")
+  done < <(split_copilot_list "${COPILOT_DENY_TOOLS:-}")
+  local available=()
+  while IFS= read -r item; do
+    [ -n "${item}" ] && available+=("${item}")
+  done < <(split_copilot_list "${COPILOT_AVAILABLE_TOOLS:-}")
+  if [ "${#available[@]}" -gt 0 ]; then
+    COPILOT_PERMISSION_ARGS+=(--available-tools "${available[@]}")
+  fi
+
+  case "${sandbox}" in
+    off) ;;
+    auto|required)
+      local sandbox_ok=true
+      if ! copilot_sandbox_available "$@"; then
+        sandbox_ok=false
+        if [ "${sandbox}" = "required" ]; then
+          echo "Error: COPILOT_SANDBOX=required but the Copilot CLI sandbox is unavailable on this runner (CLI lacks --sandbox or host backend missing: bwrap on Linux / Seatbelt on macOS). Refusing to run without the sandbox." >&2
+          return 1
+        fi
+        echo "Warning: COPILOT_SANDBOX=auto but the sandbox is unavailable; running without it" >&2
+      fi
+      if [ "${sandbox_ok}" = "true" ] && [ -n "${COPILOT_SANDBOX_SETTINGS:-}" ]; then
+        if [ ! -f "${COPILOT_SANDBOX_SETTINGS}" ]; then
+          if [ "${sandbox}" = "required" ]; then
+            echo "Error: COPILOT_SANDBOX_SETTINGS file not found: ${COPILOT_SANDBOX_SETTINGS}" >&2
+            return 1
+          fi
+          echo "Warning: COPILOT_SANDBOX_SETTINGS file not found: ${COPILOT_SANDBOX_SETTINGS}; using the CLI's default sandbox policy" >&2
+        else
+          # The CLI reads its sandbox policy from settings.json in its home dir.
+          local copilot_settings_home="${COPILOT_HOME:-${HOME}/.copilot}"
+          mkdir -p "${copilot_settings_home}" && cp "${COPILOT_SANDBOX_SETTINGS}" "${copilot_settings_home}/settings.json" || {
+            echo "Error: cannot install COPILOT_SANDBOX_SETTINGS into ${copilot_settings_home}/settings.json" >&2
+            [ "${sandbox}" = "required" ] && return 1
+          }
+        fi
+      fi
+      [ "${sandbox_ok}" = "true" ] && COPILOT_PERMISSION_ARGS+=(--sandbox)
+      ;;
+    *)
+      echo "Error: COPILOT_SANDBOX must be off, auto or required (got '${sandbox}')" >&2
+      return 1
+      ;;
+  esac
+
+  if [ -n "${COPILOT_ENV_ALLOWLIST:-}" ]; then
+    COPILOT_ENV_PREFIX=(env -i "HOME=${HOME:-}" "PATH=${PATH:-}")
+    # COPILOT_HOME carries the session store/cache used by session restore.
+    [ -n "${COPILOT_HOME:-}" ] && COPILOT_ENV_PREFIX+=("COPILOT_HOME=${COPILOT_HOME}")
+    while IFS= read -r item; do
+      case "${item}" in
+        HOME|PATH|COPILOT_HOME) continue ;;
+      esac
+      if ! [[ "${item}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "Error: invalid name in COPILOT_ENV_ALLOWLIST: '${item}'" >&2
+        return 1
+      fi
+      if [ -n "${!item+x}" ]; then
+        COPILOT_ENV_PREFIX+=("${item}=${!item}")
+      fi
+    done < <(split_copilot_list "${COPILOT_ENV_ALLOWLIST}")
+  fi
+  return 0
+}
+
+# Prints a secret-free description of the env allowlist for the Running: log.
+describe_copilot_env_prefix() {
+  if [ "${#COPILOT_ENV_PREFIX[@]}" -gt 0 ]; then
+    echo "Copilot env allowlist active (env -i): HOME PATH${COPILOT_HOME:+ COPILOT_HOME} $(split_copilot_list "${COPILOT_ENV_ALLOWLIST:-}" | tr '\n' ' ')"
+  fi
+}
+
 run_copilot() {
   # Export COPILOT_GITHUB_TOKEN if not set but GITHUB_TOKEN is available
   if [ -z "${COPILOT_GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
@@ -25,7 +157,8 @@ run_copilot() {
       # cached credentials are working. This avoids depending on the exact wording
       # of `gh auth status` while still requiring a working Copilot session.
       local probe_output
-      probe_output=$(printf 'Reply exactly: ok' | copilot --allow-all -p "Reply exactly: ok" 2>&1 || true)
+      build_copilot_permission_args copilot || return 1
+      probe_output=$(printf 'Reply exactly: ok' | ${COPILOT_ENV_PREFIX[@]+"${COPILOT_ENV_PREFIX[@]}"} copilot "${COPILOT_PERMISSION_ARGS[@]}" -p "Reply exactly: ok" 2>&1 || true)
       if echo "$probe_output" | grep -Eq "^ok$"; then
         echo "Copilot CLI authenticated via cached credentials (no token env var needed)"
       else
@@ -57,6 +190,11 @@ run_copilot() {
     # a stale version here.
     copilot_cmd=(npx "@github/copilot@${COPILOT_VERSION:-latest}")
   fi
+
+  build_copilot_permission_args "${copilot_cmd[@]}" || return 1
+  local copilot_perm_args=("${COPILOT_PERMISSION_ARGS[@]}")
+  local copilot_env_prefix=(${COPILOT_ENV_PREFIX[@]+"${COPILOT_ENV_PREFIX[@]}"})
+  describe_copilot_env_prefix
 
   copilot_supports_flag() {
     "${copilot_cmd[@]}" --help 2>/dev/null | grep -q -- "$1"
@@ -137,9 +275,9 @@ run_copilot() {
       prompt_stdin_file="$(mktemp)"
       cleanup_prompt_stdin_file=1
       resumed_session_reread_pointer_notice "${prompt_file_for_resume}" > "${prompt_stdin_file}"
-      echo "Running: ${copilot_cmd[*]} --allow-all --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} (resume: pointing model at prompt file ${prompt_file_for_resume} instead of inlining it)"
+      echo "Running: ${copilot_cmd[*]} ${copilot_perm_args[*]} --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} (resume: pointing model at prompt file ${prompt_file_for_resume} instead of inlining it)"
       echo ""
-      "${copilot_cmd[@]}" --allow-all --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${prompt_stdin_file}" 2>&1 | tee "$log_file"
+      ${copilot_env_prefix[@]+"${copilot_env_prefix[@]}"} "${copilot_cmd[@]}" "${copilot_perm_args[@]}" --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${prompt_stdin_file}" 2>&1 | tee "$log_file"
     elif copilot_should_use_stdin_prompt; then
       if [ -f "${PROMPT_ARG}" ]; then
         prompt_stdin_file="${PROMPT_ARG}"
@@ -148,13 +286,13 @@ run_copilot() {
         printf "%s" "${PROMPT}" > "${prompt_stdin_file}"
         cleanup_prompt_stdin_file=1
       fi
-      echo "Running: ${copilot_cmd[*]} --allow-all --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
+      echo "Running: ${copilot_cmd[*]} ${copilot_perm_args[*]} --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
       echo ""
-      "${copilot_cmd[@]}" --allow-all --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${prompt_stdin_file}" 2>&1 | tee "$log_file"
+      ${copilot_env_prefix[@]+"${copilot_env_prefix[@]}"} "${copilot_cmd[@]}" "${copilot_perm_args[@]}" --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${prompt_stdin_file}" 2>&1 | tee "$log_file"
     else
-      echo "Running: ${copilot_cmd[*]} --allow-all --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} -p <inline prompt>"
+      echo "Running: ${copilot_cmd[*]} ${copilot_perm_args[*]} --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} -p <inline prompt>"
       echo ""
-      "${copilot_cmd[@]}" --allow-all --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
+      ${copilot_env_prefix[@]+"${copilot_env_prefix[@]}"} "${copilot_cmd[@]}" "${copilot_perm_args[@]}" --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
     fi
     local status=${PIPESTATUS[0]}
     if [ "${cleanup_prompt_stdin_file}" -eq 1 ] && [ -n "${prompt_stdin_file}" ]; then

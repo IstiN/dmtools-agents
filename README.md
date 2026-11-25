@@ -1182,6 +1182,53 @@ These are resolved at runtime from the project config. To fully replace all SM r
 
 ---
 
+## Copilot Provider permissions (`AI_AGENT_PROVIDER=copilot`)
+
+By default `scripts/providers/copilot.sh` runs the Copilot CLI with
+`--allow-all` and the full job environment — unchanged for existing agents.
+Agents that only read untrusted content (PR review, security review) can opt
+into a restricted mode. All settings are plain environment variables, so they
+can be set per agent through the agent JSON `params.envVariables` (the same
+mechanism used for `AI_AGENT_PROVIDER` / `CLI_ALLOWED_COMMANDS`), in
+`dmtools.env`, or in the workflow env.
+
+| Variable | Values | Effect |
+|---|---|---|
+| `COPILOT_PERMISSION_MODE` | `allow_all` (default) \| `restricted` | `restricted` drops `--allow-all`, never adds `--allow-all-paths`, adds `--disallow-temp-dir`. In non-interactive mode any tool request not allowed below is denied. |
+| `COPILOT_ALLOW_TOOLS` | comma list | one `--allow-tool=<item>` per entry, e.g. `shell(git:*),write` |
+| `COPILOT_DENY_TOOLS` | comma list | one `--deny-tool=<item>` per entry (deny wins over every allow, also in `allow_all` mode) |
+| `COPILOT_AVAILABLE_TOOLS` | comma list | `--available-tools <items...>` — only these tools are exposed to the model |
+| `COPILOT_ENV_ALLOWLIST` | comma list of env names | runs the CLI via `env -i HOME=… PATH=… [COPILOT_HOME=…] NAME=value…`; every other variable (tokens, PATs) is absent from the CLI process |
+| `COPILOT_SANDBOX` | `off` (default) \| `auto` \| `required` | adds `--sandbox` (OS sandbox for shell commands: bwrap on Linux, Seatbelt on macOS). `auto` falls back to no sandbox when unavailable; `required` fails the run (non-zero exit) instead. |
+| `COPILOT_SANDBOX_SETTINGS` | path | optional Copilot `settings.json` holding the sandbox policy; copied to `$COPILOT_HOME/settings.json` (default `~/.copilot`) before the run |
+
+The same flags are used by the cached-credentials auth probe and by all run
+paths (stdin, inline prompt, resume); loop guard, session logging and resume
+logic are identical in every mode. Invalid values fail closed.
+
+Read-only review agent example:
+
+```json
+{
+  "parent": { "path": "pr_review@latest" },
+  "params": {
+    "envVariables": {
+      "AI_AGENT_PROVIDER": "copilot",
+      "COPILOT_PERMISSION_MODE": "restricted",
+      "COPILOT_AVAILABLE_TOOLS": "view,grep,glob,create,edit",
+      "COPILOT_ALLOW_TOOLS": "write(outputs/**)",
+      "COPILOT_DENY_TOOLS": "shell,url",
+      "COPILOT_ENV_ALLOWLIST": "COPILOT_GITHUB_TOKEN,COPILOT_MODEL",
+      "COPILOT_SANDBOX": "auto"
+    }
+  }
+}
+```
+
+Tool names/patterns follow `copilot help permissions` for your CLI version.
+
+---
+
 ## Fa Provider (`AI_AGENT_PROVIDER=fa`)
 
 Runs the [Fa CLI](https://fa1.dev) — a Dart-based AI agent harness (`fa`
