@@ -11,6 +11,9 @@
  */
 
 var configLoader = require('./configLoader.js');
+// gh-1540: the review leg's in-progress carrier (ai_reviewing) — the shared
+// label constant both review actions read.
+var configModule = require('./config.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 const commentMarkup = require('./common/commentMarkup.js');
@@ -254,6 +257,53 @@ function writePrContext(ctx, prDetails, diff, discussionData) {
     console.log('Writing PR context files to:', ctx.inputFolder);
     gitOps.writePRContext(ctx.inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
     console.log('PR context files written successfully');
+}
+
+// ── gh-1540: the review in-progress carrier (ai_reviewing) ──────────────────
+
+// The linked-issue number encoded in a machine branch name ('ai/gh-77' → 77)
+// — the same whole-token shape the rework/review arms parse (the gh-0*NN
+// convention shared by mergeTrigger/mergeTrigger consumers). Null when the
+// branch names no issue.
+function branchLinkedIssueNumber(branch) {
+    var m = /(^|[^a-z0-9])gh-0*(\d+)([^0-9]|$)/i.exec(String(branch || ''));
+    return m ? parseInt(m[2], 10) : null;
+}
+
+/**
+ * gh-1540: the review phase's "in progress" carrier — the twin of
+ * ai_validating. Set at leg start on the PR and on the linked issue (the
+ * ticket when this run is issue-anchored; the branch-parsed issue for
+ * PR-anchored runs) so every review arming rule can skip while a leg is
+ * actually running and the SM's same-tick latch has a cross-tick anchor.
+ * Non-fatal end to end: a lost label degrades to the pre-gh-1540 behavior
+ * (the arming rules lose the in-flight skip, never the leg).
+ */
+function markReviewInProgress(ctx, prDetails) {
+    if (ctx.dryRun) {
+        console.log('[dryRun] Skipping ai_reviewing stamp for PR #' + prDetails.number);
+        return;
+    }
+    try {
+        ctx.scm.addLabel(prDetails.number, configModule.LABELS.AI_REVIEWING);
+        console.log('✅ Stamped ai_reviewing on PR #' + prDetails.number + ' (review leg in progress — gh-1540)');
+    } catch (e) {
+        console.warn('Failed to stamp ai_reviewing on PR #' + prDetails.number + ' (non-fatal):', e.message || e);
+    }
+    try {
+        if (ctx.noTicket) {
+            var linkedIssue = branchLinkedIssueNumber(prDetails.head && prDetails.head.ref);
+            if (linkedIssue) {
+                ctx.scm.addLabel(linkedIssue, configModule.LABELS.AI_REVIEWING);
+                console.log('✅ Stamped ai_reviewing on linked issue #' + linkedIssue + ' (branch anchor)');
+            }
+        } else {
+            ctx.tracker.addLabel(ctx.ticketKey, configModule.LABELS.AI_REVIEWING);
+            console.log('✅ Stamped ai_reviewing on ticket ' + ctx.ticketKey + ' (the arm convention: both carriers)');
+        }
+    } catch (e) {
+        console.warn('Failed to stamp ai_reviewing on the linked issue (non-fatal):', e.message || e);
+    }
 }
 
 // ── gh-1351: the review-policy run-context stamp ─────────────────────────────
@@ -564,6 +614,12 @@ function action(params) {
         }
         var prDetails = detailsOutcome.prDetails;
 
+        // gh-1540: the review leg is RUNNING from this point — stamp the
+        // in-progress carrier before any slow step (checkout, diff, pool
+        // rounds) so the window a duplicate arm can match is as short as
+        // the leg itself allows.
+        markReviewInProgress(ctx, prDetails);
+
         var branchName = extractHeadBranch(prDetails);
         checkoutPrBranch(ctx, branchName, prDetails);
 
@@ -633,6 +689,8 @@ if (typeof module !== 'undefined' && module.exports) {
         writePrContext: writePrContext,
         writeFindingRegistryContext: writeFindingRegistryContext,
         writeNewHunksContext: writeNewHunksContext,
+        branchLinkedIssueNumber: branchLinkedIssueNumber,
+        markReviewInProgress: markReviewInProgress,
         newHunksHeadPair: newHunksHeadPair,
         resolveNewHunksContext: resolveNewHunksContext,
         resolveRegistryComments: resolveRegistryComments,

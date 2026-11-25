@@ -283,6 +283,7 @@ function autoStartModuleOf(opts, record) {
  * asserts on them, the real pure modules everywhere else. */
 function prRequireMapOf(opts, record, globalMocks, actionMocks) {
     return {
+        './config.js': configModule,
         './configLoader.js': prConfigLoader(opts, record),
         './common/githubHelpers.js': Object.assign(prGhMocks(opts, record), opts.gh || {}),
         './common/gitOps.js': Object.assign(prGitOpsMocks(opts, record), opts.gitOps || {}),
@@ -703,11 +704,12 @@ test('ticket-anchored: assembles PR context, posts review-started comment, retur
     assert.deepEqual(rec.ghCalls[3], { fn: 'detectFailedChecks', headSha: 'abc123def',
         inputFolder: 'input/TS-42', jenkinsBasePath: undefined,
         diffText: 'diff --git a/x b/x' });
-    // One tracker comment: the "review started" notice.
-    assert.equal(rec.comments.length, 1);
-    assert.equal(rec.comments[0].tool, 'jira_post_comment');
-    assert.equal(rec.comments[0].args.key, 'TS-42');
-    var comment = rec.comments[0].args.comment;
+    // One tracker comment: the "review started" notice (the gh-1540
+    // ai_reviewing stamp rides the same record as its own jira_add_label
+    // entry — filter the comment stream for the notice).
+    var notice = rec.comments.filter(function(c) { return c.tool === 'jira_post_comment'; });
+    assert.equal(notice.length, 1);
+    var comment = notice[0].args.comment;
     assert.contains(comment, 'h3. 🔍 Automated PR Review Started');
     assert.contains(comment, '*Pull Request*: [PR #42|https://example.com/pull/42]');
     assert.contains(comment, '*Branch*: {code}ai/TS-42{code}');
@@ -730,7 +732,8 @@ test('failed CI checks are rendered as a jira panel with one line per check', fu
     var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
 
     assert.equal(result.success, true);
-    var comment = rec.comments[0].args.comment;
+    var ciNotice = rec.comments.filter(function(c) { return c.tool === 'jira_post_comment'; })[0];
+    var comment = ciNotice.args.comment;
     assert.contains(comment, '*CI checks failing* — 2 check(s) did not pass');
     assert.contains(comment, '{panel:bgColor=#FFEBE6|borderColor=#DE350B}');
     assert.contains(comment, '* {code}build{code}');
@@ -981,7 +984,8 @@ test('missing head branch: checkout skipped, diff head null, branch unknown in c
     assert.ok(rec.gitOps.every(function(c) { return c.fn !== 'checkoutPRBranch'; }));
     assert.equal(rec.ghCalls[3].fn, 'detectFailedChecks');
     assert.equal(rec.ghCalls[3].headSha, null);
-    var comment = rec.comments[0].args.comment;
+    var branchNotice = rec.comments.filter(function(c) { return c.tool === 'jira_post_comment'; })[0];
+    var comment = branchNotice.args.comment;
     assert.contains(comment, '*Branch*: {code}unknown{code}');
 });
 
@@ -1432,5 +1436,93 @@ suite('preparePRForReview — gh-1471 reviewer-pool in-job round', function() {
         assert.ok(String(threw.message).indexOf('reviewPolicy.required') !== -1,
             'the error names the gate key: ' + (threw && threw.message));
         assert.equal(run.record.cliCalls.length, 0, 'nothing dispatched on a misconfigured gate');
+    });
+});
+
+// ── gh-1540: the review leg's in-progress carrier (ai_reviewing) ─────────────
+// The review phase had no "running" state carrier: arming rules could match
+// and dispatch a second review leg while one was in flight (live PR #1536).
+// The leg stamps ai_reviewing on the PR (+ the linked issue — the arm
+// convention) at start; the post action removes it at verdict time. The
+// stamp is non-fatal and dry-run-safe.
+
+suite('preparePRForReview — gh-1540 review in-progress carrier', function() {
+
+    function carrierLoad(opts) {
+        opts = opts || {};
+        var rec = opts.record || prRecorder();
+        rec.scmLabels = [];
+        var loaded = prLoad({
+            record: rec,
+            prDetails: opts.prDetails,
+            config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' } },
+            scm: {
+                addLabel: function(prId, label) {
+                    rec.scmLabels.push({ prId: prId, label: label });
+                    if (opts.scmLabelError) throw opts.scmLabelError;
+                },
+                removeLabel: function(prId, label) { rec.scmLabels.push({ prId: prId, label: label, removed: true }); }
+            }
+        });
+        return { loaded: loaded.module, rec: rec };
+    }
+
+    test('ticket-anchored leg stamps ai_reviewing on the PR and the ticket', function() {
+        var run = carrierLoad();
+        var result = run.loaded.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+
+        assert.equal(result.success, true, 'the leg proceeds after the stamp');
+        assert.deepEqual(run.rec.scmLabels, [{ prId: 42, label: 'ai_reviewing' }],
+            'the PR carries the in-progress carrier');
+        var ticketLabels = run.rec.comments.filter(function(c) { return c.tool === 'jira_add_label'; });
+        assert.deepEqual(ticketLabels.map(function(c) { return c.args.key; }), ['TS-42'],
+            'the linked issue (the ticket) carries it too — the arm convention');
+        assert.deepEqual(ticketLabels.map(function(c) { return c.args.label; }), ['ai_reviewing']);
+    });
+
+    test('PR-anchored leg resolves the linked issue from the branch (ai/gh-77)', function() {
+        var run = carrierLoad({ prDetails: {
+            number: 33, html_url: 'https://example.com/pull/33',
+            head: { ref: 'ai/gh-77', sha: 'abc123def' }, base: { ref: 'main' }, changed_files: 3
+        } });
+        var result = run.loaded.action({ inputFolderPath: 'input/pr-33',
+            jobParams: { customParams: { trackerProvider: 'jira' } } });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(run.rec.scmLabels, [
+            { prId: 33, label: 'ai_reviewing' },
+            { prId: 77, label: 'ai_reviewing' }
+        ], 'the PR and the branch-linked issue both carry the carrier');
+        var ticketLabels = run.rec.comments.filter(function(c) { return c.tool === 'jira_add_label'; });
+        assert.equal(ticketLabels.length, 0, 'PR-anchored runs have no ticket — the tracker side stays silent');
+    });
+
+    test('a PR without a gh-N branch stamps the PR only', function() {
+        var run = carrierLoad();
+        var result = run.loaded.action({ inputFolderPath: 'input/pr-33',
+            jobParams: { customParams: { trackerProvider: 'jira' } } });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(run.rec.scmLabels.map(function(l) { return l.prId; }), [33],
+            'no resolvable linked issue — no second stamp');
+    });
+
+    test('a throwing label write is non-fatal', function() {
+        var run = carrierLoad({ scmLabelError: new Error('label api down') });
+        var result = run.loaded.action({ inputFolderPath: 'input/TS-42', jobParams: { customParams: { trackerProvider: 'jira' } } });
+
+        assert.equal(result.success, true, 'a lost carrier degrades to the pre-gh-1540 behavior');
+        assert.equal(run.rec.comments.filter(function(c) { return c.tool === 'jira_add_label'; }).length, 1,
+            'the tracker-side stamp still lands');
+    });
+
+    test('dry run stamps nothing', function() {
+        var run = carrierLoad();
+        run.loaded.action({ inputFolderPath: 'input/TS-42',
+            jobParams: { customParams: { trackerProvider: 'jira' }, dryRun: true } });
+
+        assert.equal(run.rec.scmLabels.length, 0, 'no scm label writes in dry run');
+        assert.equal(run.rec.comments.filter(function(c) { return c.tool === 'jira_add_label'; }).length, 0,
+            'no tracker label writes in dry run');
     });
 });
