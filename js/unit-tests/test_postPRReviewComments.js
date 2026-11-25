@@ -1795,7 +1795,9 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
             'jira.postComment',          // ticket review summary
             'jira.addLabel',             // pr_approved on the ticket
             'jira.addLabel',             // ai_pr_reviewed on the ticket
+            'jira.removeLabel',          // gh-1540: ai_reviewing off the ticket
             'scm.addLabel',              // ai_pr_reviewed on the PR (#750)
+            'scm.removeLabel',           // gh-1540: ai_reviewing off the PR
             'jira.removeLabel',          // WIP label
             'autoStart.triggerSmIfIdle', // approved SM merge fallback
             'tokenUsage'
@@ -2393,8 +2395,11 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         );
         assert.ok(h.opsOf('scm.removeLabel').some(function(o) { return o.number === 42 && o.label === 'agent:review'; }),
             'the on-demand review trigger is consumed');
+        assert.ok(h.opsOf('scm.removeLabel').some(function(o) { return o.number === 42 && o.label === 'ai_reviewing'; }),
+            'gh-1540: the in-progress carrier comes off the PR at verdict time');
         assert.equal(h.opsOf('jira.postComment').length, 0, 'PR-anchored runs skip the ticket comment');
-        assert.equal(h.opsOf('github_get_pr').length, 1, 'only the verdict-record head probe runs');
+        // gh-1540: verdict-record head probe + the carrier clear's linked-issue probe.
+        assert.equal(h.opsOf('github_get_pr').length, 2, 'the verdict-record head probe + the linked-issue probe run');
         assert.equal(h.opsOf('jira.addLabel').filter(function(o) { return o.label === 'agent:rework'; }).length, 0,
             'external author → no linked-issue rework re-arm');
     });
@@ -3482,9 +3487,12 @@ suite('postPRReviewComments — gh-1287 cross-anchor label stripping on PR-ancho
         var pr = { number: 1940, author: 'IstiN', branch: 'ai/gh-1931' };
         var repoInfo = { owner: 'IstiN', repo: 'fa' };
 
-        // Non-approved PR-anchored review: strips agent:review from PR and linked issue, adds agent:rework to linked issue
+        // Non-approved PR-anchored review: strips agent:review from PR and linked issue, adds agent:rework to linked issue.
+        // gh-1540: the in-progress carrier clear (ai_reviewing on both carriers) rides the same verdict.
         mod.finishPRAnchoredReview(ctx, pr, repoInfo, false, 'REQUEST_CHANGES');
         assert.deepEqual(removed, [
+            { num: 1940, label: 'ai_reviewing' },
+            { num: 1931, label: 'ai_reviewing' },
             { num: 1940, label: 'agent:review' },
             { num: 1931, label: 'agent:review' }
         ]);
@@ -3495,6 +3503,8 @@ suite('postPRReviewComments — gh-1287 cross-anchor label stripping on PR-ancho
         added.length = 0;
         mod.finishPRAnchoredReview(ctx, pr, repoInfo, true, 'APPROVE');
         assert.deepEqual(removed, [
+            { num: 1940, label: 'ai_reviewing' },
+            { num: 1931, label: 'ai_reviewing' },
             { num: 1940, label: 'agent:review' },
             { num: 1931, label: 'agent:review' },
             { num: 1931, label: 'agent:rework' }
