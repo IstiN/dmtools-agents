@@ -41,9 +41,40 @@ suite('ai-teammate.yml.template — run-name carries the effective anchor', func
             'issue is no longer a required number — PR-anchored dispatches send an empty issue');
     });
 
-    test('concurrency group keeps PR-anchored runs per-PR', function () {
-        assert.ok(tpl.indexOf("format('pr-{0}', github.event.inputs.pr) }}") !== -1,
-            'empty issue falls back to pr-<N> in the concurrency group — PR-anchored runs must not share one global group');
+    test('concurrency: dispatch legs serialize per BRANCH, event runs stay per-issue (gh-1540)', function () {
+        // gh-1540 (live PR #1536): the dispatch-path group fell back to the
+        // anchor inputs — 'ai-teammate-<issue>' vs 'ai-teammate-pr-<n>' —
+        // so two lanes arming the same head in one tick ran PARALLEL until
+        // the slower posted a verdict on the merged PR. The dispatch path
+        // keys on the ITEM BRANCH the SM passes (inputs.branch) — same head
+        // = one group (two lanes arming it still collide), while unrelated
+        // branches and branch-less lanes keep their own groups. The #544
+        // guarantee returns: unrelated PRs NEVER share one global group.
+        // (PR #1541 rework: the per-ref keying collapsed every default-ref
+        // lane — fork reroutes, review-external-once, dev-on-assignment,
+        // manual dispatches — into the single refs/heads/main group.)
+        assert.ok(tpl.indexOf("github.event.inputs.branch ||") !== -1,
+            'the dispatch path keys the group on the item branch (inputs.branch) — same head = one queue');
+        assert.ok(tpl.indexOf("(github.event.inputs.pr && format('pr-{0}', github.event.inputs.pr))") !== -1,
+            'branch-less PR-anchored dispatches fall back to their own pr-<N> group (#544: unrelated PRs do not share a group)');
+        assert.ok(tpl.indexOf('|| github.run_id') !== -1,
+            'manual dispatches with no inputs fall back to a unique per-run group — never a shared global queue');
+        assert.ok(tpl.indexOf("github.event_name == 'issues' &&") !== -1,
+            'the event path is selected by event_name, not by input presence');
+        assert.ok(tpl.indexOf("format('ai-teammate-issue-{0}', github.event.issue.number)") !== -1,
+            'the issues-event path keeps the template per-issue group (same key a branch-less dispatch resolves to)');
+        assert.ok(tpl.indexOf("github.ref") === -1 || tpl.indexOf("format('ai-teammate-ref-{0}', github.ref)") === -1,
+            'the per-ref group is gone — refs/heads/main collapsed unrelated default-ref lanes');
+        var cipIdx = tpl.indexOf('cancel-in-progress:');
+        assert.ok(cipIdx !== -1 && tpl.indexOf('cancel-in-progress: false') === cipIdx,
+            'a duplicate leg queues behind the running one (cancel-in-progress: false)');
+    });
+
+    test('the dispatch contract declares the branch input (gh-1540 rework: the SM passes the item branch)', function () {
+        assert.ok(/branch:\s*\n\s+description:/.test(tpl),
+            'the branch input is declared so the SM-passed item branch reaches the group expression');
+        assert.ok(tpl.indexOf("default: ''") !== -1,
+            'the branch input defaults to empty — branch-less lanes fall back to the issue/pr anchors');
     });
 });
 

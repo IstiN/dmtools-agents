@@ -399,6 +399,7 @@ function buildTickOrchestratorDeps() {
         tickMergeReservationReleased = false; tickMergeSlotSpent = null; tickMergeSlotAccounted = false; tickL1CacheDropped = false;
         tickReposSeen = {}; tickMovedPrs = {}; tickFreshResets = {}; tickParkedRecorded = {}; tickWorkflowEscalations = {}; terminalPrMemo = {};
         tickReworkLatch = null; tickDeadZone = null; syncMemo = { repo: null, at: 0 };
+        workflowDispatchModule.resetInTickDispatchLatch();
         if (DRY) console.log('🧪 DRY-RUN mode — no workflows will be triggered, no transitions or labels applied');
         projectConfig = workflowDispatchModule.applyJobParamsScm(configLoader.loadProjectConfig(p), p);
         smForge = workflowDispatchModule.resolveSmForge(projectConfig);

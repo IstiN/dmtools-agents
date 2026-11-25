@@ -531,6 +531,7 @@
           "inputs": {
             "issue": "{issueNumber}",
             "leg": "rework",
+            "branch": "{branch}",
             "reason": "sm: agent:rework (red CI or review CHANGES)"
           },
           "limit": 1,
@@ -549,6 +550,7 @@
           "inputs": {
             "issue": "",
             "leg": "rework",
+            "branch": "{branch}",
             "reason": "sm: agent:rework label on the PR (manual rework request)",
             "pr": "{prNumber}"
           },
@@ -631,11 +633,13 @@
               "ai_developed"
             ],
             "notLabels": [
-              "agent:rework"
+              "agent:rework",
+              "ai_reviewing"
             ],
             "notPrLabels": [
               "ai_pr_reviewed",
-              "pr_approved"
+              "pr_approved",
+              "ai_reviewing"
             ],
             "prLabels": [
               "ai_validated"
@@ -645,6 +649,7 @@
           "inputs": {
             "issue": "{issueNumber}",
             "leg": "review",
+            "branch": "{branch}",
             "reason": "sm: green PR awaits review"
           },
           "limit": 10,
@@ -658,7 +663,8 @@
             "notLabels": [
               "ai_pr_reviewed",
               "agent:review",
-              "pr_approved"
+              "pr_approved",
+              "ai_reviewing"
             ],
             "checks": "green",
             "draft": false,
@@ -686,7 +692,8 @@
               "ai_pr_reviewed",
               "pr_approved",
               "agent:review",
-              "ai_validating"
+              "ai_validating",
+              "ai_reviewing"
             ],
             "checks": [
               "green",
@@ -699,6 +706,7 @@
           "inputs": {
             "issue": "",
             "leg": "review",
+            "branch": "{branch}",
             "reason": "sm: machine PR validated but issue loop never armed a review - one-time review",
             "pr": "{prNumber}"
           },
@@ -805,12 +813,16 @@
             "type": "pr",
             "labels": [
               "agent:review"
+            ],
+            "notLabels": [
+              "ai_reviewing"
             ]
           },
           "workflowFile": "ai-teammate.yml",
           "inputs": {
             "issue": "",
             "leg": "review",
+            "branch": "{branch}",
             "reason": "sm: agent:review label on PR",
             "pr": "{prNumber}"
           },
@@ -826,11 +838,13 @@
               "agent:review"
             ],
             "notLabels": [
-              "agent:rework"
+              "agent:rework",
+              "ai_reviewing"
             ],
             "notPrLabels": [
               "agent:review",
-              "pr_approved"
+              "pr_approved",
+              "ai_reviewing"
             ],
             "prState": "OPEN",
             "draft": false
@@ -839,6 +853,7 @@
           "inputs": {
             "issue": "{issueNumber}",
             "leg": "review",
+            "branch": "{branch}",
             "reason": "sm: agent:review label on issue"
           },
           "limit": 1,

@@ -96,13 +96,24 @@ on:
         required: false
         type: string
         default: ''
+      branch:
+        description: 'gh-1540: the item branch the SM dispatched against — keys the concurrency group per branch (same head = one queue). DECLARED because GitHub 422s undeclared dispatch inputs.'
+        required: false
+        type: string
+        default: ''
 
 concurrency:
-  # PR-anchored dispatches (#544/#687) carry no issue — fall back to the pr
-  # input so each PR keeps its OWN group ('ai-teammate-issue-pr-266');
-  # without it every PR-anchored run shares the empty group and serializes
-  # across unrelated PRs.
-  group: ai-teammate-issue-${{ github.event.issue.number || github.event.inputs.issue || format('pr-{0}', github.event.inputs.pr) }}
+  # gh-1540: the dispatch path keys on the ITEM BRANCH the SM passes
+  # (inputs.branch) — same head = one group, so two lanes arming the same
+  # head in one tick still serialize (a duplicate queues, cancel-in-progress
+  # stays false). The first cut keyed on github.ref, which collapsed every
+  # default-ref lane (fork reroutes, review-external-once, dev-on-assignment,
+  # manual dispatches) into the single refs/heads/main group; branch-first
+  # keying restores the #544 guarantee: branch-less lanes fall back to their
+  # issue anchor, PR-anchored legs to their own pr-<N> group, and manual
+  # no-input dispatches to a unique per-run group. The issues-event path
+  # keeps its per-issue key.
+  group: ${{ github.event_name == 'issues' && format('ai-teammate-issue-{0}', github.event.issue.number) || format('ai-teammate-{0}', github.event.inputs.branch || github.event.inputs.issue || (github.event.inputs.pr && format('pr-{0}', github.event.inputs.pr)) || github.run_id) }}
   cancel-in-progress: false
 
 permissions:

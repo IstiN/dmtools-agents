@@ -6,6 +6,24 @@
  * Uses: configModule, configLoaderModule, loadModule(), makeRequire(), assert, test(), suite()
  */
 
+// Hermetic DEFAULT_TRACKER (the test_buildEncodedConfig pattern): the
+// deployment-level env var leaks through the REAL Java bridge on the dmtools
+// host (java.lang.System.getenv) and flips the tracker layer to the github
+// provider, whose jira_* recording globals these suites never mock (rule
+// labels, targetStatus moves, tracker banners all record through jira_*).
+// The shim answers null for DEFAULT_TRACKER — the tracker layer falls through
+// to config/customParams (jira) — and defers every other name to the real
+// bridge. File-scoped for isolated runs; in run_all the same shim semantics
+// already come from test_buildEncodedConfig.js.
+var __scope__ = typeof globalThis !== 'undefined' ? globalThis : (typeof global !== 'undefined' ? global : this);
+var __realJava__ = __scope__ ? __scope__.java : undefined;
+__scope__.java = {
+    lang: { System: { getenv: function(name) {
+        if (name === 'DEFAULT_TRACKER') { return null; }
+        try { return __realJava__.lang.System.getenv(name); } catch (eEnv) { return null; }
+    } } }
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // gh-1249: the REAL smProvider module, loaded once, for the shared pure
@@ -140,6 +158,10 @@ var SM_EXTRACTED_FILES = [
     'parkAndActorProbes.js',
     'checkRunCures.js',
     'workflowRunTracking.js',
+    // gh-1540 rework: the dispatch-input builder split — loaded BEFORE
+    // workflowDispatch.js so its hoisted sibling require resolves in the
+    // sandbox require map.
+    'dispatchInputs.js',
     'workflowDispatch.js',
     'verdictAndFailState.js',
     'reworkAndVerdicts.js',
@@ -11442,6 +11464,256 @@ suite('smAgent: duplicate rework dispatch — one leg wins (gh-715)', function (
 
         assert.equal(sm.capturedTriggers.length, 1, 'unrelated active run — the dispatch proceeds');
         assert.equal(sm.capturedPrLabelRemoves.length, 1, 'label consumed on the real dispatch');
+    });
+});
+
+// ─── gh-1540: the review phase's in-progress carrier (`ai_reviewing`) and
+// the same-tick dispatch latch. Live 2026-11-23 (PR #1536 / gh-1534): two
+// review arming rules matched the same world in ONE SM tick 4 seconds apart
+// (review-after-dev issue-anchored + review-machine-unlinked PR-anchored —
+// no rule checks any in-flight review state, and `agent:review` does not
+// exist on the rework-close path), and the two runs went parallel (different
+// concurrency groups) until the slower one posted a full verdict on the
+// merged PR. Fix, three layers pinned here:
+//   1. shape — every review ARming rule excludes `ai_reviewing` on both
+//      anchors (issue-carrier rules on notLabels+notPrLabels, PR-carrier
+//      rules on notLabels), in BOTH forge configs;
+//   2. matcher — a carrier carrying `ai_reviewing` matches none of the five;
+//   3. latch — two rules matching the same world in one tick dispatch exactly
+//      one leg (branch::leg in-memory set; reset at the next tick).
+suite('smAgent: review in-progress carrier + in-tick dispatch latch (gh-1540)', function () {
+
+    function deployedRulesOf(file, ids) {
+        var cfg = JSON.parse(file_read({ path: file }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        return ids.map(function (id) {
+            assert.ok(byId[id], file + ' rule ' + id + ' exists');
+            return byId[id];
+        });
+    }
+
+    var REVIEW_ARMING_RULE_IDS = ['review-after-dev', 'review-machine-unlinked',
+        'review-external-once', 'review-on-label', 'review-on-issue-label'];
+
+    // AC4 (shape, both anchors, both forges): every review arming rule skips
+    // while `ai_reviewing` is present. Issue-carrier rules read the carrier
+    // on BOTH sides (the leg sets it on the issue and on the linked PR —
+    // the arm convention); PR-carrier rules read it on notLabels.
+    ['sm_github.json', 'sm_gitlab.json'].forEach(function (file) {
+        test(file + ': all five review arming rules exclude ai_reviewing (both anchors)', function () {
+            var rules = deployedRulesOf(file, REVIEW_ARMING_RULE_IDS);
+            var byId = {};
+            rules.forEach(function (r) { byId[r.id] = r; });
+
+            ['review-after-dev', 'review-on-issue-label'].forEach(function (id) {
+                assert.equal(byId[id].query.type, 'issue', id + ' stays issue-anchored');
+                assert.ok((byId[id].query.notLabels || []).indexOf('ai_reviewing') !== -1,
+                    id + ' excludes ai_reviewing on the ISSUE carrier');
+                assert.ok((byId[id].query.notPrLabels || []).indexOf('ai_reviewing') !== -1,
+                    id + ' excludes ai_reviewing on the linked PR');
+            });
+            ['review-machine-unlinked', 'review-external-once', 'review-on-label'].forEach(function (id) {
+                assert.equal(byId[id].query.type, 'pr', id + ' stays PR-anchored');
+                assert.ok((byId[id].query.notLabels || []).indexOf('ai_reviewing') !== -1,
+                    id + ' excludes ai_reviewing on the PR carrier');
+            });
+        });
+    });
+
+    function gh1540Params(rules, extra) {
+        var p = { jobParams: { owner: 'acme', repo: 'widgets',
+            machineAuthor: 'ai-teammate', rules: rules } };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) p.jobParams[k] = extra[k]; } }
+        return p;
+    }
+
+    function carrierFileMap() {
+        return { '../.dmtools/config.js': 'module.exports = { repository: { owner: "acme", repo: "widgets" } };' };
+    }
+
+    // The incident world, one leg in: issue ai_developed + PR ai_validated,
+    // machine-authored, checks 'none' (silent-updated head — the exact
+    // rework-close shape the incident started from), NOTHING in flight.
+    function reworkCloseWorld(reviewing) {
+        var prLabels = ['ai_validated'].concat(reviewing ? ['ai_reviewing'] : []);
+        var issueLabels = ['ai_developed'].concat(reviewing ? ['ai_reviewing'] : []);
+        return [
+            { key: 'gh-1534', labels: issueLabels, issueNumber: 1534, prNumber: 1536,
+              branch: 'ai/gh-1534', draft: false,
+              pr: { number: 1536, state: 'OPEN', checks: 'none', labels: prLabels } },
+            { key: 'pr-1536', labels: prLabels, issueNumber: 1534, prNumber: 1536,
+              branch: 'ai/gh-1534', author: 'ai-teammate', draft: false,
+              pr: { number: 1536, state: 'OPEN', checks: 'none' } }
+        ];
+    }
+
+    test('AC2: two arming rules matching the same world in one tick dispatch exactly ONE leg', function () {
+        var sm = makeSmAgent({
+            captureConsole: true,
+            fileMap: carrierFileMap(),
+            github: { items: reworkCloseWorld(false) }
+        });
+
+        sm.action(gh1540Params(deployedRulesOf('sm_github.json',
+            ['review-after-dev', 'review-machine-unlinked'])));
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'the in-tick latch fires — one review leg per branch per tick (AC1/AC2)');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.leg, 'review', 'the dispatched leg is the review leg');
+        assert.equal(sm.capturedTriggers[0].ref, 'ai/gh-1534', 'the leg runs on the PR head');
+        assert.ok((sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('in-tick dispatch latch') !== -1;
+        }), 'the suppressed lane names the latch in the tick log');
+    });
+
+    // AC4 (functional matcher — a carrier carrying ai_reviewing matches none
+    // of the five arming rules) is pinned against the REAL matchesGuards in
+    // test_smGithubSource.js ('review in-progress carrier skips'); this
+    // harness serves items raw, so a matcher assertion here would prove
+    // nothing about the deployed guard chain.
+
+    test('the latch resets between ticks — each tick still dispatches its one leg', function () {
+        var sm = makeSmAgent({
+            fileMap: carrierFileMap(),
+            github: { items: reworkCloseWorld(false) }
+        });
+        var params = gh1540Params(deployedRulesOf('sm_github.json',
+            ['review-after-dev', 'review-machine-unlinked']));
+
+        sm.action(params);
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 2,
+            'one leg PER TICK — the latch is per-tick state, never a permanent mute');
+    });
+
+    test('different legs on the same branch still both dispatch (the latch keys branch::leg)', function () {
+        var rules = deployedRulesOf('sm_github.json', ['review-on-label', 'rework-on-label']);
+        var sm = makeSmAgent({
+            fileMap: carrierFileMap(),
+            github: { items: [{ key: 'pr-1227', labels: ['agent:review', 'agent:rework'],
+                issueNumber: 1226, prNumber: 1227, branch: 'ai/gh-1226',
+                author: 'ai-teammate', draft: false, pr: { number: 1227, state: 'OPEN' } }] }
+        });
+
+        sm.action(gh1540Params(rules));
+
+        assert.equal(sm.capturedTriggers.length, 2,
+            'review and rework are different legs — the latch never merges them');
+    });
+
+    test('no-branch carriers bypass the latch (one rule, several tickets, one tick)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } },
+                { key: 'P-2', fields: { labels: [] } }
+            ]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'")
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 2,
+            'jira-carrier dispatches share no head — the latch must stay inert');
+    });
+
+    test('dry-run dispatches do not arm the latch', function () {
+        var sm = makeSmAgent({
+            captureConsole: true,
+            fileMap: carrierFileMap(),
+            github: { items: reworkCloseWorld(false).slice(1) }
+        });
+        var params = gh1540Params(deployedRulesOf('sm_github.json',
+            ['review-after-dev', 'review-machine-unlinked']), { dryRun: true });
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'dry mode dispatches nothing real (existing contract)');
+        var dryLines = (sm.capturedLogs || []).filter(function (l) {
+            return l.indexOf('[dry] ▶') !== -1;
+        });
+        assert.equal(dryLines.length, 2, 'both rules log their dry dispatch (nothing recorded)');
+    });
+});
+
+// ─── gh-1540 rework: the dispatch-input builder's anchor semantics, pinned
+// at unit level. The gh-1540 `{branch}` placeholder grew
+// buildWorkflowDispatchInputs past the CRAP ≤ 8 ratchet (quality CI: NEW > 8,
+// CC 9 at 92.9% — the one uncovered statement being the anchor.ok=false
+// skip). The builder is split into cyclomatic-lean helpers; these tests pin
+// the behaviors the split must preserve, including the previously uncovered
+// skip path.
+suite('smAgent: dispatch-input builder anchor semantics (gh-1540 rework)', function () {
+
+    function dispatchInputsParams(rules) {
+        return { jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            machineAuthor: 'ai-teammate', rules: rules } };
+    }
+
+    function inputsFileMap() {
+        return { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' };
+    }
+
+    test('a rule needing {issueNumber} with no issue and no PR anchor dispatches NOTHING (anchor.ok=false skip)', function () {
+        // The branch the coverage hole sat on: resolveRuleInputsAnchor refuses
+        // the lane (needs {issueNumber} but the item links no issue and has
+        // no PR anchor — #544) and buildWorkflowDispatchInputs returns null.
+        // No trigger attempt, no label consumed — the next tick re-evaluates.
+        var sm = makeSmAgent({
+            captureConsole: true,
+            fileMap: inputsFileMap(),
+            github: { items: [{ key: 'gh-99', labels: ['agent:rework'],
+                issueNumber: null, prNumber: null, branch: 'ai/gh-99' }] }
+        });
+
+        sm.action(dispatchInputsParams([{
+            description: 'rework needs the issue anchor',
+            source: 'github',
+            query: { type: 'issue', labels: ['agent:rework'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '{issueNumber}', leg: 'rework', reason: 'sm: test' },
+            limit: 1,
+            id: 'rework-needs-issue'
+        }]));
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'no dispatch without a resolvable issue anchor');
+        assert.ok((sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('needs {issueNumber} but the item links no issue and has no PR anchor') !== -1;
+        }), 'the skip names the missing-anchor reason in the tick log');
+    });
+
+    test('a rule without {issueNumber} expands {key} to the ticket key and leaves issue empty (issueVal=ticketKey fallback)', function () {
+        // needsIssue=false + issueNumber=null → issueVal falls back to the
+        // ticket key; an issue:'' input must stay empty (never silently
+        // become the ticket key), and {key}/{branch} expand normally.
+        var sm = makeSmAgent({
+            fileMap: inputsFileMap(),
+            github: { items: [{ key: 'gh-99', labels: ['agent:dev'],
+                issueNumber: null, prNumber: null, branch: 'ai/gh-99' }] }
+        });
+
+        sm.action(dispatchInputsParams([{
+            description: 'dev leg carries the ticket key, not an issue anchor',
+            source: 'github',
+            query: { type: 'issue', labels: ['agent:dev'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '', leg: 'dev', reason: 'sm: test', key: '{key}', branch: '{branch}' },
+            limit: 1,
+            id: 'dev-keyed'
+        }]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'dispatched — no issue anchor needed');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.key, 'gh-99', '{key} expands to the ticket key');
+        assert.equal(inputs.issue, '', 'issue stays empty (never the ticket key)');
+        assert.equal(inputs.branch, 'ai/gh-99', '{branch} expands to the item branch (gh-1540)');
     });
 });
 

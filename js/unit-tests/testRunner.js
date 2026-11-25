@@ -262,6 +262,11 @@ var REAL_COMMON_MODULES = {
     reviewPoolLegSetup: 'js/common/reviewPoolLegSetup.js',
     reviewPoolPost: 'js/common/reviewPoolPost.js',
     gitlabTracker: 'js/common/gitlabTracker.js',
+    // gh-1540: the review in-progress carrier helpers (stamp/clear + the
+    // pure PR→linked-issue parse) — pure end-to-end: reviewCarrier → config
+    // (static label constants, no requires); suites resolve it for real.
+    reviewCarrier: 'js/common/reviewCarrier.js',
+    config: 'js/config.js',
     wipSquash: 'js/common/wipSquash.js',
     ciClassification: 'js/common/ciClassification.js',
     // gh-1493: the terminal-signal delivery helpers are pure (no requires);

@@ -83,6 +83,11 @@ on:
         required: false
         type: string
         default: ''
+      branch:
+        description: 'gh-1540: the item branch the SM dispatched against — keys the concurrency group per branch (same head = one queue)'
+        required: false
+        type: string
+        default: ''
       checkout_ref:
         description: 'gh-1075/gh-1096: refs/pull/<N>/head for fork-PR legs (empty = dispatch ref)'
         required: false
@@ -102,7 +107,18 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-teammate-${{ github.event.issue.number || github.event.inputs.issue || (github.event.inputs.pr && format('pr-{0}', github.event.inputs.pr)) || github.run_id }}
+  # gh-1540: the dispatch path keys on the ITEM BRANCH the SM passes
+  # (inputs.branch) — same head = one group, so two lanes arming the same
+  # head in one tick still serialize (a duplicate queues, cancel-in-progress
+  # stays false). The first cut keyed on github.ref, which collapsed every
+  # default-ref lane (fork reroutes, review-external-once, dev-on-assignment,
+  # manual dispatches) into the single refs/heads/main group; branch-first
+  # keying restores the #544 guarantee: branch-less lanes fall back to their
+  # issue anchor, PR-anchored legs to their own pr-<N> group, and manual
+  # no-input dispatches to a unique per-run group. The issues-event path
+  # keeps its per-issue key — the same key a branch-less issue dispatch
+  # resolves to, so the cross-trigger pair serializes again.
+  group: ${{ github.event_name == 'issues' && format('ai-teammate-{0}', github.event.issue.number) || format('ai-teammate-{0}', github.event.inputs.branch || github.event.inputs.issue || (github.event.inputs.pr && format('pr-{0}', github.event.inputs.pr)) || github.run_id) }}
   cancel-in-progress: false
 
 jobs:

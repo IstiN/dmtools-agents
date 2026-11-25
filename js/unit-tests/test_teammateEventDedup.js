@@ -623,9 +623,25 @@ suite('ai-teammate.yml — the dedup gate is wired into the stub', function () {
             'the probe passes the wall clock into the decision');
     });
 
-    test('UT-wf-1: concurrency.group isolates PR-anchored runs and probe passes INPUT_PR + INPUT_LEG', function () {
-        assert.ok(yml.indexOf("format('pr-{0}', github.event.inputs.pr)") !== -1,
-            'concurrency group falls back to pr-<N> when issue is empty');
+    test('UT-wf-1: concurrency.group serializes dispatch runs per ITEM BRANCH and probe passes INPUT_PR + INPUT_LEG', function () {
+        // gh-1540: the anchor-input fallback minted a SECOND group
+        // ('ai-teammate-<issue>' vs 'ai-teammate-pr-<n>') for a head its
+        // issue-anchored twin already covered — both lanes ran parallel.
+        // The first fix keyed on github.ref; the #1541 rework keys on the
+        // ITEM BRANCH the SM passes (inputs.branch): same head = one queue,
+        // while fork reroutes, review-external-once, dev-on-assignment and
+        // manual dispatches (all default-ref lanes) keep their own
+        // issue/pr/run groups instead of collapsing into refs/heads/main.
+        assert.ok(yml.indexOf('github.event.inputs.branch ||') !== -1,
+            'concurrency group keys dispatch runs on the item branch (inputs.branch)');
+        assert.ok(yml.indexOf("(github.event.inputs.pr && format('pr-{0}', github.event.inputs.pr))") !== -1,
+            'branch-less PR-anchored dispatches keep their own pr-<N> group (#544: unrelated PRs never share a group)');
+        assert.ok(yml.indexOf('|| github.run_id') !== -1,
+            'manual dispatches with no inputs fall back to a unique per-run group — never a shared global queue');
+        assert.ok(yml.indexOf("format('ai-teammate-ref-{0}', github.ref)") === -1,
+            'the per-ref group is gone — refs/heads/main collapsed unrelated default-ref lanes');
+        assert.ok(/branch:\s*\n\s+description:/.test(yml),
+            'the branch input is declared so the SM-passed item branch reaches the group expression');
         assert.ok(yml.indexOf("INPUT_PR: ${{ github.event.inputs.pr || '' }}") !== -1,
             'dedup probe step receives INPUT_PR');
         assert.ok(yml.indexOf("INPUT_LEG: ${{ github.event.inputs.leg || '' }}") !== -1,

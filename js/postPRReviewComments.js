@@ -38,6 +38,13 @@ var reviewVerdicts = require('./common/reviewVerdicts.js');
 // (model advisory, machine enforces), the legacy-knob audit and the density
 // control.
 var reviewPolicyModule = require('./common/reviewPolicy.js');
+// gh-1540: the review in-progress carrier (`ai_reviewing`) — the stamp/clear
+// helpers + the pure branch→issue parse live in ONE shared module (PR #1541
+// rework: module-size pins + the failure/missing-data clears). The local
+// aliases keep every pre-existing call site and export unchanged.
+var reviewCarrierModule = require('./common/reviewCarrier.js');
+var removePRLabelQuietly = reviewCarrierModule.removePRLabelQuietly;
+var parseLinkedIssueNumber = reviewCarrierModule.parseLinkedIssueNumber;
 // gh-1332 (hoisted, never lazy — the gh-823 pack-require rule): the
 // finding-identity registry — the review-round dedup. The round's structured
 // inlineComments already carry path/severity/claim, so registering the round
@@ -339,11 +346,15 @@ function runResumeAttempt(ticketKey) {
     }
 }
 
-function handleMissingReviewData(params, config, customParams, tracker) {
+function handleMissingReviewData(params, config, customParams, tracker, ctx) {
     var ticketKey = params.ticket.key;
     console.error('Failed to read pr_review.json after resume attempt');
 
     postMissingOutputComment(tracker, ticketKey);
+    // gh-1540: the leg ended WITHOUT a verdict — both anchors clear (the
+    // PR side through the same verdict clear); fail-open on a stuck probe.
+    reviewCarrierModule.removeTicketLabelQuietly(tracker, ticketKey, LABELS.AI_REVIEWING, 'no verdict — back to "review wanted, not running"');
+    if (ctx) reviewCarrierModule.clearCarrierAfterMissingData(ctx, params, discoverPullRequest, linkedIssueNumberFromPR);
     removeSmLabelAfterMissingOutput(tracker, ticketKey, customParams);
     triggerSmAfterMissingOutput(config, customParams);
 
@@ -2172,14 +2183,6 @@ function resolveFormalReviewEnabled(customParams, config) {
     return !!(config && config.formalGithubReview === true);
 }
 
-function parseLinkedIssueNumber(prBody) {
-    // gh-728: the knob is a comma-separated LIST of machine logins — the
-    // linked-issue lookup only needs the trailing "closes #N" reference.
-    var m = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(orEmpty(prBody)));
-    if (!m) return null;
-    return parseInt(m[1], 10);
-}
-
 function resolveWipLabel(params) {
     var contextId = params.metadata && params.metadata.contextId;
     if (!contextId) return 'pr_review_wip';
@@ -2505,14 +2508,6 @@ function addPRLabelQuietlyDetailed(scm, prNumber, label, warnPrefix) {
     }
 }
 
-function removePRLabelQuietly(scm, prNumber, label, warnMessage) {
-    try {
-        scm.removeLabel(prNumber, label);
-    } catch (e2) {
-        console.warn(warnMessage);
-    }
-}
-
 function applyPRApprovalOutcome(ctx, pr, isApproved, recommendation) {
     if (!isApproved) {
         // STATE 2: REQUEST_CHANGES / BLOCK → do NOT merge
@@ -2593,6 +2588,18 @@ function fetchPullRequestObject(repoInfo, prNumber) {
     return typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
 }
 
+// The linked issue of a PR: body link first, then the branch parse (the
+// gh-1540 parse lives in the shared reviewCarrier module; this read probes
+// the per-run github_get_pr global, so it stays here).
+function linkedIssueNumberFromPR(repoInfo, prNumber, prBranch) {
+    var prObj = fetchPullRequestObject(repoInfo, prNumber);
+    var fromBody = parseLinkedIssueNumber(prObj.body);
+    if (fromBody) return fromBody;
+    var headRef = prObj.head && (prObj.head.ref || prObj.head);
+    return reviewCarrierModule.branchLinkedIssueNumber(headRef) ||
+        reviewCarrierModule.branchLinkedIssueNumber(prBranch);
+}
+
 // gh-1369: fresh terminal-PR probe for the review-leg rework arms. The PR
 // was matched via an OPEN-PR search at leg start — a leg in flight at merge
 // time (#1368: merged 48s before its stamp) must not stamp agent:rework on
@@ -2608,19 +2615,6 @@ function prIsTerminal(repoInfo, prNumber) {
         console.warn('⚠️ terminal-PR probe failed (fail-open): ' + (e.message || e));
         return false;
     }
-}
-
-function parseBranchIssueNumber(branch) {
-    var m = /(^|[^a-z0-9])gh-0*(\d+)([^0-9]|$)/i.exec(String(orEmpty(branch)));
-    return m ? parseInt(m[2], 10) : null;
-}
-
-function linkedIssueNumberFromPR(repoInfo, prNumber, prBranch) {
-    var prObj = fetchPullRequestObject(repoInfo, prNumber);
-    var fromBody = parseLinkedIssueNumber(prObj.body);
-    if (fromBody) return fromBody;
-    var headRef = prObj.head && (prObj.head.ref || prObj.head);
-    return parseBranchIssueNumber(headRef) || parseBranchIssueNumber(prBranch);
 }
 
 function stripLinkedIssueArmLabels(scm, linkedIssue, isApproved) {
@@ -2672,6 +2666,7 @@ function cleanLinkedIssueArmsOnApproval(ctx, pr, repoInfo) {
 function finishPRAnchoredReview(ctx, pr, repoInfo, isApproved, recommendation) {
     addPRLabelQuietlyDetailed(ctx.scm, pr.number, LABELS.AI_PR_REVIEWED,
         'Failed to add ai_pr_reviewed to PR #' + pr.number + ':');
+    reviewCarrierModule.clearReviewInProgressCarrier(ctx, pr, repoInfo, linkedIssueNumberFromPR);
     // Consume the on-demand trigger so the label never loops.
     removePRLabelQuietly(ctx.scm, pr.number, 'agent:review', 'No agent:review label to remove from PR #' + pr.number);
     if (!isApproved) {
@@ -2768,9 +2763,11 @@ function addTicketAiPrReviewedLabel(tracker, ticketKey) {
  */
 function addReviewMarkers(ctx, ticketKey, pr, repoInfo) {
     addTicketAiPrReviewedLabel(ctx.tracker, ticketKey);
+    reviewCarrierModule.removeTicketLabelQuietly(ctx.tracker, ticketKey, LABELS.AI_REVIEWING, 'gh-1540: verdict reached');
     if (!hasGitHubTarget(pr, repoInfo)) return;
     addPRLabelQuietlyDetailed(ctx.scm, pr.number, LABELS.AI_PR_REVIEWED,
         'Failed to add ai_pr_reviewed to PR #' + pr.number + ':');
+    removePRLabelQuietly(ctx.scm, pr.number, LABELS.AI_REVIEWING, 'No ai_reviewing label on PR #' + pr.number);
 }
 
 function removeWipLabel(tracker, ticketKey, wipLabel) {
@@ -3161,7 +3158,7 @@ function action(params) {
         // Step 1: Read structured review data
         var reviewData = readOrResumeReviewData(ctx.ticketKey, ctx.workingDir);
         if (!reviewData) {
-            return handleMissingReviewData(params, ctx.config, ctx.customParams, tracker);
+            return handleMissingReviewData(params, ctx.config, ctx.customParams, tracker, ctx);
         }
 
         // gh-1053: uncited external-spec BLOCKING claims are downgraded to
@@ -3344,11 +3341,13 @@ if (typeof module !== 'undefined' && module.exports) {
         policyStampSection,
         resolveFormalReviewEnabled,
         parseLinkedIssueNumber,
-        parseBranchIssueNumber,
+        parseBranchIssueNumber: reviewCarrierModule.branchLinkedIssueNumber,
         linkedIssueNumberFromPR,
         stripLinkedIssueArmLabels,
         cleanLinkedIssueArmsOnApproval,
         finishPRAnchoredReview,
+        addReviewMarkers,
+        handleMissingReviewData,
         runReworkLeg,
         resolveWipLabel,
         buildBitriseEnvVars,

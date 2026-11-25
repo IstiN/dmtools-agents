@@ -26,6 +26,9 @@
 var LIFECYCLE_LABELS = [
     'agent:review', 'agent:rework', 'agent:dev', 'ai_developed',
     'ai_validating', 'ai_validated', 'pr_approved', 'validation_failed',
+    // gh-1540: the review leg's in-progress carrier — a PR mid-review is
+    // not a naked PR (the sweep must never re-arm under a live carrier).
+    'ai_reviewing',
     'blocked', 'needs-human', 'rework-loop-escalated'
 ];
 

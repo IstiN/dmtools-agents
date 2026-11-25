@@ -11,6 +11,11 @@
  */
 
 var configLoader = require('./configLoader.js');
+// gh-1540: the review leg's in-progress carrier (ai_reviewing) — stamp at
+// leg start, clear on every non-verdict exit; the helpers live in the
+// shared reviewCarrier module (the clear must also heal a leg that dies
+// between the stamp and its post-action).
+var reviewCarrierModule = require('./common/reviewCarrier.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 const commentMarkup = require('./common/commentMarkup.js');
@@ -535,6 +540,11 @@ function action(params) {
     // parsing completed (gh-927: the catch previously crashed on a
     // block-scoped `noTicket` when the try threw early).
     var ctx = { noTicket: false, tracker: null };
+    // gh-1540 rework: set once the carrier is stamped — a leg that dies
+    // between the stamp and its post-action never reaches a verdict path,
+    // so the catch clears the carrier from BOTH anchors on the way out.
+    var carrierStamped = false;
+    var prDetails = null;
     try {
         // loadContext MUTATES ctx in place and returns it — the in-place
         // mutation is load-bearing (gh-1351): a reviewPolicy validation error
@@ -563,6 +573,13 @@ function action(params) {
             return false;
         }
         var prDetails = detailsOutcome.prDetails;
+
+        // gh-1540: the review leg is RUNNING from this point — stamp the
+        // in-progress carrier before any slow step (checkout, diff, pool
+        // rounds) so the window a duplicate arm can match is as short as
+        // the leg itself allows.
+        reviewCarrierModule.markReviewInProgress(ctx, prDetails);
+        carrierStamped = true;
 
         var branchName = extractHeadBranch(prDetails);
         checkoutPrBranch(ctx, branchName, prDetails);
@@ -602,6 +619,14 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in preparePRForReview:', error);
         postSetupErrorComment(ctx, params, error);
+        // gh-1540 rework: the leg exits WITHOUT a verdict — the stamped
+        // carrier comes off both anchors here. Every review arming rule
+        // skips on ai_reviewing and the naked-PR sweep refuses to re-arm
+        // under it, so a carrier left behind by a stamp-then-die leg would
+        // starve the PR until a human removes the label.
+        if (carrierStamped && prDetails) {
+            reviewCarrierModule.clearStaleCarrierOnLegFailure(ctx, prDetails);
+        }
         return false;
     }
 }
@@ -633,6 +658,8 @@ if (typeof module !== 'undefined' && module.exports) {
         writePrContext: writePrContext,
         writeFindingRegistryContext: writeFindingRegistryContext,
         writeNewHunksContext: writeNewHunksContext,
+        branchLinkedIssueNumber: reviewCarrierModule.branchLinkedIssueNumber,
+        markReviewInProgress: reviewCarrierModule.markReviewInProgress,
         newHunksHeadPair: newHunksHeadPair,
         resolveNewHunksContext: resolveNewHunksContext,
         resolveRegistryComments: resolveRegistryComments,
