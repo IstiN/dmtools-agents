@@ -291,7 +291,10 @@ function buildWorkflowDispatchInputs(deps, repoInfo, ticketKey, rule, effectiveC
   var issueVal = anchor.issueNumber !== null ? anchor.issueNumber : anchor.prAnchoredFallback ? '' : ticketKey;
   var inputs = {};
   Object.keys(rule.inputs).forEach(function (k) {
-    inputs[k] = String(rule.inputs[k]).replace(/\{key\}/g, String(ticketKey)).replace(/\{issueNumber\}/g, String(issueVal)).replace(/\{prNumber\}/g, String(it.prNumber || ''));
+    // gh-1540: {branch} carries the item branch — the ai-teammate
+    // concurrency group keys on it (same head = one queue; unrelated
+    // branches and default-ref lanes keep their own groups).
+    inputs[k] = String(rule.inputs[k]).replace(/\{key\}/g, String(ticketKey)).replace(/\{issueNumber\}/g, String(issueVal)).replace(/\{prNumber\}/g, String(it.prNumber || '')).replace(/\{branch\}/g, String(it.branch || ''));
   });
   if (anchor.prAnchoredFallback) {
     inputs.issue = '';

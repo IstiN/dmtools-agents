@@ -96,16 +96,24 @@ on:
         required: false
         type: string
         default: ''
+      branch:
+        description: 'gh-1540: the item branch the SM dispatched against — keys the concurrency group per branch (same head = one queue). DECLARED because GitHub 422s undeclared dispatch inputs.'
+        required: false
+        type: string
+        default: ''
 
 concurrency:
-  # gh-1540: the dispatch path keys on the REF the SM dispatched against —
-  # two lanes arming the same head in one tick used to mint two groups
-  # ('ai-teammate-issue-<n>' vs the anchor-input fallback) and ran parallel
-  # until the slower posted a verdict on the merged PR. Per-ref keying
-  # serializes them; the issues-event path keeps its per-issue key.
-  # cancel-in-progress stays false: a duplicate QUEUES behind the running
-  # leg, it never races it.
-  group: ${{ github.event_name == 'issues' && format('ai-teammate-issue-{0}', github.event.issue.number) || format('ai-teammate-ref-{0}', github.ref) }}
+  # gh-1540: the dispatch path keys on the ITEM BRANCH the SM passes
+  # (inputs.branch) — same head = one group, so two lanes arming the same
+  # head in one tick still serialize (a duplicate queues, cancel-in-progress
+  # stays false). The first cut keyed on github.ref, which collapsed every
+  # default-ref lane (fork reroutes, review-external-once, dev-on-assignment,
+  # manual dispatches) into the single refs/heads/main group; branch-first
+  # keying restores the #544 guarantee: branch-less lanes fall back to their
+  # issue anchor, PR-anchored legs to their own pr-<N> group, and manual
+  # no-input dispatches to a unique per-run group. The issues-event path
+  # keeps its per-issue key.
+  group: ${{ github.event_name == 'issues' && format('ai-teammate-issue-{0}', github.event.issue.number) || format('ai-teammate-{0}', github.event.inputs.branch || github.event.inputs.issue || (github.event.inputs.pr && format('pr-{0}', github.event.inputs.pr)) || github.run_id) }}
   cancel-in-progress: false
 
 permissions:

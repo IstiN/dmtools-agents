@@ -5952,4 +5952,71 @@ suite('postPReviewComments — gh-1540 review in-progress carrier clear', functi
         assert.deepEqual(removed, [{ key: 'gh-1931', label: 'ai_reviewing' }],
             'a leg that ends without a verdict must not leave the carrier armed');
     });
+
+    // gh-1540 rework (thread "missing-data exit"): the ticket-side clear
+    // alone leaves the PR anchor carrying ai_reviewing forever — every
+    // arming rule reads notPrLabels on the PR too. With the run context the
+    // exit resolves the PR and routes through the same verdict clear.
+    test('handleMissingReviewData clears the PR anchors too (ctx routes the PR side through the verdict clear)', function() {
+        var removed = [];
+        var scmRemoved = [];
+        var tracker = {
+            removeLabel: function(key, label) { removed.push({ key: key, label: label }); },
+            postComment: function() {}
+        };
+        var scm = {
+            removeLabel: function(num, label) { scmRemoved.push({ num: num, label: label }); }
+        };
+        var fileRead = function() { return null; };
+        var mod = loadModule('js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': prReviewOutputFiles(fileRead)
+            })),
+            {
+                file_read: fileRead,
+                github_get_pr: function() {
+                    return JSON.stringify({ number: 1940, state: 'open', merged: false,
+                        body: 'Closes #1931', head: { ref: 'ai/gh-1931' } });
+                }
+            });
+        mod.handleMissingReviewData(
+            { ticket: { key: 'pr-1940' }, inputFolderPath: 'input/pr-1940' },
+            { repository: { owner: 'acme', repo: 'widget' } }, {}, tracker,
+            { scm: scm, config: { repository: { owner: 'acme', repo: 'widget' } },
+              prAnchor: 1940, ticketKey: 'pr-1940' });
+
+        assert.deepEqual(removed, [{ key: 'pr-1940', label: 'ai_reviewing' }],
+            'the ticket-side clear still runs');
+        assert.deepEqual(scmRemoved.filter(function(c) { return c.label === 'ai_reviewing'; }),
+            [{ num: 1940, label: 'ai_reviewing' }, { num: 1931, label: 'ai_reviewing' }],
+            'the PR and the linked issue both clear — no stuck carrier on the PR anchor');
+    });
+
+    test('handleMissingReviewData with an unresolvable PR keeps the ticket-side clear (fail-open)', function() {
+        var removed = [];
+        var tracker = {
+            removeLabel: function(key, label) { removed.push({ key: key, label: label }); },
+            postComment: function() {}
+        };
+        var scm = {
+            removeLabel: function(num, label) { throw new Error('scm down'); }
+        };
+        var fileRead = function() { return null; };
+        var mod = loadModule('js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': prReviewOutputFiles(fileRead)
+            })),
+            {
+                file_read: fileRead,
+                github_get_pr: function() { throw new Error('github api down'); }
+            });
+        mod.handleMissingReviewData(
+            { ticket: { key: 'pr-1940' }, inputFolderPath: 'input/pr-1940' },
+            { repository: { owner: 'acme', repo: 'widget' } }, {}, tracker,
+            { scm: scm, config: { repository: { owner: 'acme', repo: 'widget' } },
+              prAnchor: 1940, ticketKey: 'pr-1940' });
+
+        assert.deepEqual(removed, [{ key: 'pr-1940', label: 'ai_reviewing' }],
+            'the ticket side clears even when the PR side cannot resolve');
+    });
 });

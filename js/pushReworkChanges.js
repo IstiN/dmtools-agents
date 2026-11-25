@@ -16,6 +16,8 @@ var submoduleHelper = require('./common/submodules.js');
 var prHelper = require('./common/pullRequest.js');
 var jiraWikiToMarkdown = require('./common/jiraWikiToMarkdown.js').jiraWikiToMarkdown;
 var ghHelpers = require('./common/githubHelpers.js');
+// gh-1540: the shared branch→issue parse — one authoritative gh-branch regex.
+var reviewCarrierModule = require('./common/reviewCarrier.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var autoStart = require('./common/autoStart.js');
 var outputFiles = require('./common/outputFiles.js');
@@ -207,8 +209,11 @@ function prHasApproved(pr, ticket) {
 function parseLinkedIssueFromText(text) {
     var m = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(String(text || ''));
     if (m) return 'gh-' + parseInt(m[1], 10);
-    m = /(^|[^a-z0-9])gh-0*(\d+)([^0-9]|$)/i.exec(String(text || ''));
-    return m ? 'gh-' + parseInt(m[2], 10) : null;
+    // gh-1540: the gh-branch whole-token parse is the shared reviewCarrier
+    // regex (one authoritative copy — preparePRForReview/postPRReviewComments
+    // resolve their linked issues through the same one).
+    var n = reviewCarrierModule.branchLinkedIssueNumber(text);
+    return n ? 'gh-' + n : null;
 }
 
 function resolveLinkedIssueKeyForPr(pr) {

@@ -201,6 +201,9 @@ function prTrackerGlobals(record, trackerThrows) {
     var g = {
         jira_post_comment: function(a) { record.comments.push({ tool: 'jira_post_comment', args: a }); },
         jira_add_label: function(a) { record.comments.push({ tool: 'jira_add_label', args: a }); },
+        // gh-1540: the non-verdict exits clear the carrier from the ticket —
+        // recorded so the suites can assert the both-anchors clear.
+        jira_remove_label: function(a) { record.comments.push({ tool: 'jira_remove_label', args: a }); },
         ado_add_work_item_comment: function(a) { record.comments.push({ tool: 'ado_add_work_item_comment', args: a }); }
     };
     if (trackerThrows) {
@@ -943,12 +946,76 @@ test('setup error mid-flow (diff fails): error comment posted via tracker + fals
     // array; the error report is still the only COMMENT.
     var stamps = rec.comments.filter(function(c) { return c.tool === 'jira_add_label'; });
     assert.deepEqual(stamps.map(function(c) { return c.args.label; }), ['ai_reviewing'],
-        'the carrier is stamped before the failing step (the failure path keeps it — cleanup is the verdict path\'s job)');
+        'the carrier is stamped before the failing step');
     var comments = rec.comments.filter(function(c) { return c.tool === 'jira_post_comment'; });
     assert.equal(comments.length, 1);
     assert.equal(comments[0].args.key, 'TS-42');
     assert.equal(comments[0].args.comment,
         'h3. ❌ PR Review Setup Error\n\n{code}Error: git exploded{code}');
+});
+
+// gh-1540 rework (thread "stamp-then-die"): a leg that dies between the
+// stamp and its post-action never reaches a verdict path — the carrier must
+// come off BOTH anchors in the leg's own failure path, or every review
+// arming rule skips on the stuck label forever and the naked-PR sweep
+// refuses to re-arm under it.
+test('failure path after the stamp clears the carrier from both anchors (ticket-anchored)', function() {
+    var rec = prRecorder();
+    rec.scmLabels = [];
+    var loaded = prLoad({
+        record: rec,
+        scm: {
+            addLabel: function(prId, label) { rec.scmLabels.push({ prId: prId, label: label }); },
+            removeLabel: function(prId, label) { rec.scmLabels.push({ prId: prId, label: label, removed: true }); }
+        },
+        config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' } },
+        gitOps: {
+            getPRDiff: function() { throw new Error('git exploded'); }
+        }
+    });
+
+    var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: {} });
+
+    assert.equal(result, false);
+    assert.ok(rec.scmLabels.some(function(l) {
+        return l.prId === 42 && l.label === 'ai_reviewing' && l.removed === true;
+    }), 'the PR carrier clears on the failure path: ' + JSON.stringify(rec.scmLabels));
+    var ticketClears = rec.comments.filter(function(c) {
+        return c.tool === 'jira_remove_label' && c.args.label === 'ai_reviewing';
+    });
+    assert.deepEqual(ticketClears.map(function(c) { return c.args.key; }), ['TS-42'],
+        'the ticket carrier clears too — back to "review wanted, not running"');
+});
+
+test('failure path clears the PR and the branch-linked issue (PR-anchored, no ticket)', function() {
+    var rec = prRecorder();
+    rec.scmLabels = [];
+    var loaded = prLoad({
+        record: rec,
+        scm: {
+            addLabel: function(prId, label) { rec.scmLabels.push({ prId: prId, label: label }); },
+            removeLabel: function(prId, label) { rec.scmLabels.push({ prId: prId, label: label, removed: true }); }
+        },
+        prDetails: {
+            number: 33, html_url: 'https://example.com/pull/33',
+            head: { ref: 'ai/gh-77', sha: 'abc123def' }, base: { ref: 'main' }, changed_files: 3
+        },
+        config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' } },
+        gitOps: {
+            getPRDiff: function() { throw new Error('git exploded'); }
+        }
+    });
+
+    var result = loaded.module.action({ inputFolderPath: 'input/pr-33', jobParams: {} });
+
+    assert.equal(result, false);
+    var cleared = rec.scmLabels.filter(function(l) { return l.removed === true; });
+    assert.deepEqual(cleared, [
+        { prId: 33, label: 'ai_reviewing', removed: true },
+        { prId: 77, label: 'ai_reviewing', removed: true }
+    ], 'both PR anchors clear; a PR-anchored run has no ticket side: ' + JSON.stringify(rec.scmLabels));
+    assert.equal(rec.comments.filter(function(c) { return c.tool === 'jira_remove_label'; }).length, 0,
+        'no ticket-side writes on a PR-anchored leg');
 });
 
 test('setup error on a pr-N anchor posts nothing', function() {

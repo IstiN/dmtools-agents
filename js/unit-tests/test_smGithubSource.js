@@ -4253,6 +4253,28 @@ suite('sm github source: review in-progress carrier skips (gh-1540)', function (
         });
     }
 
+    // gh-1540 rework (thread "per-ref concurrency group"): the workflow's
+    // concurrency group keys on inputs.branch — same head = one queue (the
+    // gh-1540 goal), while unrelated branches and default-ref lanes keep
+    // their own groups. The SM must therefore PASS the item branch on every
+    // head-ref dispatch rule; rules without it collapse back into the
+    // refs/heads/main group the review flagged.
+    test('branch-dispatching ai-teammate rules pass the item branch to the workflow (gh-1540 rework)', function () {
+        var BRANCH_RULE_IDS = ['review-after-dev', 'review-on-label',
+            'review-on-issue-label', 'review-machine-unlinked', 'rework-on-red-ci', 'rework-on-label'];
+        ['sm_github.json', 'sm_gitlab.json'].forEach(function (file) {
+            var isGithub = file === 'sm_github.json';
+            deployedRules(file, BRANCH_RULE_IDS).forEach(function (r) {
+                if (isGithub) {
+                    assert.equal(r.workflowRef, '{branch}',
+                        file + ' ' + r.id + ' dispatches at the item head');
+                }
+                assert.equal(r.inputs && r.inputs.branch, '{branch}',
+                    file + ' ' + r.id + ' passes inputs.branch={branch} — the workflow group keys per branch');
+            });
+        });
+    });
+
     function issueCarriers(searchLabels, prLabels) {
         return carrierLoad({
             github_search_issues: function () {

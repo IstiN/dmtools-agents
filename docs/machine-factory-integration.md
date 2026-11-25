@@ -129,7 +129,10 @@ on:
       issue: { description: Issue number, required: true, type: number }
       leg: { description: 'dev | review | rework (empty = derive)', required: false, type: string }
 concurrency:
-  group: ${{ github.event_name == 'issues' && format('ai-teammate-issue-{0}', github.event.issue.number) || format('ai-teammate-ref-{0}', github.ref) }}
+  # gh-1540: the dispatch path keys on the ITEM BRANCH the SM passes
+  # (inputs.branch — same head = one group); branch-less lanes fall back to
+  # the issue / pr-<N> anchors, manual dispatches to a per-run group.
+  group: ${{ github.event_name == 'issues' && format('ai-teammate-issue-{0}', github.event.issue.number) || format('ai-teammate-{0}', github.event.inputs.branch || github.event.inputs.issue || (github.event.inputs.pr && format('pr-{0}', github.event.inputs.pr)) || github.run_id) }}
   cancel-in-progress: false
 jobs:
   factory:
