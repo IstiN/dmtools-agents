@@ -623,9 +623,15 @@ suite('ai-teammate.yml — the dedup gate is wired into the stub', function () {
             'the probe passes the wall clock into the decision');
     });
 
-    test('UT-wf-1: concurrency.group isolates PR-anchored runs and probe passes INPUT_PR + INPUT_LEG', function () {
-        assert.ok(yml.indexOf("format('pr-{0}', github.event.inputs.pr)") !== -1,
-            'concurrency group falls back to pr-<N> when issue is empty');
+    test('UT-wf-1: concurrency.group serializes dispatch runs per ref and probe passes INPUT_PR + INPUT_LEG', function () {
+        // gh-1540: the anchor-input fallback minted a SECOND group
+        // ('ai-teammate-pr-<N>') for a head its issue-anchored twin already
+        // covered ('ai-teammate-<issue>') — both lanes ran parallel. The
+        // dispatch path now keys on github.ref, the event path on the issue.
+        assert.ok(yml.indexOf("format('ai-teammate-ref-{0}', github.ref)") !== -1,
+            'concurrency group keys dispatch runs on the dispatched ref');
+        assert.ok(yml.indexOf("format('pr-{0}', github.event.inputs.pr) }}") === -1,
+            'the anchor-input fallback is gone');
         assert.ok(yml.indexOf("INPUT_PR: ${{ github.event.inputs.pr || '' }}") !== -1,
             'dedup probe step receives INPUT_PR');
         assert.ok(yml.indexOf("INPUT_LEG: ${{ github.event.inputs.leg || '' }}") !== -1,

@@ -6,6 +6,24 @@
  * Uses: configModule, configLoaderModule, loadModule(), makeRequire(), assert, test(), suite()
  */
 
+// Hermetic DEFAULT_TRACKER (the test_buildEncodedConfig pattern): the
+// deployment-level env var leaks through the REAL Java bridge on the dmtools
+// host (java.lang.System.getenv) and flips the tracker layer to the github
+// provider, whose jira_* recording globals these suites never mock (rule
+// labels, targetStatus moves, tracker banners all record through jira_*).
+// The shim answers null for DEFAULT_TRACKER — the tracker layer falls through
+// to config/customParams (jira) — and defers every other name to the real
+// bridge. File-scoped for isolated runs; in run_all the same shim semantics
+// already come from test_buildEncodedConfig.js.
+var __scope__ = typeof globalThis !== 'undefined' ? globalThis : (typeof global !== 'undefined' ? global : this);
+var __realJava__ = __scope__ ? __scope__.java : undefined;
+__scope__.java = {
+    lang: { System: { getenv: function(name) {
+        if (name === 'DEFAULT_TRACKER') { return null; }
+        try { return __realJava__.lang.System.getenv(name); } catch (eEnv) { return null; }
+    } } }
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // gh-1249: the REAL smProvider module, loaded once, for the shared pure

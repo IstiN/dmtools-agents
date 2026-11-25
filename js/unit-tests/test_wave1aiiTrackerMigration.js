@@ -40,6 +40,9 @@ function w2LoadSA(rec) {
 
 function w2LoadPR(rec) {
     return loadModule('js/preparePRForReview.js', makeRequire({
+        // gh-1540: preparePRForReview now requires config.js for the
+        // ai_reviewing carrier constant — this stubbed map must resolve it.
+        './config.js': loadModule('js/config.js'),
         './configLoader.js': { loadProjectConfig: function() { return {}; }, createScm: function() { return { getRemoteRepoInfo: function() { return null; } }; } },
         './common/reviewPolicy.js': (function() {
             var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});

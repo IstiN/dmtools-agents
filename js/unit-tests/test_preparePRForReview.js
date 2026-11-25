@@ -8,6 +8,23 @@
  *  2. Direct tests of the extracted parse, build and resolve helpers.
  */
 
+// Hermetic DEFAULT_TRACKER (the test_buildEncodedConfig pattern): the
+// deployment-level env var leaks through the REAL Java bridge on the dmtools
+// host (java.lang.System.getenv) and flips trackers.js to the github
+// provider, whose jira_* recording globals these suites never mock. The shim
+// answers null for DEFAULT_TRACKER — createTracker falls through to
+// config/customParams (jira here) — and defers every other name to the real
+// bridge. File-scoped for isolated runs; in run_all the same shim semantics
+// already come from test_buildEncodedConfig.js.
+var __scope__ = typeof globalThis !== 'undefined' ? globalThis : (typeof global !== 'undefined' ? global : this);
+var __realJava__ = __scope__ ? __scope__.java : undefined;
+__scope__.java = {
+    lang: { System: { getenv: function(name) {
+        if (name === 'DEFAULT_TRACKER') { return null; }
+        try { return __realJava__.lang.System.getenv(name); } catch (eEnv) { return null; }
+    } } }
+};
+
 function prTrackersWith(mocks) {
     return loadModule('js/common/trackers.js', makeRequire({
         '../config.js': configModule,
@@ -919,9 +936,18 @@ test('setup error mid-flow (diff fails): error comment posted via tracker + fals
     var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: {} });
 
     assert.equal(result, false);
-    assert.equal(rec.comments.length, 1);
-    assert.equal(rec.comments[0].args.key, 'TS-42');
-    assert.equal(rec.comments[0].args.comment,
+    // gh-1540: the leg stamps the ai_reviewing carrier right after the PR
+    // details resolve — BEFORE the slow steps (checkout, diff) — so a
+    // duplicate arming rule can only match for as long as the leg itself
+    // runs. The stamp is a jira_add_label record in the shared mock
+    // array; the error report is still the only COMMENT.
+    var stamps = rec.comments.filter(function(c) { return c.tool === 'jira_add_label'; });
+    assert.deepEqual(stamps.map(function(c) { return c.args.label; }), ['ai_reviewing'],
+        'the carrier is stamped before the failing step (the failure path keeps it — cleanup is the verdict path\'s job)');
+    var comments = rec.comments.filter(function(c) { return c.tool === 'jira_post_comment'; });
+    assert.equal(comments.length, 1);
+    assert.equal(comments[0].args.key, 'TS-42');
+    assert.equal(comments[0].args.comment,
         'h3. ❌ PR Review Setup Error\n\n{code}Error: git exploded{code}');
 });
 
