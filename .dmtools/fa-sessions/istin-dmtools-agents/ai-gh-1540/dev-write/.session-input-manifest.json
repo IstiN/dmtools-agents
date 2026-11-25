@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-25T10:24:31.032Z",
+  "ticketKey": "pr-1541",
+  "headSha": "3d2ad85a0d478983df3dcaac636f356854b8e762",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_classification.json": {
+      "hash": "fnv1a64:288ef7cd6301a838",
+      "size": 79
+    },
+    "ci_failures.md": {
+      "hash": "fnv1a64:d152b97a401992db",
+      "size": 50130
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:31af530add703ffe",
+      "size": 5274011
+    },
+    "ci_violations.json": {
+      "hash": "fnv1a64:d79f413d708f332b",
+      "size": 2276
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:4fb1818eb876e2b3",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:05eab1a2aecf55ea",
+      "size": 18761
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:6efae51c96a7ef62",
+      "size": 8932
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:c778fdde65b69d88",
+      "size": 3258
+    },
+    "request.md": {
+      "hash": "fnv1a64:90cabf86784532b1",
+      "size": 2914
+    },
+    "review_policy.md": {
+      "hash": "fnv1a64:349512ac1497ce62",
+      "size": 1907
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:87c247b33467dc7f",
+      "size": 1067
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:0fe94085c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:f40c9ec993f12a55",
+      "size": 3002
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:90cabf86784532b1",
+      "size": 2914
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs671wbp",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postPRReviewComments.js:351",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: the missing-data exit clears the carrier from the ticket only — the PR side stays stuck and starves the review loop**\n\n`handleMissingReviewData` removes `ai_reviewing` from the ticket but never from the PR (the in-code comment defers the PR side to \"the follow-up staleness sweep\" — which does not exist: not in this diff, not in the ticket's follow-ups list). Every review arming rule reads **both** carriers: `review-after-dev` / `review-on-issue-label` check `notPrLabels: [ai_reviewing]` on the linked PR (`sm_github.json:610-620`, `sm_github.json:667-672`), and the PR-anchored rules check it on `notLabels` too.\n\nSo after the **handled** missing-output exit (a real, exercised path — it has its own resume logic at `readOrResumeReviewData`), the PR keeps `ai_reviewing` forever → every re-arm skips → the PR/issue is starved from review until a human removes the label. The naked-PR sweep cannot heal it either — this PR deliberately added the carrier to `LIFECYCLE_LABELS` (`js/common/nakedPrReconcile.js:31`), so a PR mid-carrier is never \"naked\". The PR description's claim \"the world returns to 'review wanted, not running'\" is only true for the ticket anchor; the PR anchor stays \"running\" permanently.\n\n**Fix**: at this exit, resolve the PR (the branch/PR context is available via `params` / the input folder the pre-action wrote; `ctx.scm` is already built in `buildReviewContext`) and clear both sides — ideally by routing through the same `clearReviewInProgressCarrier` the verdict path uses."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs671wem",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/preparePRForReview.js:621",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: a leg that dies between the stamp and its post-action wedges both anchors permanently — no staleness recovery exists**\n\nThe stamp is intentionally placed before the slow steps (checkout/diff) to shrink the race window — good. But the PR's own characterization test pins that the failure path **keeps** the carrier: *\"the failure path keeps it — cleanup is the verdict path's job\"* (`js/unit-tests/test_preparePRForReview.js:939-952`, the `git exploded` mid-flow setup-error case). A leg that dies after the stamp never reaches its post-action: no verdict path runs and `handleMissingReviewData` never runs.\n\nNet effect with this change: all five arming rules skip on the carrier (both anchors), the naked-PR sweep refuses to re-arm under it (`ai_reviewing` in `LIFECYCLE_LABELS`), and **no SM-side staleness/liveness probe exists for `ai_reviewing`** — unlike its twin `ai_validating`, which has removal probes in `js/sm/mergeAndParkProbes.js:83,105,320`, `js/sm/prVerdictAndSweepActions.js:27` and `js/sm/prLifecycleActions.js:266`. Checkout failures (the recurring dead-head class with its own subsystems: gh-922 no-ref bookeeping, fork parks), API flakes and CLI crashes previously converted into \"retried next tick until recovered/parked\" — the dead-letter recovery the SM configs document as *\"the dead-letter recovery the machine loop is built on\"* (`sm_github.json` rework-on-red-ci description). The carrier defeats that recovery, and the park counters can no longer accumulate because re-dispatch never happens.\n\n**Fix** (either): (a) an SM-side staleness probe that clears `ai_reviewing` when no active `ai-teammate` run exists on the branch (`ai_validating` parity), or (b) clear the carrier on non-verdict leg exits in the runner's failure path."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs671wiP",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/preparePRForReview.js:282",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: `crap` CI check red — CRAP ratchet: `markReviewInProgress` CRAP 9 > threshold 8**\n\nCI on commit `3d2ad85a` (the `crap` check, machine-classified **owned** in `ci_classification.json` — not a foreign red):\n\n```\nCRAP Ratchet\nNEW > 8  js/preparePRForReview.js::markReviewInProgress: 9\n0 regression(s), 1 new over threshold\n##[error]Process completed with exit code 2\n```\n\nThe new function added by this PR breaches the CRAP ≤ 8 ratchet (multiple `try/catch` + conditional branches, partial coverage). Per the repo's ratchet (\"CRAP may only decrease\"), this fails the gate.\n\n**Fix**: extract the linked-issue stamp half into a helper (e.g. `stampLinkedIssueCarrier(ctx, prDetails)`) — this simplifies both halves and also relieves the module-size pin breach on this same file (42 top-level functions > max 40) — or add coverage until CRAP ≤ 8.\n\n(Full log: `ci_failures_full.log`; the `$f` tracked-artifact errors in the same log are parser noise classified foreign — not chased here.)"
+    },
+    {
+      "id": "PRRT_kwDORYAuYs671wlp",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/postPRReviewComments.js:2682",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: `crap` CI check red — module-size pins breached on both touched modules**\n\nCI on commit `3d2ad85a` (module-size step, exit 2):\n\n```\njs/postPRReviewComments.js: grew above pin: 3433 lines > max 3382, 274 top-level functions > max 272\njs/preparePRForReview.js: 42 top-level functions > max 40\n```\n\nVerified locally against `origin/main`: `postPRReviewComments.js` was **exactly at its pin** (3382 lines / 272 functions) and this PR's +51 lines / +2 functions pushed it over; `preparePRForReview.js` was exactly at 40 top-level functions and this PR's `branchLinkedIssueNumber` + `markReviewInProgress` pushed it to 42. Both breaches are fully attributable to this change.\n\n**Fix**: extract the gh-1540 carrier helpers (stamp + clear + the branch→issue parse) into a small shared module (e.g. `js/common/reviewCarrier.js`). That brings both modules back under their pins and also dedups the gh-branch regex now copy-pasted in three places (`js/preparePRForReview.js:268`, `js/postPRReviewComments.js:2620`, `js/pushReworkChanges.js:210` — plus a laxer variant in `js/mergeTrigger.js:117`)."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs671wow",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": ".github/workflows/ai-teammate.yml:112",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the per-ref concurrency group collapses all default-ref dispatch lanes into one global queue**\n\n`ai-teammate-ref-{github.ref}` is correct for head-ref dispatches (`workflowRef={branch}` → per-branch serialization — the gh-1540 goal, well tested). But every lane that dispatches at a **non-branch ref** now shares the single group `ai-teammate-ref-refs/heads/main`:\n\n- **Fork-PR legs** reroute onto `BASE_MACHINE_REF = 'main'` (`js/common/forkDispatch.js:33`) — every cross-repo PR leg, any ticket;\n- **`review-external-once`** (`sm_github.json`) has no `workflowRef` → default ref — external PR reviews;\n- **`dev-on-assignment`** (the SM dev re-derive safety net) — same;\n- manual UI dispatches with no inputs (the old expression's `github.run_id` escape hatch is gone).\n\nBefore this change those keyed per-anchor (`ai-teammate-<issue>` / `ai-teammate-pr-<N>`) and ran in parallel across unrelated work. The deleted test asserted exactly this guarantee — *\"concurrency group keeps PR-anchored runs per-PR … must not share one global group\"* (the #544 lesson, whose explanatory comment this diff also removes). Concrete cost: a wave of external PRs (the rule's own docs: \"the trio drains over consecutive ticks\") now reviews strictly one-at-a-time **globally**, ~17 min per leg, and fork legs queue behind them.\n\nSecondary: an `assigned`-event run and a same-issue dispatch run previously shared `ai-teammate-<issue>`; the new expression splits them, so the cross-trigger-type pair no longer serializes (re-opening the run-list-probe lag window there).\n\n**Fix**: key dispatch runs on the resolved item branch rather than the dispatch ref — e.g. have the SM pass `inputs.branch` and group on `github.event.inputs.branch || format('issue-{0}', github.event.inputs.issue) || github.ref`. Same-head lanes still collide into one group (the gh-1540 goal), while unrelated branches and branch-less issue legs keep their own groups. Please also add a template test pinning \"unrelated PRs do not share a group\" — the guarantee the old test carried."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-25:ea0e5eed",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-25",
+      "updatedAt": "2026-11-25",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: the missing-data exit clears the carrier from the ticket only — the PR side stays stuck and starves the review loop**\n\n`handleMissingReviewData` removes `ai_reviewing` from the ticket but never from the PR (the in-code comment defers the PR side to \"the follow-up staleness sweep\" — which does not exist: not in this diff, not in the ticket's follow-ups list). Every review arming rule reads **both** carriers: `review-after-dev` / `review-on-issue-label` check `notPrLabels: [ai_reviewing]` on the linked PR (`sm_github.json:610-620`, `sm_github.json:667-672`), and the PR-anchored rules check it on `notLabels` too.\n\nSo after the **handled** missing-output exit (a real, exercised path — it has its own resume logic at `readOrResumeReviewData`), the PR keeps `ai_reviewing` forever → every re-arm skips → the PR/issue is starved from review until a human removes the label. The naked-PR sweep cannot heal it either — this PR deliberately added the carrier to `LIFECYCLE_LABELS` (`js/common/nakedPrReconcile.js:31`), so a PR mid-carrier is never \"naked\". The PR description's claim \"the world returns to 'review wanted, not running'\" is only true for the ticket anchor; the PR anchor stays \"running\" permanently.\n\n**Fix**: at this exit, resolve the PR (the branch/PR context is available via `params` / the input folder the pre-action wrote; `ctx.scm` is already built in `buildReviewContext`) and clear both sides — ideally by routing through the same `clearReviewInProgressCarrier` the verdict path uses."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-25:c0e61325",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-25",
+      "updatedAt": "2026-11-25",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: a leg that dies between the stamp and its post-action wedges both anchors permanently — no staleness recovery exists**\n\nThe stamp is intentionally placed before the slow steps (checkout/diff) to shrink the race window — good. But the PR's own characterization test pins that the failure path **keeps** the carrier: *\"the failure path keeps it — cleanup is the verdict path's job\"* (`js/unit-tests/test_preparePRForReview.js:939-952`, the `git exploded` mid-flow setup-error case). A leg that dies after the stamp never reaches its post-action: no verdict path runs and `handleMissingReviewData` never runs.\n\nNet effect with this change: all five arming rules skip on the carrier (both anchors), the naked-PR sweep refuses to re-arm under it (`ai_reviewing` in `LIFECYCLE_LABELS`), and **no SM-side staleness/liveness probe exists for `ai_reviewing`** — unlike its twin `ai_validating`, which has removal probes in `js/sm/mergeAndParkProbes.js:83,105,320`, `js/sm/prVerdictAndSweepActions.js:27` and `js/sm/prLifecycleActions.js:266`. Checkout failures (the recurring dead-head class with its own subsystems: gh-922 no-ref bookeeping, fork parks), API flakes and CLI crashes previously converted into \"retried next tick until recovered/parked\" — the dead-letter recovery the SM configs document as *\"the dead-letter recovery the machine loop is built on\"* (`sm_github.json` rework-on-red-ci description). The carrier defeats that recovery, and the park counters can no longer accumulate because re-dispatch never happens.\n\n**Fix** (either): (a) an SM-side staleness probe that clears `ai_reviewing` when no active `ai-teammate` run exists on the branch (`ai_validating` parity), or (b) clear the carrier on non-verdict leg exits in the runner's failure path."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-25:9d29c1af",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-25",
+      "updatedAt": "2026-11-25",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: `crap` CI check red — CRAP ratchet: `markReviewInProgress` CRAP 9 > threshold 8**\n\nCI on commit `3d2ad85a` (the `crap` check, machine-classified **owned** in `ci_classification.json` — not a foreign red):\n\n```\nCRAP Ratchet\nNEW > 8  js/preparePRForReview.js::markReviewInProgress: 9\n0 regression(s), 1 new over threshold\n##[error]Process completed with exit code 2\n```\n\nThe new function added by this PR breaches the CRAP ≤ 8 ratchet (multiple `try/catch` + conditional branches, partial coverage). Per the repo's ratchet (\"CRAP may only decrease\"), this fails the gate.\n\n**Fix**: extract the linked-issue stamp half into a helper (e.g. `stampLinkedIssueCarrier(ctx, prDetails)`) — this simplifies both halves and also relieves the module-size pin breach on this same file (42 top-level functions > max 40) — or add coverage until CRAP ≤ 8.\n\n(Full log: `ci_failures_full.log`; the `$f` tracked-artifact errors in the same log are parser noise classified foreign — not chased here.)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-25:86df61ce",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-25",
+      "updatedAt": "2026-11-25",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 severity: BLOCKING —\n🚨 **BLOCKING: `crap` CI check red — module-size pins breached on both touched modules**\n\nCI on commit `3d2ad85a` (module-size step, exit 2):\n\n```\njs/postPRReviewComments.js: grew above pin: 3433 lines > max 3382, 274 top-level functions > max 272\njs/preparePRForReview.js: 42 top-level functions > max 40\n```\n\nVerified locally against `origin/main`: `postPRReviewComments.js` was **exactly at its pin** (3382 lines / 272 functions) and this PR's +51 lines / +2 functions pushed it over; `preparePRForReview.js` was exactly at 40 top-level functions and this PR's `branchLinkedIssueNumber` + `markReviewInProgress` pushed it to 42. Both breaches are fully attributable to this change.\n\n**Fix**: extract the gh-1540 carrier helpers (stamp + clear + the branch→issue parse) into a small shared module (e.g. `js/common/reviewCarrier.js`). That brings both modules back under their pins and also dedups the gh-branch regex now copy-pasted in three places (`js/preparePRForReview.js:268`, `js/postPRReviewComments.js:2620`, `js/pushReworkChanges.js:210` — plus a laxer variant in `js/mergeTrigger.js:117`)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-25:735f1891",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-25",
+      "updatedAt": "2026-11-25",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ severity: IMPORTANT —\n⚠️ **IMPORTANT: the per-ref concurrency group collapses all default-ref dispatch lanes into one global queue**\n\n`ai-teammate-ref-{github.ref}` is correct for head-ref dispatches (`workflowRef={branch}` → per-branch serialization — the gh-1540 goal, well tested). But every lane that dispatches at a **non-branch ref** now shares the single group `ai-teammate-ref-refs/heads/main`:\n\n- **Fork-PR legs** reroute onto `BASE_MACHINE_REF = 'main'` (`js/common/forkDispatch.js:33`) — every cross-repo PR leg, any ticket;\n- **`review-external-once`** (`sm_github.json`) has no `workflowRef` → default ref — external PR reviews;\n- **`dev-on-assignment`** (the SM dev re-derive safety net) — same;\n- manual UI dispatches with no inputs (the old expression's `github.run_id` escape hatch is gone).\n\nBefore this change those keyed per-anchor (`ai-teammate-<issue>` / `ai-teammate-pr-<N>`) and ran in parallel across unrelated work. The deleted test asserted exactly this guarantee — *\"concurrency group keeps PR-anchored runs per-PR … must not share one global group\"* (the #544 lesson, whose explanatory comment this diff also removes). Concrete cost: a wave of external PRs (the rule's own docs: \"the trio drains over consecutive ticks\") now reviews strictly one-at-a-time **globally**, ~17 min per leg, and fork legs queue behind them.\n\nSecondary: an `assigned`-event run and a same-issue dispatch run previously shared `ai-teammate-<issue>`; the new expression splits them, so the cross-trigger-type pair no longer serializes (re-opening the run-list-probe lag window there).\n\n**Fix**: key dispatch runs on the resolved item branch rather than the dispatch ref — e.g. have the SM pass `inputs.branch` and group on `github.event.inputs.branch || format('issue-{0}', github.event.inputs.issue) || github.ref`. Same-head lanes still collide into one group (the gh-1540 goal), while unrelated branches and branch-less issue legs keep their own groups. Please also add a template test pinning \"unrelated PRs do not share a group\" — the guarantee the old test carried."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-11-25:fd364ba0",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-11-25",
+      "updatedAt": "2026-11-25",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The gh-1540 design (label carrier `ai_reviewing` + in-tick dispatch latch + per-branch concurrency) is sound and well tested — I re-ran the PR's own verification suites locally (`run_smAgent.json` 869 ✓, `run_postPRReviewComments.json` 225 ✓, `run_preparePRForReview.json` 65 ✓, matching CI's 11120-pass suite run); AC1/AC2/AC4/AC5 are demonstrated. It is blocked by a carrier with **no recovery path** and a **red `crap` CI check** (both owned by this PR); ticket AC3 is only partially met (carrier absence guaranteed on verdict exits, not failure exits). The `$f` CI lines are foreign parser noise per `ci_classification.json` — not chased.\n\n**Key Issues**:\n1. 🚨 `js/postPRReviewComments.js:351` — missing-data exit clears only the ticket carrier; the PR side stays stuck and every arming rule skips forever (`notPrLabels` reads the linked PR).\n2. 🚨 `js/preparePRForReview.js:621` — stamp-then-die legs (checkout failure, API flake — pinned by this PR's own test) keep the carrier on both anchors; no staleness probe exists (`ai_validating` has three).\n3. 🚨 `js/preparePRForReview.js:282` — CRAP ratchet red: new function CRAP 9 > 8 (exit 2).\n4. 🚨 `js/postPRReviewComments.js:2682` — module-size pins red on both touched modules (3433>3382 lines & 274>272 funcs; 42>40 funcs — both exactly at pin on `main`).\n5. ⚠️ `.github/workflows/ai-teammate.yml:112` — per-ref group globally serializes unrelated default-ref legs (fork reroutes, `review-external-once`, `dev-on-assignment`) and drops event-vs-dispatch same-issue serialization.\n\n**Next Steps**:\n1. Clear the PR-side carrier on the missing-data exit (route through `clearReviewInProgressCarrier`) and add an SM-side staleness probe / failure-path clear — `ai_validating` parity.\n2. Extract the gh-1540 carrier helpers into a shared `js/common/*` module — fixes both module pins, the CRAP ratchet, and dedups the triplicated branch→issue regex.\n3. Key the dispatch group on the item branch (`inputs.branch`) so same-head lanes still serialize but unrelated legs keep their own groups; pin \"unrelated PRs do not share a group\" in the template test.\n\n**Digest**: `js/preparePRForReview.js:268` + `js/postPRReviewComments.js:2620` + `js/pushReworkChanges.js:210` — third copy of the gh-branch regex · `js/postPRReviewComments.js:2818` — `function removeWipLabel(...) {   try {` mangled onto one line · `js/unit-tests/run_preparePRForReview.json` — trailing newline lost · `docs/machine-factory-integration.md:132` — doc group prefix (`ai-teammate-issue-`) drifts from shipped `ai-teammate-`."
+    }
+  ]
+}
