@@ -15,6 +15,33 @@ var triggerFailuresModule = require('../common/triggerFailures.js');
 var validationLivenessModule = require('../common/validationLiveness.js');
 var workflowRunTrackingModule = require('./workflowRunTracking.js');
 var TERMINAL_PR_SKIP_MSG = 'terminal PR — dispatch skipped';
+// gh-1540 — the in-tick dispatch latch: one SM tick can evaluate several
+// dispatch lanes against the SAME world (the live PR #1536 incident: two
+// review arming rules matched the same rework-close state 4 seconds apart
+// and both legs ran in parallel). The run-list probes (gh-715 / gh-806 /
+// gh-1028) are list-based — a run created seconds ago is not yet visible —
+// and labels alone cannot close the window because leg A has not started
+// (and has not set ai_reviewing) when the second lane evaluates in the same
+// tick. This set is the arbiter: keyed branch::leg, consulted before the
+// trigger, recorded after a successful one. Module-level state is tick-state
+// by construction (one fresh GraalJS engine per tick); the explicit reset in
+// smAgent's initTickState keeps that true even for multi-action callers.
+var inTickDispatchLatch = {};
+function inTickDispatchKey(item, rule) {
+  var it = item || {};
+  if (!it.branch) return null;
+  var leg = (rule && rule.inputs && rule.inputs.leg) || '';
+  return String(it.branch) + '::' + String(leg);
+}
+function inTickDispatchSeen(item, rule) {
+  var key = inTickDispatchKey(item, rule);
+  return !!key && !!inTickDispatchLatch[key];
+}
+function recordInTickDispatch(item, rule) {
+  var key = inTickDispatchKey(item, rule);
+  if (key) inTickDispatchLatch[key] = true;
+}
+function resetInTickDispatchLatch() { inTickDispatchLatch = {}; }
 var TAG_ONLY_STAGE_KEYS = {
   PASSED: true, FAILED: true, IN_REVIEW_PASSED: true, IN_REVIEW_FAILED: true,
   SKIPPED: true, IRRELEVANT: true, BUG_TO_FIX: true, IN_TESTING: true,
@@ -327,13 +354,14 @@ function applyForkCheckoutInputs(plan, inputs, item) {
     inputs.pr = inputs.pr || String(item.prNumber);
   }
 }
-function dispatchPreparedWorkflow(deps, repoInfo, scm, plan, inputs, ticketKey, projectKey, item) {
+function dispatchPreparedWorkflow(deps, repoInfo, scm, plan, inputs, ticketKey, projectKey, item, rule) {
   applyForkCheckoutInputs(plan, inputs, item);
   if (deps.dry) {
     deps.log('  [dry] ▶️ ' + ticketKey + ' dispatch:' + plan.workflowFile + ' inputs=' + JSON.stringify(inputs));
     return;
   }
   scm.triggerWorkflow(repoInfo.owner, repoInfo.repo, plan.workflowFile, JSON.stringify(inputs), plan.workflowRef);
+  if (rule) recordInTickDispatch(item, rule);
   deps.log('  ✅ Triggered ' + plan.workflowFile + '@' + plan.workflowRef + ' for ' + ticketKey + (projectKey ? ' [project_key=' + projectKey + ']' : ''));
   return true;
 }
@@ -347,7 +375,17 @@ function triggerWorkflow(deps, repoInfo, ticketKey, rule, effectiveConfig, workf
     if (checkTriggerSuppressionGates(deps, repoInfo, scm, plan.workflowFile, resolvedCf, concurrencyKey, ticketKey, workflowBudget, plan.headRefDispatch, plan.forkPlan, item, skipInfo)) return false;
     var inputs = buildWorkflowDispatchInputs(deps, repoInfo, ticketKey, rule, effectiveConfig, resolvedCf, concurrencyKey, projectKey, item);
     if (!inputs) return false;
-    return dispatchPreparedWorkflow(deps, repoInfo, scm, plan, inputs, ticketKey, projectKey, item);
+    // gh-1540: the in-tick latch is consulted AFTER the probes and BEFORE
+    // the trigger — every suppression probe above is list-based and cannot
+    // see a leg dispatched seconds ago, so this set is the only same-tick
+    // arbiter. A latch skip is transient (no labels consumed): the next
+    // tick re-evaluates the lane under the leg's own ai_reviewing carrier.
+    if (inTickDispatchSeen(item, rule)) {
+      deps.log('  ⏭️  ' + ticketKey + ' skipped (in-tick dispatch latch: ' +
+        inTickDispatchKey(item, rule) + ' already dispatched this tick — gh-1540: one leg per branch per tick)');
+      return false;
+    }
+    return dispatchPreparedWorkflow(deps, repoInfo, scm, plan, inputs, ticketKey, projectKey, item, rule);
   } catch (e) {
     var failClass = triggerFailuresModule.classifyTriggerError(e && e.message);
     deps.warn('  ⚠️  Workflow trigger failed for ' + ticketKey + ' (' + failClass + ', ref=' + plan.workflowRef + '): ' + (e.message || e));
@@ -413,6 +451,8 @@ if (typeof module !== 'undefined' && module.exports) {
       removeRuleLabel: removeRuleLabel, moveStatus: moveStatus,
       forkPullRefLive: forkPullRefLive, recordNoRefBookkeeping: recordNoRefBookkeeping,
       recordDispatchFailure: recordDispatchFailure, triggerWorkflow: triggerWorkflow,
+      inTickDispatchKey: inTickDispatchKey, inTickDispatchSeen: inTickDispatchSeen,
+      recordInTickDispatch: recordInTickDispatch, resetInTickDispatchLatch: resetInTickDispatchLatch,
       runTeammateLocally: runTeammateLocally, stageKeyForStatusName: stageKeyForStatusName
     };
 }

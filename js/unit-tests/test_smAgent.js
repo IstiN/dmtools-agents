@@ -11445,6 +11445,187 @@ suite('smAgent: duplicate rework dispatch — one leg wins (gh-715)', function (
     });
 });
 
+// ─── gh-1540: the review phase's in-progress carrier (`ai_reviewing`) and
+// the same-tick dispatch latch. Live 2026-11-23 (PR #1536 / gh-1534): two
+// review arming rules matched the same world in ONE SM tick 4 seconds apart
+// (review-after-dev issue-anchored + review-machine-unlinked PR-anchored —
+// no rule checks any in-flight review state, and `agent:review` does not
+// exist on the rework-close path), and the two runs went parallel (different
+// concurrency groups) until the slower one posted a full verdict on the
+// merged PR. Fix, three layers pinned here:
+//   1. shape — every review ARming rule excludes `ai_reviewing` on both
+//      anchors (issue-carrier rules on notLabels+notPrLabels, PR-carrier
+//      rules on notLabels), in BOTH forge configs;
+//   2. matcher — a carrier carrying `ai_reviewing` matches none of the five;
+//   3. latch — two rules matching the same world in one tick dispatch exactly
+//      one leg (branch::leg in-memory set; reset at the next tick).
+suite('smAgent: review in-progress carrier + in-tick dispatch latch (gh-1540)', function () {
+
+    function deployedRulesOf(file, ids) {
+        var cfg = JSON.parse(file_read({ path: file }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        return ids.map(function (id) {
+            assert.ok(byId[id], file + ' rule ' + id + ' exists');
+            return byId[id];
+        });
+    }
+
+    var REVIEW_ARMING_RULE_IDS = ['review-after-dev', 'review-machine-unlinked',
+        'review-external-once', 'review-on-label', 'review-on-issue-label'];
+
+    // AC4 (shape, both anchors, both forges): every review arming rule skips
+    // while `ai_reviewing` is present. Issue-carrier rules read the carrier
+    // on BOTH sides (the leg sets it on the issue and on the linked PR —
+    // the arm convention); PR-carrier rules read it on notLabels.
+    ['sm_github.json', 'sm_gitlab.json'].forEach(function (file) {
+        test(file + ': all five review arming rules exclude ai_reviewing (both anchors)', function () {
+            var rules = deployedRulesOf(file, REVIEW_ARMING_RULE_IDS);
+            var byId = {};
+            rules.forEach(function (r) { byId[r.id] = r; });
+
+            ['review-after-dev', 'review-on-issue-label'].forEach(function (id) {
+                assert.equal(byId[id].query.type, 'issue', id + ' stays issue-anchored');
+                assert.ok((byId[id].query.notLabels || []).indexOf('ai_reviewing') !== -1,
+                    id + ' excludes ai_reviewing on the ISSUE carrier');
+                assert.ok((byId[id].query.notPrLabels || []).indexOf('ai_reviewing') !== -1,
+                    id + ' excludes ai_reviewing on the linked PR');
+            });
+            ['review-machine-unlinked', 'review-external-once', 'review-on-label'].forEach(function (id) {
+                assert.equal(byId[id].query.type, 'pr', id + ' stays PR-anchored');
+                assert.ok((byId[id].query.notLabels || []).indexOf('ai_reviewing') !== -1,
+                    id + ' excludes ai_reviewing on the PR carrier');
+            });
+        });
+    });
+
+    function gh1540Params(rules, extra) {
+        var p = { jobParams: { owner: 'acme', repo: 'widgets',
+            machineAuthor: 'ai-teammate', rules: rules } };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) p.jobParams[k] = extra[k]; } }
+        return p;
+    }
+
+    function carrierFileMap() {
+        return { '../.dmtools/config.js': 'module.exports = { repository: { owner: "acme", repo: "widgets" } };' };
+    }
+
+    // The incident world, one leg in: issue ai_developed + PR ai_validated,
+    // machine-authored, checks 'none' (silent-updated head — the exact
+    // rework-close shape the incident started from), NOTHING in flight.
+    function reworkCloseWorld(reviewing) {
+        var prLabels = ['ai_validated'].concat(reviewing ? ['ai_reviewing'] : []);
+        var issueLabels = ['ai_developed'].concat(reviewing ? ['ai_reviewing'] : []);
+        return [
+            { key: 'gh-1534', labels: issueLabels, issueNumber: 1534, prNumber: 1536,
+              branch: 'ai/gh-1534', draft: false,
+              pr: { number: 1536, state: 'OPEN', checks: 'none', labels: prLabels } },
+            { key: 'pr-1536', labels: prLabels, issueNumber: 1534, prNumber: 1536,
+              branch: 'ai/gh-1534', author: 'ai-teammate', draft: false,
+              pr: { number: 1536, state: 'OPEN', checks: 'none' } }
+        ];
+    }
+
+    test('AC2: two arming rules matching the same world in one tick dispatch exactly ONE leg', function () {
+        var sm = makeSmAgent({
+            captureConsole: true,
+            fileMap: carrierFileMap(),
+            github: { items: reworkCloseWorld(false) }
+        });
+
+        sm.action(gh1540Params(deployedRulesOf('sm_github.json',
+            ['review-after-dev', 'review-machine-unlinked'])));
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'the in-tick latch fires — one review leg per branch per tick (AC1/AC2)');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.leg, 'review', 'the dispatched leg is the review leg');
+        assert.equal(sm.capturedTriggers[0].ref, 'ai/gh-1534', 'the leg runs on the PR head');
+        assert.ok((sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('in-tick dispatch latch') !== -1;
+        }), 'the suppressed lane names the latch in the tick log');
+    });
+
+    test('AC4 (matcher): ai_reviewing on the carriers silences every arming rule', function () {
+        var sm = makeSmAgent({
+            fileMap: carrierFileMap(),
+            github: { items: reworkCloseWorld(true) }
+        });
+
+        sm.action(gh1540Params(deployedRulesOf('sm_github.json', REVIEW_ARMING_RULE_IDS)));
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'a review is RUNNING — no arming rule may dispatch while ai_reviewing is present');
+    });
+
+    test('the latch resets between ticks — each tick still dispatches its one leg', function () {
+        var sm = makeSmAgent({
+            fileMap: carrierFileMap(),
+            github: { items: reworkCloseWorld(false) }
+        });
+        var params = gh1540Params(deployedRulesOf('sm_github.json',
+            ['review-after-dev', 'review-machine-unlinked']));
+
+        sm.action(params);
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 2,
+            'one leg PER TICK — the latch is per-tick state, never a permanent mute');
+    });
+
+    test('different legs on the same branch still both dispatch (the latch keys branch::leg)', function () {
+        var rules = deployedRulesOf('sm_github.json', ['review-on-label', 'rework-on-label']);
+        var sm = makeSmAgent({
+            fileMap: carrierFileMap(),
+            github: { items: [{ key: 'pr-1227', labels: ['agent:review', 'agent:rework'],
+                issueNumber: 1226, prNumber: 1227, branch: 'ai/gh-1226',
+                author: 'ai-teammate', draft: false, pr: { number: 1227, state: 'OPEN' } }] }
+        });
+
+        sm.action(gh1540Params(rules));
+
+        assert.equal(sm.capturedTriggers.length, 2,
+            'review and rework are different legs — the latch never merges them');
+    });
+
+    test('no-branch carriers bypass the latch (one rule, several tickets, one tick)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } },
+                { key: 'P-2', fields: { labels: [] } }
+            ]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'")
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 2,
+            'jira-carrier dispatches share no head — the latch must stay inert');
+    });
+
+    test('dry-run dispatches do not arm the latch', function () {
+        var sm = makeSmAgent({
+            captureConsole: true,
+            fileMap: carrierFileMap(),
+            github: { items: reworkCloseWorld(false) }
+        });
+        var params = gh1540Params(deployedRulesOf('sm_github.json',
+            ['review-after-dev', 'review-machine-unlinked']), { dryRun: true });
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'dry mode dispatches nothing real (existing contract)');
+        var dryLines = (sm.capturedLogs || []).filter(function (l) {
+            return l.indexOf('[dry] ▶') !== -1;
+        });
+        assert.equal(dryLines.length, 2, 'both rules log their dry dispatch (nothing recorded)');
+    });
+});
+
 // ─── gh-1028: duplicate CONCURRENT rework legs on one PR (live 2026-10-18
 // 08:04–08:09Z: PR #1017 / gh-1000 / branch ai/gh-1000 got TWO concurrent
 // rework legs for ONE rework cycle — run 39110030366 PR-armed at 08:04:12Z

@@ -631,11 +631,13 @@
               "ai_developed"
             ],
             "notLabels": [
-              "agent:rework"
+              "agent:rework",
+              "ai_reviewing"
             ],
             "notPrLabels": [
               "ai_pr_reviewed",
-              "pr_approved"
+              "pr_approved",
+              "ai_reviewing"
             ],
             "prLabels": [
               "ai_validated"
@@ -658,7 +660,8 @@
             "notLabels": [
               "ai_pr_reviewed",
               "agent:review",
-              "pr_approved"
+              "pr_approved",
+              "ai_reviewing"
             ],
             "checks": "green",
             "draft": false,
@@ -686,7 +689,8 @@
               "ai_pr_reviewed",
               "pr_approved",
               "agent:review",
-              "ai_validating"
+              "ai_validating",
+              "ai_reviewing"
             ],
             "checks": [
               "green",
@@ -805,6 +809,9 @@
             "type": "pr",
             "labels": [
               "agent:review"
+            ],
+            "notLabels": [
+              "ai_reviewing"
             ]
           },
           "workflowFile": "ai-teammate.yml",
@@ -826,11 +833,13 @@
               "agent:review"
             ],
             "notLabels": [
-              "agent:rework"
+              "agent:rework",
+              "ai_reviewing"
             ],
             "notPrLabels": [
               "agent:review",
-              "pr_approved"
+              "pr_approved",
+              "ai_reviewing"
             ],
             "prState": "OPEN",
             "draft": false

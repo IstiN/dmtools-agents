@@ -56,6 +56,7 @@ const LABELS = {
     AI_SOLUTION_DESIGN_CREATED: 'ai_solution_design_created',
     AI_DEVELOPED: 'ai_developed',
     AI_PR_REVIEWED: 'ai_pr_reviewed',
+    AI_REVIEWING: 'ai_reviewing',           // gh-1540: review leg in progress (the ai_validating twin) — set at leg start, removed at verdict
     AI_INTAKE: 'ai_intake',
     QUESTION: 'q',
     SD_CORE: 'sd_core',
