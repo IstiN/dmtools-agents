@@ -5810,3 +5810,131 @@ suite('postPReviewComments — gh-1471 pool round escalation + partial coverage'
             'the truncated specialist is named in the packet');
     });
 });
+
+// ─── gh-1540: the review in-progress carrier clear (`ai_reviewing`) ──────────
+// The pre-action stamps ai_reviewing on the PR + the linked issue at leg
+// start; every review arming rule skips while it is present. This suite pins
+// the OTHER half: wherever ai_pr_reviewed is latched (verdict time), the
+// carrier comes off both carriers — and the missing-review-data exit returns
+// the world to "review wanted, not running" (otherwise a failed leg would
+// starve the PR forever: the stuck carrier blocks every arming rule).
+
+suite('postPReviewComments — gh-1540 review in-progress carrier clear', function() {
+
+    function carrierHarness(prPayload) {
+        var added = [];
+        var removed = [];
+        var fileRead = function() { return null; };
+        var mod = loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': prReviewOutputFiles(fileRead)
+            })),
+            {
+                file_read: fileRead,
+                github_get_pr: function() {
+                    if (typeof prPayload === 'function') return prPayload();
+                    return JSON.stringify(prPayload);
+                }
+            }
+        );
+        var scm = {
+            addLabel: function(num, label) { added.push({ num: num, label: label }); },
+            removeLabel: function(num, label) { removed.push({ num: num, label: label }); }
+        };
+        var ctx = { scm: scm, machineAuthor: 'ai-teammate' };
+        var pr = { number: 1940, author: 'ai-teammate', branch: 'ai/gh-1931' };
+        return { mod: mod, added: added, removed: removed, ctx: ctx, pr: pr,
+                 repoInfo: { owner: 'acme', repo: 'widget' } };
+    }
+
+    test('finishPRAnchoredReview (REQUEST_CHANGES) clears the carrier from the PR and the linked issue', function() {
+        var h = carrierHarness({ number: 1940, state: 'open', merged: false,
+                                 body: 'Closes #1931', head: { ref: 'ai/gh-1931' } });
+        h.mod.finishPRAnchoredReview(h.ctx, h.pr, h.repoInfo, false, 'REQUEST_CHANGES');
+
+        assert.ok(h.removed.some(function(c) { return c.num === 1940 && c.label === 'ai_reviewing'; }),
+            'the PR carrier comes off at verdict time: ' + JSON.stringify(h.removed));
+        assert.ok(h.removed.some(function(c) { return c.num === 1931 && c.label === 'ai_reviewing'; }),
+            'the linked-issue carrier comes off too (the arm convention covers both)');
+    });
+
+    test('finishPRAnchoredReview (APPROVE) clears the carrier as well', function() {
+        var h = carrierHarness({ number: 1940, state: 'open', merged: false,
+                                 body: 'Closes #1931', head: { ref: 'ai/gh-1931' } });
+        h.mod.finishPRAnchoredReview(h.ctx, h.pr, h.repoInfo, true, 'APPROVE');
+
+        assert.equal(h.removed.filter(function(c) { return c.label === 'ai_reviewing'; }).length, 2,
+            'both carriers cleared on the approved verdict: ' + JSON.stringify(h.removed));
+    });
+
+    test('the clear survives a failed linked-issue probe (quiet, PR side still cleared)', function() {
+        var h = carrierHarness(function() { throw new Error('github_get_pr failed'); });
+        h.mod.finishPRAnchoredReview(h.ctx, h.pr, h.repoInfo, false, 'REQUEST_CHANGES');
+
+        assert.deepEqual(h.removed, [{ num: 1940, label: 'ai_reviewing' }],
+            'the PR carrier clears without the linked-issue lookup');
+    });
+
+    test('addReviewMarkers (issue-anchored verdict) clears the carrier from the ticket and the PR', function() {
+        var h = carrierHarness({ number: 1940, state: 'open', merged: false });
+        var removed = [];
+        var added = [];
+        h.ctx.tracker = {
+            addLabel: function(key, label) { added.push({ key: key, label: label }); },
+            removeLabel: function(key, label) { removed.push({ key: key, label: label }); },
+            postComment: function() {}
+        };
+        h.ctx.noTicket = false;
+        h.mod.addReviewMarkers(h.ctx, 'gh-1931', h.pr, h.repoInfo);
+
+        assert.ok(removed.some(function(c) { return c.key === 'gh-1931' && c.label === 'ai_reviewing'; }),
+            'the ticket-side carrier comes off: ' + JSON.stringify(removed));
+        assert.ok(h.removed.some(function(c) { return c.num === 1940 && c.label === 'ai_reviewing'; }),
+            'the PR-side carrier comes off: ' + JSON.stringify(h.removed));
+        assert.ok(added.some(function(c) { return c.label === 'ai_pr_reviewed'; }),
+            'the ai_pr_reviewed latch still lands (behavior unchanged)');
+    });
+
+    test('addReviewMarkers without a GitHub target still clears the ticket side (quiet)', function() {
+        var h = carrierHarness({ number: 1940, state: 'open', merged: false });
+        var removed = [];
+        h.ctx.tracker = {
+            addLabel: function() {},
+            removeLabel: function(key, label) { removed.push({ key: key, label: label }); }
+        };
+        h.mod.addReviewMarkers(h.ctx, 'gh-1931', { url: null }, null);
+
+        assert.deepEqual(removed, [{ key: 'gh-1931', label: 'ai_reviewing' }],
+            'the ticket-side clear is the only step (no scm target)');
+    });
+
+    test('addReviewMarkers keeps the verdict flow when the tracker remove throws', function() {
+        var h = carrierHarness({ number: 1940, state: 'open', merged: false });
+        h.ctx.tracker = {
+            addLabel: function() {},
+            removeLabel: function() { throw new Error('tracker down'); }
+        };
+        h.mod.addReviewMarkers(h.ctx, 'gh-1931', h.pr, h.repoInfo);
+
+        assert.ok(h.removed.some(function(c) { return c.label === 'ai_reviewing'; }),
+            'the PR-side clear still ran; no crash propagated');
+    });
+
+    test('handleMissingReviewData returns the world to "not running" (ticket-side clear)', function() {
+        var removed = [];
+        var tracker = {
+            removeLabel: function(key, label) { removed.push({ key: key, label: label }); },
+            postComment: function() {}
+        };
+        var mod = loadModule('js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({})),
+            { file_read: function() { return null; } });
+        mod.handleMissingReviewData(
+            { ticket: { key: 'gh-1931' }, inputFolderPath: 'input/gh-1931' },
+            {}, {}, tracker);
+
+        assert.deepEqual(removed, [{ key: 'gh-1931', label: 'ai_reviewing' }],
+            'a leg that ends without a verdict must not leave the carrier armed');
+    });
+});
