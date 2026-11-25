@@ -10,6 +10,7 @@ var configModule = require('../config.js');
 var forkDispatchModule = require('../common/forkDispatch.js');
 var labelListModule = require('../common/labelList.js');
 var prTerminalStateModule = require('../common/prTerminalState.js');
+var dispatchInputsModule = require('./dispatchInputs.js');
 var scmModule = require('../common/scm.js');
 var triggerFailuresModule = require('../common/triggerFailures.js');
 var validationLivenessModule = require('../common/validationLiveness.js');
@@ -277,30 +278,16 @@ function resolveRuleInputsAnchor(deps, repoInfo, ticketKey, rule, it) {
 }
 function buildWorkflowDispatchInputs(deps, repoInfo, ticketKey, rule, effectiveConfig, resolvedCf, concurrencyKey, projectKey, item) {
   if (!rule.inputs) {
-    return {
-      concurrency_key: concurrencyKey, display_key: ticketKey,
-      input_jql: buildEncodedConfigModule.resolveTicketInputJql(ticketKey, effectiveConfig),
-      config_file: resolvedCf,
-      encoded_config: buildEncodedConfigModule.buildEncodedConfig(ticketKey, rule, effectiveConfig),
-      project_key: projectKey
-    };
+    return dispatchInputsModule.bareDispatchInputs(ticketKey, rule, effectiveConfig, resolvedCf, concurrencyKey, projectKey);
   }
   var it = item || {};
   var anchor = resolveRuleInputsAnchor(deps, repoInfo, ticketKey, rule, it);
   if (!anchor.ok) return null;
-  var issueVal = anchor.issueNumber !== null ? anchor.issueNumber : anchor.prAnchoredFallback ? '' : ticketKey;
   var inputs = {};
   Object.keys(rule.inputs).forEach(function (k) {
-    // gh-1540: {branch} carries the item branch — the ai-teammate
-    // concurrency group keys on it (same head = one queue; unrelated
-    // branches and default-ref lanes keep their own groups).
-    inputs[k] = String(rule.inputs[k]).replace(/\{key\}/g, String(ticketKey)).replace(/\{issueNumber\}/g, String(issueVal)).replace(/\{prNumber\}/g, String(it.prNumber || '')).replace(/\{branch\}/g, String(it.branch || ''));
+    inputs[k] = dispatchInputsModule.expandDispatchInputValue(rule.inputs[k], ticketKey, dispatchInputsModule.dispatchAnchorIssueVal(anchor, ticketKey), it);
   });
-  if (anchor.prAnchoredFallback) {
-    inputs.issue = '';
-    inputs.pr = String(it.prNumber);
-  }
-  return inputs;
+  return dispatchInputsModule.applyPrAnchoredFallbackInputs(inputs, anchor, it);
 }
 function checkCrossAnchorActive(deps, scm, workflowFile, resolvedCf, item, skipInfo) {
   var altKeys = workflowRunTrackingModule.crossAnchorKeys(item);

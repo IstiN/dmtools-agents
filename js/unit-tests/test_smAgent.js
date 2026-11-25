@@ -158,6 +158,10 @@ var SM_EXTRACTED_FILES = [
     'parkAndActorProbes.js',
     'checkRunCures.js',
     'workflowRunTracking.js',
+    // gh-1540 rework: the dispatch-input builder split — loaded BEFORE
+    // workflowDispatch.js so its hoisted sibling require resolves in the
+    // sandbox require map.
+    'dispatchInputs.js',
     'workflowDispatch.js',
     'verdictAndFailState.js',
     'reworkAndVerdicts.js',
@@ -11635,6 +11639,81 @@ suite('smAgent: review in-progress carrier + in-tick dispatch latch (gh-1540)', 
             return l.indexOf('[dry] ▶') !== -1;
         });
         assert.equal(dryLines.length, 2, 'both rules log their dry dispatch (nothing recorded)');
+    });
+});
+
+// ─── gh-1540 rework: the dispatch-input builder's anchor semantics, pinned
+// at unit level. The gh-1540 `{branch}` placeholder grew
+// buildWorkflowDispatchInputs past the CRAP ≤ 8 ratchet (quality CI: NEW > 8,
+// CC 9 at 92.9% — the one uncovered statement being the anchor.ok=false
+// skip). The builder is split into cyclomatic-lean helpers; these tests pin
+// the behaviors the split must preserve, including the previously uncovered
+// skip path.
+suite('smAgent: dispatch-input builder anchor semantics (gh-1540 rework)', function () {
+
+    function dispatchInputsParams(rules) {
+        return { jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            machineAuthor: 'ai-teammate', rules: rules } };
+    }
+
+    function inputsFileMap() {
+        return { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' };
+    }
+
+    test('a rule needing {issueNumber} with no issue and no PR anchor dispatches NOTHING (anchor.ok=false skip)', function () {
+        // The branch the coverage hole sat on: resolveRuleInputsAnchor refuses
+        // the lane (needs {issueNumber} but the item links no issue and has
+        // no PR anchor — #544) and buildWorkflowDispatchInputs returns null.
+        // No trigger attempt, no label consumed — the next tick re-evaluates.
+        var sm = makeSmAgent({
+            captureConsole: true,
+            fileMap: inputsFileMap(),
+            github: { items: [{ key: 'gh-99', labels: ['agent:rework'],
+                issueNumber: null, prNumber: null, branch: 'ai/gh-99' }] }
+        });
+
+        sm.action(dispatchInputsParams([{
+            description: 'rework needs the issue anchor',
+            source: 'github',
+            query: { type: 'issue', labels: ['agent:rework'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '{issueNumber}', leg: 'rework', reason: 'sm: test' },
+            limit: 1,
+            id: 'rework-needs-issue'
+        }]));
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'no dispatch without a resolvable issue anchor');
+        assert.ok((sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('needs {issueNumber} but the item links no issue and has no PR anchor') !== -1;
+        }), 'the skip names the missing-anchor reason in the tick log');
+    });
+
+    test('a rule without {issueNumber} expands {key} to the ticket key and leaves issue empty (issueVal=ticketKey fallback)', function () {
+        // needsIssue=false + issueNumber=null → issueVal falls back to the
+        // ticket key; an issue:'' input must stay empty (never silently
+        // become the ticket key), and {key}/{branch} expand normally.
+        var sm = makeSmAgent({
+            fileMap: inputsFileMap(),
+            github: { items: [{ key: 'gh-99', labels: ['agent:dev'],
+                issueNumber: null, prNumber: null, branch: 'ai/gh-99' }] }
+        });
+
+        sm.action(dispatchInputsParams([{
+            description: 'dev leg carries the ticket key, not an issue anchor',
+            source: 'github',
+            query: { type: 'issue', labels: ['agent:dev'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '', leg: 'dev', reason: 'sm: test', key: '{key}', branch: '{branch}' },
+            limit: 1,
+            id: 'dev-keyed'
+        }]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'dispatched — no issue anchor needed');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.key, 'gh-99', '{key} expands to the ticket key');
+        assert.equal(inputs.issue, '', 'issue stays empty (never the ticket key)');
+        assert.equal(inputs.branch, 'ai/gh-99', '{branch} expands to the item branch (gh-1540)');
     });
 });
 
