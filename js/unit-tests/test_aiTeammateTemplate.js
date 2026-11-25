@@ -41,9 +41,25 @@ suite('ai-teammate.yml.template — run-name carries the effective anchor', func
             'issue is no longer a required number — PR-anchored dispatches send an empty issue');
     });
 
-    test('concurrency group keeps PR-anchored runs per-PR', function () {
-        assert.ok(tpl.indexOf("format('pr-{0}', github.event.inputs.pr) }}") !== -1,
-            'empty issue falls back to pr-<N> in the concurrency group — PR-anchored runs must not share one global group');
+    test('concurrency: dispatch legs serialize per BRANCH, event runs stay per-issue (gh-1540)', function () {
+        // gh-1540 (live PR #1536): the dispatch-path group fell back to the
+        // anchor inputs — 'ai-teammate-<issue>' vs 'ai-teammate-pr-<n>' —
+        // so two lanes arming the same head in one tick ran PARALLEL until
+        // the slower posted a verdict on the merged PR. The dispatch path
+        // now keys on github.ref (the PR head the SM dispatched against);
+        // the issues-event path keeps its per-issue key and
+        // cancel-in-progress stays false (a duplicate QUEUES, never races).
+        assert.ok(tpl.indexOf("format('ai-teammate-ref-{0}', github.ref)") !== -1,
+            'the dispatch path keys the group on the dispatched ref (github.ref)');
+        assert.ok(tpl.indexOf("format('ai-teammate-issue-{0}', github.event.issue.number)") !== -1,
+            'the issues-event path keeps the per-issue group');
+        assert.ok(tpl.indexOf("github.event_name == 'issues' &&") !== -1,
+            'the event path is selected by event_name, not by input presence');
+        assert.ok(tpl.indexOf("format('pr-{0}', github.event.inputs.pr) }}") === -1,
+            'the anchor-input fallback is gone — it minted a second group for the same head');
+        var cipIdx = tpl.indexOf('cancel-in-progress:');
+        assert.ok(cipIdx !== -1 && tpl.indexOf('cancel-in-progress: false') === cipIdx,
+            'a duplicate leg queues behind the running one (cancel-in-progress: false)');
     });
 });
 

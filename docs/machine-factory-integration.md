@@ -129,7 +129,7 @@ on:
       issue: { description: Issue number, required: true, type: number }
       leg: { description: 'dev | review | rework (empty = derive)', required: false, type: string }
 concurrency:
-  group: ai-teammate-issue-${{ github.event.issue.number || inputs.issue }}
+  group: ${{ github.event_name == 'issues' && format('ai-teammate-issue-{0}', github.event.issue.number) || format('ai-teammate-ref-{0}', github.ref) }}
   cancel-in-progress: false
 jobs:
   factory:

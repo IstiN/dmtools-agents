@@ -98,11 +98,14 @@ on:
         default: ''
 
 concurrency:
-  # PR-anchored dispatches (#544/#687) carry no issue — fall back to the pr
-  # input so each PR keeps its OWN group ('ai-teammate-issue-pr-266');
-  # without it every PR-anchored run shares the empty group and serializes
-  # across unrelated PRs.
-  group: ai-teammate-issue-${{ github.event.issue.number || github.event.inputs.issue || format('pr-{0}', github.event.inputs.pr) }}
+  # gh-1540: the dispatch path keys on the REF the SM dispatched against —
+  # two lanes arming the same head in one tick used to mint two groups
+  # ('ai-teammate-issue-<n>' vs the anchor-input fallback) and ran parallel
+  # until the slower posted a verdict on the merged PR. Per-ref keying
+  # serializes them; the issues-event path keeps its per-issue key.
+  # cancel-in-progress stays false: a duplicate QUEUES behind the running
+  # leg, it never races it.
+  group: ${{ github.event_name == 'issues' && format('ai-teammate-issue-{0}', github.event.issue.number) || format('ai-teammate-ref-{0}', github.ref) }}
   cancel-in-progress: false
 
 permissions:

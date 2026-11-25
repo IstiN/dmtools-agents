@@ -35,6 +35,15 @@ suite('nakedPrReconcile predicates (gh-1097 UT-1..3)', function () {
         assert.equal(m.isNakedPr(['x'], ['x']), false);
     });
 
+    test('gh-1540: a PR carrying only the review in-progress carrier is NOT naked', function () {
+        // A review leg stamps ai_reviewing on the PR at leg start; the
+        // sweep must not read that PR as label-naked and re-arm agent:review
+        // under a LIVE leg — that is exactly the duplicate-arm the gh-1540
+        // carrier exists to prevent.
+        var m = nakedMod();
+        assert.equal(m.isNakedPr(['ai_reviewing']), false);
+    });
+
     test('excluded: blocked/needs-human/validation_failed on PR or issue, human PR', function () {
         var m = nakedMod();
         var machine = { machine: true };
