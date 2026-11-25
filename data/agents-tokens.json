@@ -155,5 +155,18 @@
       "source": "reported",
       "model": "glm-5.3-flash"
     }
+  ],
+  "issue-1540": [
+    {
+      "leg": "dev",
+      "at": "2026-11-25T10:00:55Z",
+      "prompt": 222579,
+      "completion": 27707,
+      "total": 250286,
+      "cacheRead": 5758848,
+      "requests": 93,
+      "source": "",
+      "model": "glm-5.3-flash"
+    }
   ]
 }
