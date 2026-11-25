@@ -1,0 +1,33 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "ci_analyst",
+      "descriptionPath": "agents/docs/agents/ci_analyst.md"
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": false,
+    "cleanupInputFolder": false,
+    "preCliJSAction": "agents/js/ciAnalystContext.js",
+    "postJSAction": "agents/js/ciAnalystPost.js",
+    "customParams": {
+      "contextPath": "",
+      "dryRun": true,
+      "machineAuthor": "",
+      "targetRepository": ""
+    },
+    "cliPrompts": [
+      "CI Failure Analyst",
+      "./agents/instructions/common/agent_task_preamble.md",
+      "./agents/instructions/common/response_output.md",
+      "./agents/prompts/bash_tools.md",
+      "./agents/prompts/ci_analyst.md"
+    ]
+  }
+}
