@@ -344,6 +344,12 @@ function handleMissingReviewData(params, config, customParams, tracker) {
     console.error('Failed to read pr_review.json after resume attempt');
 
     postMissingOutputComment(tracker, ticketKey);
+    // gh-1540: the leg ended WITHOUT a verdict — the in-progress carrier
+    // must come off the ticket here, or the stuck label blocks every
+    // review arming rule forever (the PR side needs the follow-up
+    // staleness sweep; no PR is resolved at this point).
+    removeTicketLabelQuietly(tracker, ticketKey, LABELS.AI_REVIEWING,
+        'the leg ended without a verdict — back to "review wanted, not running"');
     removeSmLabelAfterMissingOutput(tracker, ticketKey, customParams);
     triggerSmAfterMissingOutput(config, customParams);
 
@@ -2665,6 +2671,29 @@ function cleanLinkedIssueArmsOnApproval(ctx, pr, repoInfo) {
 }
 
 /**
+ * gh-1540: clear the review in-progress carrier (`ai_reviewing`, the
+ * ai_validating twin) — the mirror of the pre-action's stamp. Called where
+ * `ai_pr_reviewed` is latched (verdict time) so the world returns to
+ * "review wanted, not running" exactly when the review phase concludes; the
+ * arming rules skip on this label, so a stuck carrier would starve the PR.
+ * Quiet and non-fatal: the PR side clears even when the linked-issue probe
+ * fails (fail-open, same shape as the rework re-arm).
+ */
+function clearReviewInProgressCarrier(ctx, pr, repoInfo) {
+    removePRLabelQuietly(ctx.scm, pr.number, LABELS.AI_REVIEWING,
+        'No ai_reviewing label to remove from PR #' + pr.number);
+    try {
+        var linkedIssue = linkedIssueNumberFromPR(repoInfo, pr.number, pr.branch);
+        if (linkedIssue) {
+            removePRLabelQuietly(ctx.scm, linkedIssue, LABELS.AI_REVIEWING,
+                'No ai_reviewing label to remove from issue #' + linkedIssue);
+        }
+    } catch (e) {
+        console.warn('Linked-issue ai_reviewing clear failed (non-fatal):', e.message || e);
+    }
+}
+
+/**
  * ── PR-anchored runs end here (#687): verdict + labels live on the
  * PR; the ticket-side steps below (tracker statuses/labels, ticket
  * comments) assume a hydrated ticket this run does not have.
@@ -2672,6 +2701,9 @@ function cleanLinkedIssueArmsOnApproval(ctx, pr, repoInfo) {
 function finishPRAnchoredReview(ctx, pr, repoInfo, isApproved, recommendation) {
     addPRLabelQuietlyDetailed(ctx.scm, pr.number, LABELS.AI_PR_REVIEWED,
         'Failed to add ai_pr_reviewed to PR #' + pr.number + ':');
+    // gh-1540: the verdict IS the leg's end — the in-progress carrier comes
+    // off the PR and the linked issue wherever ai_pr_reviewed is latched.
+    clearReviewInProgressCarrier(ctx, pr, repoInfo);
     // Consume the on-demand trigger so the label never loops.
     removePRLabelQuietly(ctx.scm, pr.number, 'agent:review', 'No agent:review label to remove from PR #' + pr.number);
     if (!isApproved) {
@@ -2768,13 +2800,29 @@ function addTicketAiPrReviewedLabel(tracker, ticketKey) {
  */
 function addReviewMarkers(ctx, ticketKey, pr, repoInfo) {
     addTicketAiPrReviewedLabel(ctx.tracker, ticketKey);
+    removeTicketLabelQuietly(ctx.tracker, ticketKey, LABELS.AI_REVIEWING,
+        'gh-1540: verdict reached — the ai_reviewing carrier comes off the ticket');
     if (!hasGitHubTarget(pr, repoInfo)) return;
     addPRLabelQuietlyDetailed(ctx.scm, pr.number, LABELS.AI_PR_REVIEWED,
         'Failed to add ai_pr_reviewed to PR #' + pr.number + ':');
+    removePRLabelQuietly(ctx.scm, pr.number, LABELS.AI_REVIEWING,
+        'No ai_reviewing label to remove from PR #' + pr.number);
 }
 
-function removeWipLabel(tracker, ticketKey, wipLabel) {
+/**
+ * Quiet tracker-side label removal (gh-1540 carrier clear + reuse): a
+ * missing label or a dead tracker must never break the verdict flow.
+ */
+function removeTicketLabelQuietly(tracker, ticketKey, label, why) {
     try {
+        tracker.removeLabel(ticketKey, label);
+        console.log('✅ Removed ' + label + ' from ' + ticketKey + (why ? ' — ' + why : ''));
+    } catch (e) {
+        console.warn('Failed to remove ' + label + ' from ' + ticketKey + ' (non-fatal):', e.message || e);
+    }
+}
+
+function removeWipLabel(tracker, ticketKey, wipLabel) {    try {
         tracker.removeLabel(ticketKey, wipLabel);
         console.log('Removed WIP label:', wipLabel);
     } catch (error) {
@@ -3349,6 +3397,9 @@ if (typeof module !== 'undefined' && module.exports) {
         stripLinkedIssueArmLabels,
         cleanLinkedIssueArmsOnApproval,
         finishPRAnchoredReview,
+        addReviewMarkers,
+        handleMissingReviewData,
+        clearReviewInProgressCarrier,
         runReworkLeg,
         resolveWipLabel,
         buildBitriseEnvVars,

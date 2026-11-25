@@ -5872,7 +5872,9 @@ suite('postPReviewComments — gh-1540 review in-progress carrier clear', functi
         var h = carrierHarness(function() { throw new Error('github_get_pr failed'); });
         h.mod.finishPRAnchoredReview(h.ctx, h.pr, h.repoInfo, false, 'REQUEST_CHANGES');
 
-        assert.deepEqual(h.removed, [{ num: 1940, label: 'ai_reviewing' }],
+        assert.deepEqual(
+            h.removed.filter(function(c) { return c.label === 'ai_reviewing'; }),
+            [{ num: 1940, label: 'ai_reviewing' }],
             'the PR carrier clears without the linked-issue lookup');
     });
 
@@ -5927,9 +5929,12 @@ suite('postPReviewComments — gh-1540 review in-progress carrier clear', functi
             removeLabel: function(key, label) { removed.push({ key: key, label: label }); },
             postComment: function() {}
         };
+        var fileRead = function() { return null; };
         var mod = loadModule('js/postPRReviewComments.js',
-            makeRequire(prReviewRequireMap({})),
-            { file_read: function() { return null; } });
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': prReviewOutputFiles(fileRead)
+            })),
+            { file_read: fileRead });
         mod.handleMissingReviewData(
             { ticket: { key: 'gh-1931' }, inputFolderPath: 'input/gh-1931' },
             {}, {}, tracker);
