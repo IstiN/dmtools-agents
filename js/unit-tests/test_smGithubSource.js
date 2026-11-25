@@ -2371,10 +2371,10 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
         assert.equal(r.inputs.issue, '{issueNumber}',
             'issue-carried: the engine resolves the linked PR from the issue');
         assert.equal(r.workflowRef, '{branch}', 'the leg runs on the PR head');
-        assert.deepEqual(r.query.notPrLabels, ['agent:review', 'pr_approved'],
-            'defers to the PR-carrier rule and skips concluded reviews');
-        assert.deepEqual(r.query.notLabels, ['agent:rework'],
-            'a PR sent to rework must not simultaneously arm a re-review (#683)');
+        assert.deepEqual(r.query.notPrLabels, ['agent:review', 'pr_approved', 'ai_reviewing'],
+            'defers to the PR-carrier rule, skips concluded reviews, and skips a running leg (gh-1540)');
+        assert.deepEqual(r.query.notLabels, ['agent:rework', 'ai_reviewing'],
+            'a PR sent to rework must not simultaneously arm a re-review (#683), and a running review leg blocks a second arm (gh-1540)');
         // Catalog order: the PR-carrier arm must stay ahead of the issue one
         // (RULE ORDER discipline — the closer anchor wins the tick).
         var ids = rules.map(function (x) { return x.id; });
@@ -4193,5 +4193,141 @@ suite('sm github source — matchesGuards probe order (gh-1221 composite split)'
             provider, null, 'o', { owner: 'o', repo: 'r' });
         assert.equal(ok, false, 'prChecks mismatch fails first');
         assert.deepEqual(calls, [], 'no provider probe is reached (the cached-issue-label fetch included)');
+    });
+});
+
+// ─── gh-1540 AC4: the review phase's in-progress carrier (`ai_reviewing`,
+// the ai_validating twin) must silence EVERY review arming rule on BOTH
+// anchors. Live PR #1536 (2026-11-23): review-after-dev (issue-anchored)
+// and review-machine-unlinked (PR-anchored) matched the same rework-close
+// world in one tick — no rule read any in-flight review state — and the two
+// legs ran in parallel until the slower one posted a verdict on the merged
+// PR. The shape tests (both forges, five rules) live in test_smAgent.js;
+// this suite proves the DEPLOYED queries through the real matchesGuards.
+suite('sm github source: review in-progress carrier skips (gh-1540)', function () {
+
+    var RULE_IDS = ['review-after-dev', 'review-machine-unlinked',
+        'review-external-once', 'review-on-label', 'review-on-issue-label'];
+
+    // Same loader shape as the suite above (its `load` helper is closure-
+    // scoped): real githubSource + provider stub + real smAsync fallback.
+    function carrierLoad(tools, prs, statuses) {
+        var providerStub = {
+            findPr: function (n) { return prs[n] || null; },
+            prStatus: function (n) { return statuses[n] || null; },
+            lastReview: function (n) { return null; },
+            reviewThreads: function (n) { return null; },
+            latestVerdictRecord: function () { return null; }
+        };
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': {
+                createSmProvider: function () { return providerStub; }
+            }
+        }), tools || {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return providerStub; },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
+            },
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
+        }), tools);
+    }
+
+    function deployedRules(file, ids) {
+        var cfg = JSON.parse(file_read({ path: file }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        return ids.map(function (id) {
+            assert.ok(byId[id], file + ' rule ' + id + ' exists');
+            return byId[id];
+        });
+    }
+
+    function issueCarriers(searchLabels, prLabels) {
+        return carrierLoad({
+            github_search_issues: function () {
+                return { items: [{ number: 2, labels: searchLabels.map(function (l) { return { name: l }; }) }] };
+            }
+        }, { 2: { number: 20, state: 'OPEN' } },
+        { 20: { number: 20, state: 'OPEN', checks: 'none', labels: prLabels } });
+    }
+
+    function prCarriers(prLabelNames, author, status) {
+        return carrierLoad({
+            github_list_prs: function () {
+                return [{ number: 1536, labels: prLabelNames.map(function (l) { return { name: l }; }),
+                    head: { ref: 'ai/gh-1534' }, draft: false, user: { login: author } }];
+            }
+        }, {}, { 1536: status });
+    }
+
+    function queryOne(srcMod, rule) {
+        return srcMod.query(rule, {
+            repoInfo: { owner: 'acme', repo: 'widgets' },
+            machineAuthor: 'ai-teammate'
+        });
+    }
+
+    ['sm_github.json', 'sm_gitlab.json'].forEach(function (file) {
+        // The GitLab twins' queries are forge-portable — the matcher is the
+        // same module for both forges (gitlabSource rides githubSource), so
+        // running the gitlab query objects through this matcher is the
+        // functional proof of the mirrored guard sets.
+        test(file + ': issue-anchored review rules skip while ai_reviewing is present (both carriers)', function () {
+            var rules = deployedRules(file, RULE_IDS).filter(function (r) {
+                return r.query.type === 'issue';
+            });
+            assert.ok(rules.length >= 2, file + ' carries the issue-anchored review rules');
+
+            rules.forEach(function (rule) {
+                var quiet = issueCarriers(
+                    (rule.query.labels || []).concat(['ai_reviewing']),
+                    ['ai_validated', 'ai_reviewing']);
+                assert.equal(queryOne(quiet, rule).length, 0,
+                    rule.id + ': ai_reviewing on the ISSUE carrier silences it');
+
+                var quietPr = issueCarriers(rule.query.labels || [], ['ai_validated', 'ai_reviewing']);
+                assert.equal(queryOne(quietPr, rule).length, 0,
+                    rule.id + ': ai_reviewing on the LINKED PR silences it too');
+
+                var live = issueCarriers(rule.query.labels || [], ['ai_validated']);
+                assert.equal(queryOne(live, rule).length, 1,
+                    rule.id + ': without the carrier the same world still matches (negative is carrier-specific)');
+            });
+        });
+
+        test(file + ': PR-anchored review rules skip while ai_reviewing is present', function () {
+            var rules = deployedRules(file, RULE_IDS).filter(function (r) {
+                return r.query.type === 'pr' && RULE_IDS.indexOf(r.id) !== -1;
+            });
+            assert.equal(rules.length, 3, file + ' carries the three PR-anchored review arming rules');
+
+            rules.forEach(function (rule) {
+                var isExternal = rule.id === 'review-external-once';
+                var baseStatus = isExternal
+                    ? { number: 1536, state: 'OPEN', checks: 'green', trackedVerdict: 'green' }
+                    : { number: 1536, state: 'OPEN', checks: 'none' };
+                var author = isExternal ? 'vendor-cla' : 'ai-teammate';
+
+                var quiet = prCarriers((rule.query.labels || []).concat(['ai_reviewing']),
+                    author, baseStatus);
+                assert.equal(queryOne(quiet, rule).length, 0,
+                    rule.id + ': ai_reviewing on the PR silences it');
+
+                var live = prCarriers(rule.query.labels || [], author, baseStatus);
+                assert.equal(queryOne(live, rule).length, 1,
+                    rule.id + ': without the carrier the same world still matches');
+            });
+        });
     });
 });

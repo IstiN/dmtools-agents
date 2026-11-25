@@ -11547,17 +11547,11 @@ suite('smAgent: review in-progress carrier + in-tick dispatch latch (gh-1540)', 
         }), 'the suppressed lane names the latch in the tick log');
     });
 
-    test('AC4 (matcher): ai_reviewing on the carriers silences every arming rule', function () {
-        var sm = makeSmAgent({
-            fileMap: carrierFileMap(),
-            github: { items: reworkCloseWorld(true) }
-        });
-
-        sm.action(gh1540Params(deployedRulesOf('sm_github.json', REVIEW_ARMING_RULE_IDS)));
-
-        assert.equal(sm.capturedTriggers.length, 0,
-            'a review is RUNNING — no arming rule may dispatch while ai_reviewing is present');
-    });
+    // AC4 (functional matcher — a carrier carrying ai_reviewing matches none
+    // of the five arming rules) is pinned against the REAL matchesGuards in
+    // test_smGithubSource.js ('review in-progress carrier skips'); this
+    // harness serves items raw, so a matcher assertion here would prove
+    // nothing about the deployed guard chain.
 
     test('the latch resets between ticks — each tick still dispatches its one leg', function () {
         var sm = makeSmAgent({
@@ -11610,7 +11604,7 @@ suite('smAgent: review in-progress carrier + in-tick dispatch latch (gh-1540)', 
         var sm = makeSmAgent({
             captureConsole: true,
             fileMap: carrierFileMap(),
-            github: { items: reworkCloseWorld(false) }
+            github: { items: reworkCloseWorld(false).slice(1) }
         });
         var params = gh1540Params(deployedRulesOf('sm_github.json',
             ['review-after-dev', 'review-machine-unlinked']), { dryRun: true });
