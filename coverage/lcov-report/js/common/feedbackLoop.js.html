@@ -1,0 +1,2107 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for js/common/feedbackLoop.js</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../prettify.css" />
+    <link rel="stylesheet" href="../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">js/common</a> feedbackLoop.js</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">78.93% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>532/674</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">92.16% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>200/217</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">50.92% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>55/108</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">78.93% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>532/674</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line medium'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a>
+<a name='L150'></a><a href='#L150'>150</a>
+<a name='L151'></a><a href='#L151'>151</a>
+<a name='L152'></a><a href='#L152'>152</a>
+<a name='L153'></a><a href='#L153'>153</a>
+<a name='L154'></a><a href='#L154'>154</a>
+<a name='L155'></a><a href='#L155'>155</a>
+<a name='L156'></a><a href='#L156'>156</a>
+<a name='L157'></a><a href='#L157'>157</a>
+<a name='L158'></a><a href='#L158'>158</a>
+<a name='L159'></a><a href='#L159'>159</a>
+<a name='L160'></a><a href='#L160'>160</a>
+<a name='L161'></a><a href='#L161'>161</a>
+<a name='L162'></a><a href='#L162'>162</a>
+<a name='L163'></a><a href='#L163'>163</a>
+<a name='L164'></a><a href='#L164'>164</a>
+<a name='L165'></a><a href='#L165'>165</a>
+<a name='L166'></a><a href='#L166'>166</a>
+<a name='L167'></a><a href='#L167'>167</a>
+<a name='L168'></a><a href='#L168'>168</a>
+<a name='L169'></a><a href='#L169'>169</a>
+<a name='L170'></a><a href='#L170'>170</a>
+<a name='L171'></a><a href='#L171'>171</a>
+<a name='L172'></a><a href='#L172'>172</a>
+<a name='L173'></a><a href='#L173'>173</a>
+<a name='L174'></a><a href='#L174'>174</a>
+<a name='L175'></a><a href='#L175'>175</a>
+<a name='L176'></a><a href='#L176'>176</a>
+<a name='L177'></a><a href='#L177'>177</a>
+<a name='L178'></a><a href='#L178'>178</a>
+<a name='L179'></a><a href='#L179'>179</a>
+<a name='L180'></a><a href='#L180'>180</a>
+<a name='L181'></a><a href='#L181'>181</a>
+<a name='L182'></a><a href='#L182'>182</a>
+<a name='L183'></a><a href='#L183'>183</a>
+<a name='L184'></a><a href='#L184'>184</a>
+<a name='L185'></a><a href='#L185'>185</a>
+<a name='L186'></a><a href='#L186'>186</a>
+<a name='L187'></a><a href='#L187'>187</a>
+<a name='L188'></a><a href='#L188'>188</a>
+<a name='L189'></a><a href='#L189'>189</a>
+<a name='L190'></a><a href='#L190'>190</a>
+<a name='L191'></a><a href='#L191'>191</a>
+<a name='L192'></a><a href='#L192'>192</a>
+<a name='L193'></a><a href='#L193'>193</a>
+<a name='L194'></a><a href='#L194'>194</a>
+<a name='L195'></a><a href='#L195'>195</a>
+<a name='L196'></a><a href='#L196'>196</a>
+<a name='L197'></a><a href='#L197'>197</a>
+<a name='L198'></a><a href='#L198'>198</a>
+<a name='L199'></a><a href='#L199'>199</a>
+<a name='L200'></a><a href='#L200'>200</a>
+<a name='L201'></a><a href='#L201'>201</a>
+<a name='L202'></a><a href='#L202'>202</a>
+<a name='L203'></a><a href='#L203'>203</a>
+<a name='L204'></a><a href='#L204'>204</a>
+<a name='L205'></a><a href='#L205'>205</a>
+<a name='L206'></a><a href='#L206'>206</a>
+<a name='L207'></a><a href='#L207'>207</a>
+<a name='L208'></a><a href='#L208'>208</a>
+<a name='L209'></a><a href='#L209'>209</a>
+<a name='L210'></a><a href='#L210'>210</a>
+<a name='L211'></a><a href='#L211'>211</a>
+<a name='L212'></a><a href='#L212'>212</a>
+<a name='L213'></a><a href='#L213'>213</a>
+<a name='L214'></a><a href='#L214'>214</a>
+<a name='L215'></a><a href='#L215'>215</a>
+<a name='L216'></a><a href='#L216'>216</a>
+<a name='L217'></a><a href='#L217'>217</a>
+<a name='L218'></a><a href='#L218'>218</a>
+<a name='L219'></a><a href='#L219'>219</a>
+<a name='L220'></a><a href='#L220'>220</a>
+<a name='L221'></a><a href='#L221'>221</a>
+<a name='L222'></a><a href='#L222'>222</a>
+<a name='L223'></a><a href='#L223'>223</a>
+<a name='L224'></a><a href='#L224'>224</a>
+<a name='L225'></a><a href='#L225'>225</a>
+<a name='L226'></a><a href='#L226'>226</a>
+<a name='L227'></a><a href='#L227'>227</a>
+<a name='L228'></a><a href='#L228'>228</a>
+<a name='L229'></a><a href='#L229'>229</a>
+<a name='L230'></a><a href='#L230'>230</a>
+<a name='L231'></a><a href='#L231'>231</a>
+<a name='L232'></a><a href='#L232'>232</a>
+<a name='L233'></a><a href='#L233'>233</a>
+<a name='L234'></a><a href='#L234'>234</a>
+<a name='L235'></a><a href='#L235'>235</a>
+<a name='L236'></a><a href='#L236'>236</a>
+<a name='L237'></a><a href='#L237'>237</a>
+<a name='L238'></a><a href='#L238'>238</a>
+<a name='L239'></a><a href='#L239'>239</a>
+<a name='L240'></a><a href='#L240'>240</a>
+<a name='L241'></a><a href='#L241'>241</a>
+<a name='L242'></a><a href='#L242'>242</a>
+<a name='L243'></a><a href='#L243'>243</a>
+<a name='L244'></a><a href='#L244'>244</a>
+<a name='L245'></a><a href='#L245'>245</a>
+<a name='L246'></a><a href='#L246'>246</a>
+<a name='L247'></a><a href='#L247'>247</a>
+<a name='L248'></a><a href='#L248'>248</a>
+<a name='L249'></a><a href='#L249'>249</a>
+<a name='L250'></a><a href='#L250'>250</a>
+<a name='L251'></a><a href='#L251'>251</a>
+<a name='L252'></a><a href='#L252'>252</a>
+<a name='L253'></a><a href='#L253'>253</a>
+<a name='L254'></a><a href='#L254'>254</a>
+<a name='L255'></a><a href='#L255'>255</a>
+<a name='L256'></a><a href='#L256'>256</a>
+<a name='L257'></a><a href='#L257'>257</a>
+<a name='L258'></a><a href='#L258'>258</a>
+<a name='L259'></a><a href='#L259'>259</a>
+<a name='L260'></a><a href='#L260'>260</a>
+<a name='L261'></a><a href='#L261'>261</a>
+<a name='L262'></a><a href='#L262'>262</a>
+<a name='L263'></a><a href='#L263'>263</a>
+<a name='L264'></a><a href='#L264'>264</a>
+<a name='L265'></a><a href='#L265'>265</a>
+<a name='L266'></a><a href='#L266'>266</a>
+<a name='L267'></a><a href='#L267'>267</a>
+<a name='L268'></a><a href='#L268'>268</a>
+<a name='L269'></a><a href='#L269'>269</a>
+<a name='L270'></a><a href='#L270'>270</a>
+<a name='L271'></a><a href='#L271'>271</a>
+<a name='L272'></a><a href='#L272'>272</a>
+<a name='L273'></a><a href='#L273'>273</a>
+<a name='L274'></a><a href='#L274'>274</a>
+<a name='L275'></a><a href='#L275'>275</a>
+<a name='L276'></a><a href='#L276'>276</a>
+<a name='L277'></a><a href='#L277'>277</a>
+<a name='L278'></a><a href='#L278'>278</a>
+<a name='L279'></a><a href='#L279'>279</a>
+<a name='L280'></a><a href='#L280'>280</a>
+<a name='L281'></a><a href='#L281'>281</a>
+<a name='L282'></a><a href='#L282'>282</a>
+<a name='L283'></a><a href='#L283'>283</a>
+<a name='L284'></a><a href='#L284'>284</a>
+<a name='L285'></a><a href='#L285'>285</a>
+<a name='L286'></a><a href='#L286'>286</a>
+<a name='L287'></a><a href='#L287'>287</a>
+<a name='L288'></a><a href='#L288'>288</a>
+<a name='L289'></a><a href='#L289'>289</a>
+<a name='L290'></a><a href='#L290'>290</a>
+<a name='L291'></a><a href='#L291'>291</a>
+<a name='L292'></a><a href='#L292'>292</a>
+<a name='L293'></a><a href='#L293'>293</a>
+<a name='L294'></a><a href='#L294'>294</a>
+<a name='L295'></a><a href='#L295'>295</a>
+<a name='L296'></a><a href='#L296'>296</a>
+<a name='L297'></a><a href='#L297'>297</a>
+<a name='L298'></a><a href='#L298'>298</a>
+<a name='L299'></a><a href='#L299'>299</a>
+<a name='L300'></a><a href='#L300'>300</a>
+<a name='L301'></a><a href='#L301'>301</a>
+<a name='L302'></a><a href='#L302'>302</a>
+<a name='L303'></a><a href='#L303'>303</a>
+<a name='L304'></a><a href='#L304'>304</a>
+<a name='L305'></a><a href='#L305'>305</a>
+<a name='L306'></a><a href='#L306'>306</a>
+<a name='L307'></a><a href='#L307'>307</a>
+<a name='L308'></a><a href='#L308'>308</a>
+<a name='L309'></a><a href='#L309'>309</a>
+<a name='L310'></a><a href='#L310'>310</a>
+<a name='L311'></a><a href='#L311'>311</a>
+<a name='L312'></a><a href='#L312'>312</a>
+<a name='L313'></a><a href='#L313'>313</a>
+<a name='L314'></a><a href='#L314'>314</a>
+<a name='L315'></a><a href='#L315'>315</a>
+<a name='L316'></a><a href='#L316'>316</a>
+<a name='L317'></a><a href='#L317'>317</a>
+<a name='L318'></a><a href='#L318'>318</a>
+<a name='L319'></a><a href='#L319'>319</a>
+<a name='L320'></a><a href='#L320'>320</a>
+<a name='L321'></a><a href='#L321'>321</a>
+<a name='L322'></a><a href='#L322'>322</a>
+<a name='L323'></a><a href='#L323'>323</a>
+<a name='L324'></a><a href='#L324'>324</a>
+<a name='L325'></a><a href='#L325'>325</a>
+<a name='L326'></a><a href='#L326'>326</a>
+<a name='L327'></a><a href='#L327'>327</a>
+<a name='L328'></a><a href='#L328'>328</a>
+<a name='L329'></a><a href='#L329'>329</a>
+<a name='L330'></a><a href='#L330'>330</a>
+<a name='L331'></a><a href='#L331'>331</a>
+<a name='L332'></a><a href='#L332'>332</a>
+<a name='L333'></a><a href='#L333'>333</a>
+<a name='L334'></a><a href='#L334'>334</a>
+<a name='L335'></a><a href='#L335'>335</a>
+<a name='L336'></a><a href='#L336'>336</a>
+<a name='L337'></a><a href='#L337'>337</a>
+<a name='L338'></a><a href='#L338'>338</a>
+<a name='L339'></a><a href='#L339'>339</a>
+<a name='L340'></a><a href='#L340'>340</a>
+<a name='L341'></a><a href='#L341'>341</a>
+<a name='L342'></a><a href='#L342'>342</a>
+<a name='L343'></a><a href='#L343'>343</a>
+<a name='L344'></a><a href='#L344'>344</a>
+<a name='L345'></a><a href='#L345'>345</a>
+<a name='L346'></a><a href='#L346'>346</a>
+<a name='L347'></a><a href='#L347'>347</a>
+<a name='L348'></a><a href='#L348'>348</a>
+<a name='L349'></a><a href='#L349'>349</a>
+<a name='L350'></a><a href='#L350'>350</a>
+<a name='L351'></a><a href='#L351'>351</a>
+<a name='L352'></a><a href='#L352'>352</a>
+<a name='L353'></a><a href='#L353'>353</a>
+<a name='L354'></a><a href='#L354'>354</a>
+<a name='L355'></a><a href='#L355'>355</a>
+<a name='L356'></a><a href='#L356'>356</a>
+<a name='L357'></a><a href='#L357'>357</a>
+<a name='L358'></a><a href='#L358'>358</a>
+<a name='L359'></a><a href='#L359'>359</a>
+<a name='L360'></a><a href='#L360'>360</a>
+<a name='L361'></a><a href='#L361'>361</a>
+<a name='L362'></a><a href='#L362'>362</a>
+<a name='L363'></a><a href='#L363'>363</a>
+<a name='L364'></a><a href='#L364'>364</a>
+<a name='L365'></a><a href='#L365'>365</a>
+<a name='L366'></a><a href='#L366'>366</a>
+<a name='L367'></a><a href='#L367'>367</a>
+<a name='L368'></a><a href='#L368'>368</a>
+<a name='L369'></a><a href='#L369'>369</a>
+<a name='L370'></a><a href='#L370'>370</a>
+<a name='L371'></a><a href='#L371'>371</a>
+<a name='L372'></a><a href='#L372'>372</a>
+<a name='L373'></a><a href='#L373'>373</a>
+<a name='L374'></a><a href='#L374'>374</a>
+<a name='L375'></a><a href='#L375'>375</a>
+<a name='L376'></a><a href='#L376'>376</a>
+<a name='L377'></a><a href='#L377'>377</a>
+<a name='L378'></a><a href='#L378'>378</a>
+<a name='L379'></a><a href='#L379'>379</a>
+<a name='L380'></a><a href='#L380'>380</a>
+<a name='L381'></a><a href='#L381'>381</a>
+<a name='L382'></a><a href='#L382'>382</a>
+<a name='L383'></a><a href='#L383'>383</a>
+<a name='L384'></a><a href='#L384'>384</a>
+<a name='L385'></a><a href='#L385'>385</a>
+<a name='L386'></a><a href='#L386'>386</a>
+<a name='L387'></a><a href='#L387'>387</a>
+<a name='L388'></a><a href='#L388'>388</a>
+<a name='L389'></a><a href='#L389'>389</a>
+<a name='L390'></a><a href='#L390'>390</a>
+<a name='L391'></a><a href='#L391'>391</a>
+<a name='L392'></a><a href='#L392'>392</a>
+<a name='L393'></a><a href='#L393'>393</a>
+<a name='L394'></a><a href='#L394'>394</a>
+<a name='L395'></a><a href='#L395'>395</a>
+<a name='L396'></a><a href='#L396'>396</a>
+<a name='L397'></a><a href='#L397'>397</a>
+<a name='L398'></a><a href='#L398'>398</a>
+<a name='L399'></a><a href='#L399'>399</a>
+<a name='L400'></a><a href='#L400'>400</a>
+<a name='L401'></a><a href='#L401'>401</a>
+<a name='L402'></a><a href='#L402'>402</a>
+<a name='L403'></a><a href='#L403'>403</a>
+<a name='L404'></a><a href='#L404'>404</a>
+<a name='L405'></a><a href='#L405'>405</a>
+<a name='L406'></a><a href='#L406'>406</a>
+<a name='L407'></a><a href='#L407'>407</a>
+<a name='L408'></a><a href='#L408'>408</a>
+<a name='L409'></a><a href='#L409'>409</a>
+<a name='L410'></a><a href='#L410'>410</a>
+<a name='L411'></a><a href='#L411'>411</a>
+<a name='L412'></a><a href='#L412'>412</a>
+<a name='L413'></a><a href='#L413'>413</a>
+<a name='L414'></a><a href='#L414'>414</a>
+<a name='L415'></a><a href='#L415'>415</a>
+<a name='L416'></a><a href='#L416'>416</a>
+<a name='L417'></a><a href='#L417'>417</a>
+<a name='L418'></a><a href='#L418'>418</a>
+<a name='L419'></a><a href='#L419'>419</a>
+<a name='L420'></a><a href='#L420'>420</a>
+<a name='L421'></a><a href='#L421'>421</a>
+<a name='L422'></a><a href='#L422'>422</a>
+<a name='L423'></a><a href='#L423'>423</a>
+<a name='L424'></a><a href='#L424'>424</a>
+<a name='L425'></a><a href='#L425'>425</a>
+<a name='L426'></a><a href='#L426'>426</a>
+<a name='L427'></a><a href='#L427'>427</a>
+<a name='L428'></a><a href='#L428'>428</a>
+<a name='L429'></a><a href='#L429'>429</a>
+<a name='L430'></a><a href='#L430'>430</a>
+<a name='L431'></a><a href='#L431'>431</a>
+<a name='L432'></a><a href='#L432'>432</a>
+<a name='L433'></a><a href='#L433'>433</a>
+<a name='L434'></a><a href='#L434'>434</a>
+<a name='L435'></a><a href='#L435'>435</a>
+<a name='L436'></a><a href='#L436'>436</a>
+<a name='L437'></a><a href='#L437'>437</a>
+<a name='L438'></a><a href='#L438'>438</a>
+<a name='L439'></a><a href='#L439'>439</a>
+<a name='L440'></a><a href='#L440'>440</a>
+<a name='L441'></a><a href='#L441'>441</a>
+<a name='L442'></a><a href='#L442'>442</a>
+<a name='L443'></a><a href='#L443'>443</a>
+<a name='L444'></a><a href='#L444'>444</a>
+<a name='L445'></a><a href='#L445'>445</a>
+<a name='L446'></a><a href='#L446'>446</a>
+<a name='L447'></a><a href='#L447'>447</a>
+<a name='L448'></a><a href='#L448'>448</a>
+<a name='L449'></a><a href='#L449'>449</a>
+<a name='L450'></a><a href='#L450'>450</a>
+<a name='L451'></a><a href='#L451'>451</a>
+<a name='L452'></a><a href='#L452'>452</a>
+<a name='L453'></a><a href='#L453'>453</a>
+<a name='L454'></a><a href='#L454'>454</a>
+<a name='L455'></a><a href='#L455'>455</a>
+<a name='L456'></a><a href='#L456'>456</a>
+<a name='L457'></a><a href='#L457'>457</a>
+<a name='L458'></a><a href='#L458'>458</a>
+<a name='L459'></a><a href='#L459'>459</a>
+<a name='L460'></a><a href='#L460'>460</a>
+<a name='L461'></a><a href='#L461'>461</a>
+<a name='L462'></a><a href='#L462'>462</a>
+<a name='L463'></a><a href='#L463'>463</a>
+<a name='L464'></a><a href='#L464'>464</a>
+<a name='L465'></a><a href='#L465'>465</a>
+<a name='L466'></a><a href='#L466'>466</a>
+<a name='L467'></a><a href='#L467'>467</a>
+<a name='L468'></a><a href='#L468'>468</a>
+<a name='L469'></a><a href='#L469'>469</a>
+<a name='L470'></a><a href='#L470'>470</a>
+<a name='L471'></a><a href='#L471'>471</a>
+<a name='L472'></a><a href='#L472'>472</a>
+<a name='L473'></a><a href='#L473'>473</a>
+<a name='L474'></a><a href='#L474'>474</a>
+<a name='L475'></a><a href='#L475'>475</a>
+<a name='L476'></a><a href='#L476'>476</a>
+<a name='L477'></a><a href='#L477'>477</a>
+<a name='L478'></a><a href='#L478'>478</a>
+<a name='L479'></a><a href='#L479'>479</a>
+<a name='L480'></a><a href='#L480'>480</a>
+<a name='L481'></a><a href='#L481'>481</a>
+<a name='L482'></a><a href='#L482'>482</a>
+<a name='L483'></a><a href='#L483'>483</a>
+<a name='L484'></a><a href='#L484'>484</a>
+<a name='L485'></a><a href='#L485'>485</a>
+<a name='L486'></a><a href='#L486'>486</a>
+<a name='L487'></a><a href='#L487'>487</a>
+<a name='L488'></a><a href='#L488'>488</a>
+<a name='L489'></a><a href='#L489'>489</a>
+<a name='L490'></a><a href='#L490'>490</a>
+<a name='L491'></a><a href='#L491'>491</a>
+<a name='L492'></a><a href='#L492'>492</a>
+<a name='L493'></a><a href='#L493'>493</a>
+<a name='L494'></a><a href='#L494'>494</a>
+<a name='L495'></a><a href='#L495'>495</a>
+<a name='L496'></a><a href='#L496'>496</a>
+<a name='L497'></a><a href='#L497'>497</a>
+<a name='L498'></a><a href='#L498'>498</a>
+<a name='L499'></a><a href='#L499'>499</a>
+<a name='L500'></a><a href='#L500'>500</a>
+<a name='L501'></a><a href='#L501'>501</a>
+<a name='L502'></a><a href='#L502'>502</a>
+<a name='L503'></a><a href='#L503'>503</a>
+<a name='L504'></a><a href='#L504'>504</a>
+<a name='L505'></a><a href='#L505'>505</a>
+<a name='L506'></a><a href='#L506'>506</a>
+<a name='L507'></a><a href='#L507'>507</a>
+<a name='L508'></a><a href='#L508'>508</a>
+<a name='L509'></a><a href='#L509'>509</a>
+<a name='L510'></a><a href='#L510'>510</a>
+<a name='L511'></a><a href='#L511'>511</a>
+<a name='L512'></a><a href='#L512'>512</a>
+<a name='L513'></a><a href='#L513'>513</a>
+<a name='L514'></a><a href='#L514'>514</a>
+<a name='L515'></a><a href='#L515'>515</a>
+<a name='L516'></a><a href='#L516'>516</a>
+<a name='L517'></a><a href='#L517'>517</a>
+<a name='L518'></a><a href='#L518'>518</a>
+<a name='L519'></a><a href='#L519'>519</a>
+<a name='L520'></a><a href='#L520'>520</a>
+<a name='L521'></a><a href='#L521'>521</a>
+<a name='L522'></a><a href='#L522'>522</a>
+<a name='L523'></a><a href='#L523'>523</a>
+<a name='L524'></a><a href='#L524'>524</a>
+<a name='L525'></a><a href='#L525'>525</a>
+<a name='L526'></a><a href='#L526'>526</a>
+<a name='L527'></a><a href='#L527'>527</a>
+<a name='L528'></a><a href='#L528'>528</a>
+<a name='L529'></a><a href='#L529'>529</a>
+<a name='L530'></a><a href='#L530'>530</a>
+<a name='L531'></a><a href='#L531'>531</a>
+<a name='L532'></a><a href='#L532'>532</a>
+<a name='L533'></a><a href='#L533'>533</a>
+<a name='L534'></a><a href='#L534'>534</a>
+<a name='L535'></a><a href='#L535'>535</a>
+<a name='L536'></a><a href='#L536'>536</a>
+<a name='L537'></a><a href='#L537'>537</a>
+<a name='L538'></a><a href='#L538'>538</a>
+<a name='L539'></a><a href='#L539'>539</a>
+<a name='L540'></a><a href='#L540'>540</a>
+<a name='L541'></a><a href='#L541'>541</a>
+<a name='L542'></a><a href='#L542'>542</a>
+<a name='L543'></a><a href='#L543'>543</a>
+<a name='L544'></a><a href='#L544'>544</a>
+<a name='L545'></a><a href='#L545'>545</a>
+<a name='L546'></a><a href='#L546'>546</a>
+<a name='L547'></a><a href='#L547'>547</a>
+<a name='L548'></a><a href='#L548'>548</a>
+<a name='L549'></a><a href='#L549'>549</a>
+<a name='L550'></a><a href='#L550'>550</a>
+<a name='L551'></a><a href='#L551'>551</a>
+<a name='L552'></a><a href='#L552'>552</a>
+<a name='L553'></a><a href='#L553'>553</a>
+<a name='L554'></a><a href='#L554'>554</a>
+<a name='L555'></a><a href='#L555'>555</a>
+<a name='L556'></a><a href='#L556'>556</a>
+<a name='L557'></a><a href='#L557'>557</a>
+<a name='L558'></a><a href='#L558'>558</a>
+<a name='L559'></a><a href='#L559'>559</a>
+<a name='L560'></a><a href='#L560'>560</a>
+<a name='L561'></a><a href='#L561'>561</a>
+<a name='L562'></a><a href='#L562'>562</a>
+<a name='L563'></a><a href='#L563'>563</a>
+<a name='L564'></a><a href='#L564'>564</a>
+<a name='L565'></a><a href='#L565'>565</a>
+<a name='L566'></a><a href='#L566'>566</a>
+<a name='L567'></a><a href='#L567'>567</a>
+<a name='L568'></a><a href='#L568'>568</a>
+<a name='L569'></a><a href='#L569'>569</a>
+<a name='L570'></a><a href='#L570'>570</a>
+<a name='L571'></a><a href='#L571'>571</a>
+<a name='L572'></a><a href='#L572'>572</a>
+<a name='L573'></a><a href='#L573'>573</a>
+<a name='L574'></a><a href='#L574'>574</a>
+<a name='L575'></a><a href='#L575'>575</a>
+<a name='L576'></a><a href='#L576'>576</a>
+<a name='L577'></a><a href='#L577'>577</a>
+<a name='L578'></a><a href='#L578'>578</a>
+<a name='L579'></a><a href='#L579'>579</a>
+<a name='L580'></a><a href='#L580'>580</a>
+<a name='L581'></a><a href='#L581'>581</a>
+<a name='L582'></a><a href='#L582'>582</a>
+<a name='L583'></a><a href='#L583'>583</a>
+<a name='L584'></a><a href='#L584'>584</a>
+<a name='L585'></a><a href='#L585'>585</a>
+<a name='L586'></a><a href='#L586'>586</a>
+<a name='L587'></a><a href='#L587'>587</a>
+<a name='L588'></a><a href='#L588'>588</a>
+<a name='L589'></a><a href='#L589'>589</a>
+<a name='L590'></a><a href='#L590'>590</a>
+<a name='L591'></a><a href='#L591'>591</a>
+<a name='L592'></a><a href='#L592'>592</a>
+<a name='L593'></a><a href='#L593'>593</a>
+<a name='L594'></a><a href='#L594'>594</a>
+<a name='L595'></a><a href='#L595'>595</a>
+<a name='L596'></a><a href='#L596'>596</a>
+<a name='L597'></a><a href='#L597'>597</a>
+<a name='L598'></a><a href='#L598'>598</a>
+<a name='L599'></a><a href='#L599'>599</a>
+<a name='L600'></a><a href='#L600'>600</a>
+<a name='L601'></a><a href='#L601'>601</a>
+<a name='L602'></a><a href='#L602'>602</a>
+<a name='L603'></a><a href='#L603'>603</a>
+<a name='L604'></a><a href='#L604'>604</a>
+<a name='L605'></a><a href='#L605'>605</a>
+<a name='L606'></a><a href='#L606'>606</a>
+<a name='L607'></a><a href='#L607'>607</a>
+<a name='L608'></a><a href='#L608'>608</a>
+<a name='L609'></a><a href='#L609'>609</a>
+<a name='L610'></a><a href='#L610'>610</a>
+<a name='L611'></a><a href='#L611'>611</a>
+<a name='L612'></a><a href='#L612'>612</a>
+<a name='L613'></a><a href='#L613'>613</a>
+<a name='L614'></a><a href='#L614'>614</a>
+<a name='L615'></a><a href='#L615'>615</a>
+<a name='L616'></a><a href='#L616'>616</a>
+<a name='L617'></a><a href='#L617'>617</a>
+<a name='L618'></a><a href='#L618'>618</a>
+<a name='L619'></a><a href='#L619'>619</a>
+<a name='L620'></a><a href='#L620'>620</a>
+<a name='L621'></a><a href='#L621'>621</a>
+<a name='L622'></a><a href='#L622'>622</a>
+<a name='L623'></a><a href='#L623'>623</a>
+<a name='L624'></a><a href='#L624'>624</a>
+<a name='L625'></a><a href='#L625'>625</a>
+<a name='L626'></a><a href='#L626'>626</a>
+<a name='L627'></a><a href='#L627'>627</a>
+<a name='L628'></a><a href='#L628'>628</a>
+<a name='L629'></a><a href='#L629'>629</a>
+<a name='L630'></a><a href='#L630'>630</a>
+<a name='L631'></a><a href='#L631'>631</a>
+<a name='L632'></a><a href='#L632'>632</a>
+<a name='L633'></a><a href='#L633'>633</a>
+<a name='L634'></a><a href='#L634'>634</a>
+<a name='L635'></a><a href='#L635'>635</a>
+<a name='L636'></a><a href='#L636'>636</a>
+<a name='L637'></a><a href='#L637'>637</a>
+<a name='L638'></a><a href='#L638'>638</a>
+<a name='L639'></a><a href='#L639'>639</a>
+<a name='L640'></a><a href='#L640'>640</a>
+<a name='L641'></a><a href='#L641'>641</a>
+<a name='L642'></a><a href='#L642'>642</a>
+<a name='L643'></a><a href='#L643'>643</a>
+<a name='L644'></a><a href='#L644'>644</a>
+<a name='L645'></a><a href='#L645'>645</a>
+<a name='L646'></a><a href='#L646'>646</a>
+<a name='L647'></a><a href='#L647'>647</a>
+<a name='L648'></a><a href='#L648'>648</a>
+<a name='L649'></a><a href='#L649'>649</a>
+<a name='L650'></a><a href='#L650'>650</a>
+<a name='L651'></a><a href='#L651'>651</a>
+<a name='L652'></a><a href='#L652'>652</a>
+<a name='L653'></a><a href='#L653'>653</a>
+<a name='L654'></a><a href='#L654'>654</a>
+<a name='L655'></a><a href='#L655'>655</a>
+<a name='L656'></a><a href='#L656'>656</a>
+<a name='L657'></a><a href='#L657'>657</a>
+<a name='L658'></a><a href='#L658'>658</a>
+<a name='L659'></a><a href='#L659'>659</a>
+<a name='L660'></a><a href='#L660'>660</a>
+<a name='L661'></a><a href='#L661'>661</a>
+<a name='L662'></a><a href='#L662'>662</a>
+<a name='L663'></a><a href='#L663'>663</a>
+<a name='L664'></a><a href='#L664'>664</a>
+<a name='L665'></a><a href='#L665'>665</a>
+<a name='L666'></a><a href='#L666'>666</a>
+<a name='L667'></a><a href='#L667'>667</a>
+<a name='L668'></a><a href='#L668'>668</a>
+<a name='L669'></a><a href='#L669'>669</a>
+<a name='L670'></a><a href='#L670'>670</a>
+<a name='L671'></a><a href='#L671'>671</a>
+<a name='L672'></a><a href='#L672'>672</a>
+<a name='L673'></a><a href='#L673'>673</a>
+<a name='L674'></a><a href='#L674'>674</a>
+<a name='L675'></a><a href='#L675'>675</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">74x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-yes">34x</span>
+<span class="cline-any cline-yes">34x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">134x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">125x</span>
+<span class="cline-any cline-yes">125x</span>
+<span class="cline-any cline-yes">125x</span>
+<span class="cline-any cline-yes">115x</span>
+<span class="cline-any cline-yes">125x</span>
+<span class="cline-any cline-yes">127x</span>
+<span class="cline-any cline-yes">127x</span>
+<span class="cline-any cline-yes">127x</span>
+<span class="cline-any cline-yes">127x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">73x</span>
+<span class="cline-any cline-yes">73x</span>
+<span class="cline-any cline-yes">73x</span>
+<span class="cline-any cline-yes">73x</span>
+<span class="cline-any cline-yes">73x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">37x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">49x</span>
+<span class="cline-any cline-yes">49x</span>
+<span class="cline-any cline-yes">49x</span>
+<span class="cline-any cline-yes">49x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">416x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">53x</span>
+<span class="cline-any cline-yes">53x</span>
+<span class="cline-any cline-yes">53x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">58x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">102x</span>
+<span class="cline-any cline-yes">102x</span>
+<span class="cline-any cline-yes">102x</span>
+<span class="cline-any cline-yes">102x</span>
+<span class="cline-any cline-yes">102x</span>
+<span class="cline-any cline-yes">102x</span>
+<span class="cline-any cline-yes">102x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">55x</span>
+<span class="cline-any cline-yes">55x</span>
+<span class="cline-any cline-yes">55x</span>
+<span class="cline-any cline-yes">55x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">55x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">39x</span>
+<span class="cline-any cline-yes">39x</span>
+<span class="cline-any cline-yes">39x</span>
+<span class="cline-any cline-yes">39x</span>
+<span class="cline-any cline-yes">39x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">39x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">37x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">51x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">25x</span>
+<span class="cline-any cline-yes">25x</span>
+<span class="cline-any cline-yes">25x</span>
+<span class="cline-any cline-yes">25x</span>
+<span class="cline-any cline-yes">25x</span>
+<span class="cline-any cline-yes">25x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">40x</span>
+<span class="cline-any cline-yes">40x</span>
+<span class="cline-any cline-yes">40x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-yes">43x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">37x</span>
+<span class="cline-any cline-yes">37x</span>
+<span class="cline-any cline-yes">37x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">41x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">47x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">70x</span>
+<span class="cline-any cline-yes">70x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-yes">33x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">var DEFAULT_MAX_ATTEMPTS = 2;
+&nbsp;
+// gh-775: hard wall-clock cap for the bounded missing-response resume.
+// 40 min by recommendation — must fit the job's remaining timeout budget;
+// projects can tighten it via feedbackLoop.missingResponse.timeoutSeconds.
+var DEFAULT_MISSING_RESPONSE_TIMEOUT_SECONDS = 2400;
+&nbsp;
+// gh-775: dedicated attempt-marker stage so the bounded resume never shares
+// (or consumes) the failure-recovery stages' attempt counters.
+var MISSING_RESPONSE_STAGE = 'missing_response';
+&nbsp;
+// gh-1121: backoff before the provider-outage resume. The chain just spent
+// minutes answering 5xx/429 — an immediate resume would re-enter the same
+// outage window. Default 90s; projects override via
+// customParams.providerTransientBackoffSec.
+var DEFAULT_PROVIDER_TRANSIENT_BACKOFF_SECONDS = 90;
+&nbsp;
+function sanitizeId(value) {
+    return String(valu<span class="fstat-no" title="function not covered" >e || 'unknown').replace(/[^A-Za-z0-9_.-]+/g, '_');</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function writeFile(path, content) {</span>
+    file_write(<span class="fstat-no" title="function not covered" >{ path: path, content: content });</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function readFile(path) {</span>
+    try { return file_rea<span class="fstat-no" title="function not covered" >d({ pat<span class="branch-0 cbranch-no" title="branch not covered" >h: path }); }</span> catch (e) { return null; }</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function runCommand(command, workingDir) {</span>
+    var <span class="fstat-no" title="function not covered" >args = { command: command };</span>
+<span class="cstat-no" title="statement not covered" >    if (workingDir) args.workingDirectory = workingDir;</span>
+    return cli_execute_command(args);
+}
+&nbsp;
+<span class="cstat-no" title="statement not covered" >function ensureFeedbackDir() {</span>
+    // mkdir is not <span class="fstat-no" title="function not covered" >in the cli_execute_command whitelist — wrap in bash -c.</span>
+<span class="cstat-no" title="statement not covered" >    try { runCommand('bash -c "mkdir -p outputs/feedback"'); } catch (e) {}</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function normalizeConfig(customParams, section) {</span>
+<span class="fstat-no" title="function not covered" >    var root = (customParams &amp;&amp; customParams.feedbackLoop) || {};</span>
+<span class="cstat-no" title="statement not covered" >    var scoped = (section &amp;&amp; root[section] &amp;&amp; typeof root[section] === 'object') ? root[section] : {};</span>
+    var merged = {};
+    Object.keys(root).forEach(function(key) {
+        if (typeof root[key] !== 'object' || Array.isArray(root[key])) merged[key] = root[key];
+    });
+    Object.keys(scoped).forEach(function(key) { merged[key] = scoped[key]; });
+    return merged;
+}
+&nbsp;
+function isFeedbackEnabled(customParams, section) {
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >    var root = (customParams &amp;&amp; customParams.feedbackLoop) || null;</span></span>
+<span class="cstat-no" title="statement not covered" >    if (!root) return false;</span>
+<span class="cstat-no" title="statement not covered" >    var scoped = (section &amp;&amp; root[section] &amp;&amp; typeof root[section] === 'object') ? root[section] : null;</span>
+    return root.enabled === true || (scoped &amp;&amp; scoped.enabled === true);
+}
+&nbsp;
+function getAttempt(markerPath) {
+    var raw = rea<span class="fstat-no" title="function not covered" >dFile(markerPath);</span>
+<span class="cstat-no" title="statement not covered" >    var value = parseInt(raw || '0', 10);</span>
+<span class="cstat-no" title="statement not covered" >    return isNaN(value) ? 0 : value;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function setAttempt(markerPath, attempt) {</span>
+    writ<span class="fstat-no" title="function not covered" >eFile(markerPath, String(attempt));</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function isNonRecoverable(errorText, config) {</span>
+<span class="fstat-no" title="function not covered" >    var text = String(errorText || '');</span>
+<span class="cstat-no" title="statement not covered" >    va<span class="branch-0 cbranch-no" title="branch not covered" >r pa</span>tterns = (config &amp;&amp; config.nonRecoverablePatterns) || [</span>
+        'COPILOT_GITHUB_TOKEN',
+<span class="cstat-no" title="statement not covered" >        'GITHUB_TOKEN',</span>
+        'JIRA_API_TOKEN',
+        'Bad credentials',
+        'Resource not accessible by integration',
+        'could not read Username',
+        'Authentication failed',
+        'refusing to merge unrelated histories',
+        'No merge base found between HEAD and origin/'
+    ];
+    return patterns.some(function(pattern) {
+        return text.indexOf(pattern) !== -1;
+    });
+}
+&nbsp;
+function buildFeedbackPrompt(options) {
+    return <span class="fstat-no" title="function not covered" >[</span>
+<span class="cstat-no" title="statement not covered" >        'A previous automation step failed. Continue/resume the current task in the same repository and fix the root cause.',</span>
+        '',
+<span class="cstat-no" title="statement not covered" >        'Ticket: ' + (options.ticketKey || 'unknown'),</span>
+        'Stage: ' + (options.stage || 'unknown'),
+        'Attempt: ' + (options.attempt || 1),
+        '',
+        'Error/output:',
+        '```',
+        String(options.error || '').substring(0, 12000),
+        '```',
+        '',
+        'Instructions:',
+        '- Inspect the current <span class="branch-0 cbranch-no" title="branch not covered" >worki</span>ng tree and recent changes.',
+        '- Fix the failure directly; do not revert un<span class="branch-0 cbranch-no" title="branch not covered" >relate</span>d user or automation changes.',
+        '- Keep the implementation focused on the ticket and the failing gate/post-action.',
+        '- Update outputs/response.md with what you changed and any validation you ran.',
+        '- Do not push; the post-action will commit and push after you finish.'
+    ].join('\n');
+}
+&nbsp;
+// gh-775: follow-up prompt for the bounded missing-response resume — the exact
+// scenario this recovery exists for is a hung background verification child
+// that stalled the session after the real work was done (live fa gh-1341).
+// Kept inline like buildFeedbackPrompt (the prompts/ home variant would add a
+// runtime file-read failure mode for no versioning benefit — this file IS the
+// versioned home of the resume mechanics).
+function buildMissingResponsePrompt(options) {
+<span class="fstat-no" title="function not covered" >    options = options || {};</span>
+<span class="cstat-no" title="statement not covered" >    return [</span>
+<span class="cstat-no" title="statement not covered" >        'Your previous run finished its real work but was interrupted before outputs/response.md could be written — most likely a background verification job (test suite, coverage<span class="branch-0 cbranch-no" title="branch not covered" >, buil</span>d) hung and the session stalled watching it.',</span>
+        '',
+        'Ticket: ' + (options.ticketKey || 'unknown'),
+        '',
+        'Resume and finish the task now:',
+        '- Check running background jobs (bash_job status) and STOP any job with no progress: bash_job stop &lt;id&gt;.',
+        '- Do<span class="branch-0 cbranch-no" title="branch not covered" > NOT restart </span>long verification runs. Note the unverified part in the deliverable (job id, command, last output tail) — validation CI on the pull request is the safety net.',
+        '- Finish any remaining small steps, then write outputs/response.md (the deliverable the post-action expects) and end the turn.',
+        '- Do not push; the post-action will commit and push after you finish.'
+    ].join('\n');
+}
+&nbsp;
+// ── gh-1196: resumeAgent decomposed into pure single-purpose helpers ────────
+// Behavior contract is unchanged (the characterization suites in
+// test_feedbackLoop.js pin every branch); this section only splits the
+// former monolith the same way gh-1079 split runConfiguredGates:
+//   feedbackSection      — the section default ('postAction')
+//   resumeEnabled        — the enablement gate (root/section switch + explicit false)
+//   maxAttemptsFrom      — default → parse → validity (0 = unusable)
+//   resumeBlocker        — the three early exits in contract order
+//   resumeKey            — the sanitized &lt;ticket&gt;_&lt;stage&gt; marker key
+//   feedbackMarkerPaths  — the attempt-marker + prompt-file paths
+//   resumePromptFor      — override or the built feedback prompt
+//   buildResumeCommand   — the run-agent.sh wrapper (+ the hard timeout wrap)
+// Every exec/console/file call keeps its original position in the sequence.
+&nbsp;
+function feedbackSection(options) {
+    return opti<span class="fstat-no" title="function not covered" >ons.section || 'postAction';</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+function resumeEnabled(customParams, section, confi<span class="fstat-no" title="function not covered" >g) {</span>
+<span class="cstat-no" title="statement not covered" >    return isFeedbackEnabled(customParams, section) &amp;&amp; config.enabled !== false;</span>
+}
+&nbsp;
+function maxAttemptsFrom(config) {
+    var maxAttem<span class="fstat-no" title="function not covered" >pts = config.maxAttempts;</span>
+    if (maxAttempts === undefined || maxAttempts === null) maxAttempts = DEFAULT_MAX_ATTEMPTS;
+<span class="cstat-no" title="statement not covered" >    maxAttempts = parseInt(maxAttempts, 10);</span>
+    if (!maxAttempts || maxAttempts &lt; 1) return 0;
+    return maxAttempts;
+}
+&nbsp;
+// The early exits in contract order: disabled → maxAttempts unusable →
+// non-recoverable error. Null = the resume may proceed.
+function resumeBlocker(options, customParams, confi<span class="fstat-no" title="function not covered" >g, section) {</span>
+<span class="cstat-no" title="statement not covered" >    if (!resumeEnabled(customParams, section, config)) {</span>
+<span class="cstat-no" title="statement not covered" >        return { attempted: false, reason: 'disabled' };</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    if (!maxAttemptsFrom(config)) {</span>
+        return { attempted: false, reason: 'maxAttempts=0' };
+    }
+    if (isNonRecoverable(String(options.error || ''), config)) {
+        return { attempted: false, reason: 'non-recoverable' };
+    }
+    return null;
+}
+&nbsp;
+function resumeKey(options) {
+    return sanitizeId<span class="fstat-no" title="function not covered" >((options.ticketKey || 'unknown') + '_' + (options.stage || 'feedback'));</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function feedbackMarkerPaths(key) {</span>
+<span class="cstat-no" title="statement not covered" >    return {</span>
+<span class="fstat-no" title="function not covered" >        marker: 'outputs/feedback/' + key + '.attempt',</span>
+        prompt: 'outputs/feedback/' + key + '.md'
+    };
+}
+&nbsp;
+// `buildFeedbackPrompt()` bakes in dev-flow assumptions ("do not push; the
+// post-action will commit and push after you finish") that don't apply to
+// every caller (e.g. a publish-only post-action that never pushes code).
+// Callers with a different resume flow can pass `promptOverride` with the
+// full prompt text instead — attempt tracking / non-recoverable-error
+// detection / the `--continue` resume mechanics stay identical either way.
+function resumePromptFor(options, errorText, attemp<span class="fstat-no" title="function not covered" >t) {</span>
+<span class="cstat-no" title="statement not covered" >    return options.promptOverride || buildFeedbackPrompt({</span>
+<span class="cstat-no" title="statement not covered" >        ticketKey: options.ticketKey,</span>
+<span class="cstat-no" title="statement not covered" >        stage: options.stage,</span>
+<span class="cstat-no" title="statement not covered" >        attempt: attempt,</span>
+        error: errorText
+    });
+}
+&nbsp;
+// gh-775: bounded resume — a hard wall-clock cap on the wrapper invocation so a
+// hung provider session cannot hold the post-action (and the job's remaining
+// timeout budget) hostage. `timeout -k 60 &lt;N&gt;` TERM-inates the wrapper after &lt;N&gt;
+// seconds and KILLs it 60s later if TERM is ignored. The wrapper is entered
+// through `bash` (cli_execute_command whitelists the command's FIRST token only;
+// dev runners carry it via envVariables.CLI_ALLOWED_COMMANDS), so no new
+// whitelist entry is needed.
+function buildResumeCommand(config, promptPath, tim<span class="fstat-no" title="function not covered" >eoutSeconds) {</span>
+<span class="cstat-no" title="statement not covered" >    // Copilot CLI's `--continue` already means "resume the most recent session in this</span>
+<span class="cstat-no" title="statement not covered" >    // directory" (no value needed); its own `-r, --resume[=value]` flag is a second,</span>
+    // mutually exclusive way to resume (by explicit id or an interactive picker when bare).
+    // Passing both together is rejected outright: "error: option '-r, --resume[=value]'
+    // cannot be used with option '--continue'" — which made every feedback-loop retry fail
+    // deterministically before the agent ever got a chance to act on the new prompt.
+    var resumeArgs = config.resumeArgs || '--continue';
+    var command = 'bash agents/scripts/run-agent.sh ' + resumeArgs + ' ' + promptPath;
+    var timeout = parseInt(timeoutSeconds, 10);
+    if (timeout &amp;&amp; timeout &gt; 0) {
+        command = 'bash -c "timeout -k 60 ' + timeout + ' ' + command + '"';
+    }
+    return command;
+}
+&nbsp;
+function resumeLogLine(stage, attempt, maxAttempts)<span class="fstat-no" title="function not covered" > {</span>
+<span class="cstat-no" title="statement not covered" >    return 'Feedback loop: resuming agent for ' + (stage || 'failure') +</span>
+<span class="cstat-no" title="statement not covered" >        ' attempt ' + attempt + '/' + maxAttempts;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function resumeAgent(options) {</span>
+    options = optio<span class="fstat-no" title="function not covered" >ns || {};</span>
+<span class="cstat-no" title="statement not covered" >    var customParams = options.customParams || {};</span>
+<span class="cstat-no" title="statement not covered" >    var section = feedbackSection(options);</span>
+<span class="cstat-no" title="statement not covered" >    var config = normalizeConfig(customParams, section);</span>
+    var blocker = resumeBlocker(options,<span class="branch-0 cbranch-no" title="branch not covered" > custo</span>mParams, config, section);
+    if (blocker) r<span class="branch-0 cbranch-no" title="branch not covered" >eturn </span>blocker;
+&nbsp;
+    var maxAttempts = maxAttemptsFrom(config);
+    ensureFeedbackDir();
+    var paths = feedbackMarkerPaths(resumeKey(options));
+    var attempt = getAttempt(paths.marker);
+    if (attempt &gt;= maxAttempts) {
+        return { attempted: false, reason: 'attempts-exhausted', attempts: attempt };
+    }
+&nbsp;
+    attempt += 1;
+    setAttempt(paths.marker, attempt);
+    writeFile(paths.prompt, resumePromptFor(options, String(options.error || ''), attempt));
+    console.log(resumeLogLine(options.stage, attempt, maxAttempts));
+    runCommand(buildResumeCommand(config, paths.prompt, options.timeoutSeconds));
+    return { attempted: true, attempts: attempt, promptPath: paths.prompt };
+}
+&nbsp;
+// ── gh-775: ONE bounded resume for a missing deliverable ────────────────────
+// A dev agent can finish all real work and still lose the leg to a HUNG
+// background verification job: the post-action finds outputs/response.md
+// missing and cold-resets a session that was one "write the deliverable" step
+// away from done (live fa gh-1341, run 37521704313). Before that cold reset,
+// the dev post-action makes exactly ONE bounded resume attempt so the
+// still-resumable session can finish and land the deliverable.
+//
+// Contract:
+// - gated on the same feedback-loop enablement switch as every other resume
+//   path (root `enabled` or a dedicated `missingResponse.enabled`), with a
+//   section-level `enabled: false` winning over the root switch;
+// - exactly ONE attempt per leg (own `missing_response` attempt marker —
+//   multi-resume retries are a non-goal by design);
+// - the wrapper invocation is hard-capped (timeout -k 60 &lt;timeoutSeconds&gt;,
+//   default 2400s = 40 min; configurable via
+//   feedbackLoop.missingResponse.timeoutSeconds);
+// - a failed/timed-out wrapper invocation is a resume FAILURE, not a crash:
+//   it is returned (attempted: true, failed: true) so the caller can re-check
+//   the deliverable and fall back to the EXISTING cold reset verbatim.
+function missingResponseScoped(root) {
+    return (<span class="fstat-no" title="function not covered" >root.missingResponse &amp;&amp; typeof root.missingResponse === 'object') ? root.missingResponse : {};</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+// The two opt-outs in contract order: the section-level switch wins over
+// everything (even an outage-forced resume); the generic feedback-loop
+// enablement switch applies unless the caller forces the resume.
+function missingResponseDisabled(scoped, options, c<span class="fstat-no" title="function not covered" >ustomParams) {</span>
+<span class="cstat-no" title="statement not covered" >    if (scoped.enabled === false) {</span>
+<span class="cstat-no" title="statement not covered" >        return true;</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    return !options.force &amp;&amp; !isFeedbackEnabled(customParams, 'missingResponse');</span>
+}
+&nbsp;
+function missingResponseTimeoutSeconds(scoped) {
+<span class="fstat-no" title="function not covered" >    var timeoutSeconds = parseInt(scoped.timeoutSeconds, 10);</span>
+<span class="cstat-no" title="statement not covered" >    if (!timeoutSeconds || timeoutSeconds &lt; 1) {</span>
+<span class="cstat-no" title="statement not covered" >        return DEFAULT_MISSING_RESPONSE_TIMEOUT_SECONDS;</span>
+    }
+    return timeoutSeconds;
+}
+&nbsp;
+// The resumeAgent invocation for the missing-deliverable resume: exactly one
+// attempt for the dedicated stage, the caller's error text (or the built
+// follow-up prompt when no override is supplied) and the hard timeout cap.
+function missingResponseResumeOptions(options, forc<span class="fstat-no" title="function not covered" >edCustomParams, timeoutSeconds) {</span>
+<span class="cstat-no" title="statement not covered" >    return {</span>
+<span class="cstat-no" title="statement not covered" >        ticketKey: options.ticketKey,</span>
+<span class="cstat-no" title="statement not covered" >        customParams: forcedCustomParams,</span>
+<span class="cstat-no" title="statement not covered" >        section: 'missingResponse',</span>
+        stage: MISSING_RESPONSE_STAGE,
+        error: options.error || '',
+        promptOverride: options.promptOverride || buildMissingResponsePrompt({
+            ticketKey: options.ticketKey
+        }),
+        timeoutSeconds: timeoutSeconds
+    };
+}
+&nbsp;
+function resumeOnceForMissingResponse(options) {
+<span class="fstat-no" title="function not covered" >    options = options || {};</span>
+<span class="cstat-no" title="statement not covered" >    var customParams = options.customParams || {};</span>
+<span class="cstat-no" title="statement not covered" >    var root = customParams.feedbackLoop || {};</span>
+<span class="cstat-no" title="statement not covered" >    var scoped = missingResponseScoped(root);</span>
+    if (missingResponseDisabled(scoped, options, customParams)) {
+        return { attempted: false, reason: 'disabled' };
+    }
+&nbsp;
+    // gh-1121: the provider-outage resume bypasses the GENERIC enablement
+    // flag (options.force) — an outage that killed the leg mid-flight must
+    // not depend on feedbackLoop being configured. An explicit
+    // missingResponse.enabled=false still opts the project out.
+&nbsp;
+    var timeoutSeconds = missingResponseTimeoutSeconds(scoped);
+&nbsp;
+    // Force exactly one attempt for this stage regardless of the inherited
+    // root maxAttempts — gh-775 is explicit: no multi-resume retries.
+    var forced = forcedResumeParams(customParams, root, scoped);
+&nbsp;
+    try {
+        return resumeAgent(missingResponseResumeOptions(options, forced, timeoutSeconds));
+    } catch (e) {
+        console.warn('Bounded resume for missing outputs/response.md failed/timed out:', e);
+        return { attempted: true, failed: true, error: errorTextOf(e) };
+    }
+}
+&nbsp;
+// gh-775: exactly one attempt for the missingResponse stage regardless of the
+// inherited root maxAttempts — clone customParams with the scoped
+// missingResponse config forced on (enabled: true, maxAttempts: 1). Split out
+// of resumeOnceForMissingResponse to keep it under the CRAP ratchet baseline.
+function forcedResumeParams(customParams, root, sco<span class="fstat-no" title="function not covered" >ped) {</span>
+<span class="cstat-no" title="statement not covered" >    var forced = {};</span>
+<span class="cstat-no" title="statement not covered" >    for (var key in customParams) {</span>
+<span class="cstat-no" title="statement not covered" >        if (customParams.hasOwnProperty(key)) forced[key] = customParams[key];</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+    forced.feedbackLoop = Object.assign({}, root, {
+        missingResponse: Object.assign({}, scoped, { enabled: true, maxAttempts: 1 })
+    });
+    return forced;
+}
+&nbsp;
+// ── gh-1121: ONE bounded resume for a whole-provider-chain outage ───────────
+// Live fa gh-1112 (run 39315836954, 2026-10-19): zai/glm-5.3-flash answered
+// 500 ×3, kimi-for-coding hit 429 ×12 → "Provider chain exhausted: 2 of 2".
+// The dev leg discarded 97k prompt tokens of real work and cold-reset into
+// the same outage. Before that cold reset, the classified outage gets ONE
+// resume of the persisted fa session (run-agent.sh re-invoked; the fa
+// provider resume-or-creates the deterministic --session):
+//
+// - a configurable backoff (customParams.providerTransientBackoffSec, default
+//   90s) runs first so the resume does not re-enter the same outage window;
+//   the sleep goes through `bash -c` — already whitelisted for the wrapper —
+//   so no new CLI_ALLOWED_COMMANDS entry is needed;
+// - the generic feedback-loop enablement flag is IGNORED (the outage resume
+//   is the recovery for a leg the provider chain killed — it cannot depend
+//   on the project having opted into feedbackLoop); an explicit
+//   missingResponse.enabled=false still opts out;
+// - the same missing_response attempt marker as resumeOnceForMissingResponse
+//   enforces at-most-once per leg (I2).
+function providerTransientBackoffSeconds(customParams) {
+    var n = parseInt(customParams &amp;&amp; customParams.providerTransientBackoffSec, 10);
+    return (n &gt; 0) ? n : DEFAULT_PROVIDER_TRANSIENT_BACKOFF_SECONDS;
+}
+&nbsp;
+// Follow-up prompt for the outage resume. Unlike the gh-775 hung-job prompt,
+// the session here died from transient provider errors mid-run — the agent
+// must pick up where it stopped, not diagnose a hung child.
+function buildProviderOutageResumePrompt(options) {
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >    options = options || {};</span></span>
+<span class="cstat-no" title="statement not covered" >    return [</span>
+<span class="cstat-no" title="statement not covered" >        'Your previous run was interrupted by a transient provider outage — every provider in the chain answered transient errors (HTTP 5xx / 429 / network) and the CLI exited bef<span class="branch-0 cbranch-no" title="branch not covered" >ore th</span>e task was finished. The outage window has passed and the persisted session was restored for this resume.',</span>
+        '',
+        'Ticket: ' + (options.ticketKey || 'unknown'),
+        '',
+        'Resume the task now:',
+        '- Continue exactly where the previous run left off — do NOT restart completed steps from scratch.',
+        '- If a background job <span class="branch-0 cbranch-no" title="branch not covered" >from the prev</span>ious run is stuck, stop it (bash_job stop &lt;id&gt;) instead of waiting on it.',
+        '- Finish the remaining work, then write outputs/response.md (the deliverable the post-action expects) and end the turn.',
+        '- Do not push; the post-action will commit and push after you finish.'
+    ].join('\n');
+}
+&nbsp;
+// gh-1121: the explicit section-level opt-out — checked BEFORE the backoff
+// sleep so a project that disabled the missingResponse resume never pays the
+// wait either. The generic feedbackLoop flag is deliberately NOT consulted.
+function providerOutageResumeOptedOut(customParams)<span class="fstat-no" title="function not covered" > {</span>
+<span class="cstat-no" title="statement not covered" >    var root = (customParams &amp;&amp; customParams.feedbackLoop) || {};</span>
+<span class="cstat-no" title="statement not covered" >    var scoped = (root.missingResponse &amp;&amp; typeof root.missingResponse === 'object') ? root.missingResponse : {};</span>
+    return scoped.enabled === false;
+}
+&nbsp;
+function resumeOnceForProviderOutage(options) {
+<span class="fstat-no" title="function not covered" >    options = options || {};</span>
+<span class="cstat-no" title="statement not covered" >    var customParams = options.customParams || {};</span>
+<span class="cstat-no" title="statement not covered" >    if (providerOutageResumeOptedOut(customParams)) {</span>
+<span class="cstat-no" title="statement not covered" >        return { attempted: false, reason: 'disabled' };</span>
+    }
+    var backoff = provid<span class="branch-0 cbranch-no" title="branch not covered" >erTran</span>sientBackoffSeconds(customParams);
+    consol<span class="branch-0 cbranch-no" title="branch not covered" >e.log(</span>'⏸️ Provider chain outage (transient 5xx/429/network failures) — backing off ' + backoff + 's before the bounded resume of the persisted session…');
+    runCommand('bash -c "sleep ' + backoff + '"');
+    return resumeOnceForMissingResponse({
+        ticketKey: options.ticketKey,
+        customParams: customParams,
+        error: options.error || '',
+        promptOverride: options.promptOverride || buildProviderOutageResumePrompt({
+            ticketKey: options.ticketKey
+        }),
+        timeoutSeconds: options.timeoutSeconds,
+        force: true
+    });
+}
+&nbsp;
+function getConfiguredGates(customParams, section, <span class="fstat-no" title="function not covered" >legacyKey) {</span>
+<span class="cstat-no" title="statement not covered" >    var config = normalizeConfig(customParams || {}, section);</span>
+<span class="cstat-no" title="statement not covered" >    var gates = config.gates || config[section] || ((customParams &amp;&amp; customParams[legacyKey || section]) || []);</span>
+    return Array.isArray(gates) ? gates : [];
+}
+&nbsp;
+// ── gh-1079: runCo<span class="branch-0 cbranch-no" title="branch not covered" >nfigur</span>edGates decomposed into pure helpers ────────────────
+// Behavior contract is unchanged (the characteri<span class="branch-0 cbranch-no" title="branch not covered" >zation suit</span>e in
+// test_feedbackLoop.js pins every branch); this section only splits the
+// former 37-complexity monolith into single-purpose pieces:
+//   resolveGateEntry   — skip rules + name/command/workingDir/maxAttempts
+//   runGateAttempt     — one console.log + runCommand attempt
+//   classifyGateFailure— exhausted? resume? return-after-resume? retry?
+//   gateExhaustedOutcome / recordNonBlockingGateFailure / gateFailureResult
+//                      — the three failure exits (non-blocking record,
+//                        blocking bubble, resumeAttempted bubble)
+// Every exec/console call keeps its original position in the sequence.
+&nbsp;
+function errorTextOf(error) {
+    return error &amp;&amp; e<span class="fstat-no" title="function not covered" >rror.message ? error.message : String(error);</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function gateRunnable(gate) {</span>
+    return !!gate &amp;&amp; <span class="fstat-no" title="function not covered" >gate.enabled !== false;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function gateCommand(gate, ticketKey) {</span>
+    return <span class="fstat-no" title="function not covered" >gate.command ? String(gate.command).replace(/\{ticketKey\}/g, ticketKey || '') : null;</span>
+}
+&nbsp;
+function gateWorkingDir(gate, options, config) {
+<span class="fstat-no" title="function not covered" >    return gate.workingDir || options.workingDir || config.workingDir || null;</span>
+}
+&nbsp;
+function gateMaxAttempts(gate) {
+    var maxAttempt<span class="fstat-no" title="function not covered" >s = gate.maxAttempts;</span>
+    if (maxAttempts === undefined || maxAttempts === null) maxAttempts = DEFAULT_MAX_ATTEMPTS;
+<span class="cstat-no" title="statement not covered" >    return parseInt(maxAttempts, 10) || 0;</span>
+}
+&nbsp;
+// Exact key order of the pre-refactor failure results (success, failedGate,
+// error, [resumeAttempted], results, nonBlockingFailures) — keep it stable.
+function gateFailureResult(name, errorText, ctx, re<span class="fstat-no" title="function not covered" >sumeAttempted) {</span>
+<span class="cstat-no" title="statement not covered" >    return resumeAttempted ? {</span>
+<span class="cstat-no" title="statement not covered" >        success: false,</span>
+<span class="cstat-no" title="statement not covered" >        failedGate: name,</span>
+<span class="cstat-no" title="statement not covered" >        error: errorText,</span>
+<span class="cstat-no" title="statement not covered" >        resumeAttempted: true,</span>
+        results: ctx.results,
+        nonBlockingFailures: ctx.nonBlockingFailures
+    } : {
+        success: false,
+        failedGate: name,
+        error: errorText,
+        results: ctx.results,
+        nonBlockingFailures: ctx.nonBlockingFailures
+    };
+}
+&nbsp;
+function recordNonBlockingGateFailure(name, attempt<span class="fstat-no" title="function not covered" >s, errorText, ctx, warnWhy) {</span>
+<span class="cstat-no" title="statement not covered" >    console.warn('⚠️ Non-blocking ' + ctx.gateType + ' "' + name + '" failed ' + warnWhy +</span>
+<span class="cstat-no" title="statement not covered" >        ' — continuing without blocking: ' + errorText);</span>
+    ctx.results.push({ name: name, success: false, attempts: attempts, error: errorText, blocking: false });
+    ctx.nonBlockingFailures.push({ name: name, error: errorText });
+}
+&nbsp;
+// A gate that gave up: blocking gates bubble the failure result, non-blocking
+// gates are recorded and the run moves to the next gate ('next-gate').
+function gateExhaustedOutcome(gate, name, attempts,<span class="fstat-no" title="function not covered" > errorText, ctx, warnWhy) {</span>
+<span class="cstat-no" title="statement not covered" >    if (gate.blocking !== false) return gateFailureResult(name, errorText, ctx, false);</span>
+<span class="cstat-no" title="statement not covered" >    recordNonBlockingGateFailure(name, attempts, errorText, ctx, warnWhy);</span>
+    return 'next-gate';
+}
+&nbsp;
+function gateFeedbackConfig(section, gate, maxAttem<span class="fstat-no" title="function not covered" >pts) {</span>
+<span class="cstat-no" title="statement not covered" >    var feedbackLoopConfig = { feedbackLoop: {} };</span>
+<span class="cstat-no" title="statement not covered" >    feedbackLoopConfig.feedbackLoop[section] = {</span>
+<span class="cstat-no" title="statement not covered" >        enabled: true,</span>
+<span class="cstat-no" title="statement not covered" >        maxAttempts: maxAttempts,</span>
+        resumeArgs: gate.resumeArgs || undefined,
+        nonRecoverablePatterns: gate.nonRecoverablePatterns || undefined
+    };
+    return feedbackLoopConfig;
+}
+&nbsp;
+function gateResumeOptions(ctx, gate, name, command<span class="fstat-no" title="function not covered" >, workingDir, maxAttempts, errorText) {</span>
+<span class="cstat-no" title="statement not covered" >    return {</span>
+<span class="cstat-no" title="statement not covered" >        ticketKey: ctx.options.ticketKey,</span>
+<span class="cstat-no" title="statement not covered" >        customParams: gateFeedbackConfig(ctx.section, gate, maxAttempts),</span>
+        section: ctx.section,
+        stage: ctx.stagePrefix + '_' + name,
+        error: 'Command failed: ' + command +
+            (workingDir ? '\nWorking directory: ' + workingDir : '') +
+            '\n\n' + errorText
+    };
+}
+&nbsp;
+function gateWantsReturnAfterResume(ctx, gate) {
+<span class="fstat-no" title="function not covered" >    return !!(ctx.options.returnAfterResume || ctx.config.returnAfterResume || gate.returnAfterResume);</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+// Outcome protocol: 'retry' → run the command again; 'next-gate' → give up on
+// this gate without failing the run (non-blocking); object → bubble the
+// failure result to the caller.
+function classifyGateFailure(gate, entry, attempts,<span class="fstat-no" title="function not covered" > error, ctx) {</span>
+<span class="cstat-no" title="statement not covered" >    var errorText = errorTextOf(error);</span>
+<span class="cstat-no" title="statement not covered" >    if (attempts &gt; entry.maxAttempts || gate.retryWithAgent === false) {</span>
+<span class="cstat-no" title="statement not covered" >        return gateExhaustedOutcome(gate, entry.name, attempts, errorText, ctx, 'after ' + attempts + ' attempt(s)');</span>
+    }
+    var resume = resumeAgent(gateResumeOptions(ctx, gate, entry.name, entry.command,
+        entry.workingDir, entry.maxAttempts, errorText));
+    if (!resume.attempted) {
+        return gateExhaustedOutcome(gate, entry.name, attempts, errorText, ctx, '(no resume attempted)');
+    }
+    if (gateWantsReturnAfterResume(ctx, gate)) {
+        return gateFailureResult(entry.name, errorText, ctx, true);
+    }
+    return 'retry';
+}
+&nbsp;
+function runGateAttempt(gate, entry, attempts, ctx)<span class="fstat-no" title="function not covered" > {</span>
+<span class="cstat-no" title="statement not covered" >    try {</span>
+<span class="cstat-no" title="statement not covered" >        console.log('Running ' + ctx.gateType + ' "' + entry.name + '": ' + entry.command);</span>
+<span class="cstat-no" title="statement not covered" >        var output = runCommand(entry.command, entry.workingDir) || '';</span>
+        ctx.results.push({ name: entry.name, success: true, attempts: attempts, output: output });
+        return true;
+    } catch (e) {
+        return classifyGateFailure(gate, entry, attempts, e, ctx);
+    }
+}
+&nbsp;
+function resolveGateEntry(gate, index, ctx) {
+    i<span class="fstat-no" title="function not covered" >f (!gateRunnable(gate)) return null;</span>
+<span class="cstat-no" title="statement not covered" >    var command = gateCommand(gate, ctx.options.ticketKey);</span>
+<span class="cstat-no" title="statement not covered" >    if (!command) return null;</span>
+<span class="cstat-no" title="statement not covered" >    return {</span>
+<span class="cstat-no" title="statement not covered" >        name: gate.name || ('gate_' + (index + 1)),</span>
+        command: command,
+        workingDir: gateWorkingDir(gate, ctx.options, ctx.config),
+        maxAttempts: gateMaxAttempts(gate)
+    };
+}
+&nbsp;
+function runGate(gate, index, ctx) {
+    var entry <span class="fstat-no" title="function not covered" >= resolveGateEntry(gate, index, ctx);</span>
+<span class="cstat-no" title="statement not covered" >    if (!entry) return null;</span>
+<span class="cstat-no" title="statement not covered" >    var attempts = 0;</span>
+<span class="cstat-no" title="statement not covered" >    while (true) {</span>
+<span class="cstat-no" title="statement not covered" >        attempts += 1;</span>
+<span class="cstat-no" title="statement not covered" >        var outcome = runGateAttempt(gate, entry, attempts, ctx);</span>
+        if (outcome === 'retry') continue;
+        if (outcome === 'next-gate') return null;
+        return outcome === true ? null : outcome;
+    }
+}
+&nbsp;
+function gateSection(options, section) {
+    return<span class="fstat-no" title="function not covered" > options.section || section;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+function runGateContext(options, section, stagePref<span class="fstat-no" title="function not covered" >ix) {</span>
+<span class="cstat-no" title="statement not covered" >    var customParams = options.customParams || {};</span>
+<span class="cstat-no" title="statement not covered" >    return {</span>
+        options: options,
+        section: section,
+<span class="cstat-no" title="statement not covered" >        stagePrefix: stagePrefix,</span>
+        gateType: section === 'policyGates' ? 'policy gate' : 'quality gate',
+        config: normalizeConfig(customParams, gateSection(options, section)),
+        results: [],
+        nonBlockingFailures: []
+    };
+}
+&nbsp;
+function runConfiguredGates(options, section, stage<span class="fstat-no" title="function not covered" >Prefix) {</span>
+<span class="cstat-no" title="statement not covered" >    options = options || {};</span>
+<span class="cstat-no" title="statement not covered" >    section = section || 'qualityGates';</span>
+<span class="cstat-no" title="statement not covered" >    stagePrefix = stagePrefix || 'quality_gate';</span>
+<span class="cstat-no" title="statement not covered" >    var ctx = runGateContext(options, section, stagePrefix);</span>
+    var gates = getConfiguredGates(options.customParams || {}, gateSection(options, section), section);
+    for (var i = 0; i &lt; gates.length; i++) {
+        var outcome = runGate(gates[i], i, ctx);
+        if (outcome) return outcome;
+    }
+    return { success: true, results: ctx.results, nonBlockingFailures: ctx.nonBlockingFailures };
+}
+&nbsp;
+function runQualityGates(options) {
+    return runC<span class="fstat-no" title="function not covered" >onfiguredGates(options || {}, 'qualityGates', 'quality_gate');</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function runPolicyGates(options) {</span>
+    return runCo<span class="fstat-no" title="function not covered" >nfiguredGates(options || {}, 'policyGates', 'policy_gate');</span>
+}
+&nbsp;
+function runPostPublishGates(options) {
+<span class="branch-0 cbranch-no" title="branch not covered" >    opti</span>ons<span class="fstat-no" title="function not covered" > = options || {};</span>
+<span class="cstat-no" title="statement not covered" >    options.returnAfterResume = options.returnAfterResume !== false;</span>
+<span class="cstat-no" title="statement not covered" >    return runConfig<span class="branch-0 cbranch-no" title="branch not covered" >uredGa</span>tes(options, 'postPublishGates', 'post_publish_gate');</span>
+}
+&nbsp;
+module.exports = {
+    DEFAULT_MAX_ATTE<span class="branch-0 cbranch-no" title="branch not covered" >MPTS: </span>DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_MISSING_RESPONSE_TIMEOUT_SECONDS: DEFAULT_MISSING_RESPONSE_TIMEOUT_SECONDS,
+    DEFAULT_PROVIDER_TRANSIENT_BACKOFF_SECONDS: DEFAULT_PROVIDER_TRANSIENT_BACKOFF_SECONDS,
+    MISSING_RESPONSE_STAGE: MISSING_RESPONSE_STAGE,
+    resumeAgent: resumeAgent,
+    resumeOnceForMissingResponse: resumeOnceForMissingResponse,
+    // gh-122: extracted missingResponse helpers, exported for unit tests.
+    missingResponseScoped: missingResponseScoped,
+    missingResponseDisabled: missingResponseDisabled,
+    missingResponseTimeoutSeconds: missingResponseTimeoutSeconds,
+    missingResponseResumeOptions: missingResponseResumeOptions,
+    resumeOnceForProviderOutage: resumeOnceForProviderOutage,
+    providerTransientBackoffSeconds: providerTransientBackoffSeconds,
+    buildFeedbackPrompt: buildFeedbackPrompt,
+    buildMissingResponsePrompt: buildMissingResponsePrompt,
+    buildProviderOutageResumePrompt: buildProviderOutageResumePrompt,
+    runConfiguredGates: runConfiguredGates,
+    runQualityGates: runQualityGates,
+    runPolicyGates: runPolicyGates,
+    runPostPublishGates: runPostPublishGates,
+    normalizeConfig: normalizeConfig,
+    isFeedbackEnabled: isFeedbackEnabled,
+    sanitizeId: sanitizeId,
+    getConfiguredGates: getConfiguredGates,
+    feedbackSection: feedbackSection,
+    resumeEnabled: resumeEnabled,
+    maxAttemptsFrom: maxAttemptsFrom,
+    resumeBlocker: resumeBlocker,
+    resumeKey: resumeKey,
+    feedbackMarkerPaths: feedbackMarkerPaths,
+    resumePromptFor: resumePromptFor,
+    buildResumeCommand: buildResumeCommand,
+    resumeLogLine: resumeLogLine,
+    errorTextOf: errorTextOf,
+    gateRunnable: gateRunnable,
+    gateCommand: gateCommand,
+    gateWorkingDir: gateWorkingDir,
+    gateMaxAttempts: gateMaxAttempts,
+    gateFailureResult: gateFailureResult,
+    gateFeedbackConfig: gateFeedbackConfig,
+    gateResumeOptions: gateResumeOptions,
+    gateWantsReturnAfterResume: gateWantsReturnAfterResume,
+    classifyGateFailure: classifyGateFailure,
+    resolveGateEntry: resolveGateEntry,
+    runGate: runGate,
+    gateSection: gateSection,
+    runGateContext: runGateContext
+};
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-11-25T02:47:15.365Z
+            </div>
+        <script src="../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../sorter.js"></script>
+        <script src="../../block-navigation.js"></script>
+    </body>
+</html>
+    

@@ -1,0 +1,1867 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for js/common/teammateEventDedup.js</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../prettify.css" />
+    <link rel="stylesheet" href="../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">js/common</a> teammateEventDedup.js</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">97.97% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>582/594</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">86.76% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>177/204</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>40/40</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">97.97% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>582/594</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line high'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a>
+<a name='L150'></a><a href='#L150'>150</a>
+<a name='L151'></a><a href='#L151'>151</a>
+<a name='L152'></a><a href='#L152'>152</a>
+<a name='L153'></a><a href='#L153'>153</a>
+<a name='L154'></a><a href='#L154'>154</a>
+<a name='L155'></a><a href='#L155'>155</a>
+<a name='L156'></a><a href='#L156'>156</a>
+<a name='L157'></a><a href='#L157'>157</a>
+<a name='L158'></a><a href='#L158'>158</a>
+<a name='L159'></a><a href='#L159'>159</a>
+<a name='L160'></a><a href='#L160'>160</a>
+<a name='L161'></a><a href='#L161'>161</a>
+<a name='L162'></a><a href='#L162'>162</a>
+<a name='L163'></a><a href='#L163'>163</a>
+<a name='L164'></a><a href='#L164'>164</a>
+<a name='L165'></a><a href='#L165'>165</a>
+<a name='L166'></a><a href='#L166'>166</a>
+<a name='L167'></a><a href='#L167'>167</a>
+<a name='L168'></a><a href='#L168'>168</a>
+<a name='L169'></a><a href='#L169'>169</a>
+<a name='L170'></a><a href='#L170'>170</a>
+<a name='L171'></a><a href='#L171'>171</a>
+<a name='L172'></a><a href='#L172'>172</a>
+<a name='L173'></a><a href='#L173'>173</a>
+<a name='L174'></a><a href='#L174'>174</a>
+<a name='L175'></a><a href='#L175'>175</a>
+<a name='L176'></a><a href='#L176'>176</a>
+<a name='L177'></a><a href='#L177'>177</a>
+<a name='L178'></a><a href='#L178'>178</a>
+<a name='L179'></a><a href='#L179'>179</a>
+<a name='L180'></a><a href='#L180'>180</a>
+<a name='L181'></a><a href='#L181'>181</a>
+<a name='L182'></a><a href='#L182'>182</a>
+<a name='L183'></a><a href='#L183'>183</a>
+<a name='L184'></a><a href='#L184'>184</a>
+<a name='L185'></a><a href='#L185'>185</a>
+<a name='L186'></a><a href='#L186'>186</a>
+<a name='L187'></a><a href='#L187'>187</a>
+<a name='L188'></a><a href='#L188'>188</a>
+<a name='L189'></a><a href='#L189'>189</a>
+<a name='L190'></a><a href='#L190'>190</a>
+<a name='L191'></a><a href='#L191'>191</a>
+<a name='L192'></a><a href='#L192'>192</a>
+<a name='L193'></a><a href='#L193'>193</a>
+<a name='L194'></a><a href='#L194'>194</a>
+<a name='L195'></a><a href='#L195'>195</a>
+<a name='L196'></a><a href='#L196'>196</a>
+<a name='L197'></a><a href='#L197'>197</a>
+<a name='L198'></a><a href='#L198'>198</a>
+<a name='L199'></a><a href='#L199'>199</a>
+<a name='L200'></a><a href='#L200'>200</a>
+<a name='L201'></a><a href='#L201'>201</a>
+<a name='L202'></a><a href='#L202'>202</a>
+<a name='L203'></a><a href='#L203'>203</a>
+<a name='L204'></a><a href='#L204'>204</a>
+<a name='L205'></a><a href='#L205'>205</a>
+<a name='L206'></a><a href='#L206'>206</a>
+<a name='L207'></a><a href='#L207'>207</a>
+<a name='L208'></a><a href='#L208'>208</a>
+<a name='L209'></a><a href='#L209'>209</a>
+<a name='L210'></a><a href='#L210'>210</a>
+<a name='L211'></a><a href='#L211'>211</a>
+<a name='L212'></a><a href='#L212'>212</a>
+<a name='L213'></a><a href='#L213'>213</a>
+<a name='L214'></a><a href='#L214'>214</a>
+<a name='L215'></a><a href='#L215'>215</a>
+<a name='L216'></a><a href='#L216'>216</a>
+<a name='L217'></a><a href='#L217'>217</a>
+<a name='L218'></a><a href='#L218'>218</a>
+<a name='L219'></a><a href='#L219'>219</a>
+<a name='L220'></a><a href='#L220'>220</a>
+<a name='L221'></a><a href='#L221'>221</a>
+<a name='L222'></a><a href='#L222'>222</a>
+<a name='L223'></a><a href='#L223'>223</a>
+<a name='L224'></a><a href='#L224'>224</a>
+<a name='L225'></a><a href='#L225'>225</a>
+<a name='L226'></a><a href='#L226'>226</a>
+<a name='L227'></a><a href='#L227'>227</a>
+<a name='L228'></a><a href='#L228'>228</a>
+<a name='L229'></a><a href='#L229'>229</a>
+<a name='L230'></a><a href='#L230'>230</a>
+<a name='L231'></a><a href='#L231'>231</a>
+<a name='L232'></a><a href='#L232'>232</a>
+<a name='L233'></a><a href='#L233'>233</a>
+<a name='L234'></a><a href='#L234'>234</a>
+<a name='L235'></a><a href='#L235'>235</a>
+<a name='L236'></a><a href='#L236'>236</a>
+<a name='L237'></a><a href='#L237'>237</a>
+<a name='L238'></a><a href='#L238'>238</a>
+<a name='L239'></a><a href='#L239'>239</a>
+<a name='L240'></a><a href='#L240'>240</a>
+<a name='L241'></a><a href='#L241'>241</a>
+<a name='L242'></a><a href='#L242'>242</a>
+<a name='L243'></a><a href='#L243'>243</a>
+<a name='L244'></a><a href='#L244'>244</a>
+<a name='L245'></a><a href='#L245'>245</a>
+<a name='L246'></a><a href='#L246'>246</a>
+<a name='L247'></a><a href='#L247'>247</a>
+<a name='L248'></a><a href='#L248'>248</a>
+<a name='L249'></a><a href='#L249'>249</a>
+<a name='L250'></a><a href='#L250'>250</a>
+<a name='L251'></a><a href='#L251'>251</a>
+<a name='L252'></a><a href='#L252'>252</a>
+<a name='L253'></a><a href='#L253'>253</a>
+<a name='L254'></a><a href='#L254'>254</a>
+<a name='L255'></a><a href='#L255'>255</a>
+<a name='L256'></a><a href='#L256'>256</a>
+<a name='L257'></a><a href='#L257'>257</a>
+<a name='L258'></a><a href='#L258'>258</a>
+<a name='L259'></a><a href='#L259'>259</a>
+<a name='L260'></a><a href='#L260'>260</a>
+<a name='L261'></a><a href='#L261'>261</a>
+<a name='L262'></a><a href='#L262'>262</a>
+<a name='L263'></a><a href='#L263'>263</a>
+<a name='L264'></a><a href='#L264'>264</a>
+<a name='L265'></a><a href='#L265'>265</a>
+<a name='L266'></a><a href='#L266'>266</a>
+<a name='L267'></a><a href='#L267'>267</a>
+<a name='L268'></a><a href='#L268'>268</a>
+<a name='L269'></a><a href='#L269'>269</a>
+<a name='L270'></a><a href='#L270'>270</a>
+<a name='L271'></a><a href='#L271'>271</a>
+<a name='L272'></a><a href='#L272'>272</a>
+<a name='L273'></a><a href='#L273'>273</a>
+<a name='L274'></a><a href='#L274'>274</a>
+<a name='L275'></a><a href='#L275'>275</a>
+<a name='L276'></a><a href='#L276'>276</a>
+<a name='L277'></a><a href='#L277'>277</a>
+<a name='L278'></a><a href='#L278'>278</a>
+<a name='L279'></a><a href='#L279'>279</a>
+<a name='L280'></a><a href='#L280'>280</a>
+<a name='L281'></a><a href='#L281'>281</a>
+<a name='L282'></a><a href='#L282'>282</a>
+<a name='L283'></a><a href='#L283'>283</a>
+<a name='L284'></a><a href='#L284'>284</a>
+<a name='L285'></a><a href='#L285'>285</a>
+<a name='L286'></a><a href='#L286'>286</a>
+<a name='L287'></a><a href='#L287'>287</a>
+<a name='L288'></a><a href='#L288'>288</a>
+<a name='L289'></a><a href='#L289'>289</a>
+<a name='L290'></a><a href='#L290'>290</a>
+<a name='L291'></a><a href='#L291'>291</a>
+<a name='L292'></a><a href='#L292'>292</a>
+<a name='L293'></a><a href='#L293'>293</a>
+<a name='L294'></a><a href='#L294'>294</a>
+<a name='L295'></a><a href='#L295'>295</a>
+<a name='L296'></a><a href='#L296'>296</a>
+<a name='L297'></a><a href='#L297'>297</a>
+<a name='L298'></a><a href='#L298'>298</a>
+<a name='L299'></a><a href='#L299'>299</a>
+<a name='L300'></a><a href='#L300'>300</a>
+<a name='L301'></a><a href='#L301'>301</a>
+<a name='L302'></a><a href='#L302'>302</a>
+<a name='L303'></a><a href='#L303'>303</a>
+<a name='L304'></a><a href='#L304'>304</a>
+<a name='L305'></a><a href='#L305'>305</a>
+<a name='L306'></a><a href='#L306'>306</a>
+<a name='L307'></a><a href='#L307'>307</a>
+<a name='L308'></a><a href='#L308'>308</a>
+<a name='L309'></a><a href='#L309'>309</a>
+<a name='L310'></a><a href='#L310'>310</a>
+<a name='L311'></a><a href='#L311'>311</a>
+<a name='L312'></a><a href='#L312'>312</a>
+<a name='L313'></a><a href='#L313'>313</a>
+<a name='L314'></a><a href='#L314'>314</a>
+<a name='L315'></a><a href='#L315'>315</a>
+<a name='L316'></a><a href='#L316'>316</a>
+<a name='L317'></a><a href='#L317'>317</a>
+<a name='L318'></a><a href='#L318'>318</a>
+<a name='L319'></a><a href='#L319'>319</a>
+<a name='L320'></a><a href='#L320'>320</a>
+<a name='L321'></a><a href='#L321'>321</a>
+<a name='L322'></a><a href='#L322'>322</a>
+<a name='L323'></a><a href='#L323'>323</a>
+<a name='L324'></a><a href='#L324'>324</a>
+<a name='L325'></a><a href='#L325'>325</a>
+<a name='L326'></a><a href='#L326'>326</a>
+<a name='L327'></a><a href='#L327'>327</a>
+<a name='L328'></a><a href='#L328'>328</a>
+<a name='L329'></a><a href='#L329'>329</a>
+<a name='L330'></a><a href='#L330'>330</a>
+<a name='L331'></a><a href='#L331'>331</a>
+<a name='L332'></a><a href='#L332'>332</a>
+<a name='L333'></a><a href='#L333'>333</a>
+<a name='L334'></a><a href='#L334'>334</a>
+<a name='L335'></a><a href='#L335'>335</a>
+<a name='L336'></a><a href='#L336'>336</a>
+<a name='L337'></a><a href='#L337'>337</a>
+<a name='L338'></a><a href='#L338'>338</a>
+<a name='L339'></a><a href='#L339'>339</a>
+<a name='L340'></a><a href='#L340'>340</a>
+<a name='L341'></a><a href='#L341'>341</a>
+<a name='L342'></a><a href='#L342'>342</a>
+<a name='L343'></a><a href='#L343'>343</a>
+<a name='L344'></a><a href='#L344'>344</a>
+<a name='L345'></a><a href='#L345'>345</a>
+<a name='L346'></a><a href='#L346'>346</a>
+<a name='L347'></a><a href='#L347'>347</a>
+<a name='L348'></a><a href='#L348'>348</a>
+<a name='L349'></a><a href='#L349'>349</a>
+<a name='L350'></a><a href='#L350'>350</a>
+<a name='L351'></a><a href='#L351'>351</a>
+<a name='L352'></a><a href='#L352'>352</a>
+<a name='L353'></a><a href='#L353'>353</a>
+<a name='L354'></a><a href='#L354'>354</a>
+<a name='L355'></a><a href='#L355'>355</a>
+<a name='L356'></a><a href='#L356'>356</a>
+<a name='L357'></a><a href='#L357'>357</a>
+<a name='L358'></a><a href='#L358'>358</a>
+<a name='L359'></a><a href='#L359'>359</a>
+<a name='L360'></a><a href='#L360'>360</a>
+<a name='L361'></a><a href='#L361'>361</a>
+<a name='L362'></a><a href='#L362'>362</a>
+<a name='L363'></a><a href='#L363'>363</a>
+<a name='L364'></a><a href='#L364'>364</a>
+<a name='L365'></a><a href='#L365'>365</a>
+<a name='L366'></a><a href='#L366'>366</a>
+<a name='L367'></a><a href='#L367'>367</a>
+<a name='L368'></a><a href='#L368'>368</a>
+<a name='L369'></a><a href='#L369'>369</a>
+<a name='L370'></a><a href='#L370'>370</a>
+<a name='L371'></a><a href='#L371'>371</a>
+<a name='L372'></a><a href='#L372'>372</a>
+<a name='L373'></a><a href='#L373'>373</a>
+<a name='L374'></a><a href='#L374'>374</a>
+<a name='L375'></a><a href='#L375'>375</a>
+<a name='L376'></a><a href='#L376'>376</a>
+<a name='L377'></a><a href='#L377'>377</a>
+<a name='L378'></a><a href='#L378'>378</a>
+<a name='L379'></a><a href='#L379'>379</a>
+<a name='L380'></a><a href='#L380'>380</a>
+<a name='L381'></a><a href='#L381'>381</a>
+<a name='L382'></a><a href='#L382'>382</a>
+<a name='L383'></a><a href='#L383'>383</a>
+<a name='L384'></a><a href='#L384'>384</a>
+<a name='L385'></a><a href='#L385'>385</a>
+<a name='L386'></a><a href='#L386'>386</a>
+<a name='L387'></a><a href='#L387'>387</a>
+<a name='L388'></a><a href='#L388'>388</a>
+<a name='L389'></a><a href='#L389'>389</a>
+<a name='L390'></a><a href='#L390'>390</a>
+<a name='L391'></a><a href='#L391'>391</a>
+<a name='L392'></a><a href='#L392'>392</a>
+<a name='L393'></a><a href='#L393'>393</a>
+<a name='L394'></a><a href='#L394'>394</a>
+<a name='L395'></a><a href='#L395'>395</a>
+<a name='L396'></a><a href='#L396'>396</a>
+<a name='L397'></a><a href='#L397'>397</a>
+<a name='L398'></a><a href='#L398'>398</a>
+<a name='L399'></a><a href='#L399'>399</a>
+<a name='L400'></a><a href='#L400'>400</a>
+<a name='L401'></a><a href='#L401'>401</a>
+<a name='L402'></a><a href='#L402'>402</a>
+<a name='L403'></a><a href='#L403'>403</a>
+<a name='L404'></a><a href='#L404'>404</a>
+<a name='L405'></a><a href='#L405'>405</a>
+<a name='L406'></a><a href='#L406'>406</a>
+<a name='L407'></a><a href='#L407'>407</a>
+<a name='L408'></a><a href='#L408'>408</a>
+<a name='L409'></a><a href='#L409'>409</a>
+<a name='L410'></a><a href='#L410'>410</a>
+<a name='L411'></a><a href='#L411'>411</a>
+<a name='L412'></a><a href='#L412'>412</a>
+<a name='L413'></a><a href='#L413'>413</a>
+<a name='L414'></a><a href='#L414'>414</a>
+<a name='L415'></a><a href='#L415'>415</a>
+<a name='L416'></a><a href='#L416'>416</a>
+<a name='L417'></a><a href='#L417'>417</a>
+<a name='L418'></a><a href='#L418'>418</a>
+<a name='L419'></a><a href='#L419'>419</a>
+<a name='L420'></a><a href='#L420'>420</a>
+<a name='L421'></a><a href='#L421'>421</a>
+<a name='L422'></a><a href='#L422'>422</a>
+<a name='L423'></a><a href='#L423'>423</a>
+<a name='L424'></a><a href='#L424'>424</a>
+<a name='L425'></a><a href='#L425'>425</a>
+<a name='L426'></a><a href='#L426'>426</a>
+<a name='L427'></a><a href='#L427'>427</a>
+<a name='L428'></a><a href='#L428'>428</a>
+<a name='L429'></a><a href='#L429'>429</a>
+<a name='L430'></a><a href='#L430'>430</a>
+<a name='L431'></a><a href='#L431'>431</a>
+<a name='L432'></a><a href='#L432'>432</a>
+<a name='L433'></a><a href='#L433'>433</a>
+<a name='L434'></a><a href='#L434'>434</a>
+<a name='L435'></a><a href='#L435'>435</a>
+<a name='L436'></a><a href='#L436'>436</a>
+<a name='L437'></a><a href='#L437'>437</a>
+<a name='L438'></a><a href='#L438'>438</a>
+<a name='L439'></a><a href='#L439'>439</a>
+<a name='L440'></a><a href='#L440'>440</a>
+<a name='L441'></a><a href='#L441'>441</a>
+<a name='L442'></a><a href='#L442'>442</a>
+<a name='L443'></a><a href='#L443'>443</a>
+<a name='L444'></a><a href='#L444'>444</a>
+<a name='L445'></a><a href='#L445'>445</a>
+<a name='L446'></a><a href='#L446'>446</a>
+<a name='L447'></a><a href='#L447'>447</a>
+<a name='L448'></a><a href='#L448'>448</a>
+<a name='L449'></a><a href='#L449'>449</a>
+<a name='L450'></a><a href='#L450'>450</a>
+<a name='L451'></a><a href='#L451'>451</a>
+<a name='L452'></a><a href='#L452'>452</a>
+<a name='L453'></a><a href='#L453'>453</a>
+<a name='L454'></a><a href='#L454'>454</a>
+<a name='L455'></a><a href='#L455'>455</a>
+<a name='L456'></a><a href='#L456'>456</a>
+<a name='L457'></a><a href='#L457'>457</a>
+<a name='L458'></a><a href='#L458'>458</a>
+<a name='L459'></a><a href='#L459'>459</a>
+<a name='L460'></a><a href='#L460'>460</a>
+<a name='L461'></a><a href='#L461'>461</a>
+<a name='L462'></a><a href='#L462'>462</a>
+<a name='L463'></a><a href='#L463'>463</a>
+<a name='L464'></a><a href='#L464'>464</a>
+<a name='L465'></a><a href='#L465'>465</a>
+<a name='L466'></a><a href='#L466'>466</a>
+<a name='L467'></a><a href='#L467'>467</a>
+<a name='L468'></a><a href='#L468'>468</a>
+<a name='L469'></a><a href='#L469'>469</a>
+<a name='L470'></a><a href='#L470'>470</a>
+<a name='L471'></a><a href='#L471'>471</a>
+<a name='L472'></a><a href='#L472'>472</a>
+<a name='L473'></a><a href='#L473'>473</a>
+<a name='L474'></a><a href='#L474'>474</a>
+<a name='L475'></a><a href='#L475'>475</a>
+<a name='L476'></a><a href='#L476'>476</a>
+<a name='L477'></a><a href='#L477'>477</a>
+<a name='L478'></a><a href='#L478'>478</a>
+<a name='L479'></a><a href='#L479'>479</a>
+<a name='L480'></a><a href='#L480'>480</a>
+<a name='L481'></a><a href='#L481'>481</a>
+<a name='L482'></a><a href='#L482'>482</a>
+<a name='L483'></a><a href='#L483'>483</a>
+<a name='L484'></a><a href='#L484'>484</a>
+<a name='L485'></a><a href='#L485'>485</a>
+<a name='L486'></a><a href='#L486'>486</a>
+<a name='L487'></a><a href='#L487'>487</a>
+<a name='L488'></a><a href='#L488'>488</a>
+<a name='L489'></a><a href='#L489'>489</a>
+<a name='L490'></a><a href='#L490'>490</a>
+<a name='L491'></a><a href='#L491'>491</a>
+<a name='L492'></a><a href='#L492'>492</a>
+<a name='L493'></a><a href='#L493'>493</a>
+<a name='L494'></a><a href='#L494'>494</a>
+<a name='L495'></a><a href='#L495'>495</a>
+<a name='L496'></a><a href='#L496'>496</a>
+<a name='L497'></a><a href='#L497'>497</a>
+<a name='L498'></a><a href='#L498'>498</a>
+<a name='L499'></a><a href='#L499'>499</a>
+<a name='L500'></a><a href='#L500'>500</a>
+<a name='L501'></a><a href='#L501'>501</a>
+<a name='L502'></a><a href='#L502'>502</a>
+<a name='L503'></a><a href='#L503'>503</a>
+<a name='L504'></a><a href='#L504'>504</a>
+<a name='L505'></a><a href='#L505'>505</a>
+<a name='L506'></a><a href='#L506'>506</a>
+<a name='L507'></a><a href='#L507'>507</a>
+<a name='L508'></a><a href='#L508'>508</a>
+<a name='L509'></a><a href='#L509'>509</a>
+<a name='L510'></a><a href='#L510'>510</a>
+<a name='L511'></a><a href='#L511'>511</a>
+<a name='L512'></a><a href='#L512'>512</a>
+<a name='L513'></a><a href='#L513'>513</a>
+<a name='L514'></a><a href='#L514'>514</a>
+<a name='L515'></a><a href='#L515'>515</a>
+<a name='L516'></a><a href='#L516'>516</a>
+<a name='L517'></a><a href='#L517'>517</a>
+<a name='L518'></a><a href='#L518'>518</a>
+<a name='L519'></a><a href='#L519'>519</a>
+<a name='L520'></a><a href='#L520'>520</a>
+<a name='L521'></a><a href='#L521'>521</a>
+<a name='L522'></a><a href='#L522'>522</a>
+<a name='L523'></a><a href='#L523'>523</a>
+<a name='L524'></a><a href='#L524'>524</a>
+<a name='L525'></a><a href='#L525'>525</a>
+<a name='L526'></a><a href='#L526'>526</a>
+<a name='L527'></a><a href='#L527'>527</a>
+<a name='L528'></a><a href='#L528'>528</a>
+<a name='L529'></a><a href='#L529'>529</a>
+<a name='L530'></a><a href='#L530'>530</a>
+<a name='L531'></a><a href='#L531'>531</a>
+<a name='L532'></a><a href='#L532'>532</a>
+<a name='L533'></a><a href='#L533'>533</a>
+<a name='L534'></a><a href='#L534'>534</a>
+<a name='L535'></a><a href='#L535'>535</a>
+<a name='L536'></a><a href='#L536'>536</a>
+<a name='L537'></a><a href='#L537'>537</a>
+<a name='L538'></a><a href='#L538'>538</a>
+<a name='L539'></a><a href='#L539'>539</a>
+<a name='L540'></a><a href='#L540'>540</a>
+<a name='L541'></a><a href='#L541'>541</a>
+<a name='L542'></a><a href='#L542'>542</a>
+<a name='L543'></a><a href='#L543'>543</a>
+<a name='L544'></a><a href='#L544'>544</a>
+<a name='L545'></a><a href='#L545'>545</a>
+<a name='L546'></a><a href='#L546'>546</a>
+<a name='L547'></a><a href='#L547'>547</a>
+<a name='L548'></a><a href='#L548'>548</a>
+<a name='L549'></a><a href='#L549'>549</a>
+<a name='L550'></a><a href='#L550'>550</a>
+<a name='L551'></a><a href='#L551'>551</a>
+<a name='L552'></a><a href='#L552'>552</a>
+<a name='L553'></a><a href='#L553'>553</a>
+<a name='L554'></a><a href='#L554'>554</a>
+<a name='L555'></a><a href='#L555'>555</a>
+<a name='L556'></a><a href='#L556'>556</a>
+<a name='L557'></a><a href='#L557'>557</a>
+<a name='L558'></a><a href='#L558'>558</a>
+<a name='L559'></a><a href='#L559'>559</a>
+<a name='L560'></a><a href='#L560'>560</a>
+<a name='L561'></a><a href='#L561'>561</a>
+<a name='L562'></a><a href='#L562'>562</a>
+<a name='L563'></a><a href='#L563'>563</a>
+<a name='L564'></a><a href='#L564'>564</a>
+<a name='L565'></a><a href='#L565'>565</a>
+<a name='L566'></a><a href='#L566'>566</a>
+<a name='L567'></a><a href='#L567'>567</a>
+<a name='L568'></a><a href='#L568'>568</a>
+<a name='L569'></a><a href='#L569'>569</a>
+<a name='L570'></a><a href='#L570'>570</a>
+<a name='L571'></a><a href='#L571'>571</a>
+<a name='L572'></a><a href='#L572'>572</a>
+<a name='L573'></a><a href='#L573'>573</a>
+<a name='L574'></a><a href='#L574'>574</a>
+<a name='L575'></a><a href='#L575'>575</a>
+<a name='L576'></a><a href='#L576'>576</a>
+<a name='L577'></a><a href='#L577'>577</a>
+<a name='L578'></a><a href='#L578'>578</a>
+<a name='L579'></a><a href='#L579'>579</a>
+<a name='L580'></a><a href='#L580'>580</a>
+<a name='L581'></a><a href='#L581'>581</a>
+<a name='L582'></a><a href='#L582'>582</a>
+<a name='L583'></a><a href='#L583'>583</a>
+<a name='L584'></a><a href='#L584'>584</a>
+<a name='L585'></a><a href='#L585'>585</a>
+<a name='L586'></a><a href='#L586'>586</a>
+<a name='L587'></a><a href='#L587'>587</a>
+<a name='L588'></a><a href='#L588'>588</a>
+<a name='L589'></a><a href='#L589'>589</a>
+<a name='L590'></a><a href='#L590'>590</a>
+<a name='L591'></a><a href='#L591'>591</a>
+<a name='L592'></a><a href='#L592'>592</a>
+<a name='L593'></a><a href='#L593'>593</a>
+<a name='L594'></a><a href='#L594'>594</a>
+<a name='L595'></a><a href='#L595'>595</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">61x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">61x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">36x</span>
+<span class="cline-any cline-yes">36x</span>
+<span class="cline-any cline-yes">36x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">36x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">80x</span>
+<span class="cline-any cline-yes">80x</span>
+<span class="cline-any cline-yes">64x</span>
+<span class="cline-any cline-yes">64x</span>
+<span class="cline-any cline-yes">64x</span>
+<span class="cline-any cline-yes">64x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">64x</span>
+<span class="cline-any cline-yes">64x</span>
+<span class="cline-any cline-yes">59x</span>
+<span class="cline-any cline-yes">64x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">64x</span>
+<span class="cline-any cline-yes">64x</span>
+<span class="cline-any cline-yes">189x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">189x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">56x</span>
+<span class="cline-any cline-yes">56x</span>
+<span class="cline-any cline-yes">56x</span>
+<span class="cline-any cline-yes">56x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">70x</span>
+<span class="cline-any cline-yes">67x</span>
+<span class="cline-any cline-yes">67x</span>
+<span class="cline-any cline-yes">70x</span>
+<span class="cline-any cline-yes">70x</span>
+<span class="cline-any cline-yes">60x</span>
+<span class="cline-any cline-yes">60x</span>
+<span class="cline-any cline-yes">60x</span>
+<span class="cline-any cline-yes">60x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">15x</span>
+<span class="cline-any cline-yes">15x</span>
+<span class="cline-any cline-yes">15x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">15x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">35x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">23x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">32x</span>
+<span class="cline-any cline-yes">32x</span>
+<span class="cline-any cline-yes">32x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">32x</span>
+<span class="cline-any cline-yes">32x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">32x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">32x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">/**
+ * teammateEventDedup.js — gh-1065 event-path trigger dedup (pure side).
+ *
+ * Live evidence (dmtools-agents 2026-10-18, issues #1040–#1043 / #1061):
+ * ONE human action (assign, or assign-while-labels-change) emits MULTIPLE
+ * issues events (`assigned` + one `labeled` per label write), and
+ * .github/workflows/ai-teammate.yml triggered one teammate run PER event
+ * — two runs per issue at 20:11Z, three on #1061 across 20:07–20:15,
+ * each duplicate hand-cancelled by the owner. The gh-1028 dedup
+ * (branchLegGuard.js + smAgent.triggerWorkflow) covers the SM-internal
+ * workflow_dispatch path only; the GitHub-event path bypassed that ledger.
+ * The per-issue `concurrency:` group (cancel-in-progress:false) only
+ * SERIALIZES the duplicates into queued no-op burns — it never drops them.
+ *
+ * This module is the missing gate: an issues-event run proceeds only when
+ * NO OTHER ai-teammate run for the SAME issue + leg is in flight (active
+ * status, gh-1028 stale-zombie parity) or freshly completed (a fulfilled
+ * leg owns a short freshness window — burst duplicates of one action land
+ * after the first run because the concurrency group queues them). The key
+ * semantics mirror the SM side (gh-1028): same issue + same leg, where the
+ * run's leg is recovered from its run title (dispatch titles carry the
+ * leg; the stub run-name now also resolves the strongest arming label for
+ * event-path runs — see .github/workflows/ai-teammate.yml run-name).
+ *
+ * Leg wildcard — SCOPED (gh-1065 rework, review threads):
+ *  - IN-FLIGHT owners: an unknown leg on either side wildcards. Event-path
+ *    burst titles cannot be told apart; an in-flight owner of the same
+ *    issue is almost certainly the same human action (AC1/AC4).
+ *  - COMPLETED owners: the wildcard is GONE. A completed owner with an
+ *    unknown leg suppressing a KNOWN-leg event is exactly the sequential-
+ *    human-action case (assign at T, deliberate agent:review at T+6min) —
+ *    it proceeds. A completed owner suppresses only when both legs are
+ *    unknown (a second bare assign inside the window is burst noise) or
+ *    both known and equal (the concurrency-released burst duplicate).
+ *
+ * Tie-break (AC1, exactly one survivor): only a run that is STRICTLY OLDER
+ * than the probing run suppresses it (run_number order, created_at
+ * fallback). Burst runs are created milliseconds apart in run_number order,
+ * so the earliest always proceeds and every later duplicate of the burst
+ * drops — regardless of which probe executes first.
+ *
+ * FAIL-OPEN (AC3): the transport (.github/workflows/ai-teammate.yml dedup
+ * job) treats a probe error as "no data" — this module maps a missing/
+ * non-array run list to proceed, so a broken dedup check can never
+ * silently swallow the only trigger. Non-arming events never reach the
+ * probe at all: the dedup JOB carries the same arming gate as the teammate
+ * call, so a lifecycle-label write executes ZERO jobs and its run
+ * concludes failure (the gh-676 phantom pattern) — it can never own the
+ * freshness window without having run a leg.
+ *
+ * FOLLOW-UP — RESOLVED (gh-1073): the consumer-repo copy
+ * workflows/ai-teammate.yml.template now mirrors the same gated dedup job
+ * (its probe requires THIS module from the mounted agents-pack checkout at
+ * dmtools-agents/js/common/, and its issues-event run-name resolves the
+ * strongest arming label into the emoji title family parsed below). The
+ * stub and the template stay in lockstep — a gate change here must land in
+ * both files (pinned by test_teammateEventDedup.js and
+ * test_aiTeammateTemplate.js).
+ *
+ * Pure functions, no tool globals — the workflow wires the transport
+ * (gh api per-status fan-out, smAgent parity). GraalJS-clean: var + plain
+ * functions, JSON-safe data only.
+ */
+&nbsp;
+'use strict';
+&nbsp;
+var legRunVocab = require('./legRunVocab.js');
+&nbsp;
+// The leg workflow this dedup guards — the same default branchLegGuard and
+// the SM dispatch side use. NOTE: the consumer-repo copies of
+// workflows/ai-teammate.yml.template point at the same default workflow
+// file (their probe rides WORKFLOW_FILE: ai-teammate.yml); see the
+// FOLLOW-UP note in the header.
+var DEFAULT_WORKFLOW_FILE = 'ai-teammate.yml';
+&nbsp;
+// Active-state vocabulary — branchLegGuard parity, one list (gh-1153 adds 'requested').
+var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending', 'requested'];
+&nbsp;
+// gh-1028 stale bound for NON-running active states (queued/waiting/pending
+// zombies aged out own nothing). in_progress runs never age out.
+var DEFAULT_STALE_NON_RUNNING_MS = 6 * 60 * 60 * 1000;
+&nbsp;
+// gh-1065 freshness window for COMPLETED runs: a run that concluded
+// 'success' within this window still owns the issue+leg key. Deliberately
+// SHORT (10 min): the burst duplicates of one human action reach their
+// dedup probe only after the concurrency group releases the first run, so
+// the window only has to cover event-burst + queue lag. Sequential human
+// actions inside the window are NOT swallowed thanks to the scoped
+// wildcard: a completed owner with an unknown leg cannot suppress a KNOWN
+// new leg (see completedLegsCompatible). Only conclusion 'success' counts:
+// a cancelled or failed run owns nothing (the retry path stays open) —
+// which also covers the zero-job phantom runs (gh-676 shape) that the
+// dedup job gate produces for non-arming events.
+var DEFAULT_FRESHLY_COMPLETED_MS = 10 * 60 * 1000;
+&nbsp;
+// Arming labels → leg, the factory's derivation order (template header:
+// "dispatch input leg &gt; label agent:rework &gt; label agent:review &gt;
+// assignee/agent:dev (dev)"). pr_approved arms the review leg.
+var ARMING_LABEL_LEGS = {
+    'agent:dev': 'dev',
+    'agent:develop': 'dev',
+    'agent:review': 'review',
+    'agent:rework': 'rework',
+    'pr_approved': 'review'
+};
+&nbsp;
+// Label-scan priority for an `assigned` event: the factory resolves the
+// strongest arming label on the issue (rework &gt; review &gt; dev).
+var ASSIGNED_LEG_PRIORITY = ['agent:rework', 'agent:review', 'agent:dev', 'agent:develop'];
+&nbsp;
+function armingLegOfLabel(labelName) {
+    if (!labelName || typeof labelName !== 'string') return null;
+    return ARMING_LABEL_LEGS.hasOwnProperty(labelName) ? ARMING_LABEL_LEGS[labelName] : null;
+}
+&nbsp;
+/**
+ * The leg of the STRONGEST arming label on the issue (assigned events).
+ */
+function assignedEventLeg(issueLabelNames) {
+    var names = Array.isArray(issueLabelNames) ? issueLabelNames : [];
+    for (var i = 0; i &lt; ASSIGNED_LEG_PRIORITY.length; i++) {
+        if (names.indexOf(ASSIGNED_LEG_PRIORITY[i]) !== -1) {
+            return { applicable: true, leg: ARMING_LABEL_LEGS[ASSIGNED_LEG_PRIORITY[i]] };
+        }
+    }
+    return { applicable: true, leg: '' };
+}
+&nbsp;
+/**
+ * The leg an issues event will run. Returns { applicable, leg }:
+ *  - labeled: applicable iff the label is an arming label (the workflow
+ *    job gate admits exactly these — non-arming lifecycle labels skip the
+ *    jobs entirely, gh-1029 zero-burn parity);
+ *  - assigned: always applicable; leg = strongest arming label on the
+ *    issue, '' when none (a bare assign declares no leg — an in-flight
+ *    run for the issue still suppresses it, see legsCompatible);
+ *  - anything else: applicable, leg ''.
+ */
+function deriveEventLeg(action, labelName, issueLabelNames) {
+    if (action === 'labeled') {
+        var leg = armingLegOfLabel(labelName);
+        return { applicable: leg !== null, leg: leg || '' };
+    }
+    if (action === 'assigned') return assignedEventLeg(issueLabelNames);
+    return { applicable: true, leg: '' };
+}
+&nbsp;
+/**
+<span class="branch-0 cbranch-no" title="branch not covered" > * One anchored-token scanner shared by the t</span>wo issue-anchor regex
+ * families (stub '#&lt;n&gt;' and factory/template 'gh-&lt;n&gt;'): iterate the
+ * pattern's matches and accept the FIRST match that is not immediately
+ * followed by a digit — a trailing-digit guard keeps '#104' from matching
+ * '#1040'. Returns a number or null.
+ */
+function anchoredNumberOf(name, re) {
+    var m = re.exec(name);
+    while (m) {
+        var after = name.charAt(m.index + m[0].length);
+        if (after === '' || after &lt; '0' || after &gt; '9') return parseInt(m[1], 10);
+        m = re.exec(name);
+    }
+    return null;
+<span class="cstat-no" title="statement not covered" ><span class="branch-0 cbranch-no" title="branch not covered" >}</span></span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+ * The issue anchor carried by a run title. Both title families carry it:
+ * the stub's 'teammate: assigned #1040' / 'teammate: workflow_dispatch
+ * #1040 dev' and the factory/SM '▶ dev (SM) · gh-1040' / template
+ * '⚒️ dev · gh-1040' shapes. Returns a number or null.
+ */
+function issueOfRunName(name) {
+    if (!name || typeof name !== 'string') return null;
+    // First well-terminated '#&lt;n&gt;' token wins.
+    var issue = anchoredNumberOf(name, /#(\d+)/g);
+    if (issue !== null) return issue;
+    return anchoredNumberOf(name, /(?:^|[^0-9a-zA-Z])gh-(\d+)/g);
+}
+&nbsp;
+/**
+ * The PR anchor carried by a run title ('teammate: workflow_dispatch # · pr-1151 review'
+ * or '▶ review (SM) · pr-1151'). Uses the same non-digit boundary guard as
+ * issueOfRunName so 'pr-115' never matches 'pr-1151'. Returns a number or null.
+ */
+function prOfRunName(name) {
+    if (!name || typeof name !== 'string') return null;
+    return anchoredNumberOf(name, /(?:^|[^0-9a-zA-Z])pr-(\d+)/g);
+}
+&nbsp;
+// Emoji-marker → leg for the template title family ('🔧 rework · ...',
+// '🔍 review · ...', '⚒️ dev · ...').
+var EMOJI_LEG_MARKERS = [['🔧', 'rework'], ['🔍', 'review'], ['⚒️', 'dev']];
+&nbsp;
+function emojiLegOf(name) {
+    for (var i = 0; i &lt; EMOJI_LEG_MARKERS.length; i++) {
+        var marker = EMOJI_LEG_MARKERS[i][0];
+        var at = name.indexOf(marker);
+        if (at !== -1 &amp;&amp; name.indexOf(EMOJI_LEG_MARKERS[i][1], at) !== -1) {
+            return EMOJI_LEG_MARKERS[i][1];
+        }
+    }
+    return '';
+}
+&nbsp;
+/** Trailing leg token of a stub title ('teammate: ... #&lt;n&gt; &lt;leg&gt;'). */
+function stubTailLegOf(name) {
+    var m = /\s(dev|review|rework)$/.exec(name);
+    return m ? m[1] : '';
+}
+&nbsp;
+/**
+ * The leg a run title carries, '' when unknown:
+ *  - '▶ &lt;leg&gt; (SM) · ...'           — SM dispatch (factory title)
+ *  - '🔧 rework · ...' / '🔍 review · ...' / '⚒️ dev · ...'
+ *                                   — template event titles
+ *  - 'teammate: ... #&lt;n&gt; &lt;leg&gt;'     — stub titles (dispatch leg input AND
+ *                                     the event-path label-derived leg the
+ *                                     stub run-name carries since the
+ *                                     gh-1065 rework; the stub prefix is
+ *                                     required so an issue title ending
+ *                                     in a leg word never aliases)
+ * Event-path stub titles from before the run-name change ('teammate:
+ * assigned #1040') carry no leg → ''.
+ */
+function legOfRunName(name) {
+    if (!name || typeof name !== 'string') return '';
+    var m = /▶\s+(dev|review|rework)\s+\(SM\)/.exec(name);
+    if (m) return m[1];
+    var emoji = emojiLegOf(name);
+    if (emoji) return emoji;
+    if (name.indexOf('teammate:') === 0) return stubTailLegOf(name);
+    return '';
+}
+&nbsp;
+/**
+ * gh-1028 key semantics for IN-FLIGHT owners: same issue + same leg. An
+ * UNKNOWN leg on either side is a wildcard — event-path run titles from
+ * a live burst cannot be told apart ('teammate: issues #1040'), and a
+ * bare `assigned` event declares none, yet both are how the observed
+ * burst (#1040–#1043: assign-while-labels-change) reaches the workflow;
+ * treating '' as a match-all keeps exactly one run per issue per burst
+ * (AC1/AC4). Precision where it is possible: when BOTH legs are known
+ * they must be EQUAL — an SM-dispatched 'dev' leg in flight never
+ * swallows a genuinely new 'review' trigger (the concurrency group
+ * serializes the review run behind the dev leg instead of dropping it).
+ */
+function legsCompatible(eventLeg, runLeg) {
+    var e = eventLeg || '';
+    var r = runLeg || '';
+    if (e === '' || r === '') return true;
+    return e === r;
+}
+&nbsp;
+/**
+ * gh-1065 rework — key semantics for COMPLETED owners (the freshness
+ * window): STRICT. A completed owner that suppressed a KNOWN new leg
+ * would swallow genuinely sequential human actions (assign at T, the run
+ * concludes success at T+4min, the same human deliberately adds
+ * agent:review at T+6min — a new request, not burst noise). So a
+ * completed owner with an unknown leg suppresses ONLY another unknown-leg
+ * event (a second bare assign inside the window stays burst noise); in
+ * all other cases both legs must be known and equal. The wildcard stays
+ * where it belongs — on in-flight owners (legsCompatible).
+ */
+function completedLegsCompatible(eventLeg, runLeg) {
+    var e = eventLeg || '';
+    var r = runLeg || '';
+    if (e === '' &amp;&amp; r === '') return true;
+    return e !== '' &amp;&amp; r !== '' &amp;&amp; e === r;
+}
+&nbsp;
+/**
+ * Leg compatibility for a candidate owner: the wildcard is scoped to
+ * in-flight owners; completed owners are strict.
+ */
+function ownerLegCompatible(run, eventLeg) {
+    if (isActiveStatus(run.status)) return legsCompatible(eventLeg, legOfRunName(run.name));
+    return completedLegsCompatible(eventLeg, legOfRunName(run.name));
+}
+&nbsp;
+// The freshness probes bound to this module's active-state vocabulary
+// ('requested' included) — one factory call instead of the former delegate
+// copies (gh-1248 dedup).
+var runProbes = legRunVocab.makeRunProbes(ACTIVE_RUN_STATES);
+var isActiveStatus = runProbes.isActiveStatus;
+var runTimestampMs = runProbes.runTimestampMs;
+/** gh-1028 zombie parity: non-in_progress active state past the stale bound. */
+var isStaleNonRunning = runProbes.isStaleNonRunning;
+&nbsp;
+/**
+ * A run that concluded 'success' within the freshness window still owns
+ * the issue+leg key. Any other conclusion (failure, cancelled, skipped)
+ * owns nothing — the retry path stays open. Note the transport guarantee
+ * that makes 'success' trustworthy: the dedup JOB is gated by the same
+ * arming gate as the teammate call, so a run that never ran a leg (a
+ * dropped duplicate is a real leg run's sibling; a non-arming label
+ * write executes ZERO jobs and concludes failure) cannot conclude
+ * 'success' on its own.
+ */
+function isFreshlyCompleted(run, nowMs, freshMs) {
+    if (!run || run.status !== 'completed') return false;
+    if (String(run.conclusion || '').<span class="branch-0 cbranch-no" title="branch not covered" >toLowerCase() </span>!== 'success') return false;
+<span class="branch-0 cbranch-no" title="branch not covered" >    var</span> ts = runTimestampMs(run);
+    if (ts === null || nowMs === null) return false;
+    return (nowMs - ts) &lt;= freshMs;
+}
+<span class="cstat-no" title="statement not covered" ><span class="branch-0 cbranch-no" title="branch not covered" ></span></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+ * THE GATE: is this run a suppressor candidate at all — in flight
+ * (active, non-stale zombie) or freshly completed?
+ */
+function isOwningRun(run, nowMs, staleMs, freshMs) {
+    if (!run || !run.status) return false;
+    if (isActiveStatus(run.status)) {
+<span class="branch-0 cbranch-no" title="branch not covered" >        if (r</span>un.status !== 'in_progress' &amp;&amp; nowMs !== null &amp;&amp;
+            isStaleNonRunning(run, nowMs, staleMs)) return false;
+        return true;
+    }
+    return isFreshlyCompleted(run, nowMs, freshMs);
+}
+&nbsp;
+/**
+ * Tie-break helpers: the suppressor must be STRICTLY OLDER than the
+ * probing run, so of a same-second burst (run_numbers N, N+1, N+2) only
+ * the earliest proceeds — regardless of probe execution order. run_number
+ * order first (REST always carries it), created_at fallback; a run with
+ * neither order signal is ignored. Timestamps accept ISO strings or
+ * epoch ms.
+ */
+function timeMsOf(value) {
+    if (typeof value === 'number') return isNaN(value) ? NaN : value;
+    if (!value) return NaN;
+    var <span class="branch-0 cbranch-no" title="branch not covered" >ms = D</span>ate.parse(String(value));
+    return isNaN(ms) ? NaN : ms;
+}
+&nbsp;
+function olderByCreatedAt(run, selfR<span class="branch-0 cbranch-no" title="branch not covered" >un) {</span>
+    var ta = timeMsOf(run.created_at);
+    var tb = timeMsOf(selfRun.createdAt);
+    return !isNaN(ta) &amp;&amp; !isNaN(tb) &amp;&amp; ta &lt; tb;
+}
+&nbsp;
+/**
+ * Older = STRICTLY older. run_number order DECIDES when both sides carry
+ * it (REST always does — no created_at fallback there); only when a side
+ * lacks a run_number does the created_at fallback run. A run with neither
+ * order signal is ignored.
+ */
+function isOlderRun(run, selfRun) {
+    if (!run || !selfRun) return false;
+    var a = run.run_number, b = selfR<span class="branch-0 cbranch-no" title="branch not covered" >un.runNumber;</span>
+    if (typeof a === 'number' &amp;&amp; typeof b === 'number') {
+        return !isNaN(a) &amp;&amp; !isNaN(b) &amp;&amp; a &lt; b;
+    }
+    return olderByCreatedAt(run, selfRun);
+}
+&nbsp;
+/** branchLegGuard.isLegRun parity — only runs of the leg workflow count. */
+function isLegWorkflowRun(run, workflowFile) {
+    if (!run) return false;
+    if (run.path === undefined || run.path === null || run.path === '') return true;
+    var suffix = '/' + String(workflowFile || DEFAULT_WORKFLOW_FILE);
+    var path = String(run.path);
+    return path.length &gt;= suffix.length &amp;&amp;
+        path.slice(path.length - suffix.length) === suffix;
+}
+&nbsp;
+function staleMsOf(opts) {
+    return (opts &amp;&amp; typeof opts.staleNonRunningMs === 'number' &amp;&amp; opts.staleNonRunningMs &gt; 0)
+        ? opts.stale<span class="branch-0 cbranch-no" title="branch not covered" >NonRunningMs : DEFAULT_STALE_N</span>ON_RUNNIN<span class="branch-0 cbranch-no" title="branch not covered" >G_MS;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+function freshMsOf(opts) {
+    return (opts &amp;&amp; typeof opts.freshlyCompletedMs === 'number' &amp;&amp; opts.freshlyCompletedMs &gt; 0)
+        ? opts.fres<span class="branch-0 cbranch-no" title="branch not covered" >hlyCompletedMs : DEFAULT_FRESHL</span>Y_COMPLET<span class="branch-0 cbranch-no" title="branch not covered" >ED_MS;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+function nowMsOf(opts) {
+    return (opts &amp;&amp; typeof opts.nowMs === 'number' &amp;&amp; !isNaN(opts.nowMs))
+        ? opts.nowMs : null;
+}
+&nbsp;
+function selfIdOf(selfRun) {
+    if (sel<span class="branch-0 cbranch-no" title="branch not covered" >fRun &amp;&amp;</span> selfRun.id !== undefined) return selfRun.id;
+    return null;
+}
+&nbsp;
+/** The per-candidate gate — t<span class="branch-0 cbranch-no" title="branch not covered" >he six-condition su</span>ppressor predicate. */
+function isSuppressorRun(run, ctx) {
+    if (ctx.selfId !== null &amp;&amp; run.id === ctx.selfId) return false;
+    if (!isLegWorkflowRun(run, ctx.workflowFile)) return false;
+    if (issueOfRunName(run.name) !== ctx.issue) return false;
+    if (!ownerLegCompatible(run, ctx.leg)) return false;
+    if (!isOwningRun(run, ctx.nowMs, ctx.staleMs, ctx.freshMs)) return false;
+    return isOlderRun(run, ctx.selfRun);
+}
+&nbsp;
+/** The first run of the candidate list that suppresses this event. */
+function findSuppressor(runs, ctx) {
+    for (var i = 0; i &lt; runs.length; i++) {
+        var run = runs[i] || {};
+        if (isSuppressorRun(run, ctx)) retur<span class="branch-0 cbranch-no" title="branch not covered" >n run;</span>
+    }
+    return null;
+}
+&nbsp;
+/** The scan context shared by the per-candidate predicates. */
+function scanContextOf(input, issue, leg) {
+    var selfRun = input.selfRun || {};
+    return {
+        issue: issue,
+        l<span class="branch-0 cbranch-no" title="branch not covered" >eg: le</span>g,
+        workflowFile: input.workflowFile || DEFAULT_WORKFLOW_FILE,
+        nowMs: nowMsOf(input),
+        staleMs: staleMsOf(input),
+        freshMs: freshMsOf(input),
+        selfRun: selfRun,
+        selfId: selfIdOf(selfRun)
+    };
+}
+&nbsp;
+/** A proceed verdict — the ONLY proceed=false outcome is 'duplicate'. */
+function proceedVerdict(reason, audit) {
+    return { proceed: true, reason: reason, audit: audit };
+}
+&nbsp;
+function issueNumberOf(input) {
+    return typeof input.issue === 'number' ? input.issue : parseInt(input.issue, 10);
+}
+&nbsp;
+function prNumberOf(input) {
+    return typeof input.pr === 'number' ? input.pr : parseInt(input.pr, 10);
+}
+&nbsp;
+function hasRuns(runs) {
+    return Array.isArray(runs) &amp;&amp; runs.length &gt; 0;
+}
+&nbsp;
+function isInFlightRun(run, nowMs, staleMs) {
+    return legRunVocab.isFreshActiveRun(run, ACTIVE_RUN_STATES, nowMs, staleMs);
+}
+&nbsp;
+function runMatchesDispatchAnchor(run, ctx) {
+    if (!isNaN(ctx.issue) &amp;&amp; issueOfRunName(run.name) === ctx.issue) return true;
+    return !isNaN(ctx.pr) &amp;&amp; prOfRunName(run.name) === ctx.pr;
+}
+&nbsp;
+function isDispatchSuppressorRun(run, ctx) {
+    if (ctx.selfId !== null &amp;&amp; run.id === ctx.selfId) return false;
+    if (!isLegWorkflowRun(run, ctx.workflowFile)) return false;
+    if (!runMatchesDispatchAnchor(run, ctx)) return false;
+    if (!legsCompatible(ctx.leg, legOfRunName(run.name))) return false;
+    if (!isInFlightRun(run, ctx.nowMs, ctx.staleMs)) return false;
+    return isOlderRun(run, ctx.selfRun);
+}
+&nbsp;
+function findDispatchSuppressor(runs, ctx) {
+    for (var i = 0; i &lt; runs.length; i++) {
+        var run = runs[i] || {};
+        if (isDispatchSuppressorRun(run, ctx<span class="branch-0 cbranch-no" title="branch not covered" >)) ret</span>urn run;
+    }
+    return null;
+}
+&nbsp;
+function dispatchAnchorLabel(issue, pr) {
+    return !isNaN(pr) ? ('pr-' + pr) : ('#' + issue);
+}
+&nbsp;
+function duplicateDispatchVerdict(run, anchorLabel, leg) {
+    var owner = run.run_number !== undefined ? ('run ' + run.run_number) : ('run id ' + run.id);
+    return {
+        procee<span class="branch-0 cbranch-no" title="branch not covered" >d: false,</span>
+        reason: 'duplicate',
+        audit: '⏭️ teammate dedup (gh-1153): dropped workflow_dispatch on ' + anchorLabel +
+            ' (leg \'' + (leg || 'any') + '\') — ' + owner +
+            ' for th<span class="branch-0 cbranch-no" title="branch not covered" >e same an</span>chor+leg is in flight (' + run.status + '); this dispatch is a duplicate'
+    };
+}
+&nbsp;
+function decideDispatchDedup(input) {
+    var issue = issueNumberOf(input);
+    var pr = prNumberOf(input);
+    if ((isNaN(issue) &amp;&amp; isNaN(pr)) || !hasRuns(input.runs)) {
+        return proceedVerdict('dispatch-path',
+            'teammate dedup (gh-1065): workflow_dispatch path — governed by the SM-side gh-1028 dedup; proceeding');
+    }
+    var leg = String(input.leg || '');
+    var ctx = scanContextOf(input, issue, l<span class="branch-0 cbranch-no" title="branch not covered" >eg);</span>
+    ctx.pr = pr;
+    var anchorLabel = dispatchAnchorLabel(issue, pr);
+    var owner = findDispatchSuppressor(input.runs, ctx);
+    if (owner) return duplicateDispatchVerdict(owner, anchorLabel, leg);
+    return proceedVerdict('first-trigger',
+        'teammate dedup (gh-1153): no in-flight run for ' + anchorLabel +
+        ' (leg \'' + (leg || 'any') + '\') — proceeding');
+}
+&nbsp;
+function duplic<span class="branch-0 cbranch-no" title="branch not covered" >ateVerdic</span>t(run, input, issue, leg) {
+    var owner = run.run_number !== undefined ? ('run ' + run.run_number) : ('run id ' + run.id);
+    var state = run.status <span class="branch-0 cbranch-no" title="branch not covered" >=== 'completed'</span>
+        ? ('freshly completed (' + run.conclusion + ')')
+        : ('in flight (' + run.status + ')');
+    return {
+        proceed: false,
+        reason: 'duplicate',
+        audit: '⏭️ teammate dedup (gh-1065): dropped ' + String(input.action || 'issues') +
+            ' event on #' + issue + <span class="branch-0 cbranch-no" title="branch not covered" >' (leg \'' +</span> (leg || 'any') + '\') — ' +
+            owner + ' for the same issue+leg is ' + state +
+            ' within the dedup window; this trigger is a duplicate'
+    };
+}
+&nbsp;
+function firstTriggerVerdict(issue, leg) {
+    return proceedVerdict('first-trigger',
+        'teammate dedup (gh-1065): no in-flight or freshly-completed run for #' +
+        issue + ' (leg \'' + (leg || 'any') + '\') — proceeding');
+}
+&nbsp;
+/** The scan-phase verdicts: after preflight, the event arms the workflow. */
+function scanVerdict(input, derived) {
+    var issue = issueNumberOf(input);
+    if (isNaN(issue)) {
+        return proceedVerdict('no-issue-anchor',
+<span class="cstat-no" title="statement not covered" ><span class="branch-0 cbranch-no" title="branch not covered" >            'teammate dedup (gh-1065): issues event without an issue anchor — proceeding');</span></span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    if (!hasRuns(input.runs)) {</span>
+        return proceedVerdict('no-runs',
+            'teammate dedup (gh-1065): no runs on file for the leg workflow — proceeding');
+    }
+    var owner = findSuppressor(input.runs, scanContextOf(input, issue, derived.leg));
+    if (owner) return duplicateVerdict(owner, input, issue, derived.leg);
+    return firstTriggerVerdict(issue, derived.leg);
+}
+&nbsp;
+/**
+ * THE DECISION (gh-1065). input:
+ *   eventName        'issues' | anything else (dispatch paths pass through)
+ *   action           github.event.action ('assigned' | 'labeled')
+ *   labelName        github.event.label.name (labeled events)
+ *   issueLabelNames  github.event.issue.labels.*.name (assigned events)
+ *   issue            the issue number (number)
+ *   workflowFile     default ai-teammate.yml
+ *   runs             workflow_run list for the leg workflow (any status mix)
+ *   selfRun          { id, runNumber, createdAt } — the probing run
+ *   nowMs            clock (default null — without a clock no zombie can be
+ *                    proven stale and nothing is freshly completed: the
+ *                    gate degrades to in-flight-only, still never blocks
+ *                    the earliest run of a burst)
+ *   staleNonRunningMs / freshlyCompletedMs — window overrides
+ *
+ * Returns { proceed, reason, audit }. reason: 'dispatch-path' |
+ * 'non-arming-label' | 'no-issue-anchor' | 'no-runs' | 'duplicate' |
+ * 'first-trigger'. 'duplicate' is the ONLY proceed=false outcome and its
+ * audit line is the AC1 drop-audit entry.
+ */
+function decideEventDedup(input) {
+    input = input || {};
+    if (input.eventName === 'workflow_dispat<span class="branch-0 cbranch-no" title="branch not covered" >ch') {</span>
+        return decideDispatchDedup(input);
+    }
+    if (input.eventName !== 'issues') {
+        return proceedVerdict('dispatch-path',
+            'teammate dedup (gh-1065): ' + (input.eventName || 'dispatch') +
+            ' path — governed by t<span class="branch-0 cbranch-no" title="branch not covered" >he SM-side gh-</span>1028 dedup; proceeding');
+    }
+    var derived = deriveEventLeg(input.action, input.labelName, input.issueLabelNames);
+    if (!derived.applicable) {
+        return proceedVerdict('non-arming-label',
+            'teammate dedup (gh-1065): labeled event for non-arming label' +
+            ' — the job gate rejects it; no probe spent');
+    }
+    return scanVerdict(input, derived);
+}
+&nbsp;
+module.exports = {
+    DEFAULT_WORKFLOW_FILE: DEFAULT_WORKFLOW_FILE,
+    ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
+    DEFAULT_STALE_NON_RUNNING_MS: DEFAULT_STALE_NON_RUNNING_MS,
+    DEFAULT_FRESHLY_COMPLETED_MS: DEFAULT_FRESHLY_COMPLETED_MS,
+    ARMING_LABEL_LEGS: ARMING_LABEL_LEGS,
+    armingLegOfLabel: armingLegOfLabel,
+    deriveEventLeg: deriveEventLeg,
+    issueOfRunName: issueOfRunName,
+    prOfRunName: prOfRunName,
+    legOfRunName: legOfRunName,
+    legsCompatible: legsCompatible,
+    completedLegsCompatible: completedLegsCompatible,
+    isActiveStatus: isActiveStatus,
+    isStaleNonRunning: isStaleNonRunning,
+    isFreshlyCompleted: isFreshlyCompleted,
+    isOwningRun: isOwningRun,
+    isOlderRun: isOlderRun,
+    isLegWorkflowRun: isLegWorkflowRun,
+    decideEventDedup: decideEventDedup
+};
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-11-25T02:47:15.365Z
+            </div>
+        <script src="../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../sorter.js"></script>
+        <script src="../../block-navigation.js"></script>
+    </body>
+</html>
+    

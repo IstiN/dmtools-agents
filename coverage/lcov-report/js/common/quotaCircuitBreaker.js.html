@@ -1,0 +1,1093 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for js/common/quotaCircuitBreaker.js</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../prettify.css" />
+    <link rel="stylesheet" href="../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">js/common</a> quotaCircuitBreaker.js</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">95.53% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>321/336</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">86.95% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>80/92</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">92% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>23/25</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">95.53% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>321/336</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line high'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a>
+<a name='L150'></a><a href='#L150'>150</a>
+<a name='L151'></a><a href='#L151'>151</a>
+<a name='L152'></a><a href='#L152'>152</a>
+<a name='L153'></a><a href='#L153'>153</a>
+<a name='L154'></a><a href='#L154'>154</a>
+<a name='L155'></a><a href='#L155'>155</a>
+<a name='L156'></a><a href='#L156'>156</a>
+<a name='L157'></a><a href='#L157'>157</a>
+<a name='L158'></a><a href='#L158'>158</a>
+<a name='L159'></a><a href='#L159'>159</a>
+<a name='L160'></a><a href='#L160'>160</a>
+<a name='L161'></a><a href='#L161'>161</a>
+<a name='L162'></a><a href='#L162'>162</a>
+<a name='L163'></a><a href='#L163'>163</a>
+<a name='L164'></a><a href='#L164'>164</a>
+<a name='L165'></a><a href='#L165'>165</a>
+<a name='L166'></a><a href='#L166'>166</a>
+<a name='L167'></a><a href='#L167'>167</a>
+<a name='L168'></a><a href='#L168'>168</a>
+<a name='L169'></a><a href='#L169'>169</a>
+<a name='L170'></a><a href='#L170'>170</a>
+<a name='L171'></a><a href='#L171'>171</a>
+<a name='L172'></a><a href='#L172'>172</a>
+<a name='L173'></a><a href='#L173'>173</a>
+<a name='L174'></a><a href='#L174'>174</a>
+<a name='L175'></a><a href='#L175'>175</a>
+<a name='L176'></a><a href='#L176'>176</a>
+<a name='L177'></a><a href='#L177'>177</a>
+<a name='L178'></a><a href='#L178'>178</a>
+<a name='L179'></a><a href='#L179'>179</a>
+<a name='L180'></a><a href='#L180'>180</a>
+<a name='L181'></a><a href='#L181'>181</a>
+<a name='L182'></a><a href='#L182'>182</a>
+<a name='L183'></a><a href='#L183'>183</a>
+<a name='L184'></a><a href='#L184'>184</a>
+<a name='L185'></a><a href='#L185'>185</a>
+<a name='L186'></a><a href='#L186'>186</a>
+<a name='L187'></a><a href='#L187'>187</a>
+<a name='L188'></a><a href='#L188'>188</a>
+<a name='L189'></a><a href='#L189'>189</a>
+<a name='L190'></a><a href='#L190'>190</a>
+<a name='L191'></a><a href='#L191'>191</a>
+<a name='L192'></a><a href='#L192'>192</a>
+<a name='L193'></a><a href='#L193'>193</a>
+<a name='L194'></a><a href='#L194'>194</a>
+<a name='L195'></a><a href='#L195'>195</a>
+<a name='L196'></a><a href='#L196'>196</a>
+<a name='L197'></a><a href='#L197'>197</a>
+<a name='L198'></a><a href='#L198'>198</a>
+<a name='L199'></a><a href='#L199'>199</a>
+<a name='L200'></a><a href='#L200'>200</a>
+<a name='L201'></a><a href='#L201'>201</a>
+<a name='L202'></a><a href='#L202'>202</a>
+<a name='L203'></a><a href='#L203'>203</a>
+<a name='L204'></a><a href='#L204'>204</a>
+<a name='L205'></a><a href='#L205'>205</a>
+<a name='L206'></a><a href='#L206'>206</a>
+<a name='L207'></a><a href='#L207'>207</a>
+<a name='L208'></a><a href='#L208'>208</a>
+<a name='L209'></a><a href='#L209'>209</a>
+<a name='L210'></a><a href='#L210'>210</a>
+<a name='L211'></a><a href='#L211'>211</a>
+<a name='L212'></a><a href='#L212'>212</a>
+<a name='L213'></a><a href='#L213'>213</a>
+<a name='L214'></a><a href='#L214'>214</a>
+<a name='L215'></a><a href='#L215'>215</a>
+<a name='L216'></a><a href='#L216'>216</a>
+<a name='L217'></a><a href='#L217'>217</a>
+<a name='L218'></a><a href='#L218'>218</a>
+<a name='L219'></a><a href='#L219'>219</a>
+<a name='L220'></a><a href='#L220'>220</a>
+<a name='L221'></a><a href='#L221'>221</a>
+<a name='L222'></a><a href='#L222'>222</a>
+<a name='L223'></a><a href='#L223'>223</a>
+<a name='L224'></a><a href='#L224'>224</a>
+<a name='L225'></a><a href='#L225'>225</a>
+<a name='L226'></a><a href='#L226'>226</a>
+<a name='L227'></a><a href='#L227'>227</a>
+<a name='L228'></a><a href='#L228'>228</a>
+<a name='L229'></a><a href='#L229'>229</a>
+<a name='L230'></a><a href='#L230'>230</a>
+<a name='L231'></a><a href='#L231'>231</a>
+<a name='L232'></a><a href='#L232'>232</a>
+<a name='L233'></a><a href='#L233'>233</a>
+<a name='L234'></a><a href='#L234'>234</a>
+<a name='L235'></a><a href='#L235'>235</a>
+<a name='L236'></a><a href='#L236'>236</a>
+<a name='L237'></a><a href='#L237'>237</a>
+<a name='L238'></a><a href='#L238'>238</a>
+<a name='L239'></a><a href='#L239'>239</a>
+<a name='L240'></a><a href='#L240'>240</a>
+<a name='L241'></a><a href='#L241'>241</a>
+<a name='L242'></a><a href='#L242'>242</a>
+<a name='L243'></a><a href='#L243'>243</a>
+<a name='L244'></a><a href='#L244'>244</a>
+<a name='L245'></a><a href='#L245'>245</a>
+<a name='L246'></a><a href='#L246'>246</a>
+<a name='L247'></a><a href='#L247'>247</a>
+<a name='L248'></a><a href='#L248'>248</a>
+<a name='L249'></a><a href='#L249'>249</a>
+<a name='L250'></a><a href='#L250'>250</a>
+<a name='L251'></a><a href='#L251'>251</a>
+<a name='L252'></a><a href='#L252'>252</a>
+<a name='L253'></a><a href='#L253'>253</a>
+<a name='L254'></a><a href='#L254'>254</a>
+<a name='L255'></a><a href='#L255'>255</a>
+<a name='L256'></a><a href='#L256'>256</a>
+<a name='L257'></a><a href='#L257'>257</a>
+<a name='L258'></a><a href='#L258'>258</a>
+<a name='L259'></a><a href='#L259'>259</a>
+<a name='L260'></a><a href='#L260'>260</a>
+<a name='L261'></a><a href='#L261'>261</a>
+<a name='L262'></a><a href='#L262'>262</a>
+<a name='L263'></a><a href='#L263'>263</a>
+<a name='L264'></a><a href='#L264'>264</a>
+<a name='L265'></a><a href='#L265'>265</a>
+<a name='L266'></a><a href='#L266'>266</a>
+<a name='L267'></a><a href='#L267'>267</a>
+<a name='L268'></a><a href='#L268'>268</a>
+<a name='L269'></a><a href='#L269'>269</a>
+<a name='L270'></a><a href='#L270'>270</a>
+<a name='L271'></a><a href='#L271'>271</a>
+<a name='L272'></a><a href='#L272'>272</a>
+<a name='L273'></a><a href='#L273'>273</a>
+<a name='L274'></a><a href='#L274'>274</a>
+<a name='L275'></a><a href='#L275'>275</a>
+<a name='L276'></a><a href='#L276'>276</a>
+<a name='L277'></a><a href='#L277'>277</a>
+<a name='L278'></a><a href='#L278'>278</a>
+<a name='L279'></a><a href='#L279'>279</a>
+<a name='L280'></a><a href='#L280'>280</a>
+<a name='L281'></a><a href='#L281'>281</a>
+<a name='L282'></a><a href='#L282'>282</a>
+<a name='L283'></a><a href='#L283'>283</a>
+<a name='L284'></a><a href='#L284'>284</a>
+<a name='L285'></a><a href='#L285'>285</a>
+<a name='L286'></a><a href='#L286'>286</a>
+<a name='L287'></a><a href='#L287'>287</a>
+<a name='L288'></a><a href='#L288'>288</a>
+<a name='L289'></a><a href='#L289'>289</a>
+<a name='L290'></a><a href='#L290'>290</a>
+<a name='L291'></a><a href='#L291'>291</a>
+<a name='L292'></a><a href='#L292'>292</a>
+<a name='L293'></a><a href='#L293'>293</a>
+<a name='L294'></a><a href='#L294'>294</a>
+<a name='L295'></a><a href='#L295'>295</a>
+<a name='L296'></a><a href='#L296'>296</a>
+<a name='L297'></a><a href='#L297'>297</a>
+<a name='L298'></a><a href='#L298'>298</a>
+<a name='L299'></a><a href='#L299'>299</a>
+<a name='L300'></a><a href='#L300'>300</a>
+<a name='L301'></a><a href='#L301'>301</a>
+<a name='L302'></a><a href='#L302'>302</a>
+<a name='L303'></a><a href='#L303'>303</a>
+<a name='L304'></a><a href='#L304'>304</a>
+<a name='L305'></a><a href='#L305'>305</a>
+<a name='L306'></a><a href='#L306'>306</a>
+<a name='L307'></a><a href='#L307'>307</a>
+<a name='L308'></a><a href='#L308'>308</a>
+<a name='L309'></a><a href='#L309'>309</a>
+<a name='L310'></a><a href='#L310'>310</a>
+<a name='L311'></a><a href='#L311'>311</a>
+<a name='L312'></a><a href='#L312'>312</a>
+<a name='L313'></a><a href='#L313'>313</a>
+<a name='L314'></a><a href='#L314'>314</a>
+<a name='L315'></a><a href='#L315'>315</a>
+<a name='L316'></a><a href='#L316'>316</a>
+<a name='L317'></a><a href='#L317'>317</a>
+<a name='L318'></a><a href='#L318'>318</a>
+<a name='L319'></a><a href='#L319'>319</a>
+<a name='L320'></a><a href='#L320'>320</a>
+<a name='L321'></a><a href='#L321'>321</a>
+<a name='L322'></a><a href='#L322'>322</a>
+<a name='L323'></a><a href='#L323'>323</a>
+<a name='L324'></a><a href='#L324'>324</a>
+<a name='L325'></a><a href='#L325'>325</a>
+<a name='L326'></a><a href='#L326'>326</a>
+<a name='L327'></a><a href='#L327'>327</a>
+<a name='L328'></a><a href='#L328'>328</a>
+<a name='L329'></a><a href='#L329'>329</a>
+<a name='L330'></a><a href='#L330'>330</a>
+<a name='L331'></a><a href='#L331'>331</a>
+<a name='L332'></a><a href='#L332'>332</a>
+<a name='L333'></a><a href='#L333'>333</a>
+<a name='L334'></a><a href='#L334'>334</a>
+<a name='L335'></a><a href='#L335'>335</a>
+<a name='L336'></a><a href='#L336'>336</a>
+<a name='L337'></a><a href='#L337'>337</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">15x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">17x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">/**
+ * quotaCircuitBreaker.js — gh-1087 quota circuit-breaker (pure logic, no dmtools globals).
+ *
+ * A hard provider-quota failure (HTTP 403 usage-limit / billing body — e.g.
+ * "weekly (7-day) usage limit" — or a "Provider chain exhausted" tail that
+ * follows quota responses) must PARK the leg lane instead of burning a
+ * per-tick retry against a wall that cannot succeed until the quota window
+ * resets. Transient interruptions (429 rate-limit blips, timeouts, network
+ * cuts) keep the classic gh-742 reset-for-retry behavior.
+ *
+ * Everything here is a pure function so the classifier, the park decision,
+ * the SM dispatch-lane exclusion and the probe cadence are unit-testable
+ * without any tracker/CLI mocks:
+ *
+ *   classifyFailure(text)              → { kind: 'quota_exhausted' | 'transient' | null, ... }
+ *   parkLabelOf(jobParams)             → park label name (default 'provider_quota')
+ *   probeEveryOf(jobParams)            → probe cadence in SM ticks (default 3)
+ *   probeCommandOf(jobParams)          → cheap provider ping shell command
+ *   redactCommand(command)             → log-safe probe command (credentials masked)
+ *   probeDue(completedTicks, everyN)   → is a probe due this tick?
+ *   tickMarkerLine(n)                  → durable per-tick cadence marker line
+ *   probeMarkerLine(n)                 → durable per-probe counter line
+ *   countTickMarkers(bodies)           → park ticks already recorded
+ *   countProbeMarkers(bodies)          → probe attempts already recorded
+ *   shouldSkipForQuotaPark(t,rule,jp)  → SM dispatch-lane exclusion predicate
+ *   parkComment(m, cls, label, everyN) → ticket/PR park comment (markup-object driven)
+ *   unparkComment(m, label, count)     → probe-success un-park comment
+ */
+&nbsp;
+var DEFAULT_PARK_LABEL = 'provider_quota';
+var DEFAULT_PROBE_EVERY_TICKS = 3;
+&nbsp;
+// Hard-quota bodies: usage-limit / quota / billing vocabulary. A bare 403 is
+// NOT enough (some gateways answer 403 for auth too) — the quota vocabulary
+// (or an exhausted-chain tail, see classifyFailure) must corroborate it.
+var QUOTA_BODY_RE = /usage\s*limit|quota|billing|insufficient\s+(?:credit|quota|balance)|credit[s]?\s+exhausted|plan\s+limit|spend\s+limit/i;
+var FORBIDDEN_RE = /\b403\b/;
+var CHAIN_EXHAUSTED_RE = /provider chain exhausted/i;
+// Transient signals — a retry CAN plausibly succeed on the next tick.
+var RATE_LIMIT_RE = /\b429\b/i;
+var TIMEOUT_RE = /rate\s*limit|timeout|timed?\s*out|econnreset|etimedout|socket hang up|network error|temporar/i;
+// gh-1121: an exhausted chain whose attempts carry 401-style auth text is a
+// credential problem, not an outage — a resume can never fix it. (403 and
+// quota vocabulary are excluded earlier by the quota branch's priority — I1.)
+var AUTH_TEXT_RE = /\b401\b|unauthorized|invalid[\s_-]?api[\s_-]?key|authentication failed/i;
+&nbsp;
+// gh-1121: transient-outage evidence extraction for the honest reset comment.
+// Live shapes (run 39315836954):
+//   zai/glm-5.3-flash returned 500 {"code":"1234",...}
+//   kimi-for-coding hit 429 Rate limit reached
+var OUTAGE_CODE_RE = /\b(5\d{2}|429)\b/g;
+var OUTAGE_MODEL_RES = [
+    /([A-Za-z0-9][\w.-]*(?:\/[\w.-]+)+)\s+(?:returned|responded with|answered|failed with|hit)\s+(?:HTTP\/?)?\s*(?:5\d{2}|429)/gi,
+    /(?:^|[\s"'(])([A-Za-z0-9][\w-]{2,})\s+(?:then\s+)?hit\s+(?:HTTP\/?)?\s*(?:5\d{2}|429)/gi,
+    /provider\s*[:\["']+\s*([A-Za-z0-9][\w.-]*)/gi
+];
+var OUTAGE_EXTRACT_CAP = 6;
+&nbsp;
+function collectMatches(text, re, cap) {
+    var found = [];
+    var seen = {};
+    re.lastIndex = 0;
+    var m;
+    while ((m = re.exec(text)) !== null) {
+        var value = m[1];
+        if (value &amp;&amp; !seen[value]) {
+            seen[value] = true;
+            found.push(value);
+            if (found.length &gt;= cap) break;
+        }
+    }
+    re.lastIndex = 0;
+    re<span class="branch-0 cbranch-no" title="branch not covered" >turn fo</span>und;
+}
+&nbsp;
+function extractOutageModels(text) {
+    var models = [];
+    OUTAGE_MODEL_RES.forEach(function (re) {
+        collectMatches(text, re, OUTAGE_EXTRACT_CAP).forEach(function (model) {
+            if (models.indexOf(model) === -1) models.push(model);
+        });
+    });
+    return models;
+}
+&nbsp;
+function extractOutageCodes(text) {
+    return collectMatches(text, OUTAGE_CODE_RE, OUTAGE_EXTRACT_CAP);
+}
+&nbsp;
+// gh-1121 AC5: the honest reset header — names the model list and the codes
+// so the comment says "provider outage" instead of guessing "rate limit"
+// when the chain answered 5xx. Shared by the story and bug interrupted-leg
+// comment builders so both legs word the reset identically.
+function outageResetHeaderOf(outage) {
+    var models = (outage &amp;&amp; outage.models &amp;&amp; outage.models.length) ? outage.models.join(', ') : 'unknown models';
+    var codes = (outage &amp;&amp; outage.codes &amp;&amp; outage.codes.length) ? outage.codes.join(', ') : 'transient errors';
+    return '⏸️ Provider outage (' + models + ', ' + codes + ') — reset for retry';
+}
+&nbsp;
+function extractQuotaWindow(text) {
+    var m = /((?:weekly|daily|monthly|hourly|yearly)(?:\s*\([^)]*\))?)\s+(?:usage\s+)?limit/i.exec(text);
+    if (m) return m[1];
+    m = /((?:7|14|24|30)-day)\s+(?:usage\s+)?limit/i.exec(text);
+    if (m) return m[1];
+    m = /(usage\s+limit)\s+((?:weekly|<span class="branch-0 cbranch-no" title="branch not covered" >daily|monthly</span>|hourly|yearly)(?:\s*\([^)]*\))?)/i.exec(text);
+    if (m) return m[2];
+    return null;
+}
+&nbsp;
+function extractPr<span class="branch-0 cbranch-no" title="branch not covered" >ovider(text) </span>{
+    // Live shape: z.ai glm-5.3-flash answered 403 "weekly (7-day) usage limit"
+    var m = /([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z]{2,})+)\s+[\w.-]+\s+(?:answered|returned|responded with)\s+403/i.exec(text);
+    if (m) return m[1];
+    m = /provider\s*[:\["']+\s*([A-Za-z0-9._-]+)/i.exec(text);
+    if (m) return m[1];
+    m = /(?:^|[\s"'(])([a-z0-9](?:[a-z<span class="branch-0 cbranch-no" title="branch not covered" >0-9-]*[a-z0-9</span>])?\.(?:ai|com|dev|io|net|org))\b/i.exec(text);
+    if (m) return m[1];
+    return null;
+}
+&nbsp;
+function classifyF<span class="branch-0 cbranch-no" title="branch not covered" >ailure(text) </span>{
+    var t = String(text || '');
+    if (!t.trim()) return null;
+    var window = extractQuotaWindow(t);
+    // Quota ALWAYS wins over transient signals — a mixed chain (429 retries
+    // first, 403 usage-limit last) is a quota wall, not a blip.
+    if (hasQuotaEvidence(t, window)) {
+        return {
+            kind: 'quota_exhausted',
+            provider: extractProvider(t),
+            window: window,
+            evidence: quotaEvidenceOf(t)
+        };
+    }
+    // gh-1121: the exhausted-chain tail whose attempts are ONLY transient
+    // (5xx / 429 / network — no 401 auth text; 403/quota already excluded by
+    // the priority branch above, I1) is a whole-chain OUTAGE, not a blip: the
+    // dev leg may resume the persisted fa session once instead of cold-reset.
+    var outage = providerOutageClassificationOf(t);
+    if (outage) return outage;
+    if (RATE_LIMIT_RE.test(t) || TIMEOUT_RE.test(t)) {
+        return { kind: 'transient', provider: extractProvider(t), window: null, evidence: null };
+    }
+    return null;
+}
+&nbsp;
+// gh-1121: classifies the exhausted-chain tail whose attempts are ONLY
+// transient (5xx / 429 / network — no 401 auth text) as a whole-chain OUTAGE.
+// Returns the provider_transient classification object, or null when the text
+// is not an outage. Split out of classifyFailure to keep both under the CRAP
+// gate (gh-1121 quality run: classifyFailure CC 9 &gt; threshold 8).
+function providerOutageClassificationOf(t) {
+    if (!CHAIN_EXHAUSTED_RE.test(t) || AUTH_TEXT_RE.test(t)) return null;
+    var models = extractOutageModels(t);
+    return {
+        kind: 'provider_transient',
+        provider: models[0] || extractProvider(t),
+        models: models,
+        codes: extractOutageCodes(t),
+        window: null,
+        evidence: 'provider chain exhausted'
+    };
+}
+&nbsp;
+// Quota evidence: a 403 carrying a quota/billing body, an explicit quota
+// window, or an exhausted-provider-chain tail that follows quota/403
+// responses.
+function hasQuotaEvidence(t, window) {
+    var has403 = FORBIDDEN_RE.test(t);
+    var quotaBody = QUOTA_BODY_RE.test(t);
+    return (has403 &amp;&amp; quotaBody) || window || (CHAIN_EXHAUSTED_RE.test(t) &amp;&amp; (quotaBody || has403));
+}
+&nbsp;
+function quotaEvidenceOf(t) {
+    if (FORBIDDEN_RE.test(t)) return 'HTTP 403';
+    if (CHAIN_EXHAUSTED_RE.test(t)) return 'provid<span class="branch-0 cbranch-no" title="branch not covered" >er chain exhausted';</span>
+<span class="cstat-no" title="statement not covered" >    return 'usage limit';</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function parkLabelOf(jobParams) {</span>
+    var label = jobParams &amp;&amp; jobParams.quotaParkLabel;
+    return (typeof label === 'string' &amp;&amp; label.trim()) ? label.trim() : DEFAULT_PARK_LABEL;
+}
+&nbsp;
+function probeEveryOf(jobParams) {
+    var n = jobParams &amp;&amp; parseInt(jobParams.quotaProbeEveryNTicks, 10);
+    return (n &gt; 0) ? n : DEFAULT_PROBE_EVERY_TICKS;
+}
+&nbsp;
+/**
+ * Cheap provider ping — one minimal chat completion against the fa provider
+ * config (FA_PROVIDER_BASE_URL / FA_PROVIDER_API_KEY / FA_PROVIDER_MODEL).
+ * curl --fail makes a 403 quota wall exit non-zero, so a still-exhausted
+ * provider keeps the park. Projects using another provider shape override the
+ * whole command via jobParams.quotaProbeCommand.
+ */
+function probeCommandOf(jobParams) {
+    var cmd = jobParams &amp;&amp; jobParams.quotaProbeCommand;
+    if (typeof cmd === 'string' &amp;&amp; cmd.trim()) return cmd;
+    return 'bash -c \'curl --fail -sS -m 30 -o /dev/null -X POST "$FA_PROVIDER_BASE_URL/chat/completions" ' +
+        '-H "Authorization: Bearer $FA_PROVIDER_API_KEY" -H "Content-Type: application/json" ' +
+        '-d "{\\"model\\":\\"$FA_PROVIDER_MODEL\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"ping\\"}],\\"max_tokens\\":1}"\'';
+}
+&nbsp;
+// Sensitive header / credential shapes that must never reach SM job logs or
+// CI artifacts when an operator overrides jobParams.quotaProbeCommand with an
+// inline secret (e.g. -H "Authorization: Bearer sk-...").
+var SENSITIVE_VALUE_RE = /((?:authorization|x-api-key|api[-_]?key|token|secret)[\w-]*\s*[:=]\s*(?:bearer\s+)?"?)([^\s'"]+)("?)/gi;
+var ENV_REF_RE = /^\$[\w{}]/;
+&nbsp;
+/**
+ * gh-1087 review thread 2: the probe command is logged on every probe. The
+ * default only references env-var NAMES ($FA_PROVIDER_API_KEY — safe), but a
+ * free-form operator override may inline a credential. Mask sensitive values
+ * while leaving env-var references (and the safe default) untouched.
+ */
+function redactCommand(command) {
+    return String(command || '').replace(SENSITIVE_VALUE_RE, function (match,<span class="branch-0 cbranch-no" title="branch not covered" > prefi</span>x, value, suffix) {
+        if (ENV_REF_RE.test(value)) return match;
+        return prefix + '***' + suffix;
+    });
+}
+&nbsp;
+// Probe cadence is TICK-based, not attempts-based (gh-1087 review thread 1):
+// every SM tick the probe handler records a lightweight 'quota-park-tick: n'
+// marker on the ticket, so the completed-tick count advances even between
+// probes. A probe fires when the completed tick count is a multiple of
+// everyN (0 = first tick after the park — a misclassification self-corrects
+// immediately). An attempts-only counter would deadlock: after the first
+// failed probe the count is 1 forever and 1 % N never fires probe #2.
+function probeDue(completedTicks, everyN) {
+    var n = (typeof everyN === 'number' &amp;&amp; everyN &gt; 0) ? everyN : DEFAULT_PROBE_EVERY_TICKS;
+    return (completedT<span class="branch-0 cbranch-no" title="branch not covered" >icks % n) === 0;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+function tickMarkerLine(count) {
+    return 'quota-park-tick: ' + count;
+}
+&nbsp;
+function probeMarkerLine(count) {
+    return 'quota<span class="fstat-no" title="function not covered" >-probe: ' + count;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+// Highest &lt;n&gt; across all 'markerRe' lines in the comment bodies (each body is
+// a string or a { body: ... } object). The shared counter behind
+// countTickMarkers / countProbeMarkers.
+function maxMarkerNumber(bodies, markerRe) {
+    var count = 0;
+    var list = Array.isArray(bodies) ? bodies : [];
+    for (var i = 0; i &lt; list.length; i++) {
+<span class="branch-0 cbranch-no" title="branch not covered" ></span>        var body = String((list[i] &amp;&amp; (list[i].body || list[i])) || '');
+        markerRe.lastIndex = 0;
+        var<span class="branch-0 cbranch-no" title="branch not covered" > m;</span>
+        while ((m = markerRe.exec(body)) !== null) {
+            var n = parseInt(m[1], 10);
+            if (n &gt; count) count = n;
+        }
+    }
+    return count;
+}
+&nbsp;
+function countTickMarkers(bodies) {
+    return maxMarkerNumber(bodies, /^\s*quota-park-tick:\s*(\d+)\s*$/gm);
+}
+&nbsp;
+function countProbeMarkers(bodies) {
+    return maxMarkerNumber(bodies, /^\s*quota-probe:\s*(\d+)\s*$/gm);
+}
+&nbsp;
+function labelsOf(ticket) {
+    return (ticket &amp;&amp; ticket.labels) ||
+        (ticket &amp;&amp; ticket.fields &amp;&amp; ticket.fields.labels) || [];
+}
+&nbsp;
+/**
+ * gh-1087 AC2/AC3 — the SM dispatch-<span class="branch-0 cbranch-no" title="branch not covered" >lane e</span>xclusion. A ticket carrying the
+ * park label is skipped by EVERY rule except the quota-probe rule itself
+ * (rule.quotaParkProbe === true), which must keep reaching parked tickets to
+ * probe the quota window and lift the park.
+ */
+function shouldSkipForQuotaPark(ticket, rule, jobParams) {
+    var label = parkLabelOf(jobParams);
+    if (!label) return false;
+    if (rule &amp;&amp; rule.quotaParkProbe =<span class="branch-0 cbranch-no" title="branch not covered" >== true) retur</span>n false;
+    return labelsOf(ticket).indexOf(label) !== -1;
+}
+&nbsp;
+function parkComment(m, classification, parkLabel, everyN) {
+    var provider = (classification &amp;&amp; classification.provider) || 'the provider';
+    var windowText = (classification &amp;&amp; classification.window) || 'usage';
+    return m.h(3, '🅿️ Provider Quota Exhausted — Lane Parked') + '\n\n' +
+        'The AI development leg hit a hard provider-quota wall: ' + m.bold(provider) + ' answered ' +
+        m.bold('HTTP 403') + ' (' + windowText + ' limit) — the whole provider chain is exhausted. ' +
+        'Unlike a transient rate limit, an immediate retry is guaranteed to fail again until the quota window resets.\n\n' +
+        'The ticket (and its PR, if one exists) is parked with label ' + m.code(parkLabel) + ':\n' +
+        '- The ticket is ' + m.bold('NOT') + ' reset to Ready For Development — SM dispatch lanes skip it while the label is present.\n' +
+        '- The park self-lifts: the SM runs a bounded probe (one cheap provider ping every ' + everyN + ' ticks, not a full leg) and removes the label on the first success.\n' +
+        '- A human can un-park immediately by removing the ' + m.code(parkLabel) + ' label (e.g. after reconfiguring the provider).';
+}
+&nbsp;
+function unparkComment(m, parkLabel, probeCount) {
+    return m.h(3, '▶️ Provider Quota Probe Succeeded — Lane Un-Parked') + '\n\n' +
+        'Probe ' + m.code('#' + probeCount) + ' against the provider succeeded — the quota window has reset (or the provider was reconfigured). ' +
+        'The ' + m.code(parkLabel) + ' label is removed and development retries resume on the next SM tick.';
+}
+&nbsp;
+function probeFailureComment(m, parkLabel, probeCou<span class="fstat-no" title="function not covered" >nt, everyN, detail) {</span>
+<span class="cstat-no" title="statement not covered" >    return m.h(3, '🅿️ Provider Quota Probe Still Blocked') + '\n\n' +</span>
+<span class="cstat-no" title="statement not covered" >        'Probe ' + m.code('#' + probeCount) + ' against the provider is still quota-blocked' +</span>
+<span class="cstat-no" title="statement not covered" >        (detail ? ' (' + m.code(detail) + ')' : '') + '. The ' + m.code(parkLabel) +</span>
+<span class="cstat-no" title="statement not covered" >        ' park stays; the next probe fires in ~' + everyN + ' SM ticks. Remove the label manually to un-park immediately.';</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >module.exports = {</span>
+    DEFAULT_PARK_LABEL: DEFAULT_PARK_LABEL,
+    DEFAULT_PROBE_EVERY_TICKS: DEFAULT_PROBE_EVERY_TICKS,
+    classifyFailure: classifyFailure,
+    extractQuotaWindow: extractQuotaWindow,
+    extractProvider: extractProvider,
+    extractOutageModels: extractOutageModels,
+    extractOutageCodes: extractOutageCodes,
+    outageResetHeaderOf: outageResetHeaderOf,
+    parkLabelOf: parkLabelOf,
+    probeEveryOf: probeEveryOf,
+    probeCommandOf: probeCommandOf,
+    redactCommand: redactCommand,
+    probeDue: probeDue,
+    tickMarkerLine: tickMarkerLine,
+    probeMarkerLine: probeMarkerLine,
+    countTickMarkers: countTickMarkers,
+    countProbeMarkers: countProbeMarkers,
+    shouldSkipForQuotaPark: shouldSkipForQuotaPark,
+    parkComment: parkComment,
+    unparkComment: unparkComment,
+    probeFailureComment: probeFailureComment
+};
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-11-25T02:47:15.365Z
+            </div>
+        <script src="../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../sorter.js"></script>
+        <script src="../../block-navigation.js"></script>
+    </body>
+</html>
+    

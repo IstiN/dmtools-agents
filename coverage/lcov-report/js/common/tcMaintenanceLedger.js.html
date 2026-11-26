@@ -1,0 +1,1336 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for js/common/tcMaintenanceLedger.js</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../prettify.css" />
+    <link rel="stylesheet" href="../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">js/common</a> tcMaintenanceLedger.js</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">97.6% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>407/417</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">76.53% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>75/98</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">96.42% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>27/28</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">97.6% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>407/417</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line high'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a>
+<a name='L150'></a><a href='#L150'>150</a>
+<a name='L151'></a><a href='#L151'>151</a>
+<a name='L152'></a><a href='#L152'>152</a>
+<a name='L153'></a><a href='#L153'>153</a>
+<a name='L154'></a><a href='#L154'>154</a>
+<a name='L155'></a><a href='#L155'>155</a>
+<a name='L156'></a><a href='#L156'>156</a>
+<a name='L157'></a><a href='#L157'>157</a>
+<a name='L158'></a><a href='#L158'>158</a>
+<a name='L159'></a><a href='#L159'>159</a>
+<a name='L160'></a><a href='#L160'>160</a>
+<a name='L161'></a><a href='#L161'>161</a>
+<a name='L162'></a><a href='#L162'>162</a>
+<a name='L163'></a><a href='#L163'>163</a>
+<a name='L164'></a><a href='#L164'>164</a>
+<a name='L165'></a><a href='#L165'>165</a>
+<a name='L166'></a><a href='#L166'>166</a>
+<a name='L167'></a><a href='#L167'>167</a>
+<a name='L168'></a><a href='#L168'>168</a>
+<a name='L169'></a><a href='#L169'>169</a>
+<a name='L170'></a><a href='#L170'>170</a>
+<a name='L171'></a><a href='#L171'>171</a>
+<a name='L172'></a><a href='#L172'>172</a>
+<a name='L173'></a><a href='#L173'>173</a>
+<a name='L174'></a><a href='#L174'>174</a>
+<a name='L175'></a><a href='#L175'>175</a>
+<a name='L176'></a><a href='#L176'>176</a>
+<a name='L177'></a><a href='#L177'>177</a>
+<a name='L178'></a><a href='#L178'>178</a>
+<a name='L179'></a><a href='#L179'>179</a>
+<a name='L180'></a><a href='#L180'>180</a>
+<a name='L181'></a><a href='#L181'>181</a>
+<a name='L182'></a><a href='#L182'>182</a>
+<a name='L183'></a><a href='#L183'>183</a>
+<a name='L184'></a><a href='#L184'>184</a>
+<a name='L185'></a><a href='#L185'>185</a>
+<a name='L186'></a><a href='#L186'>186</a>
+<a name='L187'></a><a href='#L187'>187</a>
+<a name='L188'></a><a href='#L188'>188</a>
+<a name='L189'></a><a href='#L189'>189</a>
+<a name='L190'></a><a href='#L190'>190</a>
+<a name='L191'></a><a href='#L191'>191</a>
+<a name='L192'></a><a href='#L192'>192</a>
+<a name='L193'></a><a href='#L193'>193</a>
+<a name='L194'></a><a href='#L194'>194</a>
+<a name='L195'></a><a href='#L195'>195</a>
+<a name='L196'></a><a href='#L196'>196</a>
+<a name='L197'></a><a href='#L197'>197</a>
+<a name='L198'></a><a href='#L198'>198</a>
+<a name='L199'></a><a href='#L199'>199</a>
+<a name='L200'></a><a href='#L200'>200</a>
+<a name='L201'></a><a href='#L201'>201</a>
+<a name='L202'></a><a href='#L202'>202</a>
+<a name='L203'></a><a href='#L203'>203</a>
+<a name='L204'></a><a href='#L204'>204</a>
+<a name='L205'></a><a href='#L205'>205</a>
+<a name='L206'></a><a href='#L206'>206</a>
+<a name='L207'></a><a href='#L207'>207</a>
+<a name='L208'></a><a href='#L208'>208</a>
+<a name='L209'></a><a href='#L209'>209</a>
+<a name='L210'></a><a href='#L210'>210</a>
+<a name='L211'></a><a href='#L211'>211</a>
+<a name='L212'></a><a href='#L212'>212</a>
+<a name='L213'></a><a href='#L213'>213</a>
+<a name='L214'></a><a href='#L214'>214</a>
+<a name='L215'></a><a href='#L215'>215</a>
+<a name='L216'></a><a href='#L216'>216</a>
+<a name='L217'></a><a href='#L217'>217</a>
+<a name='L218'></a><a href='#L218'>218</a>
+<a name='L219'></a><a href='#L219'>219</a>
+<a name='L220'></a><a href='#L220'>220</a>
+<a name='L221'></a><a href='#L221'>221</a>
+<a name='L222'></a><a href='#L222'>222</a>
+<a name='L223'></a><a href='#L223'>223</a>
+<a name='L224'></a><a href='#L224'>224</a>
+<a name='L225'></a><a href='#L225'>225</a>
+<a name='L226'></a><a href='#L226'>226</a>
+<a name='L227'></a><a href='#L227'>227</a>
+<a name='L228'></a><a href='#L228'>228</a>
+<a name='L229'></a><a href='#L229'>229</a>
+<a name='L230'></a><a href='#L230'>230</a>
+<a name='L231'></a><a href='#L231'>231</a>
+<a name='L232'></a><a href='#L232'>232</a>
+<a name='L233'></a><a href='#L233'>233</a>
+<a name='L234'></a><a href='#L234'>234</a>
+<a name='L235'></a><a href='#L235'>235</a>
+<a name='L236'></a><a href='#L236'>236</a>
+<a name='L237'></a><a href='#L237'>237</a>
+<a name='L238'></a><a href='#L238'>238</a>
+<a name='L239'></a><a href='#L239'>239</a>
+<a name='L240'></a><a href='#L240'>240</a>
+<a name='L241'></a><a href='#L241'>241</a>
+<a name='L242'></a><a href='#L242'>242</a>
+<a name='L243'></a><a href='#L243'>243</a>
+<a name='L244'></a><a href='#L244'>244</a>
+<a name='L245'></a><a href='#L245'>245</a>
+<a name='L246'></a><a href='#L246'>246</a>
+<a name='L247'></a><a href='#L247'>247</a>
+<a name='L248'></a><a href='#L248'>248</a>
+<a name='L249'></a><a href='#L249'>249</a>
+<a name='L250'></a><a href='#L250'>250</a>
+<a name='L251'></a><a href='#L251'>251</a>
+<a name='L252'></a><a href='#L252'>252</a>
+<a name='L253'></a><a href='#L253'>253</a>
+<a name='L254'></a><a href='#L254'>254</a>
+<a name='L255'></a><a href='#L255'>255</a>
+<a name='L256'></a><a href='#L256'>256</a>
+<a name='L257'></a><a href='#L257'>257</a>
+<a name='L258'></a><a href='#L258'>258</a>
+<a name='L259'></a><a href='#L259'>259</a>
+<a name='L260'></a><a href='#L260'>260</a>
+<a name='L261'></a><a href='#L261'>261</a>
+<a name='L262'></a><a href='#L262'>262</a>
+<a name='L263'></a><a href='#L263'>263</a>
+<a name='L264'></a><a href='#L264'>264</a>
+<a name='L265'></a><a href='#L265'>265</a>
+<a name='L266'></a><a href='#L266'>266</a>
+<a name='L267'></a><a href='#L267'>267</a>
+<a name='L268'></a><a href='#L268'>268</a>
+<a name='L269'></a><a href='#L269'>269</a>
+<a name='L270'></a><a href='#L270'>270</a>
+<a name='L271'></a><a href='#L271'>271</a>
+<a name='L272'></a><a href='#L272'>272</a>
+<a name='L273'></a><a href='#L273'>273</a>
+<a name='L274'></a><a href='#L274'>274</a>
+<a name='L275'></a><a href='#L275'>275</a>
+<a name='L276'></a><a href='#L276'>276</a>
+<a name='L277'></a><a href='#L277'>277</a>
+<a name='L278'></a><a href='#L278'>278</a>
+<a name='L279'></a><a href='#L279'>279</a>
+<a name='L280'></a><a href='#L280'>280</a>
+<a name='L281'></a><a href='#L281'>281</a>
+<a name='L282'></a><a href='#L282'>282</a>
+<a name='L283'></a><a href='#L283'>283</a>
+<a name='L284'></a><a href='#L284'>284</a>
+<a name='L285'></a><a href='#L285'>285</a>
+<a name='L286'></a><a href='#L286'>286</a>
+<a name='L287'></a><a href='#L287'>287</a>
+<a name='L288'></a><a href='#L288'>288</a>
+<a name='L289'></a><a href='#L289'>289</a>
+<a name='L290'></a><a href='#L290'>290</a>
+<a name='L291'></a><a href='#L291'>291</a>
+<a name='L292'></a><a href='#L292'>292</a>
+<a name='L293'></a><a href='#L293'>293</a>
+<a name='L294'></a><a href='#L294'>294</a>
+<a name='L295'></a><a href='#L295'>295</a>
+<a name='L296'></a><a href='#L296'>296</a>
+<a name='L297'></a><a href='#L297'>297</a>
+<a name='L298'></a><a href='#L298'>298</a>
+<a name='L299'></a><a href='#L299'>299</a>
+<a name='L300'></a><a href='#L300'>300</a>
+<a name='L301'></a><a href='#L301'>301</a>
+<a name='L302'></a><a href='#L302'>302</a>
+<a name='L303'></a><a href='#L303'>303</a>
+<a name='L304'></a><a href='#L304'>304</a>
+<a name='L305'></a><a href='#L305'>305</a>
+<a name='L306'></a><a href='#L306'>306</a>
+<a name='L307'></a><a href='#L307'>307</a>
+<a name='L308'></a><a href='#L308'>308</a>
+<a name='L309'></a><a href='#L309'>309</a>
+<a name='L310'></a><a href='#L310'>310</a>
+<a name='L311'></a><a href='#L311'>311</a>
+<a name='L312'></a><a href='#L312'>312</a>
+<a name='L313'></a><a href='#L313'>313</a>
+<a name='L314'></a><a href='#L314'>314</a>
+<a name='L315'></a><a href='#L315'>315</a>
+<a name='L316'></a><a href='#L316'>316</a>
+<a name='L317'></a><a href='#L317'>317</a>
+<a name='L318'></a><a href='#L318'>318</a>
+<a name='L319'></a><a href='#L319'>319</a>
+<a name='L320'></a><a href='#L320'>320</a>
+<a name='L321'></a><a href='#L321'>321</a>
+<a name='L322'></a><a href='#L322'>322</a>
+<a name='L323'></a><a href='#L323'>323</a>
+<a name='L324'></a><a href='#L324'>324</a>
+<a name='L325'></a><a href='#L325'>325</a>
+<a name='L326'></a><a href='#L326'>326</a>
+<a name='L327'></a><a href='#L327'>327</a>
+<a name='L328'></a><a href='#L328'>328</a>
+<a name='L329'></a><a href='#L329'>329</a>
+<a name='L330'></a><a href='#L330'>330</a>
+<a name='L331'></a><a href='#L331'>331</a>
+<a name='L332'></a><a href='#L332'>332</a>
+<a name='L333'></a><a href='#L333'>333</a>
+<a name='L334'></a><a href='#L334'>334</a>
+<a name='L335'></a><a href='#L335'>335</a>
+<a name='L336'></a><a href='#L336'>336</a>
+<a name='L337'></a><a href='#L337'>337</a>
+<a name='L338'></a><a href='#L338'>338</a>
+<a name='L339'></a><a href='#L339'>339</a>
+<a name='L340'></a><a href='#L340'>340</a>
+<a name='L341'></a><a href='#L341'>341</a>
+<a name='L342'></a><a href='#L342'>342</a>
+<a name='L343'></a><a href='#L343'>343</a>
+<a name='L344'></a><a href='#L344'>344</a>
+<a name='L345'></a><a href='#L345'>345</a>
+<a name='L346'></a><a href='#L346'>346</a>
+<a name='L347'></a><a href='#L347'>347</a>
+<a name='L348'></a><a href='#L348'>348</a>
+<a name='L349'></a><a href='#L349'>349</a>
+<a name='L350'></a><a href='#L350'>350</a>
+<a name='L351'></a><a href='#L351'>351</a>
+<a name='L352'></a><a href='#L352'>352</a>
+<a name='L353'></a><a href='#L353'>353</a>
+<a name='L354'></a><a href='#L354'>354</a>
+<a name='L355'></a><a href='#L355'>355</a>
+<a name='L356'></a><a href='#L356'>356</a>
+<a name='L357'></a><a href='#L357'>357</a>
+<a name='L358'></a><a href='#L358'>358</a>
+<a name='L359'></a><a href='#L359'>359</a>
+<a name='L360'></a><a href='#L360'>360</a>
+<a name='L361'></a><a href='#L361'>361</a>
+<a name='L362'></a><a href='#L362'>362</a>
+<a name='L363'></a><a href='#L363'>363</a>
+<a name='L364'></a><a href='#L364'>364</a>
+<a name='L365'></a><a href='#L365'>365</a>
+<a name='L366'></a><a href='#L366'>366</a>
+<a name='L367'></a><a href='#L367'>367</a>
+<a name='L368'></a><a href='#L368'>368</a>
+<a name='L369'></a><a href='#L369'>369</a>
+<a name='L370'></a><a href='#L370'>370</a>
+<a name='L371'></a><a href='#L371'>371</a>
+<a name='L372'></a><a href='#L372'>372</a>
+<a name='L373'></a><a href='#L373'>373</a>
+<a name='L374'></a><a href='#L374'>374</a>
+<a name='L375'></a><a href='#L375'>375</a>
+<a name='L376'></a><a href='#L376'>376</a>
+<a name='L377'></a><a href='#L377'>377</a>
+<a name='L378'></a><a href='#L378'>378</a>
+<a name='L379'></a><a href='#L379'>379</a>
+<a name='L380'></a><a href='#L380'>380</a>
+<a name='L381'></a><a href='#L381'>381</a>
+<a name='L382'></a><a href='#L382'>382</a>
+<a name='L383'></a><a href='#L383'>383</a>
+<a name='L384'></a><a href='#L384'>384</a>
+<a name='L385'></a><a href='#L385'>385</a>
+<a name='L386'></a><a href='#L386'>386</a>
+<a name='L387'></a><a href='#L387'>387</a>
+<a name='L388'></a><a href='#L388'>388</a>
+<a name='L389'></a><a href='#L389'>389</a>
+<a name='L390'></a><a href='#L390'>390</a>
+<a name='L391'></a><a href='#L391'>391</a>
+<a name='L392'></a><a href='#L392'>392</a>
+<a name='L393'></a><a href='#L393'>393</a>
+<a name='L394'></a><a href='#L394'>394</a>
+<a name='L395'></a><a href='#L395'>395</a>
+<a name='L396'></a><a href='#L396'>396</a>
+<a name='L397'></a><a href='#L397'>397</a>
+<a name='L398'></a><a href='#L398'>398</a>
+<a name='L399'></a><a href='#L399'>399</a>
+<a name='L400'></a><a href='#L400'>400</a>
+<a name='L401'></a><a href='#L401'>401</a>
+<a name='L402'></a><a href='#L402'>402</a>
+<a name='L403'></a><a href='#L403'>403</a>
+<a name='L404'></a><a href='#L404'>404</a>
+<a name='L405'></a><a href='#L405'>405</a>
+<a name='L406'></a><a href='#L406'>406</a>
+<a name='L407'></a><a href='#L407'>407</a>
+<a name='L408'></a><a href='#L408'>408</a>
+<a name='L409'></a><a href='#L409'>409</a>
+<a name='L410'></a><a href='#L410'>410</a>
+<a name='L411'></a><a href='#L411'>411</a>
+<a name='L412'></a><a href='#L412'>412</a>
+<a name='L413'></a><a href='#L413'>413</a>
+<a name='L414'></a><a href='#L414'>414</a>
+<a name='L415'></a><a href='#L415'>415</a>
+<a name='L416'></a><a href='#L416'>416</a>
+<a name='L417'></a><a href='#L417'>417</a>
+<a name='L418'></a><a href='#L418'>418</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">44x</span>
+<span class="cline-any cline-yes">44x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">675x</span>
+<span class="cline-any cline-yes">675x</span>
+<span class="cline-any cline-yes">131x</span>
+<span class="cline-any cline-yes">131x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">75x</span>
+<span class="cline-any cline-yes">675x</span>
+<span class="cline-any cline-yes">675x</span>
+<span class="cline-any cline-yes">675x</span>
+<span class="cline-any cline-yes">675x</span>
+<span class="cline-any cline-yes">675x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">920x</span>
+<span class="cline-any cline-yes">920x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">60x</span>
+<span class="cline-any cline-yes">60x</span>
+<span class="cline-any cline-yes">60x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">53x</span>
+<span class="cline-any cline-yes">53x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">28x</span>
+<span class="cline-any cline-yes">28x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">44x</span>
+<span class="cline-any cline-yes">44x</span>
+<span class="cline-any cline-yes">44x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">44x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">88x</span>
+<span class="cline-any cline-yes">88x</span>
+<span class="cline-any cline-yes">88x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">/**
+ * tcMaintenanceLedger.js — the gh-1329 rolling TC-maintenance ledger (§5).
+ *
+ * "Nothing discarded": every test-side finding (stale guard, environment-
+ * shifted TC, flaky, unfixable-in-rework, and the dev leg's structured
+ * `test_suspected` claim) is appended — script, failed_description, error
+ * class, SHA/fingerprint evidence — so automation findings are re-owned
+ * instead of stranding bugs, and test debt is fixed in batched sweep PRs.
+ *
+ *   Identity    id = hash(tcKey + errorClass + script path). The same TC
+ *               failing the same way refreshes its finding (occurrences++,
+ *               latest evidence) instead of duplicating; a re-occurrence of
+ *               a resolved finding REOPENS it (the sweep did not stick).
+ *
+ *   Lifecycle   open -&gt; resolved (a sweep PR fixes the batch; resolvedVia
+ *               names it) -&gt; open again on re-occurrence. Append-only
+ *               evidence is never rewritten; dispositions only flip status.
+ *
+ *   Storage     one machine-parseable marker comment per update on the bug
+ *               ticket — the house `dmtools:` marker pattern (same family as
+ *               the gh-1332 finding registry). The newest machine-authored
+ *               marker wins; markers from any other identity are invisible.
+ *               No configured machine identity → trust nothing.
+ *
+ *   Owner face  buildDigestComment renders the async digest (one section per
+ *               open finding, explicit "no action required now" — humans
+ *               meet a digest, never a blocking ask).
+ *
+ * Pure module — no dmtools globals; callers fetch comments and post the
+ * built marker. GraalJS-clean (var + plain functions, JSON-safe data).
+ */
+'use strict';
+&nbsp;
+var reviewVerdicts = require('./reviewVerdicts.js');
+// gh-1352 scope 4: the ledger lifecycle (append/refresh/reopen/resolve),
+// the open-set filter and the batched-sweep trigger live in the shared
+// ledger core (the #1345/#1348 pattern extracted) — this module keeps its
+// identity scheme, finding builders, marker persistence and digest face.
+var ledgerCore = require('./ledgerCore.js');
+&nbsp;
+// The registry marker — one line, JSON payload, invisible in the rendered
+// ticket (same protocol family as the gh-807 verdict / gh-1332 registry markers).
+var MARKER_PREFIX = '&lt;!-- dmtools:tc-maintenance-ledger ';
+var MARKER_SUFFIX = ' --&gt;';
+var LEDGER_VERSION = 1;
+&nbsp;
+var STATUS_OPEN = 'open';
+var STATUS_RESOLVED = 'resolved';
+&nbsp;
+var SOURCE_AUTOMATION = 'automation';
+var SOURCE_DEV = 'dev';
+&nbsp;
+// Marker-hygiene cap for free-text fields (agent-authored evidence can be
+// arbitrarily large; the ledger carries pointers, not essays).
+var MAX_NOTE_LENGTH = 500;
+&nbsp;
+// ── identity ─────────────────────────────────────────────────────────────────
+&nbsp;
+// FNV-1a (32-bit, Math.imul keeps the multiply exact) — same scheme as the
+// gh-1332 finding registry; two bases concatenated → a 16-hex id. The hash
+// helpers are the marker families' shared plumbing (reviewVerdicts —
+// gh-1329 rework, gh-1251 duplication ratchet).
+&nbsp;
+/**
+ * The finding identity: hash(tcKey + errorClass + script path). NOT the SHA
+ * (a re-run on a new build is the same finding) and NOT the verdict alone
+ * (too coarse — one TC can flake AND misencode).
+ */
+function findingIdentity(tcKey, errorClass, testPath) {
+    var key = String(tcKey || '') + '\n' + String(errorClass || 'unknown') + '<span class="branch-0 cbranch-no" title="branch not covered" >\n' + </span>String(testPath || '');
+<span class="branch-0 cbranch-no" title="branch not covered" >    return review</span>Verdicts.hex8(reviewVerdicts.fnv1a(key, 0x811c9dc5)) + reviewVerdicts.hex8(reviewVerdicts.fnv1a(key, 0x811c9dc5 ^ 0x9e3779b9));
+}
+&nbsp;
+// ── shape ────────────────────────────────────────────────────────────────────
+// (ledgerCore owns the lifecycle helpers — deepCopy/truncate/firstDefined/
+// findById/refresh/append/resolve/open — delegated below.)
+&nbsp;
+function emptyLedger() {
+    return { v: LEDGER_VERSION, at: new Date().toISOString(), findings: [] };
+}
+&nbsp;
+// Free-form finding fields copied from the source payload. `sources` lists
+// the accepted spellings in priority order; `truncate` fields are
+// marker-hygiene capped; `fallback` applies when every source is absent.
+var FINDING_FIELD_TABLE = [
+    { key: 'failedDescriptionFile', sources: ['failedDescriptionFile'] },
+    { key: 'failureSummary', sources: ['failureSummary', 'summary'], truncate: true, fallback: '' },
+    // An automation finding carries only an EXPLICIT note (gh-1329 review:
+    // reason and note stay distinct — no truncated reason copy in every
+    // marker); the dev claim builds its own additive note.
+    { key: 'note', sources: ['note'], truncate: true },
+    { key: 'claimedVerdict', sources: ['claimedVerdict'] },
+    { key: 'evidence', sources: ['evidence'] },
+    { key: 'sha', sources: ['sha', 'buildSha'] },
+    { key: 'envFingerprint', sources: ['envFingerprint'] },
+    { key: 'lastGreenSha', sources: ['lastGreenSha'] },
+    { key: 'lastGreenEnvFingerprint', sources: ['lastGreenEnvFingerprint'] }
+];
+&nbsp;
+function findingField(src, spec) {
+    var value = firstDefined(src, spec.sources);
+    if (value === null) return spec.fallback !== undefined ? spec.fallback : null;
+    return spec.truncate ? truncate(value) : value;
+}
+&nbsp;
+/** The identity-bearing core fields (they feed the finding id hash). */
+function findingCoreFields(src) {
+    return {
+        tcKey: String(firstDefined(src, ['tcKey', 'testCaseKey']) || ''),
+        errorClass: String(firstDefined(src<span class="branch-0 cbranch-no" title="branch not covered" >, ['er</span>rorClass', 'error_class']) || 'unknown'),
+        testPath: String(firstDefined(src, ['testPath', 'script']) || '')
+    };
+}
+&nbsp;
+/**
+ * Normalizes any finding input into the canonical ledger shape. Unknown
+ * errorClass stays visible as 'unknown' — a finding is never silently
+ * dropped for missing metadata.
+ */
+function normalizeFinding(input, at) {
+    var src = input || {};
+    var core = findingCoreFields(src);
+    v<span class="branch-0 cbranch-no" title="branch not covered" >ar fin</span>ding = {
+        id: findingIdentity(core.tcKey, core.errorClass, core.testPath),
+        tcKey: core.tcKey,
+        role: src.role || null,
+        verdict: src.verdict || 'maintenance',
+        reason: src.reason || nul<span class="branch-0 cbranch-no" title="branch not covered" >l,</span>
+        errorClass: core.errorClass,
+        testPath: core.testPath,
+        source: src.source || SOURCE_AUTOMATION,
+        status: STATUS_OPEN,
+        firstSeenAt: at,
+        lastSeenAt: at,
+        occurrences: 1,
+        resolvedAt: null,
+        resolvedVia: null
+    };
+    FINDING_FIELD_TABLE.forEach(function(spec) {
+        finding[spec.key] = findingField(src, spec);
+    });
+    return finding;
+}
+&nbsp;
+function truncate(text) {
+    return ledgerCore.truncate(text, MAX_NOTE_LENGTH);
+}
+&nbsp;
+function firstDefined(obj, keys) {
+    return ledgerCore.firstDefined(obj, keys);
+}
+&nbsp;
+// The TC refresh keys (verdict + reason included) — a superset slice of the
+// core's default evidence list, so the TC ledger refreshes what IT documents.
+var TC_REFRESH_KEYS = ['verdict', 'reason', 'sha', 'envFingerprint', 'lastGreenSha',
+    'lastGreenEnvFingerprint', 'failedDescriptionFile', 'failureSummary', 'note',
+    'claimedVerdict', 'evidence'];
+&nbsp;
+/**
+ * Appends a finding into a deep-copied ledger: identity match refreshes,
+ * otherwise a new entry is pushed. Returns the new ledger (never mutates
+ * the input).
+ */
+function appendFinding(prev, input) {
+    return ledgerCore.appendFinding(prev, input, normalizeFinding, TC_REFRESH_KEYS);
+}
+&nbsp;
+/**
+ * Marks the listed identities resolved (the sweep leg's disposition).
+ * Unknown ids are ignored — the ledger is append-only evidence.
+ */
+function resolveFindings(prev, ids, via) {
+    return ledgerCore.resolveFindings(prev, ids, via);
+}
+&nbsp;
+function openFindings(l) {
+    return ledgerCore.openFindings(l);
+}
+&nbsp;
+// The SM-routing label that anchors a parked differential request to the
+// scripted dispatcher rule (gh-1345): the automation leg adds it when a run
+// parks a request, the dispatcher clears it when nothing remains parked.
+var PARK_LABEL = 'tc_differential_pending';
+&nbsp;
+// The parked differential-rerun verdict (tcTriage ACTION_DIFFERENTIAL): the
+// finding that awaits the scripted CI dispatcher — never a sweep item.
+var VERDICT_DIFFERENTIAL = 'differential-rerun';
+&nbsp;
+/**
+ * The parked differential rerun requests of a ledger: open findings whose
+ * verdict is the differential rerun — the TCs the dispatcher still has to run
+ * on their last-green build. They stay parked (and visible in every digest)
+ * until the dispatcher resolves them.
+ */
+function differentialRequests(l) {
+    return openFindings(l).filter(function(f) { return f &amp;&amp; f.verdict === VERDICT_DIFFERENTIAL; });
+}
+&nbsp;
+// ── finding builders (the two machine sources) ───────────────────────────────
+&nbsp;
+var VERDICT_FALLBACK_TABLE = [
+    { key: 'tcKey', entryKey: 'tcKey', verdictKey: 'tcKey' },
+    { key: 'role', entryKey: 'role', verdictKey: 'role' },
+    { key: 'verdict', entryKey: 'verdict', verdictKey: 'action' },
+    { key: 'reason', entryKey: 'reason', verdictKey: 'reason' }
+];
+&nbsp;
+var VERDICT_EVIDENCE_FIELDS = ['errorClass', 'testPath', 'failedDescriptionFile', 'failureSummary',
+    'sha', 'envFingerprint', 'lastGreenSha', 'lastGreenEnvFingerprint'];
+&nbsp;
+function firstNonEmptyValue(a, b) {
+    return (a !== undefined &amp;&amp; a !== null &amp;&amp; a !== '') ? a : b;
+}
+&nbsp;
+function verdictLedgerEntry(v) {
+    return (v &amp;&amp; v.ledgerEntry) || {};
+}
+&nbsp;
+function verdictEvidence(v, entry) {
+    return entry.evidence || (v &amp;&amp; v.evidence) || {};
+}
+&nbsp;
+/**
+ * A triage verdict (tcTriage.js) bec<span class="branch-0 cbranch-no" title="branch not covered" >omes a</span>n automation-sourced finding.
+ * Every verdict except ACTION_NONE carries a ledgerEntry payload — this
+ * builder consumes it.
+ */
+function findingFromVerdict(v, opts) {
+    var at = (opts &amp;&amp; opts.at) || new Date().toISOString();
+    var entry = verdictLedgerEntry(v);
+    var evidence = verdictEvidence(v, entry);
+    var verdictLike = v || {};
+    var src = { source: SOURCE_AUTOMATION, a<span class="branch-0 cbranch-no" title="branch not covered" >t: at </span>};
+    VERDICT_FALLBACK_TABLE.forEach(function(spec) {
+        src[spec.key] = firstNonEmptyValue(entry[spec.entryKey], verdictLike[spec.verdictKey]);
+    });
+    VERDICT_EVIDENCE_FIELDS.forEach(function(k) {
+        src[k] = evidence[k];
+    });
+    return normalizeFinding(src, at);
+}
+&nbsp;
+/** The dev claim's additive note: reason + evidence pointer (never a bare reason copy). */
+function devClaimNote(src) {
+    var noteParts = [];
+    if (src.reason) noteParts.push(String(src.reason));
+    if (src.evidence) noteParts.push('evidence: ' + String(src.evidence));
+    return noteParts.join(' — ');
+}
+&nbsp;
+function devClaimCoreFields(src) {
+    return {
+        tcKey: firstDefined(src, ['tcKey', 'testCaseKey']) || '',
+        claimedVerdict: firstDefined(src, ['<span class="branch-0 cbranch-no" title="branch not covered" >claime</span>dVerdict', 'verdict']) || null,
+        errorClass: firstDefined(src, ['errorClass']) || 'unknown',
+        testPath: firstDefined(src, ['testPath', 'script']) || '',
+        sha: firstDefined(src, ['sha', 'buildSha']) || null
+    };
+}
+&nbsp;
+/**
+ * The dev leg's structured exit (§6): outputs/test_suspected.json — the
+ * claimed test-side verdict + evidence + TC key — machine-routed into the
+ * ledger. Free text is truncated (marker hygiene) and the source is 'dev'.
+ */
+function findingFromDevClaim(claim, opts) {
+    var src = claim || {};
+    var core = devClaimCoreFields(src);
+<span class="branch-0 cbranch-no" title="branch not covered" >    core.v</span>erdict = 'dev-test-suspected';
+    core.note = devClaimNote(src);
+    core.source = SOURCE_DEV;
+    return normalizeFinding(core, (opts &amp;&amp; opts.at) || new Date().toISOString());
+}
+&nbsp;
+// ── marker persistence (the house dmtools: marker pattern) ───────────────────
+&nbsp;
+// Marker hygiene (escaping) and the parse walk live in reviewVerdicts — the
+// shared dmtools: marker plumbing (gh-1329 rework, gh-1251 duplication
+// ratchet): this module keeps only its MARKER_PREFIX and payload adapter.
+&nbsp;
+function ledgerPayload(l) {
+    return {
+        v: l.v || LEDGER_VERSION,
+        at: l.at || new Date().t<span class="branch-0 cbranch-no" title="branch not covered" >oISOString(),</span>
+        findings: l.fi<span class="branch-0 cbranch-no" title="branch not covered" >ndings || []</span>
+<span class="cstat-no" title="statement not covered" >    };</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+function openCount(l) {
+    return <span class="branch-0 cbranch-no" title="branch not covered" >openFi</span>ndings(l).length;
+}
+&nbsp;
+function ledgerNote(l) {
+    return '\uD83E\uDDFC TC maintenance ledger (gh-1329) — ' + openCount(l) +
+        ' open test-side finding' + (openCount(l) === 1 ? '' : 's') +
+        ', ' + (Array.isArray(l.findings) ? l.findings.length : 0) + ' total. Machine-managed sweep queue; please<span class="branch-0 cbranch-no" title="branch not covered" > do </span>not edit or reply.';
+}
+&nbsp;
+/**
+ * Builds the ledger marker comment for an update: the machine-parseable
+ * one-line payload plus a short human note. Returns null for a non-postable
+ * ledger (no findings array — a ledger without findings is not a ledger).
+ */
+function buildLedgerMarker(l) {
+    if (!l || !Array.isArray(l.findings)) return null;
+    return MARKER_PREFIX + JSON.string<span class="branch-0 cbranch-no" title="branch not covered" >ify(ledgerPay</span>load(l), reviewVerdicts.markerSafeReplacer) + MARKER_SUFFIX + '\n' + ledgerNote(l);
+}
+&nbsp;
+function ledgerFromPayload(parsed) {
+    // the can<span class="fstat-no" title="function not covered" >onical shape guard lives in the ledger core (gh-1352 dedup)</span>
+<span class="cstat-no" title="statement not covered" >    return ledgerCore.ledgerFromPayload(parsed);</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+ * Parses ALL ledger records from a ticket comments payload — comments:
+ * [{body}] (author fields consulted only when opts.authorLogins is passed).
+ * FAILS CLOSED: no configured machine-identity allowlist trusts nothing
+ * (the machineAuthor doctrine — stricter than the shape-agnostic shared
+ * parser, because a maintenance ledger re-routes bug verdicts).
+ * Returns records oldest-first.
+ */
+function parseLedgerComments(comments, opts) {
+    return reviewVerdicts.parseMarkerComments(comments, opts, MARKER_PREFIX, MARKER_SUFFIX,
+        ledgerCore.ledgerRecordOf, true);
+}
+&nbsp;
+/**
+ * The newest trusted ledger record for a ticket, or null when none exists.
+ */
+function latestLedger(comments, opts) {
+    var records = parseLedgerComments(comments, opts);
+    return records.length ? records[records.length - 1] : null;
+}
+&nbsp;
+// ── the owner-facing digest (§7: async, never a blocking ask) ────────────────
+&nbsp;
+function findingLine(f) {
+    var src = f.source === SOURCE_DEV ? 'dev claim' : f.verdict;
+    return '- ' + f.tcKe<span class="branch-0 cbranch-no" title="branch not covered" >y + ' — ' + sr</span>c + (f.reason ? ' (' + f.reason.replace(/-/g, ' ') + ')' : '') +
+        (f.testPath ? ' — `' + f.testPath +<span class="branch-0 cbranch-no" title="branch not covered" > '`' </span>: '') +
+        (f.occurrences &gt; 1 ? ' — seen ' + f<span class="branch-0 cbranch-no" title="branch not covered" >.occu</span>rrences + 'x' : '') +
+<span class="branch-0 cbranch-no" title="branch not covered" >        (f.source === SOURCE_DEV &amp;&amp; f.claim</span>edVerdict ? ' — claimed: ' + f.claimedVer<span class="branch-0 cbranch-no" title="branch not covered" >dict : '');</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="branch-0 cbranch-no" title="branch not covered" > * The parked differential request li</span>ne (gh-1345): everything the scripted
+ * dispatcher needs is on the line — TC, script, last-green build.
+ */
+function parkedRequestLine(f) {
+    return '- ' + f.tcKey + (f.testPath ? ' — `' + f.testPath + '`' : '') +
+        (f.lastGreenSha ? ' — last green bu<span class="branch-0 cbranch-no" title="branch not covered" >ild `</span>' + f.lastGreenSha + '`' : '') +
+        ' — waiting for the scripted differ<span class="branch-0 cbranch-no" title="branch not covered" >entia</span>l rerun';
+}
+&nbsp;
+/**
+ * The digest comment: the parked differential rerun requests ALWAYS get
+ * their own section first (gh-1345 — attribution stalls are never silent:
+ * a parked request is dispatcher work, not sweep work), then one section
+ * per open sweep finding plus the explicit "no action required right now".
+ */
+function buildDigestComment(l) {
+    var parked = differentialRequests(l);
+    var open = openFindings(l).filter(function(f) { return !f || f.verdict !== VERDICT_DIFFERENTIAL; });
+    if (!open.length &amp;&amp; !parked.length) {
+        return '\uD83E\uDDFC TC maintenance ledger (gh-1329) — no open findings. Test-side debt is clear.';
+    }
+    var lines = [];
+    if (parked.length) {
+        lines.push('\u23F3 Parked differential rerun requests (gh-1345) — ' + parked.length +
+            ' attribution stall' + (parked.length === 1 ? '' : 's') + ', the scripted CI dispatcher owns these ' +
+            '(each TC is rerun on its last-green build; the outcome bounces the bug or closes the request):');
+        parked.forEach(function(f) {
+            lines.push(parkedRequestLine(f));
+        });
+        lines.push('');
+    }
+    if (open.length) {
+        lines.push('\uD83E\uDDFC TC maintenance ledger digest (gh-1329) — ' + open.length +
+            ' open test-side finding' + (open.length === 1 ? '' : 's') + ', queued for a batched sweep PR:');
+<span class="branch-0 cbranch-no" title="branch not covered" ></span>        open.forEach(function(f) {
+            lines.push(findingLine(f));
+        });
+        lines.push('');
+        lines.push('Findings are fixed in batched sweep PRs; tests re-enter validation afterwards. No action is required right now.');
+    } else {
+        lines.push('The dispatcher runs each parked TC on its last-green build on the next maintenance tick and resolves the request mechanically; no action is required right now.');
+    }
+    return lines.join('\n');
+}
+&nbsp;
+if (typeof module !== 'undefined' &amp;&amp; module.exports) {
+    module.exports = {
+        MARKER_PREFIX: MARKER_PREFIX,
+        MARKER_SUFFIX: MARKER_SUFFIX,
+        LEDGER_VERSION: LEDGER_VERSION,
+        STATUS_OPEN: STATUS_OPEN,
+        STATUS_RESOLVED: STATUS_RESOLVED,
+        SOURCE_AUTOMATION: SOURCE_AUTOMATION,
+        SOURCE_DEV: SOURCE_DEV,
+        MAX_NOTE_LENGTH: MAX_NOTE_LENGTH,
+        truncate: truncate,
+        findingIdentity: findingIdentity,
+        emptyLedger: emptyLedger,
+        appendFinding: appendFinding,
+        resolveFindings: resolveFindings,
+        openFindings: openFindings,
+        findingFromVerdict: findingFromVerdict,
+        findingFromDevClaim: findingFromDevClaim,
+        buildLedgerMarker: buildLedgerMarker,
+        parseLedgerComments: parseLedgerComments,
+        latestLedger: latestLedger,
+        buildDigestComment: buildDigestComment,
+        VERDICT_DIFFERENTIAL: VERDICT_DIFFERENTIAL,
+        PARK_LABEL: PARK_LABEL,
+        differentialRequests: differentialRequests
+    };
+}
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-11-25T02:47:15.365Z
+            </div>
+        <script src="../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../sorter.js"></script>
+        <script src="../../block-navigation.js"></script>
+    </body>
+</html>
+    

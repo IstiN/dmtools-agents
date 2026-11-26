@@ -510,14 +510,17 @@ function action(params) {
         var openIncidents = resolveOpenIncidents(context, custom);
         var linkedNumber = verdict.linksIssue;
         if (isOpenIncident(openIncidents, linkedNumber)) {
-            var commentArgs = githubIssueArgs(ownerRepo, linkedNumber);
+            // github_create_comment addresses issues via pullRequestId
+            // (issues are PRs upstream in the GitHub integration).
+            var commentArgs = githubIssueArgs(ownerRepo, null);
+            commentArgs.pullRequestId = String(linkedNumber);
             commentArgs.body = buildLinkedComment(verdict, context, linkedNumber);
             var commentFn = null;
-            if (typeof github_add_issue_comment === 'function') commentFn = github_add_issue_comment;
-            else if (typeof github_create_issue_comment === 'function') commentFn = github_create_issue_comment;
-            else if (typeof github_issue_comment === 'function') commentFn = github_issue_comment;
+            if (typeof github_create_comment === 'function') commentFn = github_create_comment;
+            else if (typeof github_add_issue_comment === 'function') commentFn = github_add_issue_comment;
+            else if (typeof github_add_pr_comment === 'function') commentFn = github_add_pr_comment;
             if (commentFn === null) {
-                result.linkError = 'no issue-comment global available (' + commentNames.join('|') + ')';
+                result.linkError = 'no issue-comment global available (github_create_comment family)';
                 console.error('ci_analyst: ' + result.linkError);
             } else {
                 try {

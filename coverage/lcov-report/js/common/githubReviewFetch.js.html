@@ -1,0 +1,484 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for js/common/githubReviewFetch.js</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../prettify.css" />
+    <link rel="stylesheet" href="../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">js/common</a> githubReviewFetch.js</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">39.84% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>53/133</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">92.64% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>126/136</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">4.58% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>12/262</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">39.84% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>53/133</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line low'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-yes">157x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">22x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">/**
+ * githubReviewFetch.js — the GitHub review-discussion fetch/render blocks
+ * shared by js/common/scm.js (github provider fetchDiscussions) and
+ * js/common/githubHelpers.js (fetchDiscussionsAndRawData) (gh-1248 dedup).
+ * Both paths ran byte-identical copies of:
+ *
+ *   machineBookkeepingBody — the gh-1387 L1 skip predicate for the
+ *     general-comments renderer (both machine bookkeeping classes — hidden
+ *     dmtools: markers AND visible harness notices — drop out of the
+ *     agent-facing section; named so buildGeneralCommentsSection stays
+ *     under the crap4js ratchet);
+ *   authorOf — the comment-login lookup with the unknown-login fallback;
+ *   fetchPrConversations / fetchPrReviewThreadsRaw — the dmtools-global
+ *     fetch wrappers with their exact call order, log text and fallback
+ *     semantics (a failed conversations export yields [], a failed GraphQL
+ *     census yields null + the conversations-only fallback warning);
+ *   logInventoryCounts — the 'Discussions: …' census log line;
+ *   buildGeneralCommentsSection — the '## General PR Comments' markdown
+ *     renderer (hidden dmtools machine markers AND visible machine-notice
+ *     comments skipped — gh-1248 + the gh-808 finish line, see below).
+ *
+ * GraalJS-clean (var + plain functions). The github_* globals are
+ * dmtools runtime globals, same contract as the former inline copies.
+ */
+'use strict';
+&nbsp;
+var machineNotice = require('./machineNotice.js');
+var reviewThreadInventory = require('./reviewThreadInventory.js');
+&nbsp;
+// One skip predicate for the general-comments renderer (gh-1387 L1): both
+// machine bookkeeping classes — hidden dmtools: markers AND visible
+// harness notices — drop out of the agent-facing section. Named (and kept
+// out of the renderer) so buildGeneralCommentsSection stays under the
+// crap4js ratchet. NOTE: the directive prologue ends at the use-strict
+// line above — every helper lives BELOW it (a function declaration above
+// the directive would silently deactivate strict mode for the whole
+// module, gh-1392 review).
+function machineBookkeepingBody(body) {
+    return machineNotice.isDmtoolsMarkerBody(body) ||<span class="fstat-no" title="function not covered" > m<span class="fstat-no" title="function not covered" >achi<span class="fstat-no" title="function not covered" >ne<span class="fstat-no" title="function not covered" >Noti<span class="fstat-no" title="function not covered" >ce<span class="fstat-no" title="function not covered" >.i<span class="fstat-no" title="function not covered" >sM<span class="fstat-no" title="function not covered" >ac<span class="fstat-no" title="function not covered" >hi<span class="fstat-no" title="function not covered" >ne<span class="fstat-no" title="function not covered" >No<span class="fstat-no" title="function not covered" >ti<span class="fstat-no" title="function not covered" >ce<span class="fstat-no" title="function not covered" >Bo<span class="fstat-no" title="function not covered" >dy<span class="fstat-no" title="function not covered" >(bod<span class="fstat-no" title="function not covered" >y);</span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** The comment's<span class="fstat-no" title="function not covered" > l<span class="fstat-no" title="function not covered" >ogin<span class="fstat-no" title="function not covered" >, or '<span class="fstat-no" title="function not covered" >un<span class="fstat-no" title="function not covered" >known'<span class="fstat-no" title="function not covered" > whe<span class="fstat-no" title="function not covered" >n <span class="fstat-no" title="function not covered" >the payloa<span class="fstat-no" title="function not covered" >d <span class="fstat-no" title="function not covered" >sh<span class="fstat-no" title="function not covered" >ape is o<span class="fstat-no" title="function not covered" >dd. */</span></span></span></span></span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" >function auth<span class="fstat-no" title="function not covered" >orOf(comment) <span class="fstat-no" title="function not covered" >{</span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >    return (comment &amp;&amp; comment<span class="fstat-no" title="function not covered" >.user &amp;&amp; comment.user.lo<span class="fstat-no" title="function not covered" >gin) ? com<span class="fstat-no" title="function not covered" >me<span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >nt<span class="fstat-no" title="function not covered" >.u<span class="fstat-no" title="function not covered" >se<span class="fstat-no" title="function not covered" >r.lo<span class="fstat-no" title="function not covered" >gi<span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >n <span class="fstat-no" title="function not covered" >: <span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >'u<span class="fstat-no" title="function not covered" >nk<span class="fstat-no" title="function not covered" >no<span class="fstat-no" title="function not covered" >wn<span class="fstat-no" title="function not covered" >';</span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >}</span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >/*<span class="fstat-no" title="function not covered" >*</span></span></span>
+<span class="cstat-no" title="statement not covered" > *<span class="fstat-no" title="function not covered" > The conversations expor<span class="fstat-no" title="function not covered" >t <span class="fstat-no" title="function not covered" >for<span class="branch-0 cbranch-no" title="branch not covered" > <span class="fstat-no" title="function not covered" >a PR; <span class="fstat-no" title="function not covered" >a <span class="fstat-no" title="function not covered" >fai</span>led<span class="fstat-no" title="function not covered" > fet<span class="fstat-no" title="function not covered" >ch<span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" > yields []<span class="fstat-no" title="function not covered" > (<span class="fstat-no" title="function not covered" >wa<span class="fstat-no" title="function not covered" >rning</span></span></span></span></span></span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" > *<span class="fstat-no" title="function not covered" > logged), never a th<span class="fstat-no" title="function not covered" >row.</span></span></span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >funct<span class="fstat-no" title="function not covered" >ion <span class="fstat-no" title="function not covered" >fetchPrConversations(workspa<span class="fstat-no" title="function not covered" >ce, repository<span class="fstat-no" title="function not covered" >, prIdStr)<span class="fstat-no" title="function not covered" > {</span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" >    var c<span class="fstat-no" title="function not covered" >on<span class="fstat-no" title="function not covered" >versations<span class="fstat-no" title="function not covered" > = [<span class="fstat-no" title="function not covered" >];</span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >    try<span class="fstat-no" title="function not covered" > {</span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >        c<span class="fstat-no" title="function not covered" >on<span class="fstat-no" title="function not covered" >ve<span class="fstat-no" title="function not covered" >rs<span class="fstat-no" title="function not covered" >at<span class="fstat-no" title="function not covered" >io<span class="fstat-no" title="function not covered" >ns<span class="fstat-no" title="function not covered" > =<span class="fstat-no" title="function not covered" > g<span class="fstat-no" title="function not covered" >ithu<span class="fstat-no" title="function not covered" >b_get_pr_conversations({</span></span></span></span></span></span></span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >            w<span class="fstat-no" title="function not covered" >orkspa<span class="fstat-no" title="function not covered" >ce: <span class="fstat-no" title="function not covered" >wo<span class="fstat-no" title="function not covered" >rkspace,</span></span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >            r<span class="fstat-no" title="function not covered" >epository: repositor<span class="fstat-no" title="function not covered" >y,</span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >            pul<span class="fstat-no" title="function not covered" >lRequestId: prIdStr</span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >        }) || [];</span></span>
+    } <span class="fstat-no" title="function not covered" >catch (e<span class="fstat-no" title="function not covered" >) {</span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >        co<span class="fstat-no" title="function not covered" >nsole.warn<span class="fstat-no" title="function not covered" >('github_get_pr_conversations failed:', e.messag<span class="fstat-no" title="function not covered" >e || e);</span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    return <span class="fstat-no" title="function not covered" >conversations;</span></span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * The GraphQL reviewThreads census for a PR (raw payload); a failed fetch</span>
+<span class="cstat-no" title="statement not covered" > * yiel<span class="fstat-no" title="function not covered" >ds null and logs the conversations-only fallback warni<span class="branch-0 cbranch-no" title="branch not covered" >ng.</span></span></span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >function fetchPrRe<span class="fstat-no" title="function not covered" >viewThreadsRaw(wor<span class="branch-0 cbranch-no" title="branch not covered" >kspace</span>, repos<span class="branch-0 cbranch-no" title="branch not covered" >it<span class="fstat-no" title="function not covered" >ory, prIdStr) {</span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >    var graphqlRaw =<span class="branch-0 cbranch-no" title="branch not covered" > null</span>;</span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >    t<span class="fstat-no" title="function not covered" >ry<span class="fstat-no" title="function not covered" > {</span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >        g<span class="fstat-no" title="function not covered" >ra<span class="fstat-no" title="function not covered" >ph<span class="fstat-no" title="function not covered" >ql<span class="fstat-no" title="function not covered" >Ra<span class="fstat-no" title="function not covered" >w <span class="fstat-no" title="function not covered" >= <span class="fstat-no" title="function not covered" >gi<span class="fstat-no" title="function not covered" >thub<span class="fstat-no" title="function not covered" >_get_pr_review_threads({</span></span></span></span></span></span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >            w<span class="fstat-no" title="function not covered" >o<span class="fstat-no" title="function not covered" >rkspa<span class="fstat-no" title="function not covered" >ce: <span class="fstat-no" title="function not covered" >wo<span class="fstat-no" title="function not covered" >rkspace,</span></span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >            r<span class="fstat-no" title="function not covered" >epository: repositor<span class="fstat-no" title="function not covered" >y,</span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >            pul<span class="fstat-no" title="function not covered" >lRequestI<span class="fstat-no" title="function not covered" >d: prIdStr</span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >        });</span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >        console.log(<span class="fstat-no" title="function not covered" >'Got', revie<span class="fstat-no" title="function not covered" >wT<span class="fstat-no" title="function not covered" >hreadInven<span class="fstat-no" title="function not covered" >tory.parseGraphQLNodes(graphqlRaw).length, 'review threads for GraphQL IDs<span class="fstat-no" title="function not covered" >');</span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" >    } catch (e) {</span>
+<span class="cstat-no" title="statement not covered" >        console.warn('github_get_pr_review_threads failed (falling back to conversations-only i<span class="fstat-no" title="function not covered" >nventory):', e.message || e);</span></span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    return graphqlRaw;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * The 'Discussions: …' census log line, verbatim from both former</span>
+<span class="cstat-no" title="statement not covered" > * closures (thread counts + reply/resolve id counts + the arm-rule</span>
+<span class="cstat-no" title="statement not covered" > * GraphQL census <span class="fstat-no" title="function not covered" >suffix when present).</span></span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >function logInventoryCounts(inv, rawThreads) {</span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >    var<span class="fstat-no" title="function not covered" > <span class="branch-0 cbranch-no" title="branch not covered" >c = i</span>nv.counts;</span></span></span>
+<span class="cstat-no" title="statement not covered" >    console.log('Discu<span class="fstat-no" title="function not covered" >ss<span class="fstat-no" title="function not covered" >ions<span class="fstat-no" title="function not covered" ><span class="branch-0 cbranch-no" title="branch not covered" >: <span class="fstat-no" title="function not covered" >' +</span> <span class="fstat-no" title="function not covered" >c.<span class="fstat-no" title="function not covered" >to<span class="fstat-no" title="function not covered" >ta<span class="fstat-no" title="function not covered" >l <span class="fstat-no" title="function not covered" >+ <span class="fstat-no" title="function not covered" >' <span class="fstat-no" title="function not covered" >th<span class="fstat-no" title="function not covered" >re<span class="fstat-no" title="function not covered" >ad<span class="fstat-no" title="function not covered" >s <span class="fstat-no" title="function not covered" >('<span class="fstat-no" title="function not covered" > + c<span class="fstat-no" title="function not covered" >.open + ' open, ' + c.re<span class="fstat-no" title="function not covered" >so<span class="fstat-no" title="function not covered" >lved<span class="fstat-no" title="function not covered" > + ' r<span class="fstat-no" title="function not covered" >es<span class="fstat-no" title="function not covered" >olved,<span class="fstat-no" title="function not covered" > ' +<span class="fstat-no" title="function not covered" > c<span class="fstat-no" title="function not covered" >.bot + ' b<span class="fstat-no" title="function not covered" >ot<span class="fstat-no" title="function not covered" >, <span class="fstat-no" title="function not covered" >' + c.no<span class="fstat-no" title="function not covered" >tices + ' machine no<span class="fstat-no" title="function not covered" >tices),',</span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >        rawThreads.filter(function(t<span class="fstat-no" title="function not covered" >) { return t.rootComment<span class="fstat-no" title="function not covered" >Id; }).lengt<span class="fstat-no" title="function not covered" >h <span class="fstat-no" title="function not covered" >+ ' r<span class="fstat-no" title="function not covered" >eply <span class="fstat-no" title="function not covered" >IDs,',</span></span></span></span></span></span></span></span></span>
+        rawThreads.filter(function(t) { return t.threadId; }).lengt<span class="fstat-no" title="function not covered" >h + ' resolve IDs' +</span>
+<span class="cstat-no" title="statement not covered" >        (inv.census.graphqlUnresolved !== null</span>
+<span class="cstat-no" title="statement not covered" >            ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'</span>
+<span class="cstat-no" title="statement not covered" >            : ''));</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+&nbsp;
+/**
+<span class="cstat-no" title="statement not covered" > * Pure renderer for the '## General PR Comments' section (verbatim shape):</span>
+<span class="cstat-no" title="statement not covered" > * bodies trimmed, per-comment separator. Two skip classes (gh-12<span class="fstat-no" title="function not covered" >48 + gh-808</span></span>
+<span class="cstat-no" title="statement not covered" > * finish line, live PR dmtools-agents#1387 measured ~2 KB of arm/re<span class="fstat-no" title="function not covered" >d</span></span>
+<span class="cstat-no" title="statement not covered" > * boilerplate per review/rework context build):</span>
+<span class="cstat-no" title="statement not covered" > *   1. hidden `&lt;!-- dmtools:` machine-bookkeeping comments</span>
+<span class="cstat-no" title="statement not covered" > *      (machineNotice.isDmtoolsMarkerBody);</span>
+<span class="cstat-no" title="statement not covered" > *   2. visible harness notices — arming/red/park/conflict/rework reports</span>
+<span class="cstat-no" title="statement not covered" > *      (machineNotice.isMac<span class="fstat-no" title="function not covered" >hineNoticeBody) — status updates, never review</span></span>
+<span class="cstat-no" title="statement not covered" > *      feedback; feeding them to the review/rework agent is exactly the</span>
+<span class="cstat-no" title="statement not covered" > *      gh-808 pathology (the agent answering the machine's own boilerplate).</span>
+<span class="cstat-no" title="statement not covered" > * Returns null when EVERY comment was skipped — the callers push the</span>
+<span class="cstat-no" title="statement not covered" > * section only when non-null, so a notices-only PR renders no empty</span>
+<span class="cstat-no" title="statement not covered" > * '## General PR Comments' header.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >function buildGeneralCommentsSection(comments) {</span>
+<span class="cstat-no" title="statement not covered" >    var section = '## General PR Comments\n\<span class="fstat-no" title="function not covered" >n'<span class="fstat-no" title="function not covered" >;</span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >    var <span class="fstat-no" title="function not covered" >ke<span class="fstat-no" title="function not covered" >pt<span class="fstat-no" title="function not covered" > =<span class="fstat-no" title="function not covered" > 0<span class="fstat-no" title="function not covered" >;</span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >    co<span class="fstat-no" title="function not covered" >mm<span class="fstat-no" title="function not covered" >en<span class="fstat-no" title="function not covered" >ts<span class="fstat-no" title="function not covered" >.for<span class="fstat-no" title="function not covered" >Each(function(comment) {</span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" ><span class="fstat-no" title="function not covered" >        var<span class="fstat-no" title="function not covered" > b<span class="fstat-no" title="function not covered" >ody = <span class="fstat-no" title="function not covered" >(com<span class="fstat-no" title="function not covered" >me<span class="fstat-no" title="function not covered" >nt &amp;&amp; comm<span class="fstat-no" title="function not covered" >en<span class="fstat-no" title="function not covered" >t.<span class="fstat-no" title="function not covered" >body) ||<span class="fstat-no" title="function not covered" > '';</span></span></span></span></span></span></span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" >        if (mac<span class="fstat-no" title="function not covered" >hineBookkeepin<span class="fstat-no" title="function not covered" >gBod<span class="fstat-no" title="function not covered" >y(body)) re<span class="branch-0 cbranch-no" title="branch not covered" >turn;</span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" >        var<span class="fstat-no" title="function not covered" > date = comment.created_<span class="fstat-no" title="function not covered" >at ? comment<span class="fstat-no" title="function not covered" >.c<span class="fstat-no" title="function not covered" >reated_at.<span class="fstat-no" title="function not covered" >subs<span class="fstat-no" title="function not covered" >tring(0, 10) : '';</span></span></span></span></span></span></span>
+<span class="cstat-no" title="statement not covered" >        section += '**' + authorOf(comment) +<span class="branch-0 cbranch-no" title="branch not covered" > '** </span>(<span class="fstat-no" title="function not covered" >' + date + '):\n\n';</span></span>
+<span class="cstat-no" title="statement not covered" >        section += body.trim() + '\n\n---\n\n';</span>
+        kept++;
+<span class="branch-0 cbranch-no" title="branch not covered" >    });</span>
+    return kept &gt; 0 ? section : null;
+}
+&nbsp;
+module.exports = {
+    fetchPrConversations: fetchPrConversations,
+    fetchPrReviewThreadsRaw: fetchPrReviewThreadsRaw,
+    logInventoryCounts: logInventoryCounts,
+    buildGeneralCommentsSection: buil<span class="fstat-no" title="function not covered" >dGeneralCommentsSection</span>
+<span class="cstat-no" title="statement not covered" >};</span>
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-11-25T02:47:15.365Z
+            </div>
+        <script src="../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../sorter.js"></script>
+        <script src="../../block-navigation.js"></script>
+    </body>
+</html>
+    
