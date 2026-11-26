@@ -541,6 +541,28 @@ function action(params) {
                 result.linkedIssue = linkedNumber;
                 result.linked = true;
                 result.linkedVia = linkedVia;
+                // Extend the linked issue's lane coverage: the kicker's dedup
+                // keys on wf:<lane>, so the newly-hit lane must be labeled or
+                // every next kick re-detects it and re-links. Only wf:* labels
+                // move — the linked issue keeps its own routing labels.
+                var wfLabels = [];
+                for (var wli = 0; wli < workflowNames.length; wli++) {
+                    var wfLabel = 'wf:' + workflowNames[wli];
+                    if (wfLabels.indexOf(wfLabel) === -1) wfLabels.push(wfLabel);
+                }
+                if (wfLabels.length > 0 && typeof github_add_labels === 'function') {
+                    try {
+                        var linkLabelArgs = githubIssueArgs(ownerRepo, linkedNumber);
+                        linkLabelArgs.labels = wfLabels;
+                        github_add_labels(linkLabelArgs);
+                        result.linkLabels = wfLabels;
+                    } catch (linkLabelErr) {
+                        // Non-fatal: the next kick re-detects the lane and
+                        // re-links, which retries the label.
+                        result.linkLabelError = String(linkLabelErr);
+                        console.error('ci_analyst: wf labels on #' + linkedNumber + ' failed (' + linkLabelErr + ') — next kick will retry');
+                    }
+                }
                 console.log('ci_analyst: linked to open issue #' + linkedNumber + ' (same root cause, via ' + linkedVia + ') — no new issue filed');
                 writeResult();
                 return true;

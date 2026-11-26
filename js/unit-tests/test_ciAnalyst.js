@@ -797,6 +797,12 @@ suite('ciAnalystPost.action linkage (v0.0.3)', function() {
         assert.equal(result2.linkedIssue, 41);
         assert.equal(m.calls.filter(function(c) { return c.tool === 'github_create_issue'; }).length, 0);
         assert.equal(m.calls.filter(function(c) { return c.tool === 'github_assign_issue'; }).length, 0);
+        // The new lane's wf: label must land on the linked issue so the
+        // kicker's per-lane dedup covers it on the next kick.
+        var linkLabels = m.calls.filter(function(c) { return c.tool === 'github_add_labels'; });
+        assert.equal(linkLabels.length, 1);
+        assert.ok(linkLabels[0].args.labels.indexOf('wf:ci') !== -1);
+        assert.equal(result2.linkLabels[0], 'wf:ci');
     });
 
     test('linksIssue NOT among open incidents: falls back to normal filing', function() {
