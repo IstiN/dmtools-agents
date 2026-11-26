@@ -36,6 +36,17 @@ var DEFAULT_PROBE_EVERY_TICKS = 3;
 var QUOTA_BODY_RE = /usage\s*limit|quota|billing|insufficient\s+(?:credit|quota|balance)|credit[s]?\s+exhausted|plan\s+limit|spend\s+limit/i;
 var FORBIDDEN_RE = /\b403\b/;
 var CHAIN_EXHAUSTED_RE = /provider chain exhausted/i;
+// gh-1543: the fa CLI normalizes provider deaths into a one-line catalog
+// (product lib/src/cli/provider_error_text.dart, classifyProviderFailure):
+//   error: rate limit: the provider quota window is exhausted (provider/model) — wait it out or switch provider/model
+// The rate-limit category ALWAYS renders that exhausted-window cause — quota
+// vocabulary with NO 403 and NO usage-window phrase — so the raw-body
+// corroborators missed it and the live gh-2432 line misfiled as transient
+// (13 full-CI dev-leg burns, IstiN/flutter_agent_harness#2432). The
+// exhausted-window phrasing is STANDALONE quota evidence: a retry cannot
+// succeed until the window resets ("wait it out"), which is exactly the
+// gh-1087 park criterion.
+var FA_QUOTA_WINDOW_RE = /quota\s+window\s+(?:is\s+)?exhausted/i;
 // Transient signals — a retry CAN plausibly succeed on the next tick.
 var RATE_LIMIT_RE = /\b429\b/i;
 var TIMEOUT_RE = /rate\s*limit|timeout|timed?\s*out|econnreset|etimedout|socket hang up|network error|temporar/i;
@@ -111,6 +122,12 @@ function extractProvider(text) {
     // Live shape: z.ai glm-5.3-flash answered 403 "weekly (7-day) usage limit"
     var m = /([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z]{2,})+)\s+[\w.-]+\s+(?:answered|returned|responded with)\s+403/i.exec(text);
     if (m) return m[1];
+    // gh-1543: the fa catalog line names the serving endpoint as a
+    // parenthesized "(provider/model)" suffix — … quota window is exhausted
+    // (zai/glm-5.3-flash) — wait it out … A slash is REQUIRED so window
+    // shapes like "(7-day)" can never match.
+    m = /\(\s*([A-Za-z0-9][\w.-]*\/(?:[A-Za-z0-9][\w.-]*(?:\/[\w.-]+)?))\s*\)/.exec(text);
+    if (m) return m[1];
     m = /provider\s*[:\["']+\s*([A-Za-z0-9._-]+)/i.exec(text);
     if (m) return m[1];
     m = /(?:^|[\s"'(])([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.(?:ai|com|dev|io|net|org))\b/i.exec(text);
@@ -163,12 +180,14 @@ function providerOutageClassificationOf(t) {
 }
 
 // Quota evidence: a 403 carrying a quota/billing body, an explicit quota
-// window, or an exhausted-provider-chain tail that follows quota/403
-// responses.
+// window, the fa catalog's exhausted-window cause (gh-1543 — quota
+// vocabulary with no 403/window phrase), or an exhausted-provider-chain
+// tail that follows quota/403 responses.
 function hasQuotaEvidence(t, window) {
     var has403 = FORBIDDEN_RE.test(t);
     var quotaBody = QUOTA_BODY_RE.test(t);
-    return (has403 && quotaBody) || window || (CHAIN_EXHAUSTED_RE.test(t) && (quotaBody || has403));
+    return (has403 && quotaBody) || window || FA_QUOTA_WINDOW_RE.test(t) ||
+        (CHAIN_EXHAUSTED_RE.test(t) && (quotaBody || has403));
 }
 
 function quotaEvidenceOf(t) {

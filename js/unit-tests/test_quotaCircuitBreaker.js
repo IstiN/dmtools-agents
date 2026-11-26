@@ -165,6 +165,83 @@ suite('quotaCircuitBreaker > provider_transient outage (gh-1121 UT-1/REG-1)', fu
     });
 });
 
+// ── gh-1543: the fa CLI's normalized quota-exhaustion catalog shapes ────────
+// fa (product lib/src/cli/provider_error_text.dart, classifyProviderFailure)
+// renders every provider death as one catalog line:
+//   error: <category>: <cause> (<provider>/<model>) — <recovery>
+// The rate-limit category ALWAYS renders the cause 'the provider quota
+// window is exhausted' (recovery 'wait it out or switch provider/model') —
+// quota vocabulary with NO 403 and NO usage-window phrase, so the raw-body
+// corroborators missed it and the live gh-2432 line misfiled as transient
+// (13 full-CI dev-leg burns, IstiN/flutter_agent_harness#2432, 2026-11-26).
+var GH1543_LIVE_LINE = 'error: rate limit: the provider quota window is exhausted (zai/glm-5.3-flash) — wait it out or switch provider/model';
+
+suite('quotaCircuitBreaker > fa catalog quota shapes (gh-1543)', function () {
+
+    test('the live gh-2432 line → quota_exhausted (classified transient before the fix)', function () {
+        var cls = quotaBreaker.classifyFailure(GH1543_LIVE_LINE);
+        assert.ok(cls, 'expected a classification');
+        assert.equal(cls.kind, 'quota_exhausted',
+            'an exhausted quota window must PARK — an immediate retry is guaranteed to fail');
+        assert.equal(cls.provider, 'zai/glm-5.3-flash',
+            'provider extracted from the fa (provider/model) suffix');
+    });
+
+    test('the fa line with a retry-after hint → still quota_exhausted', function () {
+        var cls = quotaBreaker.classifyFailure(
+            'error: rate limit: the provider quota window is exhausted (kimi/kimi-for-coding) — wait it out or switch provider/model — retry after ~2h');
+        assert.ok(cls);
+        assert.equal(cls.kind, 'quota_exhausted');
+        assert.equal(cls.provider, 'kimi/kimi-for-coding');
+    });
+
+    test('chain-exhausted wrapper carrying fa quota-window attempts → quota_exhausted', function () {
+        var cls = quotaBreaker.classifyFailure([
+            'kimi-for-coding: error: rate limit: the provider quota window is exhausted (kimi/kimi-for-coding) — wait it out or switch provider/model',
+            'zai/glm-5.3-flash: error: rate limit: the provider quota window is exhausted (zai/glm-5.3-flash) — wait it out or switch provider/model',
+            'Provider chain exhausted: 2 of 2 chain model(s) failed after 12 attempt(s) over 420s'
+        ].join('\n'));
+        assert.ok(cls);
+        assert.equal(cls.kind, 'quota_exhausted', 'the whole chain is quota-walled — park, not resume');
+    });
+
+    test('401-carrying chain → NOT quota (a dead-key chain must not park)', function () {
+        var cls = quotaBreaker.classifyFailure(
+            'provider kimi-for-coding: 401 Unauthorized — invalid api key\nProvider chain exhausted: 2 of 2 chain model(s) failed');
+        assert.notOk(cls && cls.kind === 'quota_exhausted',
+            'auth evidence never parks the lane');
+        assert.notOk(cls && cls.kind === 'provider_transient',
+            'a resume can never fix credentials either (gh-1121)');
+    });
+
+    test('boundary: chain died on rate-limit wording without exhausted-window/403/quota → provider_transient (gh-1121 resume, deliberately NOT a park)', function () {
+        var cls = quotaBreaker.classifyFailure(
+            'error: Rate limit exceeded — requests to the provider are being throttled\n' +
+            'Provider chain exhausted: 2 of 2 chain model(s) failed');
+        assert.ok(cls, 'expected a classification');
+        assert.equal(cls.kind, 'provider_transient',
+            'rate-limit wording alone is transient-family — the park stays quota-only');
+    });
+
+    test('boundary: single 429 blips stay transient and fa network lines never park (gh-742 dead-letter contract unchanged)', function () {
+        assert.equal(quotaBreaker.classifyFailure('HTTP 429: rate limit exceeded, retry in 30s').kind, 'transient');
+        var net = quotaBreaker.classifyFailure(
+            'error: network: the provider connection failed (zai/glm-5.3-flash) — check connectivity; transient failures replay automatically');
+        assert.notOk(net && net.kind === 'quota_exhausted',
+            'a network catalog line never parks (null → the legacy reset path, unchanged)');
+    });
+
+    test('raw-body shapes keep their classifications (no drift)', function () {
+        var raw = quotaBreaker.classifyFailure(
+            'z.ai glm-5.3-flash answered 403 "weekly (7-day) usage limit" after 9 retries');
+        assert.equal(raw.kind, 'quota_exhausted');
+        assert.equal(raw.provider, 'z.ai',
+            'the 403-answered provider shape outranks the parenthesized suffix');
+        assert.equal(raw.window, 'weekly (7-day)');
+        assert.equal(quotaBreaker.classifyFailure('HTTP 429: rate limit exceeded').kind, 'transient');
+    });
+});
+
 suite('quotaCircuitBreaker > config readers + probe cadence (AC3)', function () {
 
     test('park label / probe cadence defaults and jobParams overrides', function () {
