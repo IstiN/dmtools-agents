@@ -45,11 +45,37 @@ function applyPrAnchoredFallbackInputs(inputs, anchor, it) {
   inputs.pr = String(it.prNumber);
   return inputs;
 }
+function stripUnexpectedDispatchInputs(inputs, errMessage) {
+  var m = /Unexpected inputs provided:\s*\[([^\]]+)\]/i.exec(String(errMessage || ''));
+  if (!m || !inputs) return null;
+  var stripped = {};
+  var removed = false;
+  Object.keys(inputs).forEach(function (k) { stripped[k] = inputs[k]; });
+  var re = /\\?"([^"\\]+)\\?"/g, match;
+  while ((match = re.exec(m[1])) !== null) {
+    if (Object.prototype.hasOwnProperty.call(stripped, match[1])) {
+      delete stripped[match[1]];
+      removed = true;
+    }
+  }
+  return removed ? stripped : null;
+}
+function triggerWorkflowCompatible(scm, repoInfo, plan, inputs) {
+  try {
+    return scm.triggerWorkflow(repoInfo.owner, repoInfo.repo, plan.workflowFile, JSON.stringify(inputs), plan.workflowRef);
+  } catch (e) {
+    var fallback = stripUnexpectedDispatchInputs(inputs, e && e.message);
+    if (!fallback) throw e;
+    return scm.triggerWorkflow(repoInfo.owner, repoInfo.repo, plan.workflowFile, JSON.stringify(fallback), plan.workflowRef);
+  }
+}
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     bareDispatchInputs: bareDispatchInputs,
     dispatchAnchorIssueVal: dispatchAnchorIssueVal,
     expandDispatchInputValue: expandDispatchInputValue,
-    applyPrAnchoredFallbackInputs: applyPrAnchoredFallbackInputs
+    applyPrAnchoredFallbackInputs: applyPrAnchoredFallbackInputs,
+    stripUnexpectedDispatchInputs: stripUnexpectedDispatchInputs,
+    triggerWorkflowCompatible: triggerWorkflowCompatible
   };
 }

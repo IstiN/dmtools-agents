@@ -263,12 +263,11 @@ function isSyncEligible(deps, repoInfo) {
   }
   var syncMemo = deps.syncMemo;
   var repoKey = repoInfo.owner + '/' + repoInfo.repo;
-  var now = Date.now();
-  if (syncMemo.repo === repoKey && now - syncMemo.at < 5000) {
+  if (syncMemo.repo === repoKey) {
     return false;
   }
   syncMemo.repo = repoKey;
-  syncMemo.at = now;
+  syncMemo.at = Date.now();
   return true;
 }
 function syncValidationChecks(deps, repoInfo, stampFn) {
