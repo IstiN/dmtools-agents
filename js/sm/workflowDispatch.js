@@ -350,7 +350,7 @@ function dispatchPreparedWorkflow(deps, repoInfo, scm, plan, inputs, ticketKey, 
     deps.log('  [dry] ▶️ ' + ticketKey + ' dispatch:' + plan.workflowFile + ' inputs=' + JSON.stringify(inputs));
     return;
   }
-  scm.triggerWorkflow(repoInfo.owner, repoInfo.repo, plan.workflowFile, JSON.stringify(inputs), plan.workflowRef);
+  dispatchInputsModule.triggerWorkflowCompatible(scm, repoInfo, plan, inputs);
   if (rule) recordInTickDispatch(item, rule);
   deps.log('  ✅ Triggered ' + plan.workflowFile + '@' + plan.workflowRef + ' for ' + ticketKey + (projectKey ? ' [project_key=' + projectKey + ']' : ''));
   return true;

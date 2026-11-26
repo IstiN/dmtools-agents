@@ -11715,6 +11715,58 @@ suite('smAgent: dispatch-input builder anchor semantics (gh-1540 rework)', funct
         assert.equal(inputs.issue, '', 'issue stays empty (never the ticket key)');
         assert.equal(inputs.branch, 'ai/gh-99', '{branch} expands to the item branch (gh-1540)');
     });
+
+    test('triggerWorkflowCompatible retries without undeclared inputs when target workflow returns HTTP 422 Unexpected inputs provided', function () {
+        var attempts = 0;
+        var sm = makeSmAgent({
+            fileMap: inputsFileMap(),
+            github: { items: [{ key: 'gh-2430', labels: ['ai_developed'],
+                issueNumber: 2430, prNumber: 2431, branch: 'ai/gh-2430' }] },
+            onTrigger: function (owner, repo, workflow, inputsStr) {
+                attempts++;
+                var parsed = JSON.parse(inputsStr);
+                if (Object.prototype.hasOwnProperty.call(parsed, 'branch')) {
+                    throw new Error('Workflow trigger failed for \'ai-teammate.yml\' (422): {"message":"Unexpected inputs provided: [\\"branch\\"]","status":"422"}');
+                }
+            }
+        });
+
+        var res = sm.action(dispatchInputsParams([{
+            description: 'review leg with optional branch input against legacy caller stub',
+            source: 'github',
+            query: { type: 'issue', labels: ['ai_developed'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '{issueNumber}', leg: 'review', branch: '{branch}', reason: 'sm: green PR awaits review' },
+            workflowRef: '{branch}',
+            limit: 1,
+            id: 'review-after-dev'
+        }]));
+
+        assert.equal(attempts, 2, 'first attempt with branch + fallback retry without branch');
+        assert.equal(res.processed, 1, 'fallback retry succeeds and counts item as processed');
+        var retriedInputs = JSON.parse(sm.capturedTriggers[1].inputs);
+        assert.equal(retriedInputs.issue, '2430');
+        assert.equal(retriedInputs.leg, 'review');
+        assert.equal(Object.prototype.hasOwnProperty.call(retriedInputs, 'branch'), false,
+            'undeclared branch input stripped on retry');
+    });
+
+    test('triggerWorkflowCompatible rethrows when 422 is not an Unexpected inputs error or input was already absent', function () {
+        var dispatchInputsMod = loadModule('js/sm/dispatchInputs.js',
+            makeRequire({ '../common/buildEncodedConfig.js': {} }));
+        assert.equal(dispatchInputsMod.stripUnexpectedDispatchInputs({ issue: '1' }, '422 No ref found'), null);
+        assert.equal(dispatchInputsMod.stripUnexpectedDispatchInputs({ issue: '1' }, 'Unexpected inputs provided: ["branch"]'), null);
+        var calls = 0;
+        assert.throws(function () {
+            dispatchInputsMod.triggerWorkflowCompatible({
+                triggerWorkflow: function () {
+                    calls++;
+                    throw new Error('422 No ref found for: refs/heads/missing');
+                }
+            }, { owner: 'o', repo: 'r' }, { workflowFile: 'ai-teammate.yml', workflowRef: 'main' }, { issue: '1', branch: 'b' });
+        }, /No ref found/);
+        assert.equal(calls, 1, 'non-input 422 is not retried');
+    });
 });
 
 // ─── gh-1028: duplicate CONCURRENT rework legs on one PR (live 2026-10-18
@@ -20608,6 +20660,61 @@ suite('smAgent: rework-loop-escalated head-move reset + machine unpark on dispat
         } });
         assert.equal(stamped.length, 3, 'syncValidationChecks restamps all 3 umbrella check-runs on PR with a dispatched run on head');
         assert.ok(stampBodies.every(function (b) { return b.conclusion === 'success' && b.status === 'completed'; }));
+    });
+
+    test('syncValidationChecks runs at most once per repo per tick across multiple PR rules even when wall-clock advances > 5s', function () {
+        var stamped = [];
+        var origNow = Date.now;
+        var fakeClock = 1700000000000;
+        Date.now = function () {
+            fakeClock += 10000; // advance 10s on every call (> old 5s throttle)
+            return fakeClock;
+        };
+        try {
+            var sm = makeSmAgent({
+                fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+                captureConsole: true,
+                github: {
+                    items: [],
+                    prList: [{
+                        number: 2366,
+                        head: { sha: NEW_HEAD, ref: 'feat/product-browser-foundation' },
+                        labels: [{ name: 'ai_validating' }]
+                    }],
+                    workflowApiRuns: [{
+                        id: 45081534926,
+                        event: 'workflow_dispatch',
+                        head_sha: NEW_HEAD,
+                        status: 'completed',
+                        conclusion: 'success',
+                        html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45081534926'
+                    }]
+                },
+                onCliExecute: function (cmdOpts) {
+                    if (cmdOpts.command.indexOf('/check-runs ') !== -1) {
+                        stamped.push(cmdOpts.command);
+                        return '{}';
+                    }
+                    return '';
+                }
+            });
+
+            sm.action({ jobParams: {
+                owner: 'IstiN',
+                repo: 'flutter_agent_harness',
+                ciWorkflow: 'ci.yml',
+                validationChecks: ['Quality gate', 'Binaries smoke gate', 'JS engine integration (quickjs-ng)'],
+                machineAuthor: 'dmtools-factory-bot[bot]',
+                rules: [
+                    PARK_RULE,
+                    { id: 'pr-rule-2', source: 'github', query: { type: 'pr', labels: ['none-2'] }, limit: 1 },
+                    { id: 'pr-rule-3', source: 'github', query: { type: 'pr', labels: ['none-3'] }, limit: 1 }
+                ]
+            } });
+            assert.equal(stamped.length, 3, 'syncValidationChecks stamps the 3 checks ONCE for the whole tick, not once per PR rule');
+        } finally {
+            Date.now = origNow;
+        }
     });
 });
 
