@@ -782,9 +782,11 @@ suite('ciAnalystPost.action linkage (v0.0.3)', function() {
 
     test('ROUTING linkage: comment on the OPEN issue, NO create, NO machineAuthor guard', function() {
         var m = postModule({ files: baseFiles({ context: { openIncidents: [{ number: 41, title: '[ci-heal] ci-extra.yml: failing', createdAt: '2026-11-26T13:09:42Z' }] } }) });
-        var r = runAction(m, LINKED, '');
-        assert.equal(r, true);
+        var r, threw = null;
+        try { r = runAction(m, LINKED, ''); } catch (e) { threw = String(e && e.message || e); }
         var result = writtenResult(m.calls);
+        if (threw) assert.fail('action threw: ' + threw + ' | result=' + JSON.stringify(result));
+        assert.equal(r, true);
         assert.equal(result.linked, true);
         assert.equal(result.linkedIssue, 41);
         assert.equal(result.issueCreated, false);

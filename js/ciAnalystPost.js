@@ -511,30 +511,45 @@ function action(params) {
         var linkedNumber = verdict.linksIssue;
         if (isOpenIncident(openIncidents, linkedNumber)) {
             // github_create_comment addresses issues via pullRequestId
-            // (issues are PRs upstream in the GitHub integration).
+            // (issues are PRs upstream in the GitHub integration). Runtime
+            // tool names differ across dmtools builds, and a typeof-check
+            // cannot be trusted (proxied globals report 'function' for
+            // unknown names) — so candidates are TRIED IN ORDER and a
+            // failed call falls through to the next name.
             var commentArgs = githubIssueArgs(ownerRepo, null);
             commentArgs.pullRequestId = String(linkedNumber);
             commentArgs.body = buildLinkedComment(verdict, context, linkedNumber);
-            var commentFn = null;
-            if (typeof github_create_comment === 'function') commentFn = github_create_comment;
-            else if (typeof github_add_issue_comment === 'function') commentFn = github_add_issue_comment;
-            else if (typeof github_add_pr_comment === 'function') commentFn = github_add_pr_comment;
-            if (commentFn === null) {
-                result.linkError = 'no issue-comment global available (github_create_comment family)';
-                console.error('ci_analyst: ' + result.linkError);
-            } else {
+            var commentCandidates = [];
+            if (typeof github_create_comment === 'function') commentCandidates.push(['github_create_comment', github_create_comment]);
+            if (typeof github_add_issue_comment === 'function') commentCandidates.push(['github_add_issue_comment', github_add_issue_comment]);
+            if (typeof github_add_pr_comment === 'function') commentCandidates.push(['github_add_pr_comment', github_add_pr_comment]);
+            var linkedVia = null;
+            var linkError = null;
+            for (var cand = 0; cand < commentCandidates.length; cand++) {
+                var name = commentCandidates[cand][0];
+                var fn = commentCandidates[cand][1];
                 try {
-                    commentFn(commentArgs);
-                    result.linkedIssue = linkedNumber;
-                    result.linked = true;
-                    console.log('ci_analyst: linked to open issue #' + linkedNumber + ' (same root cause) — no new issue filed');
-                    writeResult();
-                    return true;
-                } catch (linkErr) {
-                    result.linkError = String(linkErr);
-                    console.error('ci_analyst: comment on #' + linkedNumber + ' failed (' + linkErr + ') — next kick will re-link');
+                    fn(commentArgs);
+                    linkedVia = name;
+                    break;
+                } catch (candErr) {
+                    linkError = name + ': ' + candErr;
+                    console.error('ci_analyst: comment via ' + name + ' failed (' + candErr + ') — trying next candidate');
                 }
             }
+            if (linkedVia !== null) {
+                result.linkedIssue = linkedNumber;
+                result.linked = true;
+                result.linkedVia = linkedVia;
+                console.log('ci_analyst: linked to open issue #' + linkedNumber + ' (same root cause, via ' + linkedVia + ') — no new issue filed');
+                writeResult();
+                return true;
+            }
+            // Every candidate failed: record loudly and fall through to
+            // normal filing — the duplicate is preferable to a silent loss
+            // of the evidence (the next kick will re-detect and re-link).
+            result.linkError = linkError;
+            console.error('ci_analyst: all comment candidates failed (' + linkError + ') — filing normally');
         } else {
             console.log('ci_analyst: linksIssue #' + linkedNumber + ' is not among open incidents — filing normally (re-broken after fix)');
         }
