@@ -435,6 +435,42 @@ suite('developBugAndCreatePR', function() {
         ], 'WIP + SM labels still cleaned up so a later un-park can re-dispatch');
     });
 
+    test('gh-1543: bug leg parks on the fa CLI quota-exhaustion catalog line — park label + comment, NO status reset', function() {
+        var addedLabels = [];
+        var loaded = loadDevelopBugAndCreatePR({
+            jira_add_label: function (args) { addedLabels.push(args.label); }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: {
+                    key: 'TS-1543',
+                    fields: { summary: 'fa quota wall', description: '', labels: [] }
+                },
+                metadata: { contextId: 'bug_development' },
+                response: '',
+                currentCliErrorMessage: 'error: rate limit: the provider quota window is exhausted (zai/glm-5.3-flash) — wait it out or switch provider/model',
+                jobParams: {
+                    customParams: { removeLabel: 'sm_bug_development_triggered' }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.quotaPark === true,
+            'the fa catalog line must PARK the lane (it classified transient — reset — before gh-1543)');
+        assert.deepEqual(loaded.moves, [],
+            'no Ready For Development reset on the fa quota line');
+        assert.deepEqual(addedLabels, ['provider_quota'],
+            'park label added to the ticket');
+        assert.ok(loaded.comments.length >= 1);
+        assert.contains(loaded.comments[0].comment, 'Provider Quota Exhausted');
+        assert.contains(loaded.comments[0].comment, 'zai/glm-5.3-flash',
+            'the park comment names the fa (provider/model) endpoint');
+    });
+
     test('accepts already_fixed output without CodeGraph and moves bug to Done', function() {
         var loaded = loadDevelopBugAndCreatePR({
             file_read: function(args) {
