@@ -360,7 +360,7 @@ suite('ciAnalystPost.action routing', function() {
     // Every plausible reopen/update API is mocked and recorded so the no-reopen
     // guarantee is asserted against a ZERO call count on every branch.
     var GUARDED_TOOLS = ['github_search_issues', 'github_create_issue', 'github_add_labels', 'github_assign_issue',
-        'github_reopen_issue', 'github_update_issue', 'github_edit_issue', 'github_set_issue_state', 'github_comment_issue'];
+        'github_reopen_issue', 'github_update_issue', 'github_edit_issue', 'github_set_issue_state', 'github_comment_issue', 'github_add_issue_comment'];
 
     function postModule(opts) {
         var calls = [];
@@ -705,5 +705,115 @@ suite('ciAnalystPost.action routing', function() {
             }
             noReopenCalls(m.calls, 'verdict index ' + i);
         }
+    });
+});
+
+// ── v0.0.3 linkage: same root cause comments on the OPEN issue ──────────────
+
+suite('ciAnalystPost.action linkage (v0.0.3)', function() {
+    var LINKED = '{"verdict": "adequate", "classification": "config_error", "reason": "prep_script_missing_dart_tool_dir", "summary": "same root as the open incident", "suspected_cause": "tool/prepare.sh line 5 redirects into missing .dart_tool/", "linksIssue": 41}';
+
+    function postModule(opts) {
+        var calls = [];
+        var fileMap = opts && opts.files ? opts.files : {};
+        var mocks = {
+            file_read: function(o) {
+                var p = o && (o.path || o);
+                return fileMap[p] !== undefined ? fileMap[p] : null;
+            },
+            file_write: function(o) { calls.push({ tool: 'file_write', args: o }); }
+        };
+        ['github_search_issues', 'github_create_issue', 'github_add_labels', 'github_assign_issue',
+         'github_add_issue_comment'].forEach(function(name) {
+            mocks[name] = function(args) { calls.push({ tool: name, args: args }); };
+        });
+        mocks.github_create_issue = function(args) {
+            calls.push({ tool: 'github_create_issue', args: args });
+            return { number: 99, html_url: 'https://example/99' };
+        };
+        return { mod: loadPost(mocks), calls: calls };
+    }
+
+    function baseFiles(extra) {
+        var context = {
+            monitoredWorkflows: ['ci'],
+            runs: [{ workflow: 'ci', url: 'u1', sha: 'aaa', conclusion: 'failure', logTail: 'FAIL t' }]
+        };
+        if (extra && extra.context) {
+            for (var k in extra.context) context[k] = extra.context[k];
+        }
+        return { 'input/ci_analyst_context.md': JSON.stringify(context) };
+    }
+
+    function runAction(m, verdictLine, machineAuthor) {
+        return m.mod.action({
+            jobParams: {
+                response: 'noise\n' + verdictLine + '\n## report',
+                customParams: {
+                    contextPath: 'input/ci_analyst_context.md',
+                    dryRun: false,
+                    machineAuthor: machineAuthor,
+                    targetRepository: 'owner/repo'
+                }
+            }
+        });
+    }
+
+    function writtenResult(calls) {
+        for (var i = calls.length - 1; i >= 0; i--) {
+            if (calls[i].tool === 'file_write' && calls[i].args.path === 'outputs/ci_analyst_result.json') {
+                return JSON.parse(calls[i].args.content);
+            }
+        }
+        return null;
+    }
+
+    test('parseVerdict extracts linksIssue (number and numeric string), drops junk', function() {
+        var mod = loadPost({});
+        var v1 = mod.parseVerdict('{"verdict": "adequate", "classification": "config_error", "reason": "r", "summary": "s", "suspected_cause": "c", "linksIssue": 41}');
+        assert.equal(v1.linksIssue, 41);
+        var v2 = mod.parseVerdict('{"verdict": "adequate", "classification": "config_error", "reason": "r", "summary": "s", "suspected_cause": "c", "linksIssue": "43"}');
+        assert.equal(v2.linksIssue, 43);
+        var v3 = mod.parseVerdict('{"verdict": "adequate", "classification": "config_error", "reason": "r", "summary": "s", "suspected_cause": "c", "linksIssue": "abc"}');
+        assert.equal(v3.linksIssue, undefined);
+        var v4 = mod.parseVerdict('{"verdict": "adequate", "classification": "config_error", "reason": "r", "summary": "s", "suspected_cause": "c", "linksIssue": 0}');
+        assert.equal(v4.linksIssue, undefined);
+    });
+
+    test('ROUTING linkage: comment on the OPEN issue, NO create, NO machineAuthor guard', function() {
+        var m = postModule({ files: baseFiles({ context: { openIncidents: [{ number: 41, title: '[ci-heal] ci-extra.yml: failing', createdAt: '2026-11-26T13:09:42Z' }] } }) });
+        var r = runAction(m, LINKED, '');
+        assert.equal(r, true);
+        var result = writtenResult(m.calls);
+        assert.equal(result.linked, true);
+        assert.equal(result.linkedIssue, 41);
+        assert.equal(result.issueCreated, false);
+        var comments = m.calls.filter(function(c) { return c.tool === 'github_add_issue_comment'; });
+        assert.equal(comments.length, 1);
+        assert.equal(comments[0].args.number, 41);
+        assert.ok(comments[0].args.body.indexOf('Analyst linkage') !== -1);
+        assert.ok(comments[0].args.body.indexOf('tool/prepare.sh') !== -1);
+        assert.equal(m.calls.filter(function(c) { return c.tool === 'github_create_issue'; }).length, 0);
+        assert.equal(m.calls.filter(function(c) { return c.tool === 'github_assign_issue'; }).length, 0);
+    });
+
+    test('linksIssue NOT among open incidents: falls back to normal filing', function() {
+        var m = postModule({ files: baseFiles({ context: { openIncidents: [{ number: 22, title: '[ci-heal] ci-fetch.yml: failing (needs-human)', createdAt: '2026-11-25T10:00:00Z' }] } }) });
+        var r = runAction(m, LINKED, 'machine-user');
+        assert.equal(r, true);
+        var result = writtenResult(m.calls);
+        assert.equal(result.linked, undefined);
+        assert.equal(result.issueCreated, true);
+        assert.equal(result.issueNumber, 99);
+        assert.equal(m.calls.filter(function(c) { return c.tool === 'github_add_issue_comment'; }).length, 0);
+    });
+
+    test('isOpenIncident: number match, string match, no match', function() {
+        var mod = loadPost({});
+        var open = [{ number: 41 }, { number: '22' }];
+        assert.equal(mod.isOpenIncident(open, 41), true);
+        assert.equal(mod.isOpenIncident(open, 22), true);
+        assert.equal(mod.isOpenIncident(open, 99), false);
+        assert.equal(mod.isOpenIncident(null, 41), false);
     });
 });

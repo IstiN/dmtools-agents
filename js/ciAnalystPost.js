@@ -124,6 +124,8 @@ function parseVerdict(responseText) {
                     if (key !== 'verdict' && key !== 'adequate' && key !== 'classification' &&
                         typeof parsed[key] === 'string') verdict[key] = parsed[key];
                 }
+                var linked = parsed.linksIssue !== undefined && parsed.linksIssue !== null ? parseInt(parsed.linksIssue, 10) : NaN;
+                if (!isNaN(linked) && linked > 0) verdict.linksIssue = linked;
                 return verdict;
             }
         } catch (e) {
@@ -178,7 +180,11 @@ function parseContext(contextPath) {
     if (Object.prototype.toString.call(parsed.previousIncidents) === '[object Array]') {
         previousIncidents = parsed.previousIncidents;
     }
-    return { workflows: workflows, failingRuns: failingRuns, newestSha: newestSha, previousIncidents: previousIncidents };
+    var openIncidents = [];
+    if (Object.prototype.toString.call(parsed.openIncidents) === '[object Array]') {
+        openIncidents = parsed.openIncidents;
+    }
+    return { workflows: workflows, failingRuns: failingRuns, newestSha: newestSha, previousIncidents: previousIncidents, openIncidents: openIncidents };
 }
 
 // ── issue assembly ───────────────────────────────────────────────────────────
@@ -226,6 +232,55 @@ function resolvePreviousIncidents(context, custom) {
     }
     if (Object.prototype.toString.call(raw) === '[object Array]') return raw;
     return [];
+}
+
+/** openIncidents from the staged context (preferred) or customParams (array or JSON string). */
+function resolveOpenIncidents(context, custom) {
+    if (context.openIncidents && context.openIncidents.length > 0) return context.openIncidents;
+    var raw = custom ? custom.openIncidents : null;
+    if (!raw) return [];
+    if (typeof raw === 'string') {
+        try { raw = JSON.parse(raw); } catch (e) { return []; }
+    }
+    if (Object.prototype.toString.call(raw) === '[object Array]') return raw;
+    return [];
+}
+
+/** True when the linked issue number is among the staged OPEN incidents.
+ *  A closed/unknown number falls back to normal filing: a re-broken cause
+ *  after the linked fix merged is a NEW incident, not a comment. */
+function isOpenIncident(openIncidents, number) {
+    if (!openIncidents || number === null || number === undefined) return false;
+    for (var i = 0; i < openIncidents.length; i++) {
+        var item = openIncidents[i] || {};
+        if (parseInt(item.number, 10) === number) return true;
+    }
+    return false;
+}
+
+function buildLinkedComment(verdict, context, linkedNumber) {
+    var lines = [];
+    lines.push('## Analyst linkage (same root cause — no new issue filed)');
+    lines.push('');
+    lines.push(verdict.summary || '(no summary)');
+    lines.push('');
+    lines.push('**Suspected cause:** ' + (verdict.suspected_cause || '(unknown)'));
+    lines.push('');
+    lines.push('**Classification:** `' + (verdict.classification || 'unspecified') + '`' +
+        (verdict.reason ? ' (`' + verdict.reason + '`)' : ''));
+    if (context.failingRuns && context.failingRuns.length > 0) {
+        lines.push('');
+        lines.push('**New evidence — failing runs under this root:**');
+        for (var i = 0; i < context.failingRuns.length; i++) {
+            var run = context.failingRuns[i];
+            var label = run.workflow || 'workflow';
+            var sha = run.sha ? ' (sha `' + run.sha + '`)' : '';
+            lines.push('- [' + label + '](' + run.url + ')' + sha);
+        }
+    }
+    lines.push('');
+    lines.push('The fix continues under this issue; no duplicate was filed (v0.0.3 linkage).');
+    return lines.join('\n');
 }
 
 function buildFollowUpLines(previousIncidents) {
@@ -446,6 +501,42 @@ function action(params) {
         return true;
     }
 
+    // v0.0.3 linkage: same root cause as an OPEN incident -> comment on that
+    // issue instead of filing a duplicate. No assignment changes: the linked
+    // issue keeps owning the fix (its arm already stands). A failed comment
+    // is recorded but NOT fatal — the next kick re-detects the lane (its
+    // wf: label has no open issue yet) and re-links, so nothing stalls.
+    if (verdict.linksIssue !== undefined) {
+        var openIncidents = resolveOpenIncidents(context, custom);
+        var linkedNumber = verdict.linksIssue;
+        if (isOpenIncident(openIncidents, linkedNumber)) {
+            var commentArgs = githubIssueArgs(ownerRepo, linkedNumber);
+            commentArgs.body = buildLinkedComment(verdict, context, linkedNumber);
+            var commentFn = null;
+            if (typeof github_add_issue_comment === 'function') commentFn = github_add_issue_comment;
+            else if (typeof github_create_issue_comment === 'function') commentFn = github_create_issue_comment;
+            else if (typeof github_issue_comment === 'function') commentFn = github_issue_comment;
+            if (commentFn === null) {
+                result.linkError = 'no issue-comment global available (' + commentNames.join('|') + ')';
+                console.error('ci_analyst: ' + result.linkError);
+            } else {
+                try {
+                    commentFn(commentArgs);
+                    result.linkedIssue = linkedNumber;
+                    result.linked = true;
+                    console.log('ci_analyst: linked to open issue #' + linkedNumber + ' (same root cause) — no new issue filed');
+                    writeResult();
+                    return true;
+                } catch (linkErr) {
+                    result.linkError = String(linkErr);
+                    console.error('ci_analyst: comment on #' + linkedNumber + ' failed (' + linkErr + ') — next kick will re-link');
+                }
+            }
+        } else {
+            console.log('ci_analyst: linksIssue #' + linkedNumber + ' is not among open incidents — filing normally (re-broken after fix)');
+        }
+    }
+
     // LOUD business failure guard: adequate + no machineAuthor = an unassigned
     // issue nothing will ever arm on. Fail BEFORE any GitHub call.
     var machineAuthor = custom.machineAuthor ? String(custom.machineAuthor).trim() : '';
@@ -545,6 +636,9 @@ if (typeof module !== 'undefined' && module.exports) {
         buildFollowUpLines: buildFollowUpLines,
         buildLabels: buildLabels,
         resolvePreviousIncidents: resolvePreviousIncidents,
+        resolveOpenIncidents: resolveOpenIncidents,
+        isOpenIncident: isOpenIncident,
+        buildLinkedComment: buildLinkedComment,
         shortSha: shortSha,
         issueNumberOf: issueNumberOf,
         issueUrlOf: issueUrlOf,
