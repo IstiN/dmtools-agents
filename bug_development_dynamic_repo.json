@@ -12,6 +12,9 @@
       "descriptionPath": "agents/docs/agents/bug_development_dynamic_repo.md"
     },
     "preCliJSAction": "agents/js/preCliDevelopmentSetupDynamicRepo.js",
-    "postJSAction": "agents/js/postDevelopBugDynamicRepo.js"
+    "postJSAction": "agents/js/postDevelopBugDynamicRepo.js",
+    "customParams": {
+      "removeLabel": "sm_bug_development_dynamic_repo_triggered"
+    }
   }
 }

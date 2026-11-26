@@ -20,8 +20,10 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `dependenciesDir` — base directory for cloned repositories (default `./dependencies`); `workingDir` defaults to `{dependenciesDir}/{repo}` when the repositories file does not specify one.
 - `targetRepository` — explicit repository override block (`owner`, `repo`, `baseBranch`, `workingDir`); when set, the resolver's result is applied on top of the project defaults via `configLoader`.
 
-All other `bug_development` parameters (`removeLabel`, `developmentMode`, `responseTarget`, `setupCommands`, …) apply unchanged.
+All other `bug_development` parameters (`developmentMode`, `responseTarget`, `setupCommands`, …) apply unchanged.
+
+- `removeLabel` — defaults to `sm_bug_development_dynamic_repo_triggered` in this variant (the parent's `sm_bug_development_triggered` is overridden). The post-action removes it on every terminal outcome so the ticket is never locked out of the lane; it must equal the dispatching rule's label (see below).
 
 ## SM wiring
 
-Add a rule to the project's SM config (`smRules` / `smRuleOverrides`) pointing `configFile` at `agents/bug_development_dynamic_repo.json` with its own `skipIfLabel` / `addLabel` idempotency pair (when disabling the default bug rule, set `smRuleOverrides["agents/bug_development.json"].enabled` to `false` so the two rules do not both pick up the same bug).
+Add a rule to the project's SM config (`smRules` / `smRuleOverrides`) pointing `configFile` at `agents/bug_development_dynamic_repo.json`, with `skipIfLabel` and `addLabel` set to `sm_bug_development_dynamic_repo_triggered` — the same value as the variant's `customParams.removeLabel`, so the rule re-arms after an interrupted run or a rework. To use a different label, override `customParams.removeLabel` (in this config or via `agentParamPatches`) with that same value. Disable the default bug rule (`smRuleOverrides["agents/bug_development.json"].enabled: false`) so the two rules do not both pick up the same bug.
