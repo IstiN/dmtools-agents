@@ -1,14 +1,24 @@
 /**
- * Unit tests for js/ciAnalystContext.js and js/ciAnalystPost.js (ci_analyst leg).
+ * Unit tests for js/ciAnalystContext.js and js/ciAnalystPost.js (ci_analyst leg,
+ * self-heal state machine v2.3).
  *
  * Covers: customParams resolution (jobParams vs global), dryRun normalization,
- * context staging + business failure on a missing context, verdict parsing,
- * owner/repo resolution, workflow extraction, title/body/labels assembly,
- * issue-number extraction, and the action() decision table
- * (no verdict / noise / dryRun / duplicate / create+label+assign).
+ * context staging (previousIncidents passes through VERBATIM) + business failure
+ * on a missing context, verdict parsing (v2.3 verdict/classification schema +
+ * legacy adequate fallback), owner/repo resolution, workflow extraction,
+ * title/body/labels assembly (work list, follow-up lines, escalation paragraph,
+ * Closes fix protocol), issue-number extraction, and the v2.3 action() routing
+ * matrix:
+ *   adequate + machineAuthor  -> create + label + ASSIGN (arming act)
+ *   adequate + empty ma       -> LOUD business failure BEFORE any GitHub call
+ *   needs-human               -> unassigned issue + needs-human/agent:skip labels
+ *   noise                     -> zero GitHub calls
+ *   no-reopen guarantee       -> no reopen/update-issue API is ever called.
  *
  * Uses: loadModule(), makeRequire(), assert, test(), suite(). All dmtools
  * globals (file_read, file_write, github_*) are mocked — no real services.
+ * .dmtools/config discovery is blocked: every loadModule passes makeRequire({})
+ * and no config globals.
  */
 
 // ── loader helpers ───────────────────────────────────────────────────────────
@@ -21,8 +31,11 @@ function loadPost(mocks) {
     return loadModule('js/ciAnalystPost.js', makeRequire({}), mocks || {});
 }
 
-var VERDICT_OK = '{"adequate": true, "reason": "test_regression", "summary": "s", "suspected_cause": "c"}';
-var VERDICT_NOISE = '{"adequate": false, "reason": "stale_red_sha_reset", "summary": "s", "suspected_cause": "c"}';
+var VERDICT_OK = '{"verdict": "adequate", "classification": "test_regression", "reason": "test_regression", "summary": "s", "suspected_cause": "c"}';
+var VERDICT_NEEDS_HUMAN = '{"verdict": "needs-human", "classification": "workflow_infra", "reason": "workflow_infra", "summary": "s", "suspected_cause": "c"}';
+var VERDICT_NOISE = '{"verdict": "noise", "classification": "stale_red_sha_reset", "reason": "stale_red_sha_reset", "summary": "s", "suspected_cause": "c"}';
+var VERDICT_LEGACY_OK = '{"adequate": true, "reason": "test_regression", "summary": "s", "suspected_cause": "c"}';
+var VERDICT_LEGACY_NOISE = '{"adequate": false, "reason": "stale_red_sha_reset", "summary": "s", "suspected_cause": "c"}';
 
 // ── ciAnalystContext: resolveCustomParams / normalizeDryRun ──────────────────
 
@@ -83,6 +96,37 @@ suite('ciAnalystContext.action', function() {
         assert.equal(staged.targetRepository, 'o/r');
     });
 
+    test('previousIncidents and unknown fields pass through VERBATIM (byte-identical staging)', function() {
+        var source = JSON.stringify({
+            targetRepository: 'o/r',
+            machineAuthor: 'm',
+            monitoredWorkflows: ['ci'],
+            runs: [{ workflow: 'ci', url: 'u', sha: 'aaa', conclusion: 'failure', logTail: 'x' }],
+            previousIncidents: [
+                { issue: 12, title: '[ci-heal] ci: failing', closedAt: '2026-11-24T10:00:00Z', closedByCommit: 'abc1234def5678' }
+            ],
+            someUnknownFutureField: { nested: [1, 2, 3] }
+        });
+        var written = {};
+        var mod = loadContext({
+            file_read: function(o) { return o.path === 'ctx/pi.json' ? source : null; },
+            file_write: function(o) { written[o.path] = o.content; }
+        });
+        var r = mod.action({
+            jobParams: { customParams: { contextPath: 'ctx/pi.json', dryRun: false, machineAuthor: 'm', targetRepository: 'o/r' } },
+            workingDirectory: '/repo'
+        });
+        assert.equal(r, true);
+        // the staged context is the source file byte-for-byte — nothing strips previousIncidents
+        assert.equal(written['input/ci_analyst_context.md'], source);
+        assert.ok(written['input/ci_analyst_context.md'].indexOf('previousIncidents') !== -1);
+        assert.deepEqual(JSON.parse(written['input/ci_analyst_context.md']).previousIncidents,
+            [{ issue: 12, title: '[ci-heal] ci: failing', closedAt: '2026-11-24T10:00:00Z', closedByCommit: 'abc1234def5678' }]);
+        // launch params stay flag-shaped: previousIncidents is NOT duplicated into them
+        var stagedParams = JSON.parse(written['input/ci_analyst_params.json']);
+        assert.equal(stagedParams.previousIncidents, undefined);
+    });
+
     test('missing contextPath is a business failure', function() {
         var mod = loadContext({ file_read: function() { return null; }, file_write: function() {} });
         var r = mod.action({ jobParams: { customParams: {} } });
@@ -115,28 +159,51 @@ suite('ciAnalystContext.action', function() {
 // ── ciAnalystPost: parsing helpers ───────────────────────────────────────────
 
 suite('ciAnalystPost.parseVerdict', function() {
-    test('finds the strict verdict line and records its line number', function() {
+    test('finds the strict v2.3 verdict line and records its line number', function() {
         var mod = loadPost();
         var v = mod.parseVerdict('intro\n' + VERDICT_OK + '\ntrailing');
+        assert.equal(v.verdict, 'adequate');
+        assert.equal(v.classification, 'test_regression');
         assert.equal(v.adequate, true);
         assert.equal(v.reason, 'test_regression');
         assert.equal(v.line, 2);
     });
 
-    test('skips near-miss braces and invalid JSON', function() {
+    test('routes all three v2.3 classes', function() {
         var mod = loadPost();
+        assert.equal(mod.parseVerdict(VERDICT_OK).verdict, 'adequate');
+        assert.equal(mod.parseVerdict(VERDICT_NEEDS_HUMAN).verdict, 'needs-human');
+        assert.equal(mod.parseVerdict(VERDICT_NEEDS_HUMAN).classification, 'workflow_infra');
+        assert.equal(mod.parseVerdict(VERDICT_NOISE).verdict, 'noise');
+        assert.equal(mod.parseVerdict(VERDICT_NOISE).adequate, false);
+    });
+
+    test('legacy adequate boolean lines still parse (v0.0.1 fallback)', function() {
+        var mod = loadPost();
+        assert.equal(mod.parseVerdict(VERDICT_LEGACY_OK).verdict, 'adequate');
+        assert.equal(mod.parseVerdict(VERDICT_LEGACY_OK).adequate, true);
+        assert.equal(mod.parseVerdict(VERDICT_LEGACY_NOISE).verdict, 'noise');
+        assert.equal(mod.parseVerdict(VERDICT_LEGACY_NOISE).adequate, false);
+    });
+
+    test('unknown verdict values and non-string booleans are rejected', function() {
+        var mod = loadPost();
+        assert.equal(mod.parseVerdict('{"verdict": "maybe", "summary": "s"}'), null);
+        assert.equal(mod.parseVerdict('{"verdict": "ADEQUATE"}'), null); // strict: exact lowercase only
+        assert.equal(mod.parseVerdict('{"adequate": "true"}'), null);
         assert.equal(mod.parseVerdict('{adequate: true}'), null);
-        assert.equal(mod.parseVerdict('{"adequate": broken}'), null);
-        assert.equal(mod.parseVerdict('{"summary": "no adequate key"}'), null);
+        assert.equal(mod.parseVerdict('{"verdict": broken}'), null);
+        assert.equal(mod.parseVerdict('{"summary": "no routing key"}'), null);
         assert.equal(mod.parseVerdict(''), null);
         assert.equal(mod.parseVerdict(null), null);
     });
 
-    test('adequate must be a real boolean', function() {
+    test('resolveVerdictClass maps parsed objects directly', function() {
         var mod = loadPost();
-        assert.equal(mod.parseVerdict('{"adequate": "true"}'), null);
-        var v = mod.parseVerdict(VERDICT_NOISE);
-        assert.equal(v.adequate, false);
+        assert.equal(mod.resolveVerdictClass({ verdict: 'needs-human' }), 'needs-human');
+        assert.equal(mod.resolveVerdictClass({ adequate: false }), 'noise');
+        assert.equal(mod.resolveVerdictClass({ verdict: 'zzz' }), null);
+        assert.equal(mod.resolveVerdictClass('noise'), null);
     });
 });
 
@@ -174,9 +241,19 @@ suite('ciAnalystPost.context + issue assembly', function() {
         assert.equal(c.failingRuns.length, 2);
         assert.equal(c.newestSha, 'aaa');
         assert.deepEqual(c.workflows, ['ci', 'release']);
+        assert.deepEqual(c.previousIncidents, []);
         var junk = loadPost({ file_read: function() { return 'not json'; } });
-        assert.deepEqual(junk.parseContext('x'), { workflows: [], failingRuns: [], newestSha: null });
-        assert.deepEqual(mod.parseContext(null), { workflows: [], failingRuns: [], newestSha: null });
+        assert.deepEqual(junk.parseContext('x'), { workflows: [], failingRuns: [], newestSha: null, previousIncidents: [] });
+        assert.deepEqual(mod.parseContext(null), { workflows: [], failingRuns: [], newestSha: null, previousIncidents: [] });
+    });
+
+    test('parseContext passes previousIncidents through verbatim', function() {
+        var incidents = [{ issue: 12, title: '[ci-heal] ci: failing', closedAt: '2026-11-24T10:00:00Z', closedByCommit: 'abc1234def5678' }];
+        var mod = loadPost({
+            file_read: function(o) { return o.path === 'ctx.json' ? JSON.stringify({ monitoredWorkflows: ['ci'], runs: [], previousIncidents: incidents }) : null; }
+        });
+        var c = mod.parseContext('ctx.json');
+        assert.deepEqual(c.previousIncidents, incidents);
     });
 
     test('affected workflows prefer failing runs over the monitored set', function() {
@@ -186,22 +263,76 @@ suite('ciAnalystPost.context + issue assembly', function() {
         assert.deepEqual(mod.affectedWorkflows(c, null), []);
     });
 
-    test('title, labels and body carry the contract strings', function() {
+    test('titles: adequate keeps the v0.0.1 shape, needs-human gets a distinct suffix', function() {
         var mod = loadPost();
         assert.equal(mod.buildIssueTitle(['ci', 'release']), '[ci-heal] ci,release: failing');
+        assert.equal(mod.buildIssueTitle(['ci'], 'adequate'), '[ci-heal] ci: failing');
+        assert.equal(mod.buildIssueTitle(['ci', 'release'], 'needs-human'), '[ci-heal] ci,release: failing (needs-human)');
         assert.equal(mod.buildIssueTitle([]), '[ci-heal] ci: failing');
-        var labels = mod.buildLabels(['ci', 'release', 'ci']);
-        assert.deepEqual(labels, ['ci-heal', 'agent:dev', 'wf:ci', 'wf:release']);
-        var body = mod.buildIssueBody(
-            { summary: 'sum', suspected_cause: 'cause', reason: 'test_regression' },
-            mod.parseContext === undefined ? null : { failingRuns: [{ workflow: 'ci', url: 'u1', sha: 'aaa', logTail: 'FAIL test_x' }] },
-            'owner/repo'
-        );
-        assert.ok(body.indexOf('[ci-heal]') === -1); // title not in body
-        assert.ok(body.indexOf('<details><summary>Log excerpt (failed jobs)</summary>') !== -1);
-        assert.ok(body.indexOf('FAIL test_x') !== -1);
-        assert.ok(body.indexOf('u1') !== -1);
-        assert.ok(body.indexOf('`aaa`') !== -1);
+    });
+
+    test('labels: adequate arms (agent:dev), needs-human guards (needs-human + agent:skip)', function() {
+        var mod = loadPost();
+        assert.deepEqual(mod.buildLabels(['ci', 'release', 'ci'], 'adequate'), ['ci-heal', 'agent:dev', 'wf:ci', 'wf:release']);
+        assert.deepEqual(mod.buildLabels(['ci'], 'needs-human'), ['ci-heal', 'needs-human', 'agent:skip', 'wf:ci']);
+    });
+
+    test('body: work list enumerates every live cause with its sha', function() {
+        var mod = loadPost();
+        var verdict = { verdict: 'adequate', classification: 'test_regression', reason: 'test_regression', summary: 'sum', suspected_cause: 'cause' };
+        var context = { failingRuns: [
+            { workflow: 'ci', url: 'u1', sha: 'aaa', logTail: 'FAIL test_x' },
+            { workflow: 'release', url: 'u3', sha: 'ccc', logTail: 'boom' }
+        ] };
+        var body = mod.buildIssueBody(verdict, context, 'owner/repo', []);
+        assert.notContains(body, '[ci-heal]'); // title not in body
+        assert.contains(body, '<details><summary>Log excerpt (failed jobs)</summary>');
+        assert.contains(body, 'FAIL test_x');
+        assert.contains(body, 'u1');
+        assert.contains(body, '`aaa`');
+        assert.contains(body, '**Work list (live causes in the analyzed run window):**');
+        assert.contains(body, '1. [ci run](u1) @ `aaa`');
+        assert.contains(body, '2. [release run](u3) @ `ccc`');
+        assert.contains(body, '**Classification:** `test_regression`');
+        assert.contains(body, 'Closes #<this issue number>'); // fix protocol present on adequate
+        assert.contains(body, 'state anchor');
+        assert.notContains(body, 'Follows up #'); // no previousIncidents -> no follow-up line
+        assert.notContains(body, 'Escalation — needs human'); // no escalation on adequate
+    });
+
+    test('body: previousIncidents produce Follows-up lines (short sha)', function() {
+        var mod = loadPost();
+        var verdict = { verdict: 'adequate', classification: 'test_regression', summary: 'sum', suspected_cause: 'cause' };
+        var body = mod.buildIssueBody(verdict, { failingRuns: [] }, 'owner/repo', [
+            { issue: 12, title: '[ci-heal] ci: failing', closedAt: '2026-11-24T10:00:00Z', closedByCommit: 'abc1234def5678' },
+            { issue: 7, closedByCommit: 'abc' }
+        ]);
+        assert.contains(body, '**Follow-ups:**');
+        assert.contains(body, '- Follows up #12 (closed at abc1234)');
+        assert.contains(body, '- Follows up #7 (closed at abc)');
+    });
+
+    test('body: needs-human carries the escalation paragraph and NO Closes instruction', function() {
+        var mod = loadPost();
+        var verdict = { verdict: 'needs-human', classification: 'workflow_infra', reason: 'workflow_infra', summary: 'sum', suspected_cause: 'cause' };
+        var body = mod.buildIssueBody(verdict, { failingRuns: [{ workflow: 'ci', url: 'u1', sha: 'aaa', logTail: 'x' }] }, 'owner/repo', []);
+        assert.contains(body, '**Escalation — needs human:**');
+        assert.contains(body, '`workflow_infra`');
+        assert.contains(body, 'machine fix was NOT advisable');
+        assert.contains(body, 'no dev leg is assigned');
+        assert.notContains(body, 'Closes #<this issue number>');
+        assert.contains(body, 'Work list (live causes in the analyzed run window)');
+    });
+
+    test('resolvePreviousIncidents: context first, customParams fallback (array or JSON string)', function() {
+        var mod = loadPost();
+        var fromContext = [{ issue: 1, closedByCommit: 'a' }];
+        assert.deepEqual(mod.resolvePreviousIncidents({ previousIncidents: fromContext }, { previousIncidents: [{ issue: 2 }] }), fromContext);
+        assert.deepEqual(mod.resolvePreviousIncidents({ previousIncidents: [] }, { previousIncidents: [{ issue: 2 }] }), [{ issue: 2 }]);
+        assert.deepEqual(mod.resolvePreviousIncidents({}, { previousIncidents: '[{"issue":3,"closedByCommit":"c"}]' }), [{ issue: 3, closedByCommit: 'c' }]);
+        assert.deepEqual(mod.resolvePreviousIncidents({}, { previousIncidents: 'not json' }), []);
+        assert.deepEqual(mod.resolvePreviousIncidents({}, {}), []);
+        assert.deepEqual(mod.resolvePreviousIncidents({}, null), []);
     });
 
     test('truncate cuts long log tails', function() {
@@ -223,9 +354,14 @@ suite('ciAnalystPost.context + issue assembly', function() {
     });
 });
 
-// ── ciAnalystPost.action decision table ──────────────────────────────────────
+// ── ciAnalystPost.action: v2.3 routing matrix ────────────────────────────────
 
-suite('ciAnalystPost.action', function() {
+suite('ciAnalystPost.action routing', function() {
+    // Every plausible reopen/update API is mocked and recorded so the no-reopen
+    // guarantee is asserted against a ZERO call count on every branch.
+    var GUARDED_TOOLS = ['github_search_issues', 'github_create_issue', 'github_add_labels', 'github_assign_issue',
+        'github_reopen_issue', 'github_update_issue', 'github_edit_issue', 'github_set_issue_state', 'github_comment_issue'];
+
     function postModule(opts) {
         var calls = [];
         var fileMap = opts && opts.files ? opts.files : {};
@@ -236,20 +372,30 @@ suite('ciAnalystPost.action', function() {
             },
             file_write: function(o) { calls.push({ tool: 'file_write', args: o }); }
         };
-        ['github_search_issues', 'github_create_issue', 'github_add_labels', 'github_assign_issue'].forEach(function(name) {
+        GUARDED_TOOLS.forEach(function(name) {
             mocks[name] = function(args) { calls.push({ tool: name, args: args }); };
         });
-        if (opts && opts.dropSearch) delete mocks.github_search_issues;
+        // a successful create returns a numbered issue so the adequate/needs-human paths complete
+        mocks.github_create_issue = function(args) {
+            calls.push({ tool: 'github_create_issue', args: args });
+            return { number: 42, html_url: 'https://example/42' };
+        };
         return { mod: loadPost(mocks), calls: calls };
     }
 
-    function baseFiles() {
-        return {
-            'input/ci_analyst_context.md': JSON.stringify({
-                monitoredWorkflows: ['ci'],
-                runs: [{ workflow: 'ci', url: 'u1', sha: 'aaa', conclusion: 'failure', logTail: 'FAIL t' }]
-            })
+    function baseFiles(extra) {
+        var context = {
+            monitoredWorkflows: ['ci'],
+            runs: [{ workflow: 'ci', url: 'u1', sha: 'aaa', conclusion: 'failure', logTail: 'FAIL t' }]
         };
+        if (extra && extra.context) {
+            for (var k in extra.context) context[k] = extra.context[k];
+        }
+        var files = { 'input/ci_analyst_context.md': JSON.stringify(context) };
+        if (extra && extra.files) {
+            for (var p in extra.files) files[p] = extra.files[p];
+        }
+        return files;
     }
 
     function responseOf(verdictLine) {
@@ -264,7 +410,8 @@ suite('ciAnalystPost.action', function() {
                     contextPath: 'input/ci_analyst_context.md',
                     dryRun: opts.dryRun,
                     machineAuthor: opts.machineAuthor,
-                    targetRepository: 'owner/repo'
+                    targetRepository: 'owner/repo',
+                    previousIncidents: opts.previousIncidents
                 }
             }
         });
@@ -279,51 +426,44 @@ suite('ciAnalystPost.action', function() {
         return null;
     }
 
+    function githubCalls(calls) {
+        return calls.filter(function(c) { return c.tool.indexOf('github_') === 0; });
+    }
+
+    function noReopenCalls(calls, label) {
+        ['github_reopen_issue', 'github_update_issue', 'github_edit_issue', 'github_set_issue_state'].forEach(function(tool) {
+            assert.equal(calls.filter(function(c) { return c.tool === tool; }).length, 0, label + ': no ' + tool + ' call');
+        });
+    }
+
     test('no verdict line: record + no GitHub call', function() {
         var m = postModule({ files: baseFiles() });
         assert.equal(runAction(m, { verdictLine: 'no json here', dryRun: false }), true);
         var result = writtenResult(m.calls);
         assert.equal(result.verdictParsed, false);
+        assert.equal(result.verdict, null);
+        assert.equal(result.adequate, null);
         assert.equal(result.issueCreated, false);
-        assert.equal(m.calls.filter(function(c) { return c.tool.indexOf('github_') === 0; }).length, 0);
+        assert.equal(githubCalls(m.calls).length, 0);
+        noReopenCalls(m.calls, 'no-verdict');
     });
 
-    test('noise verdict: no issue, no GitHub mutation', function() {
+    test('ROUTING noise: zero GitHub calls', function() {
         var m = postModule({ files: baseFiles() });
-        runAction(m, { verdictLine: VERDICT_NOISE, dryRun: false });
+        runAction(m, { verdictLine: VERDICT_NOISE, dryRun: false, machineAuthor: '' });
         var result = writtenResult(m.calls);
+        assert.equal(result.verdict, 'noise');
         assert.equal(result.adequate, false);
+        assert.equal(result.classification, 'stale_red_sha_reset');
         assert.equal(result.issueCreated, false);
-        assert.equal(m.calls.filter(function(c) { return c.tool.indexOf('github_') === 0; }).length, 0);
+        assert.equal(githubCalls(m.calls).length, 0);
+        noReopenCalls(m.calls, 'noise');
     });
 
-    test('dryRun adequate verdict: recorded, no issue', function() {
+    test('ROUTING adequate + machineAuthor: ONE issue, labels, ASSIGNMENT (arming act)', function() {
         var m = postModule({ files: baseFiles() });
-        runAction(m, { verdictLine: VERDICT_OK, dryRun: 'true', machineAuthor: 'm' });
-        var result = writtenResult(m.calls);
-        assert.equal(result.dryRun, true);
-        assert.equal(result.adequate, true);
-        assert.equal(result.issueCreated, false);
-        assert.equal(m.calls.filter(function(c) { return c.tool.indexOf('github_') === 0; }).length, 0);
-    });
-
-    test('adequate + not dryRun: ONE issue, labels, assignee', function() {
-        var m = postModule({ files: baseFiles() });
-        m.calls.length = 0;
-        var post = loadPost({
-            file_read: function(o) { return baseFiles()[o.path || o] !== undefined ? baseFiles()[o.path || o] : null; },
-            file_write: function(o) { m.calls.push({ tool: 'file_write', args: o }); },
-            github_search_issues: function(args) { m.calls.push({ tool: 'github_search_issues', args: args }); return { items: [] }; },
-            github_create_issue: function(args) { m.calls.push({ tool: 'github_create_issue', args: args }); return { number: 42, html_url: 'https://example/42' }; },
-            github_add_labels: function(args) { m.calls.push({ tool: 'github_add_labels', args: args }); return {}; },
-            github_assign_issue: function(args) { m.calls.push({ tool: 'github_assign_issue', args: args }); return {}; }
-        });
-        post.action({
-            jobParams: {
-                response: responseOf(VERDICT_OK),
-                customParams: { contextPath: 'input/ci_analyst_context.md', dryRun: false, machineAuthor: 'machine-user', targetRepository: 'owner/repo' }
-            }
-        });
+        var r = runAction(m, { verdictLine: VERDICT_OK, dryRun: false, machineAuthor: 'machine-user' });
+        assert.equal(r, true);
         var search = m.calls.filter(function(c) { return c.tool === 'github_search_issues'; });
         assert.equal(search.length, 1);
         assert.ok(search[0].args.query.indexOf('label:ci-heal') !== -1);
@@ -338,12 +478,103 @@ suite('ciAnalystPost.action', function() {
         assert.deepEqual(labels[0].args.labels, ['ci-heal', 'agent:dev', 'wf:ci']);
         var assign = m.calls.filter(function(c) { return c.tool === 'github_assign_issue'; });
         assert.equal(assign.length, 1);
+        assert.equal(assign[0].args.number, 42);
         assert.equal(assign[0].args.user, 'machine-user');
         var result = writtenResult(m.calls);
+        assert.equal(result.verdict, 'adequate');
         assert.equal(result.issueCreated, true);
         assert.equal(result.issueNumber, 42);
         assert.equal(result.assignedTo, 'machine-user');
         assert.equal(result.duplicate, false);
+        assert.equal(result.needsHuman, undefined);
+        noReopenCalls(m.calls, 'adequate');
+    });
+
+    test('ROUTING adequate + empty machineAuthor: LOUD failure BEFORE any GitHub call', function() {
+        var m = postModule({ files: baseFiles() });
+        assert.throws(function() {
+            runAction(m, { verdictLine: VERDICT_OK, dryRun: false, machineAuthor: '' });
+        }, 'adequate with empty machineAuthor must throw');
+        assert.throws(function() {
+            runAction(m, { verdictLine: VERDICT_OK, dryRun: false, machineAuthor: '   ' });
+        }, 'whitespace-only machineAuthor must throw too');
+        var result = writtenResult(m.calls);
+        assert.equal(result.success, false);
+        assert.equal(result.machineAuthorMissing, true);
+        assert.equal(result.issueCreated, false);
+        assert.equal(result.verdict, 'adequate');
+        assert.ok(String(result.error).indexOf('machineAuthor') !== -1);
+        // BEFORE any GitHub call: not even the dedupe search ran
+        assert.equal(githubCalls(m.calls).length, 0);
+        noReopenCalls(m.calls, 'empty-machineAuthor');
+    });
+
+    test('ROUTING adequate dryRun: verdict recorded, no issue, no machineAuthor guard', function() {
+        var m = postModule({ files: baseFiles() });
+        assert.equal(runAction(m, { verdictLine: VERDICT_OK, dryRun: 'true', machineAuthor: '' }), true);
+        var result = writtenResult(m.calls);
+        assert.equal(result.dryRun, true);
+        assert.equal(result.verdict, 'adequate');
+        assert.equal(result.issueCreated, false);
+        assert.equal(githubCalls(m.calls).length, 0);
+        noReopenCalls(m.calls, 'dryRun');
+    });
+
+    test('ROUTING needs-human: issue WITHOUT assignment, needs-human + agent:skip labels, empty machineAuthor tolerated', function() {
+        var m = postModule({ files: baseFiles() });
+        var r = runAction(m, { verdictLine: VERDICT_NEEDS_HUMAN, dryRun: false, machineAuthor: '' });
+        assert.equal(r, true); // NO throw: needs-human does not need machineAuthor
+        var create = m.calls.filter(function(c) { return c.tool === 'github_create_issue'; });
+        assert.equal(create.length, 1);
+        assert.equal(create[0].args.title, '[ci-heal] ci: failing (needs-human)');
+        assert.ok(create[0].args.body.indexOf('Escalation — needs human') !== -1);
+        assert.notContains(create[0].args.body, 'Closes #<this issue number>'); // no fix protocol on escalation
+        var labels = m.calls.filter(function(c) { return c.tool === 'github_add_labels'; });
+        assert.equal(labels.length, 1);
+        assert.deepEqual(labels[0].args.labels, ['ci-heal', 'needs-human', 'agent:skip', 'wf:ci']);
+        var assigns = m.calls.filter(function(c) { return c.tool === 'github_assign_issue'; });
+        assert.equal(assigns.length, 0); // deliberately unassigned
+        var result = writtenResult(m.calls);
+        assert.equal(result.verdict, 'needs-human');
+        assert.equal(result.needsHuman, true);
+        assert.equal(result.issueCreated, true);
+        assert.equal(result.assignedTo, undefined);
+        noReopenCalls(m.calls, 'needs-human');
+    });
+
+    test('ROUTING adequate: body carries previousIncidents follow-up lines from context', function() {
+        var m = postModule({ files: baseFiles({ context: { previousIncidents: [
+            { issue: 12, title: '[ci-heal] ci: failing', closedAt: '2026-11-24T10:00:00Z', closedByCommit: 'abc1234def5678' }
+        ] } }) });
+        runAction(m, { verdictLine: VERDICT_OK, dryRun: false, machineAuthor: 'm' });
+        var create = m.calls.filter(function(c) { return c.tool === 'github_create_issue'; });
+        assert.equal(create.length, 1);
+        assert.ok(create[0].args.body.indexOf('- Follows up #12 (closed at abc1234)') !== -1);
+    });
+
+    test('ROUTING adequate: previousIncidents fall back to customParams when the context has none', function() {
+        var m = postModule({ files: baseFiles() });
+        runAction(m, {
+            verdictLine: VERDICT_OK, dryRun: false, machineAuthor: 'm',
+            previousIncidents: [{ issue: 9, closedByCommit: 'deadbee1234' }]
+        });
+        var create = m.calls.filter(function(c) { return c.tool === 'github_create_issue'; });
+        assert.equal(create.length, 1);
+        assert.ok(create[0].args.body.indexOf('- Follows up #9 (closed at deadbee)') !== -1);
+    });
+
+    test('multi-cause window: the issue body enumerates every failing run as a work item', function() {
+        var m = postModule({ files: baseFiles({ context: { runs: [
+            { workflow: 'ci', url: 'u1', sha: 'aaa', conclusion: 'failure', logTail: 'FAIL a' },
+            { workflow: 'release', url: 'u3', sha: 'ccc', conclusion: 'failure', logTail: 'boom' }
+        ] } }) });
+        runAction(m, { verdictLine: VERDICT_OK, dryRun: false, machineAuthor: 'm' });
+        var create = m.calls.filter(function(c) { return c.tool === 'github_create_issue'; });
+        assert.equal(create[0].args.title, '[ci-heal] ci,release: failing');
+        assert.ok(create[0].args.body.indexOf('1. [ci run](u1) @ `aaa`') !== -1);
+        assert.ok(create[0].args.body.indexOf('2. [release run](u3) @ `ccc`') !== -1);
+        var labels = m.calls.filter(function(c) { return c.tool === 'github_add_labels'; });
+        assert.deepEqual(labels[0].args.labels, ['ci-heal', 'agent:dev', 'wf:ci', 'wf:release']);
     });
 
     test('open duplicate with the same title: skip creation', function() {
@@ -362,9 +593,37 @@ suite('ciAnalystPost.action', function() {
         assert.equal(r, true);
         var creates = m.calls.filter(function(c) { return c.tool === 'github_create_issue'; });
         assert.equal(creates.length, 0);
+        var assigns = m.calls.filter(function(c) { return c.tool === 'github_assign_issue'; });
+        assert.equal(assigns.length, 0); // duplicate -> no arming attempt either
         var result = writtenResult(m.calls);
         assert.equal(result.duplicate, true);
         assert.equal(result.issueUrl, 'https://example/9');
+        noReopenCalls(m.calls, 'duplicate');
+    });
+
+    test('needs-human dedupe uses its own title (not suppressed by an open adequate issue)', function() {
+        var m = postModule({ files: baseFiles() });
+        var post = loadPost({
+            file_read: function(o) { return baseFiles()[o.path || o] !== undefined ? baseFiles()[o.path || o] : null; },
+            file_write: function(o) { m.calls.push({ tool: 'file_write', args: o }); },
+            github_search_issues: function(args) {
+                m.calls.push({ tool: 'github_search_issues', args: args });
+                // an open ADEQUATE issue with the plain title is NOT a duplicate for needs-human
+                return { items: [{ number: 4, title: '[ci-heal] ci: failing' }] };
+            },
+            github_create_issue: function(args) { m.calls.push({ tool: 'github_create_issue', args: args }); return { number: 5 }; },
+            github_add_labels: function() {},
+            github_assign_issue: function() { m.calls.push({ tool: 'github_assign_issue', args: {} }); }
+        });
+        post.action({
+            jobParams: {
+                response: responseOf(VERDICT_NEEDS_HUMAN),
+                customParams: { contextPath: 'input/ci_analyst_context.md', dryRun: false, machineAuthor: '', targetRepository: 'owner/repo' }
+            }
+        });
+        assert.ok(m.calls.filter(function(c) { return c.tool === 'github_search_issues'; })[0].args.query.indexOf('(needs-human)') !== -1);
+        assert.equal(m.calls.filter(function(c) { return c.tool === 'github_create_issue'; }).length, 1);
+        assert.equal(m.calls.filter(function(c) { return c.tool === 'github_assign_issue'; }).length, 0);
     });
 
     test('search results without items stay safe (different title shapes)', function() {
@@ -380,7 +639,7 @@ suite('ciAnalystPost.action', function() {
         post.action({
             jobParams: {
                 response: responseOf(VERDICT_OK),
-                customParams: { contextPath: 'input/ci_analyst_context.md', dryRun: false, machineAuthor: '', targetRepository: '' }
+                customParams: { contextPath: 'input/ci_analyst_context.md', dryRun: false, machineAuthor: 'm', targetRepository: '' }
             }
         });
         var creates = m.calls.filter(function(c) { return c.tool === 'github_create_issue'; });
@@ -388,22 +647,63 @@ suite('ciAnalystPost.action', function() {
         assert.equal(creates[0].args.owner, undefined); // unbound target: runtime-configured repo
         var result = writtenResult(m.calls);
         assert.equal(result.issueNumber, 5);
-        assert.equal(result.assignedTo, undefined);
+        assert.equal(result.assignedTo, 'm');
     });
 
     test('missing search tool: dedupe degrades to create', function() {
         var post = loadPost({
             file_read: function(o) { return baseFiles()[o.path || o] !== undefined ? baseFiles()[o.path || o] : null; },
             file_write: function() {},
-            github_create_issue: function() { return { number: 1 }; }
+            github_create_issue: function() { return { number: 1 }; },
+            github_add_labels: function() {},
+            github_assign_issue: function() {}
         });
         // no github_search_issues global at all
         var r = post.action({
             jobParams: {
                 response: responseOf(VERDICT_OK),
-                customParams: { contextPath: 'input/ci_analyst_context.md', dryRun: false, machineAuthor: '', targetRepository: 'o/r' }
+                customParams: { contextPath: 'input/ci_analyst_context.md', dryRun: false, machineAuthor: 'm', targetRepository: 'o/r' }
             }
         });
         assert.equal(r, true);
+    });
+
+    test('adequate + failed assignment call: LOUD failure (assignment is the arming act)', function() {
+        var m = postModule({ files: baseFiles() });
+        var post = loadPost({
+            file_read: function(o) { return baseFiles()[o.path || o] !== undefined ? baseFiles()[o.path || o] : null; },
+            file_write: function(o) { m.calls.push({ tool: 'file_write', args: o }); },
+            github_search_issues: function() { return { items: [] }; },
+            github_create_issue: function() { return { number: 77 }; },
+            github_add_labels: function() {},
+            github_assign_issue: function() { throw new Error('403 assign denied'); }
+        });
+        assert.throws(function() {
+            post.action({
+                jobParams: {
+                    response: responseOf(VERDICT_OK),
+                    customParams: { contextPath: 'input/ci_analyst_context.md', dryRun: false, machineAuthor: 'm', targetRepository: 'owner/repo' }
+                }
+            });
+        }, 'failed assignment must throw');
+        var result = writtenResult(m.calls);
+        assert.equal(result.success, false);
+        assert.equal(result.issueCreated, true);
+        assert.equal(result.issueNumber, 77);
+        assert.ok(String(result.assignError).indexOf('403') !== -1);
+        noReopenCalls(m.calls, 'assign-failure');
+    });
+
+    test('NO-REOPEN guarantee: none of the reopen/update APIs is called on ANY verdict class', function() {
+        var classes = [VERDICT_OK, VERDICT_NEEDS_HUMAN, VERDICT_NOISE];
+        for (var i = 0; i < classes.length; i++) {
+            var m = postModule({ files: baseFiles() });
+            try {
+                runAction(m, { verdictLine: classes[i], dryRun: false, machineAuthor: i === 0 ? 'm' : '' });
+            } catch (e) {
+                // adequate+empty-ma throws by design; the call record still applies
+            }
+            noReopenCalls(m.calls, 'verdict index ' + i);
+        }
     });
 });
