@@ -109,6 +109,14 @@ suite('ciDispatchPriority: tick sweep / gateRule', function () {
         assert.equal(cp.gateRule(h.deps, ARMED, REPO), false, 'armed lane never defers');
         assert.equal(h.lists, 1, 'one listing per repo per tick');
     });
+    test('superseded head: a queued/started run on an old sha of an open PR is cancelled; the head run is kept', function () {
+        var p = pr(7, 'moved', ['pr_approved', 'ai_validating']);
+        p.head.sha = 'new1';
+        var h = harness({ prs: [p], runs: [run(30, 'moved', 'old1', 'queued'), run(31, 'moved', 'new1', 'pending')] });
+        cp.gateRule(h.deps, ARMED, REPO);
+        assert.deepEqual(h.cancels, [30]);
+        assert.deepEqual(cp.supersededHeadRuns([run(32, 'x', 'a', 'queued')], {}), [], 'no PR / no head sha → untouched');
+    });
     test('no approved pending: fresh dispatches, unapproved queued runs kept', function () {
         var h = harness({ prs: prs, runs: [run(11, 'fresh', 'f1', 'queued')] });
         assert.equal(cp.gateRule(h.deps, FRESH, REPO), false);
