@@ -60,6 +60,18 @@ suite('ciDispatchPriority: pure helpers', function () {
     });
 });
 
+suite('ciDispatchPriority: runs memo', function () {
+    test('inFlightCiRuns lists once per tick; dropRunsMemo forces a re-list (stale-cancel invalidation)', function () {
+        var h = harness({ runs: [run(1, 'b', 's1', 'queued')] });
+        cp.inFlightCiRuns(h.deps, REPO, 'ci.yml');
+        cp.inFlightCiRuns(h.deps, REPO, 'ci.yml');
+        assert.equal(h.lists, 1, 'memoized within the tick');
+        cp.dropRunsMemo(REPO);
+        cp.inFlightCiRuns(h.deps, REPO, 'ci.yml');
+        assert.equal(h.lists, 2, 'dropped memo re-lists');
+    });
+});
+
 suite('ciDispatchPriority: preDispatchSkip', function () {
     test('in-flight run on same branch+sha skips dispatch and marks handled', function () {
         var h = harness({ runs: [run(1, 'feat', 'abcdef123', 'queued')] });

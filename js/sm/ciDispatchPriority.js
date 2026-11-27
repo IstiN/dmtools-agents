@@ -317,6 +317,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     resetTick: resetTick,
     inFlightCiRuns: inFlightCiRuns,
+    dropRunsMemo: dropRunsMemo,
     dedupeSameHead: dedupeSameHead,
     deadBranchRuns: deadBranchRuns,
     approvedPendingExists: approvedPendingExists,

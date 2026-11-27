@@ -361,7 +361,7 @@ function bindActionHandlerDeps(d, m, ticketHelpers) {
   d.latestCheckRunConclusions = m.validationProbesModule.latestCheckRunConclusions;
   d.failingCheckNames = function (r, sha) { return m.validationProbesModule.failingCheckNames(m.pDeps, r, sha); };
   d.failedRunLinksLine = function (r, wf, sha) { return m.validationProbesModule.failedRunLinksLine(m.pDeps, r, wf, sha); };
-  d.cancelStaleDispatchedRuns = function (r, wf, b, sha) { return m.checkRunCuresModule.cancelStaleDispatchedRuns(m.pDeps, r, wf, b, sha); };
+  d.cancelStaleDispatchedRuns = function (r, wf, b, sha) { ciDispatchPriorityModule.dropRunsMemo(r); return m.checkRunCuresModule.cancelStaleDispatchedRuns(m.pDeps, r, wf, b, sha); };
   d.postGhostGuardAudit = function (r, n, res) { m.checkRunCuresModule.postGhostGuardAudit(m.pDeps, r, n, res); };
   d.headMoved = m.mergeAndParkProbesModule.headMoved;
   d.hasActiveLegRun = m.workflowRunTrackingModule.hasActiveLegRun;
