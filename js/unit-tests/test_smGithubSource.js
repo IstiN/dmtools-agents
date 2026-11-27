@@ -2426,7 +2426,7 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
             'review-on-label (PR carrier) precedes review-on-issue-label');
     });
 
-    test('sm_github.json carries validationConcurrency=3 (parallel validations on the widened runner pool)', function () {
+    test('sm_github.json carries validationConcurrency=1 (owner 2026: pre-merge validation strictly serialized)', function () {
         // Live stall (2026-10-15 sweep): the guest FIFO queued 6+ approved
         // PRs while the pool sat 3-wide idle — the serial mutex (default 1)
         // was the governor, not runner capacity. The knob (gh-837, clamped
@@ -2434,7 +2434,7 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
         // so thin queues keep the legacy serial window.
         var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
         var p = (cfg.params && cfg.params.jobParams) || {};
-        assert.equal(p.validationConcurrency, 3, '3-wide validation window');
+        assert.equal(p.validationConcurrency, 1, "exactly one pre-merge validation in flight");
         assert.ok(p.validationConcurrency >= 1 && p.validationConcurrency <= 5,
             'inside the gh-837 clamp');
     });

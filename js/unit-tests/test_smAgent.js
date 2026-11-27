@@ -154,6 +154,7 @@ function smLocalHelperRequireMap(trackersForSm, freshConfigLoader, mockScmModule
 }
 
 var SM_EXTRACTED_FILES = [
+    'ciDispatchPriority.js',
     'validationProbes.js',
     'parkAndActorProbes.js',
     'checkRunCures.js',

@@ -5,7 +5,7 @@
     "jobParams": {
       "repo": "epam/dmtools-dart",
       "maxTriggeredWorkflows": 3,
-      "validationConcurrency": 3,
+      "validationConcurrency": 1,
       "validationConcurrencyQueueWatermark": 3,
       "smGuestTransplant": {},
       "rules": [
@@ -409,6 +409,8 @@
           },
           "localAction": "validate_pr",
           "limit": 1,
+          "deferWhileApprovedPending": true,
+          "oneRunPerHead": true,
           "id": "validate-fresh"
         },
         {
@@ -437,6 +439,8 @@
           "localAction": "validate_pr",
           "skipIfGreenCi": true,
           "limit": 1,
+          "deferWhileApprovedPending": true,
+          "oneRunPerHead": true,
           "id": "validate-fresh-masked-green"
         },
         {

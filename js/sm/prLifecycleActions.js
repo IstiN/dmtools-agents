@@ -7,6 +7,7 @@
  */
 'use strict';
 
+var ciDispatchPriorityModule = require('./ciDispatchPriority.js');
 var guestTransplantModule = require('../common/guestTransplant.js');
 var issuePlanModule = require('../common/issuePlan.js');
 var machineAuthorModule = require('../common/machineAuthor.js');
@@ -254,7 +255,7 @@ function handleMergePrAction(deps, rule, effectiveConfig, repoInfo, ticket, key,
     return;
   }
   try {
-    deps.attemptMergeProbe(repoInfo, ticket, key);
+    ciDispatchPriorityModule.afterMergeOutcome(deps, repoInfo, ticket, deps.attemptMergeProbe(repoInfo, ticket, key));
     processedKeys.push(key);
   } catch (e) {
     deps.error('  ❌ merge_pr failed for ' + key + ': ' + (e.message || e));
@@ -360,7 +361,7 @@ function bindActionHandlerDeps(d, m, ticketHelpers) {
   d.latestCheckRunConclusions = m.validationProbesModule.latestCheckRunConclusions;
   d.failingCheckNames = function (r, sha) { return m.validationProbesModule.failingCheckNames(m.pDeps, r, sha); };
   d.failedRunLinksLine = function (r, wf, sha) { return m.validationProbesModule.failedRunLinksLine(m.pDeps, r, wf, sha); };
-  d.cancelStaleDispatchedRuns = function (r, wf, b, sha) { return m.checkRunCuresModule.cancelStaleDispatchedRuns(m.pDeps, r, wf, b, sha); };
+  d.cancelStaleDispatchedRuns = function (r, wf, b, sha) { ciDispatchPriorityModule.dropRunsMemo(r); return m.checkRunCuresModule.cancelStaleDispatchedRuns(m.pDeps, r, wf, b, sha); };
   d.postGhostGuardAudit = function (r, n, res) { m.checkRunCuresModule.postGhostGuardAudit(m.pDeps, r, n, res); };
   d.headMoved = m.mergeAndParkProbesModule.headMoved;
   d.hasActiveLegRun = m.workflowRunTrackingModule.hasActiveLegRun;
