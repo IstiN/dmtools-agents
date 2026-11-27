@@ -311,6 +311,17 @@
       "requests": 21,
       "source": "reported",
       "model": "glm-5.3-flash"
+    },
+    {
+      "leg": "review",
+      "at": "2026-11-27T08:18:36Z",
+      "prompt": 195682,
+      "completion": 8863,
+      "total": 204545,
+      "cacheRead": 2528832,
+      "requests": 17,
+      "source": "reported",
+      "model": "glm-5.3-flash"
     }
   ]
 }
