@@ -358,16 +358,9 @@ function _issueCarrierGuardsFail(q, labels, item) {
     // post-dev — the PR lifecycle rules own it (hasOpenLinkedPr carries
     // the eligibility detail: MERGED-PR / PR-less stay fresh dev handoffs).
     if (hasOpenLinkedPr(q, item)) return true;
-    // 'blocked' = human hold (fa #939): the machine skips the item
+    // 'blocked' (fa #939) / 'agent:skip': the machine skips the item
     // ENTIRELY — all rules, all legs — until a human removes the label.
-    // gh-1140: q.allowBlockedItems (the guest-transplant AC4 park-reset
-    // lane) opts back in HERE too — the engine-level freeze spans this
-    // guard, the queryPrs pre-mutex filter and the matched filter, and
-    // all three must open together or the parked source stays invisible.
-    // The decision core still refuses a blocked item without the lane's
-    // own park marker, so human holds are never acted on.
-    if (!q.allowBlockedItems && labels.indexOf('blocked') !== -1) return true;
-    return false;
+    return _blockedQueryHoldFail(q, labels);
 }
 
 function _prChecksGuardsFail(q, item) {
@@ -563,8 +556,7 @@ function _prStateGuardsFail(q, item) {
 }
 
 function _prSideBlockedLabel(prLs) {
-    // 'blocked' on the PR side of an issue-carrier item freezes it too.
-    return prLs.indexOf('blocked') !== -1;
+    return prLs.indexOf('blocked') !== -1 || prLs.indexOf('agent:skip') !== -1;
 }
 
 function _prLabelMatchGuardsFail(q, prLs) {
@@ -1335,16 +1327,14 @@ function _sortAndSlicePrCandidates(matched, limit, priorityLabels, repoInfo) {
 // predicate every queryPrs filter reads (complexity lives here, off the
 // queryPrs ledger; behavior: 'blocked' items are invisible to every rule
 // EXCEPT a rule that opted in with query.allowBlockedItems).
-function _blockedHoldVisible(q, it) {
-    if (q.allowBlockedItems === true) return true;
-    return it.labels.indexOf('blocked') === -1;
+function _blockedHoldVisible(q, it, repoInfo) {
+    return !_blockedQueryHoldFail(q, it.labels) &&
+        !_blockedQueryHoldFail(q, (it.issueNumber && repoInfo && cachedIssueLabels(repoInfo, it.issueNumber)) || []);
 }
 
-// The same predicate in guard form for the matched filter (defensive
-// twin of the pre-mutex filter — see matchesGuards).
 function _blockedQueryHoldFail(q2, labels) {
     if (q2.allowBlockedItems) return false;
-    return labels.indexOf('blocked') !== -1;
+    return labels.indexOf('blocked') !== -1 || labels.indexOf('agent:skip') !== -1;
 }
 
 // gh-1194: queryPrs stage helpers (CRAP ratchet) — pure splits of the former
@@ -1362,8 +1352,8 @@ function _blockedQueryHoldFail(q2, labels) {
 // stays intact for every other rule, and the transplant decision core
 // still refuses to act on a 'blocked' item that does not carry the
 // lane's own park marker (human holds are never touched).
-function _visiblePrItems(q, items) {
-    return items.filter(function (it) { return _blockedHoldVisible(q, it); });
+function _visiblePrItems(q, items, repoInfo) {
+    return items.filter(function (it) { return _blockedHoldVisible(q, it, repoInfo); });
 }
 
 // The inline gh-1009 re-application, kept call-for-call (the split's
@@ -1420,7 +1410,7 @@ function _prRuleMatches(items, rule, provider, machineAuthor, owner, repoInfo) {
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
     var q = rule.query || {};
     var items = _buildPrItems(_openPrList(provider, repoInfo), repoInfo, branchPrefixOf(rule));
-    items = _visiblePrItems(q, items);
+    items = _visiblePrItems(q, items, repoInfo);
 
     // Mutex: gh-1009 split — _applyMutexFilter owns the defer decision;
     // gh-1000's phantom-holder reconciliation (phantomHealIfFull, inside
