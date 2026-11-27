@@ -45,7 +45,7 @@ Read both files now. If either is missing or unparsable, write `outputs/response
 - the run was cancelled or skipped ("The job was canceled", cancelled because a dependency failed) with no independent root cause in this window;
 - STALE REDS: every failing run of the lane sits on a sha strictly OLDER than the live sha, and the live sha itself has a green run — the red is incident history, not live evidence;
 - an external outage visible in the logs explains the failure identically across runs;
-- INTENTIONAL RED: the failing artifact declares itself intentional — a tracked file (workflow header, test body, TODO) states the failure is by design, owned by people, or waiting on an external dependency. A change that would "green" it is forbidden by the repository's own declaration, so there is no legitimate defect to fix; the loop closes silently.
+- INTENTIONAL RED: the failing artifact declares itself intentional with NO planned resolution — a tracked file (workflow header, test body) states the failure is by design and permanent (a live-fire drill target, an expected steady state). A change that would "green" it is forbidden by the repository's own declaration, so there is no legitimate defect to fix; the loop closes silently. NOT this predicate when the declaration names a pending external dependency or planned human work ("waiting for real data", "until the vendor ships") — that is P1 needs-human: a human must own the wait.
 
 **P1 — NEEDS-HUMAN** — `verdict: "needs-human"`. Any of, ON THE LIVE SHA (older shas only count if P0 stale-reds does not apply):
 - the failing step consumes an external secret/token/permission (deploy/publish auth failures, `401`/`403` on a protected resource) — the credential is not a tracked file;
