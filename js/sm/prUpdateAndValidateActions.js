@@ -5,10 +5,11 @@
 'use strict';
 
 var checkRunZombiesModule = require('../common/checkRunZombies.js');
+var ciDispatchPriorityModule = require('./ciDispatchPriority.js');
+var finalizeValidatePrDispatch = ciDispatchPriorityModule.finalizeValidatePrDispatch;
 var machineAuthorModule = require('../common/machineAuthor.js');
 var parkAndActorProbesModule = require('./parkAndActorProbes.js');
 var smRuleLayersModule = require('../common/smRuleLayers.js');
-var triggerFailuresModule = require('../common/triggerFailures.js');
 var validationLivenessModule = require('../common/validationLiveness.js');
 var PLACEHOLDER_PARK_MARKER = '\uD83C\uDFF7\uFE0F Placeholder resets capped';
 var TERMINAL_PR_SKIP_MSG = 'terminal PR — dispatch skipped';
@@ -426,23 +427,6 @@ function checkValidatePrPreDispatchGates(deps, rule, repoInfo, ticket, key, vHea
   }
   return false;
 }
-function finalizeValidatePrDispatch(deps, repoInfo, ticket, key, vHead0, processedKeys) {
-  try {
-    deps.dispatchCiWorkflow(ticket.branch);
-  } catch (eCi922) {
-    deps.warn('  ⚠️  validation dispatch failed for ' + key + ': ' + (eCi922.message || eCi922));
-    deps.recordDispatchFailure(repoInfo, key, ticket, eCi922, ticket.branch, triggerFailuresModule.classifyTriggerError(eCi922 && eCi922.message));
-    return;
-  }
-  if (vHead0) {
-    deps.stampValidationChecks(repoInfo, vHead0, 'in_progress', null, null);
-  }
-  if (!deps.dry) {
-    deps.githubTracker(repoInfo).addLabel(ticket.prNumber, 'ai_validating');
-  }
-  deps.log('  🧪 ' + key + ' validation dispatched (CI runs on the head via workflow_dispatch)');
-  processedKeys.push(key);
-}
 function cancelStaleAndCurePlaceholders(deps, repoInfo, ticket, key, vCiWf, vHead0, vProbe, processedKeys) {
   if (vHead0) {
     var vCancelResult = deps.cancelStaleDispatchedRuns(repoInfo, vCiWf, ticket.branch, vHead0);
@@ -463,7 +447,7 @@ function dispatchAndArmValidatePr(deps, rule, effectiveConfig, repoInfo, ticket,
   if (checkValidatePrPreDispatchGates(deps, rule, repoInfo, ticket, key, vHead0)) {
     return;
   }
-  if (cancelStaleAndCurePlaceholders(deps, repoInfo, ticket, key, vCiWf, vHead0, vProbe, processedKeys)) {
+  if (cancelStaleAndCurePlaceholders(deps, repoInfo, ticket, key, vCiWf, vHead0, vProbe, processedKeys) || ciDispatchPriorityModule.preDispatchSkip(deps, rule, repoInfo, ticket, key, vProbe, vHead0, processedKeys)) {
     return;
   }
   finalizeValidatePrDispatch(deps, repoInfo, ticket, key, vHead0, processedKeys);

@@ -9,6 +9,7 @@
 var branchRefreshModule = require('./branchRefresh.js');
 var buildEncodedConfigModule = require('../common/buildEncodedConfig.js');
 var checkRunStampModule = require('../common/checkRunStamp.js');
+var ciDispatchPriorityModule = require('./ciDispatchPriority.js');
 var configLoader = require('../configLoader.js');
 var guestTransplantModule = require('../common/guestTransplant.js');
 var labelListModule = require('../common/labelList.js');
@@ -359,7 +360,7 @@ function processRule(deps, rule, globalRepoInfo, ruleIndex, workflowBudget, effe
   var label = rule.description || 'Rule #' + (ruleIndex + 1);
   deps.log('\n══ ' + label + ' ══');
   deps.logRuleQuery(rule, interpolatedJql);
-  if (!validateProcessRuleShape(deps, rule)) {
+  if (!validateProcessRuleShape(deps, rule) || ciDispatchPriorityModule.gateRule(deps, rule, effectiveRepoInfo)) {
     return {
       processedKeys: [],
       skippedKeys: []

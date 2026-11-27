@@ -89,6 +89,7 @@ var validationProbesModule = require('./sm/validationProbes.js');
 var verdictAndFailStateModule = require('./sm/verdictAndFailState.js');
 var workflowDispatchModule = require('./sm/workflowDispatch.js');
 var workflowRunTrackingModule = require('./sm/workflowRunTracking.js');
+var ciDispatchPriorityModule = require('./sm/ciDispatchPriority.js');
 
 var RUN_JOB_PARAMS = {}, projectConfig = {}, smForge = 'github', _githubTrackers = {};
 var PRIORITY_LABELS = { blocker: 'priority_blocker', medium: 'priority_medium', low: 'priority_low' };
@@ -399,7 +400,7 @@ function buildTickOrchestratorDeps() {
         tickMergeReservationReleased = false; tickMergeSlotSpent = null; tickMergeSlotAccounted = false; tickL1CacheDropped = false;
         tickReposSeen = {}; tickMovedPrs = {}; tickFreshResets = {}; tickParkedRecorded = {}; tickWorkflowEscalations = {}; terminalPrMemo = {};
         tickReworkLatch = null; tickDeadZone = null; syncMemo = { repo: null, at: 0 };
-        workflowDispatchModule.resetInTickDispatchLatch();
+        workflowDispatchModule.resetInTickDispatchLatch(); ciDispatchPriorityModule.resetTick();
         if (DRY) console.log('🧪 DRY-RUN mode — no workflows will be triggered, no transitions or labels applied');
         projectConfig = workflowDispatchModule.applyJobParamsScm(configLoader.loadProjectConfig(p), p);
         smForge = workflowDispatchModule.resolveSmForge(projectConfig);

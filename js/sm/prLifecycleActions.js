@@ -7,6 +7,7 @@
  */
 'use strict';
 
+var ciDispatchPriorityModule = require('./ciDispatchPriority.js');
 var guestTransplantModule = require('../common/guestTransplant.js');
 var issuePlanModule = require('../common/issuePlan.js');
 var machineAuthorModule = require('../common/machineAuthor.js');
@@ -254,7 +255,7 @@ function handleMergePrAction(deps, rule, effectiveConfig, repoInfo, ticket, key,
     return;
   }
   try {
-    deps.attemptMergeProbe(repoInfo, ticket, key);
+    ciDispatchPriorityModule.afterMergeOutcome(deps, repoInfo, ticket, deps.attemptMergeProbe(repoInfo, ticket, key));
     processedKeys.push(key);
   } catch (e) {
     deps.error('  ❌ merge_pr failed for ' + key + ': ' + (e.message || e));
