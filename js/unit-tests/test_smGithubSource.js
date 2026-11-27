@@ -3293,6 +3293,8 @@ suite('sm github source: gh-1000 phantom-heal helpers', function () {
         var items = [pr(1, ['ai_validating']), pr(2, ['ai_validating', 'blocked']), pr(3, ['other'])];
         assert.deepEqual(mod.mutexHoldersOf(items, { mutex: 'ai_validating' }), [1],
             'blocked holder is invisible');
+        assert.deepEqual(mod.mutexHoldersOf([pr(1, ['ai_validating']), pr(2, ['ai_validating', 'agent:skip'])],
+            { mutex: 'ai_validating' }), [1], 'agent:skip holder is invisible (same hold as blocked)');
         var scoped = [pr(4, ['ai_validating', 'agent']), pr(5, ['ai_validating'])];
         assert.deepEqual(mod.mutexHoldersOf(scoped, { mutex: 'ai_validating', mutexAmong: ['agent'] }), [4],
             'mutexAmong scopes WHO counts');

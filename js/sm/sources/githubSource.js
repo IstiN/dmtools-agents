@@ -226,14 +226,16 @@ function _fetchIssueLabels(repoInfo, issueNumber) {
 function cachedIssueLabels(repoInfo, issueNumber) {
     var key = _repoKey(repoInfo) + ':issueLabels:' + issueNumber;
     var hit = _priorityIssueLabelCache.entries[key];
+    var stale = null;
     if (hit) {
         if (Date.now() - hit.at > PRIORITY_ISSUE_LABEL_TTL_MS) {
+            stale = hit.data;
             delete _priorityIssueLabelCache.entries[key];
         } else {
             return hit.data;
         }
     }
-    var labels = _fetchIssueLabels(repoInfo, issueNumber);
+    var labels = _fetchIssueLabels(repoInfo, issueNumber) || stale;
     _priorityIssueLabelCache.entries[key] = { at: Date.now(), data: labels };
     return labels;
 }
@@ -907,7 +909,7 @@ function mutexHoldersOf(items, q) {
     var among = (q.mutexAmong && q.mutexAmong.length) ? q.mutexAmong : null;
     return items.filter(function (p) {
         var labels = p.labels || [];
-        if (labels.indexOf('blocked') !== -1) return false;
+        if (_blockedQueryHoldFail({}, labels)) return false;
         if (labels.indexOf(q.mutex) === -1) return false;
         return !among || among.some(function (m) { return labels.indexOf(m) !== -1; });
     // Tolerant of both payload shapes: the github_list_prs carrier uses
@@ -1328,8 +1330,13 @@ function _sortAndSlicePrCandidates(matched, limit, priorityLabels, repoInfo) {
 // queryPrs ledger; behavior: 'blocked' items are invisible to every rule
 // EXCEPT a rule that opted in with query.allowBlockedItems).
 function _blockedHoldVisible(q, it, repoInfo) {
-    return !_blockedQueryHoldFail(q, it.labels) &&
-        !_blockedQueryHoldFail(q, (it.issueNumber && repoInfo && cachedIssueLabels(repoInfo, it.issueNumber)) || []);
+    if (_blockedQueryHoldFail(q, it.labels)) return false;
+    if (q.allowBlockedItems || !it.issueNumber || !repoInfo) return true;
+    // Linked-issue hold: cachedIssueLabels serves STALE labels on a fetch
+    // error (stale-while-error), so a transient API failure does not
+    // dissolve a known hold. A never-read issue (null) is treated as no hold.
+    var issLabels = cachedIssueLabels(repoInfo, it.issueNumber);
+    return !_blockedQueryHoldFail(q, issLabels || []);
 }
 
 function _blockedQueryHoldFail(q2, labels) {
