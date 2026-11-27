@@ -177,8 +177,9 @@ function resolvePriorityLabels(cfg) {
 // Linked-issue label cache — same per-tick TTL pattern as smProvider's
 // ioCache (60s): every PR-rule query in one tick re-runs queryPrs, and
 // without the cache each pass would re-fetch the same issues' labels.
-// Entry shape: [] labels (fetched) | null (fetch failed → PR-side labels
-// only, tier degrades toward medium — never wedges the queue on I/O).
+// Entry shape: [] labels (fetched) | null (fetch failed AND no prior read →
+// tier degrades toward medium, never wedges the queue on I/O). A failed
+// refetch serves the last known labels (stale-while-error) so a hold holds.
 var PRIORITY_ISSUE_LABEL_TTL_MS = 60 * 1000;
 var _priorityIssueLabelCache = { entries: {} };
 // Providers that read issue labels themselves (gitlab: no github_get_issue
@@ -226,14 +227,16 @@ function _fetchIssueLabels(repoInfo, issueNumber) {
 function cachedIssueLabels(repoInfo, issueNumber) {
     var key = _repoKey(repoInfo) + ':issueLabels:' + issueNumber;
     var hit = _priorityIssueLabelCache.entries[key];
+    var stale = null;
     if (hit) {
         if (Date.now() - hit.at > PRIORITY_ISSUE_LABEL_TTL_MS) {
+            stale = hit.data;
             delete _priorityIssueLabelCache.entries[key];
         } else {
             return hit.data;
         }
     }
-    var labels = _fetchIssueLabels(repoInfo, issueNumber);
+    var labels = _fetchIssueLabels(repoInfo, issueNumber) || stale;
     _priorityIssueLabelCache.entries[key] = { at: Date.now(), data: labels };
     return labels;
 }
@@ -358,16 +361,9 @@ function _issueCarrierGuardsFail(q, labels, item) {
     // post-dev — the PR lifecycle rules own it (hasOpenLinkedPr carries
     // the eligibility detail: MERGED-PR / PR-less stay fresh dev handoffs).
     if (hasOpenLinkedPr(q, item)) return true;
-    // 'blocked' = human hold (fa #939): the machine skips the item
+    // 'blocked' (fa #939) / 'agent:skip': the machine skips the item
     // ENTIRELY — all rules, all legs — until a human removes the label.
-    // gh-1140: q.allowBlockedItems (the guest-transplant AC4 park-reset
-    // lane) opts back in HERE too — the engine-level freeze spans this
-    // guard, the queryPrs pre-mutex filter and the matched filter, and
-    // all three must open together or the parked source stays invisible.
-    // The decision core still refuses a blocked item without the lane's
-    // own park marker, so human holds are never acted on.
-    if (!q.allowBlockedItems && labels.indexOf('blocked') !== -1) return true;
-    return false;
+    return _blockedQueryHoldFail(q, labels);
 }
 
 function _prChecksGuardsFail(q, item) {
@@ -563,8 +559,7 @@ function _prStateGuardsFail(q, item) {
 }
 
 function _prSideBlockedLabel(prLs) {
-    // 'blocked' on the PR side of an issue-carrier item freezes it too.
-    return prLs.indexOf('blocked') !== -1;
+    return prLs.indexOf('blocked') !== -1 || prLs.indexOf('agent:skip') !== -1;
 }
 
 function _prLabelMatchGuardsFail(q, prLs) {
@@ -915,7 +910,7 @@ function mutexHoldersOf(items, q) {
     var among = (q.mutexAmong && q.mutexAmong.length) ? q.mutexAmong : null;
     return items.filter(function (p) {
         var labels = p.labels || [];
-        if (labels.indexOf('blocked') !== -1) return false;
+        if (_blockedQueryHoldFail({}, labels)) return false;
         if (labels.indexOf(q.mutex) === -1) return false;
         return !among || among.some(function (m) { return labels.indexOf(m) !== -1; });
     // Tolerant of both payload shapes: the github_list_prs carrier uses
@@ -1335,16 +1330,19 @@ function _sortAndSlicePrCandidates(matched, limit, priorityLabels, repoInfo) {
 // predicate every queryPrs filter reads (complexity lives here, off the
 // queryPrs ledger; behavior: 'blocked' items are invisible to every rule
 // EXCEPT a rule that opted in with query.allowBlockedItems).
-function _blockedHoldVisible(q, it) {
-    if (q.allowBlockedItems === true) return true;
-    return it.labels.indexOf('blocked') === -1;
+function _blockedHoldVisible(q, it, repoInfo) {
+    if (_blockedQueryHoldFail(q, it.labels)) return false;
+    if (q.allowBlockedItems || !it.issueNumber || !repoInfo) return true;
+    // Linked-issue hold: cachedIssueLabels serves STALE labels on a fetch
+    // error (stale-while-error), so a transient API failure does not
+    // dissolve a known hold. A never-read issue (null) is treated as no hold.
+    var issLabels = cachedIssueLabels(repoInfo, it.issueNumber);
+    return !_blockedQueryHoldFail(q, issLabels || []);
 }
 
-// The same predicate in guard form for the matched filter (defensive
-// twin of the pre-mutex filter — see matchesGuards).
 function _blockedQueryHoldFail(q2, labels) {
     if (q2.allowBlockedItems) return false;
-    return labels.indexOf('blocked') !== -1;
+    return labels.indexOf('blocked') !== -1 || labels.indexOf('agent:skip') !== -1;
 }
 
 // gh-1194: queryPrs stage helpers (CRAP ratchet) — pure splits of the former
@@ -1362,8 +1360,8 @@ function _blockedQueryHoldFail(q2, labels) {
 // stays intact for every other rule, and the transplant decision core
 // still refuses to act on a 'blocked' item that does not carry the
 // lane's own park marker (human holds are never touched).
-function _visiblePrItems(q, items) {
-    return items.filter(function (it) { return _blockedHoldVisible(q, it); });
+function _visiblePrItems(q, items, repoInfo) {
+    return items.filter(function (it) { return _blockedHoldVisible(q, it, repoInfo); });
 }
 
 // The inline gh-1009 re-application, kept call-for-call (the split's
@@ -1420,7 +1418,7 @@ function _prRuleMatches(items, rule, provider, machineAuthor, owner, repoInfo) {
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
     var q = rule.query || {};
     var items = _buildPrItems(_openPrList(provider, repoInfo), repoInfo, branchPrefixOf(rule));
-    items = _visiblePrItems(q, items);
+    items = _visiblePrItems(q, items, repoInfo);
 
     // Mutex: gh-1009 split — _applyMutexFilter owns the defer decision;
     // gh-1000's phantom-holder reconciliation (phantomHealIfFull, inside
@@ -1478,6 +1476,8 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = { query: query, matchesGuards: matchesGuards,
         linkedIssueNumber: linkedIssueNumber,
         takeMutexTickSnapshot: takeMutexTickSnapshot,
+        cachedIssueLabels: cachedIssueLabels, _issueLabelCache: _priorityIssueLabelCache,
+        _registerIssueLabelProvider: _registerIssueLabelProvider,
         mutexHoldersOf: mutexHoldersOf, rederiveHoldersLive: rederiveHoldersLive,
         logPhantomHeal: logPhantomHeal,
         // gh-1194: query split helpers exposed as testable pure helpers

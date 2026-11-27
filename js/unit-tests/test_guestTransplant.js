@@ -506,6 +506,23 @@ suite('guestTransplant: parks and resets (AC4)', function () {
         assert.equal(seq.steps.length, 0);
     });
 
+    test('agent:skip on a fresh-arm source and over our own park marker: skip/human-blocked, never touched (fa#2434)', function () {
+        var fresh = mod.transplantSequence(baseInput({
+            source: baseSource({ labels: ['po_accept', 'agent:skip'] }), headSha: SHA_B
+        }));
+        assert.equal(fresh.decision, 'skip');
+        assert.equal(fresh.reason, 'human-blocked');
+        assert.equal(fresh.steps.length, 0);
+        var overPark = mod.transplantSequence(baseInput({
+            source: baseSource({ labels: ['po_accept', 'blocked', 'agent:skip'] }),
+            marker: { state: 'parked', source: 42, head: SHA_A, branch: 'ai/guest-42', reason: 'conflict' },
+            headSha: SHA_B
+        }));
+        assert.equal(overPark.decision, 'skip', 'a moved head must NOT re-arm an agent:skip source');
+        assert.equal(overPark.reason, 'human-blocked');
+        assert.equal(overPark.steps.length, 0);
+    });
+
     test('a no-sha armed source parks with the no-ref reason (AC4 fallback)', function () {
         var seq = mod.transplantSequence(baseInput({ headSha: null }));
         assert.equal(seq.decision, 'park');
@@ -1200,6 +1217,11 @@ suite('guestTransplant: rework round 3 — terminal transplanted marker (threads
 });
 
 suite('guestTransplant: rework round 3 — hold-aware E5 completion (thread 19)', function () {
+
+    test('agent:skip holds the completion even with our own park marker (fa#2434)', function () {
+        assert.equal(mod.completionHold(['agent:skip'], 'blocked', { state: 'armed' }), true);
+        assert.equal(mod.completionHold(['agent:skip'], 'blocked', { state: 'parked' }), true);
+    });
 
     test('a blocked source holds the orphan completion (fa#939 freeze)', function () {
         assert.equal(mod.completionHold(['blocked'], 'blocked',

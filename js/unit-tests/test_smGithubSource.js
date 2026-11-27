@@ -378,6 +378,50 @@ suite('sm github source', function () {
         assert.equal(flowing[0].key, 'gh-3');
     });
 
+    test('agent:skip / blocked on issue or PR freezes BOTH issue-carrier and PR-carrier rules (fa#2434)', function () {
+        var issueMap = {
+            2432: { number: 2432, labels: [{ name: 'ai_developed' }, { name: 'agent:skip' }] },
+            2433: { number: 2433, labels: [{ name: 'ai_developed' }, { name: 'blocked' }] },
+            2435: { number: 2435, labels: [{ name: 'ai_developed' }] }
+        };
+        var srcMod = load({
+            github_search_issues: function () {
+                return { items: [issueMap[2432], issueMap[2433], issueMap[2435]] };
+            },
+            github_get_issue: function (args) {
+                return issueMap[args.issueNumber] || { message: 'Not Found' };
+            },
+            github_list_prs: function () {
+                return [
+                    { number: 2434, labels: [{ name: 'ai_validated' }], head: { ref: 'ai/gh-2432' }, user: { login: 'ai-teammate' }, draft: false },
+                    { number: 2436, labels: [{ name: 'ai_validated' }], head: { ref: 'ai/gh-2433' }, user: { login: 'ai-teammate' }, draft: false },
+                    { number: 2437, labels: [{ name: 'ai_validated' }, { name: 'agent:skip' }], head: { ref: 'ai/gh-2435' }, user: { login: 'ai-teammate' }, draft: false },
+                    { number: 2438, labels: [{ name: 'ai_validated' }], head: { ref: 'ai/gh-2435' }, user: { login: 'ai-teammate' }, draft: false }
+                ];
+            }
+        }, {
+            2432: { number: 2434, state: 'OPEN' },
+            2433: { number: 2436, state: 'OPEN' },
+            2435: { number: 2437, state: 'OPEN' }
+        }, {
+            2434: { number: 2434, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, labels: ['ai_validated'] },
+            2436: { number: 2436, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, labels: ['ai_validated'] },
+            2437: { number: 2437, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, labels: ['ai_validated', 'agent:skip'] },
+            2438: { number: 2438, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, labels: ['ai_validated'] }
+        });
+        var issueItems = srcMod.query({
+            query: { type: 'issue', labels: ['ai_developed'], prLabels: ['ai_validated'] }
+        }, { repoInfo: { owner: 'IstiN', repo: 'fa' }, machineAuthor: 'ai-teammate' });
+        assert.deepEqual(issueItems.map(function (i) { return i.key; }), [],
+            'agent:skip on issue (2432), blocked on issue (2433), and agent:skip on linked PR (2437) all freeze issue-carrier rules');
+
+        var prItems = srcMod.query({
+            query: { type: 'pr', labels: ['ai_validated'], checks: ['green', 'none'], prMachineAuthor: true, draft: false }
+        }, { repoInfo: { owner: 'IstiN', repo: 'fa' }, machineAuthor: 'ai-teammate' });
+        assert.deepEqual(prItems.map(function (i) { return i.key; }), ['pr-2438'],
+            'PR-anchored rules (like review-machine-unlinked) skip PRs whose linked issue carries agent:skip or blocked, or whose PR carries agent:skip');
+    });
+
     test('pr rules: label guards + checks + mergeable, PRs without issues', function () {
         var srcMod = load({
             github_list_prs: function () {
@@ -3244,11 +3288,31 @@ suite('sm github source: gh-1000 phantom-heal helpers', function () {
     }
     function pr(n, labels) { return { number: n, labels: labels }; }
 
+    test('cachedIssueLabels: stale-while-error keeps a known hold; success replaces stale; TTL restarts', function () {
+        var mod = loadBare();
+        var ri = { owner: 'o', repo: 'r' };
+        var result = null;
+        mod._registerIssueLabelProvider(ri, { issueLabels: function () { return result; } });
+        var key = 'o/r:issueLabels:7';
+        mod._issueLabelCache.entries[key] = { at: Date.now() - 10 * 60 * 1000, data: ['agent:skip'] };
+        result = null;
+        assert.deepEqual(mod.cachedIssueLabels(ri, 7), ['agent:skip'], 'failed refetch serves the stale hold');
+        assert.ok(Date.now() - mod._issueLabelCache.entries[key].at < 5000, 'stale data re-cached under a fresh TTL');
+        mod._issueLabelCache.entries[key] = { at: Date.now() - 10 * 60 * 1000, data: ['agent:skip'] };
+        result = [];
+        assert.deepEqual(mod.cachedIssueLabels(ri, 7), [], 'a successful empty read replaces stale (hold removal propagates)');
+        mod._issueLabelCache.entries = {};
+        result = null;
+        assert.equal(mod.cachedIssueLabels(ri, 8), null, 'no stale + failed read stays null');
+    });
+
     test('mutexHoldersOf: mutex-label holders, blocked exempt, mutexAmong scopes', function () {
         var mod = loadBare();
         var items = [pr(1, ['ai_validating']), pr(2, ['ai_validating', 'blocked']), pr(3, ['other'])];
         assert.deepEqual(mod.mutexHoldersOf(items, { mutex: 'ai_validating' }), [1],
             'blocked holder is invisible');
+        assert.deepEqual(mod.mutexHoldersOf([pr(1, ['ai_validating']), pr(2, ['ai_validating', 'agent:skip'])],
+            { mutex: 'ai_validating' }), [1], 'agent:skip holder is invisible (same hold as blocked)');
         var scoped = [pr(4, ['ai_validating', 'agent']), pr(5, ['ai_validating'])];
         assert.deepEqual(mod.mutexHoldersOf(scoped, { mutex: 'ai_validating', mutexAmong: ['agent'] }), [4],
             'mutexAmong scopes WHO counts');
