@@ -4,18 +4,19 @@
  * Runs AFTER the CLI agent. The agent wrote outputs/response.md whose FIRST
  * line is the strict verdict JSON (self-heal state machine v2.3):
  *
- *   {"verdict": "adequate"|"needs-human"|"noise", "classification": "<tag>",
+ *   {"verdict": "repo-fixable"|"needs-human"|"noise", "classification": "<tag>",
  *    "reason": "...", "summary": "...", "suspected_cause": "..."}
  *
- * A legacy line carrying only the boolean "adequate" (v0.0.1 contract) is
- * still accepted: true -> "adequate", false -> "noise".
+ * Legacy verdicts are still accepted: the boolean "adequate" line (v0.0.1)
+ * maps true -> "repo-fixable", false -> "noise"; the string verdict
+ * "adequate" (v0.0.1..0.0.4) maps to "repo-fixable".
  *
- * Routing (v2.3):
- *   - adequate    -> dedupe-search, create ONE issue "[ci-heal] <wfs>: failing"
+ * Routing (v2.4):
+ *   - repo-fixable -> dedupe-search, create ONE issue "[ci-heal] <wfs>: failing"
  *                    (labels ci-heal + wf:<name> per affected workflow + agent:dev)
  *                    and ASSIGN machineAuthor. Assignment IS the dev-leg arming
  *                    act (dev-on-assignment matches assignee; labels arm nothing).
- *                    Empty/missing machineAuthor + adequate = LOUD business
+ *                    Empty/missing machineAuthor + repo-fixable = LOUD business
  *                    failure ({success:false} record + throw) BEFORE any GitHub
  *                    call — a silent unassigned issue would stall the loop.
  *                    A failed assignment call is equally loud (same stall).
@@ -50,8 +51,9 @@ var CI_HEAL_LABEL = 'ci-heal';
 var DEV_LABEL = 'agent:dev';
 var NEEDS_HUMAN_LABEL = 'needs-human';
 var SKIP_LABEL = 'agent:skip';
-var VERDICT_CLASSES = ['adequate', 'needs-human', 'noise'];
-var VERDICT_KEYS = ['verdict', 'classification', 'reason', 'summary', 'suspected_cause', 'adequate'];
+var VERDICT_CLASSES = ['repo-fixable', 'needs-human', 'noise'];
+var VERDICT_LEGACY_ALIASES = { 'adequate': 'repo-fixable' }; // v0.0.1..0.0.4 string verdict
+var VERDICT_KEYS = ['verdict', 'classification', 'reason', 'summary', 'suspected_cause', 'suggestedFix', 'adequate'];
 
 // ── customParams / response resolution (postBugCreation.js pattern) ──────────
 
@@ -94,10 +96,11 @@ function resolveOwnerRepo(targetRepository) {
 /** Route a parsed verdict object to its class; null when it matches no contract. */
 function resolveVerdictClass(parsed) {
     if (!parsed || typeof parsed !== 'object') return null;
-    if (typeof parsed.verdict === 'string' && VERDICT_CLASSES.indexOf(parsed.verdict) !== -1) {
-        return parsed.verdict;
+    if (typeof parsed.verdict === 'string') {
+        if (VERDICT_CLASSES.indexOf(parsed.verdict) !== -1) return parsed.verdict;
+        if (VERDICT_LEGACY_ALIASES[parsed.verdict]) return VERDICT_LEGACY_ALIASES[parsed.verdict];
     }
-    if (typeof parsed.adequate === 'boolean') return parsed.adequate ? 'adequate' : 'noise'; // legacy v0.0.1
+    if (typeof parsed.adequate === 'boolean') return parsed.adequate ? 'repo-fixable' : 'noise'; // legacy v0.0.1 boolean
     return null;
 }
 
@@ -108,7 +111,7 @@ function parseVerdict(responseText) {
     for (var i = 0; i < lines.length; i++) {
         var line = lines[i].trim();
         if (line.length < 2 || line.charAt(0) !== '{' || line.charAt(line.length - 1) !== '}') continue;
-        if (line.indexOf('"verdict"') === -1 && line.indexOf('"adequate"') === -1) continue;
+        if (line.indexOf('"verdict"') === -1 && line.indexOf('"adequate"') === -1 && line.indexOf('"repo-fixable"') === -1) continue;
         try {
             var parsed = JSON.parse(line);
             var verdictClass = resolveVerdictClass(parsed);
@@ -116,12 +119,12 @@ function parseVerdict(responseText) {
                 var verdict = {
                     verdict: verdictClass,
                     classification: (typeof parsed.classification === 'string') ? parsed.classification : '',
-                    adequate: verdictClass === 'adequate',
+                    repoFixable: verdictClass === 'repo-fixable',
                     line: i + 1
                 };
                 for (var k = 0; k < VERDICT_KEYS.length; k++) {
                     var key = VERDICT_KEYS[k];
-                    if (key !== 'verdict' && key !== 'adequate' && key !== 'classification' &&
+                    if (key !== 'verdict' && key !== 'adequate' && key !== 'classification' && // 'adequate' = legacy key, still copied
                         typeof parsed[key] === 'string') verdict[key] = parsed[key];
                 }
                 var linked = parsed.linksIssue !== undefined && parsed.linksIssue !== null ? parseInt(parsed.linksIssue, 10) : NaN;
@@ -203,8 +206,8 @@ function affectedWorkflows(context, verdict) {
     return names;
 }
 
-/** adequate/noise keep the v0.0.1 title; needs-human gets a distinct suffix so
- *  title-dedupe never suppresses an adequate issue behind an open escalation. */
+/** repo-fixable/noise keep the v0.0.1 title; needs-human gets a distinct suffix so
+ *  title-dedupe never suppresses a fixable issue behind an open escalation. */
 function buildIssueTitle(workflowNames, verdictClass) {
     var prefix = (!workflowNames || workflowNames.length === 0) ? 'ci' : workflowNames.join(',');
     if (verdictClass === 'needs-human') return '[ci-heal] ' + prefix + ': failing (needs-human)';
@@ -325,7 +328,7 @@ function buildEscalationParagraph(verdict) {
 }
 
 function buildIssueBody(verdict, context, targetRepository, previousIncidents) {
-    var verdictClass = verdict.verdict || (verdict.adequate ? 'adequate' : 'noise');
+    var verdictClass = verdict.verdict || (verdict.repoFixable ? 'repo-fixable' : 'noise');
     var lines = [];
     lines.push('## CI failure analysis (automated)');
     lines.push('');
@@ -333,6 +336,8 @@ function buildIssueBody(verdict, context, targetRepository, previousIncidents) {
     lines.push('');
     lines.push('**Suspected cause:** ' + (verdict.suspected_cause || '(unknown)'));
     lines.push('');
+    if (verdict.suggestedFix) lines.push('**Most likely fix** (reasoned from this window\'s evidence — verify against the code before executing): ' + verdict.suggestedFix);
+    if (verdict.suggestedFix) lines.push('');
     lines.push('**Classification:** `' + (verdict.classification || 'unspecified') + '` — verdict **' + verdictClass + '**' +
         (verdict.reason ? ' (`' + verdict.reason + '`)' : ''));
     lines.push('');
@@ -373,7 +378,7 @@ function buildIssueBody(verdict, context, targetRepository, previousIncidents) {
     }
     lines.push('</details>');
     lines.push('');
-    if (verdictClass === 'adequate') {
+    if (verdictClass === 'repo-fixable') {
         lines.push('**Fix protocol:** the PR that fixes this issue MUST close it natively — include' +
             ' `Closes #<this issue number>` in the PR description. The native close records the' +
             ' closure commit, which is the state anchor the CI kicker uses to treat older failing' +
@@ -385,7 +390,7 @@ function buildIssueBody(verdict, context, targetRepository, previousIncidents) {
     return lines.join('\n');
 }
 
-/** adequate -> [ci-heal, agent:dev, wf:*]; needs-human -> [ci-heal, needs-human, agent:skip, wf:*]. */
+/** repo-fixable -> [ci-heal, agent:dev, wf:*]; needs-human -> [ci-heal, needs-human, agent:skip, wf:*]. */
 function buildLabels(workflowNames, verdictClass) {
     var labels = [CI_HEAL_LABEL];
     if (verdictClass === 'needs-human') {
@@ -471,7 +476,7 @@ function action(params) {
         dryRun: dryRun,
         verdictParsed: verdict !== null,
         verdict: verdictClass,
-        adequate: verdict ? verdict.adequate : null,
+        repoFixable: verdict ? verdict.repoFixable : null,
         issueCreated: false,
         duplicate: false
     };
@@ -577,13 +582,13 @@ function action(params) {
         }
     }
 
-    // LOUD business failure guard: adequate + no machineAuthor = an unassigned
+    // LOUD business failure guard: repo-fixable + no machineAuthor = an unassigned
     // issue nothing will ever arm on. Fail BEFORE any GitHub call.
     var machineAuthor = custom.machineAuthor ? String(custom.machineAuthor).trim() : '';
-    if (verdictClass === 'adequate' && machineAuthor === '') {
+    if (verdictClass === 'repo-fixable' && machineAuthor === '') {
         result.success = false;
         result.machineAuthorMissing = true;
-        result.error = 'adequate verdict requires customParams.machineAuthor — assignment is the dev-leg arming act; refusing to create a silent unassigned issue';
+        result.error = 'repo-fixable verdict requires customParams.machineAuthor — assignment is the dev-leg arming act; refusing to create a silent unassigned issue';
         console.error('ci_analyst: ' + result.error);
         writeResult();
         throw new Error('ci_analyst: ' + result.error);
@@ -632,7 +637,7 @@ function action(params) {
         console.error('ci_analyst: github_add_labels unavailable — issue created without labels');
     }
 
-    if (verdictClass === 'adequate') {
+    if (verdictClass === 'repo-fixable') {
         if (typeof github_assign_issue === 'function') {
             try {
                 var assignArgs = githubIssueArgs(ownerRepo, number);
