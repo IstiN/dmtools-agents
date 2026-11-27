@@ -3288,6 +3288,24 @@ suite('sm github source: gh-1000 phantom-heal helpers', function () {
     }
     function pr(n, labels) { return { number: n, labels: labels }; }
 
+    test('cachedIssueLabels: stale-while-error keeps a known hold; success replaces stale; TTL restarts', function () {
+        var mod = loadBare();
+        var ri = { owner: 'o', repo: 'r' };
+        var result = null;
+        mod._registerIssueLabelProvider(ri, { issueLabels: function () { return result; } });
+        var key = 'o/r:issueLabels:7';
+        mod._issueLabelCache.entries[key] = { at: Date.now() - 10 * 60 * 1000, data: ['agent:skip'] };
+        result = null;
+        assert.deepEqual(mod.cachedIssueLabels(ri, 7), ['agent:skip'], 'failed refetch serves the stale hold');
+        assert.ok(Date.now() - mod._issueLabelCache.entries[key].at < 5000, 'stale data re-cached under a fresh TTL');
+        mod._issueLabelCache.entries[key] = { at: Date.now() - 10 * 60 * 1000, data: ['agent:skip'] };
+        result = [];
+        assert.deepEqual(mod.cachedIssueLabels(ri, 7), [], 'a successful empty read replaces stale (hold removal propagates)');
+        mod._issueLabelCache.entries = {};
+        result = null;
+        assert.equal(mod.cachedIssueLabels(ri, 8), null, 'no stale + failed read stays null');
+    });
+
     test('mutexHoldersOf: mutex-label holders, blocked exempt, mutexAmong scopes', function () {
         var mod = loadBare();
         var items = [pr(1, ['ai_validating']), pr(2, ['ai_validating', 'blocked']), pr(3, ['other'])];

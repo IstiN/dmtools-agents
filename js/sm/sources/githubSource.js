@@ -1475,6 +1475,8 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = { query: query, matchesGuards: matchesGuards,
         linkedIssueNumber: linkedIssueNumber,
         takeMutexTickSnapshot: takeMutexTickSnapshot,
+        cachedIssueLabels: cachedIssueLabels, _issueLabelCache: _priorityIssueLabelCache,
+        _registerIssueLabelProvider: _registerIssueLabelProvider,
         mutexHoldersOf: mutexHoldersOf, rederiveHoldersLive: rederiveHoldersLive,
         logPhantomHeal: logPhantomHeal,
         // gh-1194: query split helpers exposed as testable pure helpers

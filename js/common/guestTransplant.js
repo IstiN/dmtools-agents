@@ -793,10 +793,10 @@ function _transplantRefuseDecision(input, source, base, audit) {
                  steps: [], audit: audit + 'REFUSED — arm actor is ' + actor + ' (audit only, no action)' };
     }
     if (!isCrossRepoHead(source.headRepo, base.owner, base.repo)) {
-        return { decision: 'skip', reason: 'same-repo', steps: [],
-                 audit: audit + 'skipped — same-repo head (transplant is cross-repo only)' };
+        return { decision: 'skip', reason: 'same-repo', steps: [], audit: audit + 'skipped — same-repo head (transplant is cross-repo only)' };
     }
-    return null;
+    return (source.labels || []).indexOf('agent:skip') === -1 ? null
+        : { decision: 'skip', reason: 'human-blocked', steps: [], audit: audit + 'skipped — agent:skip (human hold)' };
 }
 
 // The tail every transplant shares: carry probe → transplant comment →
@@ -1036,8 +1036,8 @@ function sequenceHeadSha(seq) {
 // (fail closed toward the freeze; the branch survives to a later tick).
 function completionHold(labels, holdLabel, marker) {
     if (!Array.isArray(labels)) return true;
-    if (labels.indexOf(holdLabel) === -1) return false;
-    return !(marker && marker.state === 'parked');
+    if (labels.indexOf('agent:skip') !== -1) return true;
+    return labels.indexOf(holdLabel) !== -1 && !(marker && marker.state === 'parked');
 }
 
 // The sweep's human-hold probe (thread 19): the source's current label

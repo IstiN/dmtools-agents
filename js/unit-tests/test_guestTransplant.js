@@ -1201,6 +1201,11 @@ suite('guestTransplant: rework round 3 — terminal transplanted marker (threads
 
 suite('guestTransplant: rework round 3 — hold-aware E5 completion (thread 19)', function () {
 
+    test('agent:skip holds the completion even with our own park marker (fa#2434)', function () {
+        assert.equal(mod.completionHold(['agent:skip'], 'blocked', { state: 'armed' }), true);
+        assert.equal(mod.completionHold(['agent:skip'], 'blocked', { state: 'parked' }), true);
+    });
+
     test('a blocked source holds the orphan completion (fa#939 freeze)', function () {
         assert.equal(mod.completionHold(['blocked'], 'blocked',
             { state: 'armed', source: 42, head: SHA_A }), true,
