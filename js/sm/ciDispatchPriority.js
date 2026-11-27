@@ -150,6 +150,15 @@ function deadBranchRuns(runs, prIdx) {
     return isDispatch(r) && !prIdx[r.head_branch] && PROTECTED_BRANCHES.indexOf(r.head_branch) === -1;
   });
 }
+// Pure: in-flight dispatch runs on an open PR's branch whose sha is no longer
+// the PR head (rework push / silent refresh moved it) — their verdict is void.
+function supersededHeadRuns(runs, prIdx) {
+  return (runs || []).filter(function (r) {
+    var pr = prIdx[r.head_branch];
+    var head = pr && pr.head && pr.head.sha;
+    return isDispatch(r) && !!head && r.head_sha !== head;
+  });
+}
 // Pure: an approved PR whose validation run is queued but not started.
 function approvedPendingExists(runs, prIdx) {
   return (runs || []).some(function (r) {
@@ -222,6 +231,7 @@ function runSweep(deps, repoInfo, ciWorkflow) {
   var seen = {};
   cancelBatch(deps, repoInfo, dedupeSameHead(runs), 'duplicate of a newer run on the same head', seen, null);
   cancelDeadBranchRuns(deps, repoInfo, runs, prIdx, seen);
+  cancelBatch(deps, repoInfo, supersededHeadRuns(runs, prIdx), 'superseded head (PR head moved)', seen, null);
   var pending = approvedPendingExists(runs, prIdx) || !!_armedApproved[repoKey(repoInfo)];
   if (pending) {
     cancelQueuedUnapproved(deps, repoInfo, runs, prIdx, seen);
@@ -320,6 +330,7 @@ if (typeof module !== 'undefined' && module.exports) {
     dropRunsMemo: dropRunsMemo,
     dedupeSameHead: dedupeSameHead,
     deadBranchRuns: deadBranchRuns,
+    supersededHeadRuns: supersededHeadRuns,
     approvedPendingExists: approvedPendingExists,
     queuedUnapprovedRuns: queuedUnapprovedRuns,
     otherApprovedRuns: otherApprovedRuns,
