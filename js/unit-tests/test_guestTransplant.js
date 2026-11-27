@@ -506,6 +506,23 @@ suite('guestTransplant: parks and resets (AC4)', function () {
         assert.equal(seq.steps.length, 0);
     });
 
+    test('agent:skip on a fresh-arm source and over our own park marker: skip/human-blocked, never touched (fa#2434)', function () {
+        var fresh = mod.transplantSequence(baseInput({
+            source: baseSource({ labels: ['po_accept', 'agent:skip'] }), headSha: SHA_B
+        }));
+        assert.equal(fresh.decision, 'skip');
+        assert.equal(fresh.reason, 'human-blocked');
+        assert.equal(fresh.steps.length, 0);
+        var overPark = mod.transplantSequence(baseInput({
+            source: baseSource({ labels: ['po_accept', 'blocked', 'agent:skip'] }),
+            marker: { state: 'parked', source: 42, head: SHA_A, branch: 'ai/guest-42', reason: 'conflict' },
+            headSha: SHA_B
+        }));
+        assert.equal(overPark.decision, 'skip', 'a moved head must NOT re-arm an agent:skip source');
+        assert.equal(overPark.reason, 'human-blocked');
+        assert.equal(overPark.steps.length, 0);
+    });
+
     test('a no-sha armed source parks with the no-ref reason (AC4 fallback)', function () {
         var seq = mod.transplantSequence(baseInput({ headSha: null }));
         assert.equal(seq.decision, 'park');

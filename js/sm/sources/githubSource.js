@@ -177,8 +177,9 @@ function resolvePriorityLabels(cfg) {
 // Linked-issue label cache — same per-tick TTL pattern as smProvider's
 // ioCache (60s): every PR-rule query in one tick re-runs queryPrs, and
 // without the cache each pass would re-fetch the same issues' labels.
-// Entry shape: [] labels (fetched) | null (fetch failed → PR-side labels
-// only, tier degrades toward medium — never wedges the queue on I/O).
+// Entry shape: [] labels (fetched) | null (fetch failed AND no prior read →
+// tier degrades toward medium, never wedges the queue on I/O). A failed
+// refetch serves the last known labels (stale-while-error) so a hold holds.
 var PRIORITY_ISSUE_LABEL_TTL_MS = 60 * 1000;
 var _priorityIssueLabelCache = { entries: {} };
 // Providers that read issue labels themselves (gitlab: no github_get_issue
