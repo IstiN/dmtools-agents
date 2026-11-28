@@ -35,15 +35,7 @@ function unparkValidatePrOnGreenDispatchedRun(deps, rule, repoInfo, ticket, key,
   deps.log('  ▶ ' + key + ' park cleared (latest dispatched validation run on head concluded SUCCESS) — validation proceeds');
   return true;
 }
-function checkValidatePrParkedBackstop(deps, rule, effectiveConfig, repoInfo, ticket, key) {
-  if ((ticket.labels || []).indexOf('validation_failed') === -1) {
-    return true;
-  }
-  var vprMachineLogin = machineAuthorModule.resolveMachineAuthor(deps.jobParams, effectiveConfig);
-  var vprHead = deps.resolveHeadSha(repoInfo, ticket);
-  if (unparkValidatePrOnGreenDispatchedRun(deps, rule, repoInfo, ticket, key, vprHead)) {
-    return true;
-  }
+function unparkValidatePrOnFreshHumanPush(deps, repoInfo, ticket, key, vprHead, vprMachineLogin) {
   var vprActor = deps.parkResetCommit(repoInfo, vprHead, vprMachineLogin);
   var vprParkedAt = deps.parkedSince(repoInfo, ticket.prNumber);
   if (!isNewerHumanActorCommit(vprActor, vprParkedAt, deps, vprMachineLogin)) {
@@ -54,6 +46,16 @@ function checkValidatePrParkedBackstop(deps, rule, effectiveConfig, repoInfo, ti
   unparkWithComment(deps, repoInfo, ticket.prNumber, 'validation_failed', '🅿️→▶ validation_failed cleared — human push by `' + (vprActorLogin || 'unknown') + '` at ' + vprActor.date + ' (last substantive commit `' + (vprActor.sha || vprHead) + '` of head `' + vprHead + '`, machine merges of main walked past — #681) is newer than the park (' + vprParkedAt + '). Re-entering validation (update_branch RESET never ran: the head is not BEHIND — live fa 2026-10-03).');
   deps.log('  ▶ ' + key + ' park cleared (fresh human push) — validation proceeds');
   return true;
+}
+function checkValidatePrParkedBackstop(deps, rule, effectiveConfig, repoInfo, ticket, key) {
+  if ((ticket.labels || []).indexOf('validation_failed') === -1) {
+    return true;
+  }
+  var vprHead = deps.resolveHeadSha(repoInfo, ticket);
+  if (parkAndActorProbesModule.unparkIfParkedHeadMoved(deps, repoInfo, ticket, key, 'validation_failed', vprHead) || unparkValidatePrOnGreenDispatchedRun(deps, rule, repoInfo, ticket, key, vprHead)) {
+    return true;
+  }
+  return unparkValidatePrOnFreshHumanPush(deps, repoInfo, ticket, key, vprHead, machineAuthorModule.resolveMachineAuthor(deps.jobParams, effectiveConfig));
 }
 function greenCoverVoidByZombiesOrPlaceholders(deps, repoInfo, key, vHead0) {
   if (!vHead0) {

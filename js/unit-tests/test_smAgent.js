@@ -7663,6 +7663,28 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
             return c.body.indexOf('machine merges of main walked past') !== -1; }),
             'the un-park comment explains the walk');
     });
+
+    test('validate_pr backstop: gh-994 head-change reset — when current head differs from parked-head sha, clears validation_failed and dispatches (live fa #2438)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(214, { labels: ['pr_approved', 'validation_failed'], headSha: '2a8eb3c987' })],
+                prStatus: { checkConclusion: 'none' },
+                prComments: [
+                    { body: '🛑 validation_failed — the current head `d85f766e9a` has failing checks. parked-head: d85f766e9a' }
+                ]
+            },
+            onCliExecute: vfCli({})
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [{
+            source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', deferRedHead: true, limit: 1, id: 'validate-fresh' }] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'], 'gh-994 head-change reset clears validation_failed in validate_pr backstop');
+        assert.ok(vfDispatched(sm.capturedCliCommands), 'validation CI dispatched for the new head');
+    });
 });
 
 suite('smAgent: PR priority tiers (owner directive 2026-10-08)', function () {
@@ -17308,6 +17330,26 @@ suite('smAgent: naked-PR reconciliation sweep (gh-1097 IT-1)', function () {
             body: '<!-- dmtools:naked-pr-rearm {"pr":10,"head":"sha10"} -->' }]);
         assert.equal(sm.capturedPrLabelAdds.length, 0);
         assert.equal(sm.capturedPrComments.length, 0);
+    });
+
+    test('a CLOSED linked issue with stale status:In Rework does NOT re-arm a naked PR (live fa #2453/#2454)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "o", repo: "r" } };' },
+            github: {
+                items: [],
+                prComments: [],
+                prList: JSON.stringify([
+                    nakedFixturePr(2454, [], 'ai/gh-2453', 'ai-teammate')
+                ]),
+                issues: {
+                    2453: { number: 2453, state: 'closed', labels: [{ name: 'status:In Rework' }] }
+                }
+            }
+        });
+        sm.action({ jobParams: { owner: 'o', repo: 'r', machineAuthor: 'ai-teammate',
+            rules: [{ description: 'noop', jql: 'key = X-1', configFile: 'agents/x.json', enabled: false }] } });
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'closed linked issue must not re-arm agent:rework');
     });
 });
 

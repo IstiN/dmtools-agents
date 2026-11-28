@@ -187,7 +187,9 @@ function removePrLabelSafe(deps, repoInfo, prNumber, labelName, warnPrefix) {
     return false;
   }
 }
-function unparkHeadChange994(deps, repoInfo, ticket, key, parkLabelVf, parkedHeadVf, uHead) {
+function unparkIfParkedHeadMoved(deps, repoInfo, ticket, key, parkLabelVf, uHead) {
+  var parkedHeadVf = deps.parkedHeadSha ? deps.parkedHeadSha(repoInfo, ticket.prNumber) : '';
+  if (!uHead || !parkedHeadVf || uHead === parkedHeadVf) return false;
   removePrLabelSafe(deps, repoInfo, ticket.prNumber, parkLabelVf, '  ⚠️  un-park label failed: ');
   deps.dropOpenPrsCache(repoInfo);
   deps.log('  ▶ park-reset: ' + key + ' head ' + parkedHeadVf + '→' + uHead + ' — validation_failed tracked the old head only; the park resets on ANY head change (gh-994)');
@@ -403,11 +405,7 @@ function tryClearEscalatedOnMovedHead(deps, repoInfo, ticket, key, labelsVf, uHe
 }
 function tryUnparkParkedTicket(deps, rule, repoInfo, ticket, key, parkLabelVf, labelsVf, uHead, prMachineAuthorU, isMachinePrU) {
   if (labelsVf.indexOf(parkLabelVf) === -1) return false;
-  var parkedHeadVf = deps.parkedHeadSha(repoInfo, ticket.prNumber);
-  if (uHead && parkedHeadVf && uHead !== parkedHeadVf) {
-    return unparkHeadChange994(deps, repoInfo, ticket, key, parkLabelVf, parkedHeadVf, uHead);
-  }
-  return handleLegacyParkResetLadder(deps, rule, repoInfo, ticket, key, parkLabelVf, uHead, prMachineAuthorU, isMachinePrU);
+  return unparkIfParkedHeadMoved(deps, repoInfo, ticket, key, parkLabelVf, uHead) || handleLegacyParkResetLadder(deps, rule, repoInfo, ticket, key, parkLabelVf, uHead, prMachineAuthorU, isMachinePrU);
 }
 function handleUpdateBranchAction(deps, rule, effectiveConfig, repoInfo, ticket, key, processedKeys) {
   if (!ticket.branch) {
@@ -446,6 +444,7 @@ if (typeof module !== 'undefined' && module.exports) {
       isMachineParkPush: isMachineParkPush,
       validationRollupGreen: validationRollupGreen,
       headChecksRed: headChecksRed,
+      unparkIfParkedHeadMoved: unparkIfParkedHeadMoved,
       unparkWithComment: unparkWithComment,
       cancelStaleAfterRefreshUb: cancelStaleAfterRefreshUb,
       handleUpdateBranchAction: handleUpdateBranchAction
