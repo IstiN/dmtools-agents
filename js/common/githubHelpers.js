@@ -1042,9 +1042,7 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
         console.log('Total check runs:', checkRuns.length);
 
-        var failedChecks = checkRuns.filter(function(c) {
-            return c.conclusion === 'failure' || c.conclusion === 'timed_out';
-        });
+        var failedChecks = ciModule.filterRealFailedCheckRuns(checkRuns);
 
         if (failedChecks.length === 0) {
             console.log('✅ All CI checks passed');

@@ -5301,3 +5301,110 @@ suite('pushReworkChanges — gh-1521 usage comment on failure outcomes', functio
         assert.deepEqual(posted, [], 'nothing to post on when the leg never knew a ticket');
     });
 });
+
+suite('pushReworkChanges — no-op rework lap skips empty base merge push & moves linked issue on PR-anchored rework', function () {
+    test('hasRealCodeChanges returns false when only merge commits exist since rework_base_head.txt and non-merge commits are empty', function () {
+        var loaded = loadPushReworkChangesForAction({
+            file_read: function (args) {
+                if (String(args.path).indexOf('rework_base_head.txt') !== -1) return 'abcdef1234567\n';
+                return '';
+            },
+            cli_execute_command: function (args) {
+                var c = String(args.command || '');
+                if (c.indexOf('git diff --name-only abcdef1234567 HEAD') !== -1) return 'lib/foo.dart\n';
+                if (c.indexOf('git rev-list --merges abcdef1234567..HEAD') !== -1) return 'deadbeef1111\n';
+                if (c.indexOf('git log --no-merges --format=%s abcdef1234567..HEAD') !== -1) return '';
+                return '';
+            }
+        });
+        assert.equal(loaded.mod.hasRealCodeChanges('pr-2454', {}), false);
+    });
+
+    test('hasRealCodeChanges returns true when a non-merge commit modified code alongside a merge commit', function () {
+        var loaded = loadPushReworkChangesForAction({
+            file_read: function (args) {
+                if (String(args.path).indexOf('rework_base_head.txt') !== -1) return 'abcdef1234567\n';
+                return '';
+            },
+            cli_execute_command: function (args) {
+                var c = String(args.command || '');
+                if (c.indexOf('git diff --name-only abcdef1234567 HEAD') !== -1) return 'lib/foo.dart\n';
+                if (c.indexOf('git rev-list --merges abcdef1234567..HEAD') !== -1) return 'deadbeef1111\n';
+                if (c.indexOf('git log --no-merges --format=%s abcdef1234567..HEAD') !== -1) return 'fix: address review\n';
+                if (c.indexOf('git log --no-merges --name-only --format= abcdef1234567..HEAD') !== -1) return 'lib/foo.dart\n';
+                return '';
+            }
+        });
+        assert.equal(loaded.mod.hasRealCodeChanges('pr-2454', {}), true);
+    });
+
+    test('commitAndPush skips syncBranchWithBase and push when rework lap made no code changes', function () {
+        var pushed = false;
+        var synced = false;
+        var mod = loadCommitAndPush1082({
+            file_read: function (args) {
+                if (String(args.path).indexOf('pr_info.md') !== -1) return '**Branch**: `ai/gh-2427-fix` → `main`\n';
+                if (String(args.path).indexOf('rework_base_head.txt') !== -1) return 'abcdef1234567\n';
+                return '';
+            },
+            cli_execute_command: function (args) {
+                var c = String(args.command || '');
+                if (c.indexOf('git branch --show-current') !== -1) return 'ai/gh-2427-fix\n';
+                if (c.indexOf('git diff --cached --stat') !== -1) return '';
+                if (c.indexOf('git diff --name-only abcdef1234567 HEAD') !== -1) return '';
+                if (c.indexOf('git push') !== -1) pushed = true;
+                return '';
+            }
+        }, {
+            './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
+                readStagedDiffStat: function () { return ''; },
+                syncBranchWithBase: function () { synced = true; return { success: true }; }
+            })
+        });
+        var res = mod.commitAndPush('pr-2454', baseConfig({ git: { baseBranch: 'main' } }), {});
+        assert.equal(res.hasChanges, false);
+        assert.equal(pushed, false, 'must not push an empty merge commit on a 0-change rework lap');
+        assert.equal(synced, false);
+    });
+
+    test('finalizeTicketState moves linked issue to In Review when ticketKey is PR-anchored (pr-N)', function () {
+        var moved = [];
+        var loaded = loadPushReworkChangesForAction({});
+        var tracker = {
+            moveToStatus: function (k, s) { moved.push({ key: k, status: s }); },
+            assignTo: function () {},
+            removeLabel: function () {}
+        };
+        loaded.mod.finalizeTicketState(
+            tracker,
+            'pr-2454',
+            { IN_REVIEW: 'In Review' },
+            {},
+            {},
+            null,
+            { number: 2454, title: 'feat(acp): #2427', head: { ref: 'ai/gh-2427-fix' }, body: 'Closes #2427' }
+        );
+        assert.deepEqual(moved, [
+            { key: 'pr-2454', status: 'In Review' },
+            { key: 'gh-2427', status: 'In Review' }
+        ]);
+    });
+
+    test('finalizeTicketState handles moveToStatus and assignTo/removeLabel errors gracefully', function () {
+        var loaded = loadPushReworkChangesForAction({});
+        var tracker = {
+            moveToStatus: function () { throw new Error('move err'); },
+            assignTo: function () { throw new Error('assign err'); },
+            removeLabel: function () { throw new Error('label err'); }
+        };
+        loaded.mod.finalizeTicketState(
+            tracker,
+            'PROJ-99',
+            { IN_REVIEW: 'In Review' },
+            { initiator: 'u1', metadata: { contextId: 'ctx' } },
+            {},
+            null,
+            null
+        );
+    });
+});

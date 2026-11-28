@@ -300,4 +300,15 @@ suite('wipSquash (gh-1472)', function () {
         assert.equal(devWithBaseMerge.skipReason, null, 'foreign second-parent commits must not abort dev WIP squash');
         assert.equal(devWithBaseMerge.subjects.length, 2);
     });
+    test('canSquashWipSubjects and resolveContextBaseBranch cover single-safe-message and fallback branches', function () {
+        assert.equal(wipSquash.canSquashWipSubjects([], 'msg'), false);
+        assert.equal(wipSquash.canSquashWipSubjects(['msg'], 'msg'), false);
+        assert.equal(wipSquash.canSquashWipSubjects(['normal 1', 'normal 2'], 'msg'), false);
+        assert.equal(wipSquash.canSquashWipSubjects(['WIP auto-save 1'], 'msg'), true);
+        assert.equal(wipSquash.resolveContextBaseBranch({ prTarget: 'rel' }), 'rel');
+        assert.equal(wipSquash.resolveContextBaseBranch({ baseBranch: 'dev' }), 'dev');
+        assert.equal(wipSquash.resolveContextBaseBranch({ config: { git: { baseBranch: 'trunk' } } }), 'trunk');
+        assert.equal(wipSquash.resolveContextBaseBranch({}), 'main');
+    });
+
 });

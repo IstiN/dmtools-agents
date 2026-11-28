@@ -333,6 +333,26 @@ function squashTicketWipInPlace(ctx, runCommand, readFn) {
 }
 
 
+function rangeHasRealCodeDiff(base, opts, execFn) {
+    var out = cleanText(execFn(Object.assign({}, opts, {
+        command: 'git diff --name-only ' + base + ' HEAD -- . ' +
+            "':!outputs' ':!input' ':!.dmtools' ':!.dmtools-logs' ':!.dmtools-session-output.log'"
+    })) || '');
+    if (!out) return false;
+    var merges = cleanText(execFn(Object.assign({}, opts, {
+        command: 'git rev-list --merges ' + base + '..HEAD'
+    })) || '');
+    if (!merges) return true;
+    var subjects = cleanText(execFn(Object.assign({}, opts, {
+        command: 'git log --no-merges --format=%s ' + base + '..HEAD'
+    })) || '');
+    if (!subjects) return false;
+    return cleanText(execFn(Object.assign({}, opts, {
+        command: 'git log --no-merges --name-only --format= ' + base + '..HEAD -- . ' +
+            "':!outputs' ':!input' ':!.dmtools' ':!.dmtools-logs' ':!.dmtools-session-output.log'"
+    })) || '').length > 0;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         isValidGitSha: isValidGitSha,
@@ -364,6 +384,8 @@ if (typeof module !== 'undefined' && module.exports) {
         squashAndPushInPlace: squashAndPushInPlace,
         resolveContextBaseBranch: resolveContextBaseBranch,
         resolveContextRunCommand: resolveContextRunCommand,
-        squashTicketWipInPlace: squashTicketWipInPlace
+        squashTicketWipInPlace: squashTicketWipInPlace,
+        rangeHasRealCodeDiff: rangeHasRealCodeDiff
+
     };
 }

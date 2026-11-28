@@ -801,3 +801,49 @@ suite('gh-140 — sm_github.json re-review armer gates', function () {
         assert.deepEqual(arm.query.checks, ['red'], 'the redHeadGated arm reacts to the reconciled red');
     });
 });
+
+suite('cancelled workflow run aggregator gates (if: always())', function () {
+    test('latestEntries and failingCheckNames treat FAILURE in a run with a CANCELLED sibling as CANCELLED', function () {
+        var rollup = [
+            {
+                id: 101,
+                name: 'Build macOS (debug)',
+                conclusion: 'cancelled',
+                status: 'completed',
+                details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45997084692/job/101'
+            },
+            {
+                id: 102,
+                name: 'Quality gate',
+                conclusion: 'failure',
+                status: 'completed',
+                details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45997084692/job/102'
+            },
+            {
+                id: 103,
+                name: 'Binaries smoke gate',
+                conclusion: 'failure',
+                status: 'completed',
+                details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45997084692/job/103'
+            }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup), [], 'cancelled-run aggregator failures are not real failures');
+        var entries = mrReal().latestEntries(rollup);
+        var qg = entries.filter(function (e) { return e.name === 'Quality gate'; })[0];
+        assert.equal(qg.conclusion, 'CANCELLED');
+    });
+
+    test('FAILURE in a run WITHOUT a CANCELLED sibling remains FAILURE', function () {
+        var rollup = [
+            {
+                id: 201,
+                name: 'Quality gate',
+                conclusion: 'failure',
+                status: 'completed',
+                details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45997099999/job/201'
+            }
+        ];
+        assert.deepEqual(mrReal().failingCheckNames(rollup), ['Quality gate']);
+
+    });
+});

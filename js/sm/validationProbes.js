@@ -44,14 +44,32 @@ function isNewerCheckEntry(prev, t, id, pos) {
 function parseCheckEntryTime(r) {
   return Date.parse(r.completed_at || r.started_at || '') || 0;
 }
+function cancelledCheckRunIds(rollup) {
+  var out = {};
+  (rollup || []).forEach(function (r) {
+    var concl = r && r.conclusion ? String(r.conclusion).toUpperCase() : null;
+    var rid = concl === 'CANCELLED' ? checkRunZombiesModule.runIdOf(r) : null;
+    if (rid) out[rid] = true;
+  });
+  return out;
+}
+function effectiveCheckConclusion(r, cancelledRuns) {
+  var concl = r && r.conclusion ? String(r.conclusion).toUpperCase() : null;
+  if (concl === 'FAILURE' && cancelledRuns) {
+    var rid = checkRunZombiesModule.runIdOf(r);
+    if (rid && cancelledRuns[rid]) return 'CANCELLED';
+  }
+  return concl;
+}
 function latestCheckRunConclusions(rollup) {
   var latest = {};
+  var cancelledRuns = cancelledCheckRunIds(rollup);
   (rollup || []).forEach(function (r, pos) {
     var name = r && (r.name || r.context);
     if (!name) {
       return;
     }
-    var concl = r.conclusion ? String(r.conclusion).toUpperCase() : null;
+    var concl = effectiveCheckConclusion(r, cancelledRuns);
     var t = parseCheckEntryTime(r);
     var id = Number(r.id) || 0;
     if (isNewerCheckEntry(latest[name], t, id, pos)) {

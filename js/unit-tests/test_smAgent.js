@@ -20732,3 +20732,118 @@ test('applyTickTunings: ioCacheTtlMs rides jobParams into the smProvider holder 
     sm.applyTickTunings({ ioCacheTtlMs: before });
     assert.equal(holder.ttlMs, before, 'holder restored');
 });
+
+suite('smAgent: cancelled workflow run aggregator checks and rework-loop-escalated silent-update guard', function () {
+    test('fail_validation skips when Quality gate / Binaries smoke gate concluded failure in a workflow run that has a cancelled sibling check-run', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [{
+                    key: 'pr-2454',
+                    labels: ['pr_approved', 'ai_validating'],
+                    issueNumber: null,
+                    prNumber: 2454,
+                    draft: false,
+                    branch: 'ai/gh-2427-fix',
+                    author: 'ai-teammate',
+                    headSha: '7da73f01'
+                }],
+                pr: { number: 2454, labels: ['pr_approved', 'ai_validating'], body: 'Closes #2427' },
+                commitCheckRuns: {
+                    check_runs: [
+                        {
+                            id: 1,
+                            name: 'Build macOS (debug)',
+                            status: 'completed',
+                            conclusion: 'cancelled',
+                            details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45997084692/job/1'
+                        },
+                        {
+                            id: 2,
+                            name: 'Quality gate',
+                            status: 'completed',
+                            conclusion: 'failure',
+                            details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45997084692/job/2'
+                        },
+                        {
+                            id: 3,
+                            name: 'Binaries smoke gate',
+                            status: 'completed',
+                            conclusion: 'failure',
+                            details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45997084692/job/3'
+                        }
+                    ]
+                },
+                prComments: []
+            }
+        });
+        sm.action({
+            jobParams: {
+                owner: 'IstiN',
+                repo: 'flutter_agent_harness',
+                machineAuthor: 'ai-teammate',
+                rules: [{
+                    source: 'github',
+                    query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
+                    localAction: 'fail_validation',
+                    limit: 1,
+                    id: 'fail-validation'
+                }]
+            }
+        });
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'cancelled-run aggregator failure must not unarm ai_validating');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'cancelled-run aggregator failure must not arm agent:rework');
+    });
+
+    test('update_branch skips runGuardedSilentRefresh when rework-loop-escalated remains on the PR', function () {
+        var gitMergeCalled = false;
+        var sm = makeSmAgent({
+            github: {
+                items: [{
+                    key: 'pr-2454',
+                    prNumber: 2454,
+                    labels: ['rework-loop-escalated'],
+                    branch: 'ai/gh-2427-fix',
+                    headSha: '7da73f01',
+                    author: 'ai-teammate'
+                }],
+                pr: { number: 2454, labels: ['rework-loop-escalated'], head: { sha: '7da73f01', ref: 'ai/gh-2427-fix' } },
+                prComments: [{
+                    user: { login: 'ai-teammate' },
+                    body: '<!-- dmtools:rework-loop-escalated head=7da73f01 -->\nEscalated'
+                }]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = String(cmdOpts.command || '');
+                if (c.indexOf('git merge') !== -1 || c.indexOf('/merges') !== -1) {
+                    gitMergeCalled = true;
+                }
+                if (c.indexOf('/commits/7da73f01') !== -1) {
+                    return JSON.stringify({
+                        login: 'ai-teammate',
+                        date: '2026-11-28T07:00:00Z',
+                        committer: 'AI Teammate',
+                        sha: '7da73f01',
+                        parents: ['11111111']
+                    });
+                }
+                return '';
+            }
+        });
+        sm.action({
+            jobParams: {
+                owner: 'IstiN',
+                repo: 'flutter_agent_harness',
+                machineAuthor: 'ai-teammate',
+                rules: [{
+                    id: 'park-reset',
+                    source: 'github',
+                    query: { type: 'pr', labels: ['rework-loop-escalated'], draft: false },
+                    localAction: 'update_branch',
+                    limit: 10
+                }]
+            }
+        });
+        assert.equal(gitMergeCalled, false, 'update_branch must not run silent refresh while rework-loop-escalated is active');
+    });
+});
