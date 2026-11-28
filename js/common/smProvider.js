@@ -360,14 +360,10 @@ function _ghTallyRollup(rollup) {
 }
 
 function _ghNormalizeCheckRun(r) {
-    return {
-        id: r.id, databaseId: r.databaseId,
+    return Object.assign({}, r, {
         name: r.name || null, context: r.context || null,
         conclusion: r.conclusion ? String(r.conclusion).toUpperCase() : null,
-        status: r.status ? String(r.status).toUpperCase() : null,
-        completed_at: r.completed_at, completedAt: r.completedAt,
-        started_at: r.started_at, startedAt: r.startedAt
-    };
+        status: r.status ? String(r.status).toUpperCase() : null });
 }
 
 // The rollup source: GraphQL statusCheckRollup when present, else the

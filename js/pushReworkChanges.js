@@ -417,11 +417,7 @@ function hasRealCodeChanges(ticketKey, config) {
     var workingDir = config && config.workingDir || null;
     var opts = workingDir ? { workingDirectory: workingDir } : {};
     try {
-        var out = cleanCommandOutput(cli_execute_command(Object.assign({}, opts, {
-            command: 'git diff --name-only ' + base + ' HEAD -- . ' +
-                "':!outputs' ':!input' ':!.dmtools' ':!.dmtools-logs' ':!.dmtools-session-output.log'"
-        })) || '');
-        return out.trim().length > 0;
+        return wipSquash.rangeHasRealCodeDiff(base, opts, cli_execute_command);
     } catch (e) {
         console.warn('hasRealCodeChanges probe failed (fail-open):', e.message || e);
         return null;
@@ -630,7 +626,7 @@ function squashReworkWipIfEnabled(cmd, ticketKey, config, workingDir, customPara
 }
 
 function commitAndPush(ticketKey, config, customParams) {
-    var workingDir = config.workingDir || null;
+    var workingDir = config.workingDir;
     var cmdOpts = reworkCmdOpts(workingDir);
     var cmd = function(command, extraOpts) { return cli_execute_command(Object.assign({}, cmdOpts, extraOpts || {}, { command: command })); };
 
@@ -696,16 +692,15 @@ function commitAndPush(ticketKey, config, customParams) {
     // commit since the rework base is a WIP auto-save (or the commit just made) and none is a merge, fold
     // them into one commit with the rework message and push it with --force-with-lease.
     var squashed = squashReworkWipIfEnabled(cmd, ticketKey, config, workingDir, customParams);
-    if (squashed) hasChanges = true;
+    if (!hasChanges && !squashed && hasRealCodeChanges(ticketKey, config) === false) {
+        console.log('ℹ️ No code changes in this rework lap — skipping base-branch sync and push so HEAD SHA stays unchanged');
+        return { branch: branchName, hasChanges: false };
+    }
     var syncResult = prHelper.syncBranchWithBase({
         branchName: branchName,
         baseBranch: baseBranch,
         workingDir: workingDir,
-        runCommand: function(command, dir) {
-            var args = { command: command };
-            if (dir) args.workingDirectory = dir;
-            return cli_execute_command(args);
-        }
+        runCommand: function(command, dir) { return cli_execute_command(Object.assign(reworkCmdOpts(dir), { command: command })); }
     });
     assertReworkBranchSynced(syncResult, baseBranch);
 
@@ -717,7 +712,7 @@ function commitAndPush(ticketKey, config, customParams) {
     verifyReworkPushed(cmd, branchName, pushPlan.fork);
 
     console.log('✅ Pushed to remote branch:', branchName);
-    return { branch: branchName, hasChanges: hasChanges };
+    return { branch: branchName, hasChanges: hasChanges || squashed };
 }
 
 // gh-912: verify the push produced a real refs/heads/<branch> ref line on
@@ -2369,12 +2364,12 @@ function wipLabelOf(actualParams) {
 }
 
 function finalizeTicketState(tracker, ticketKey, statuses, actualParams, customParams, scm, pr) {
-    try {
-        tracker.moveToStatus(ticketKey, statuses.IN_REVIEW);
-        console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW);
-    } catch (statusError) {
-        console.warn('Failed to move ticket to In Review:', statusError);
-    }
+    var linked = isPrAnchoredKey(ticketKey) && resolveLinkedIssueKeyForPr(pr);
+    [ticketKey].concat(linked ? [linked] : []).forEach(function (k) {
+        try { tracker.moveToStatus(k, statuses.IN_REVIEW); console.log('✅ Moved', k, 'to', statuses.IN_REVIEW); }
+        catch (statusError) { console.warn('Failed to move ticket to In Review:', statusError); }
+    });
+
 
     // Assign back to initiator (if provided)
     try {

@@ -136,7 +136,8 @@
           "query": {
             "type": "pr",
             "notLabels": [
-              "ai_validating"
+              "ai_validating",
+              "rework-loop-escalated"
             ],
             "mergeState": [
               "BEHIND"

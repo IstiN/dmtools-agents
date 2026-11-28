@@ -2167,6 +2167,37 @@ suite('githubHelpers.detectFailedChecks — scm mode and GitHub job logs (gh-100
         assert.equal(jenkinsCalls, 0, 'no Jenkins calls for a bare build number');
         assert.ok(findWrite(writes, '/tmp/input/ci_failures.md'));
     });
+
+    test('detectFailedChecks ignores aggregator failure check-runs in a workflow run that has a cancelled sibling check-run', function() {
+        var writes = [];
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [
+                        {
+                            name: 'Build macOS (debug)',
+                            conclusion: 'cancelled',
+                            details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45997084692/job/101'
+                        },
+                        {
+                            name: 'Quality gate',
+                            conclusion: 'failure',
+                            details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45997084692/job/102'
+                        },
+                        {
+                            name: 'Binaries smoke gate',
+                            conclusion: 'failure',
+                            details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/45997084692/job/103'
+                        }
+                    ]
+                };
+            },
+            file_write: function(args) { writes.push(args); }
+        });
+        var failed = gh.detectFailedChecks('IstiN', 'flutter_agent_harness', 'abc123def', '/tmp/input');
+        assert.deepEqual(failed, []);
+        assert.equal(writes.length, 0);
+    });
 });
 
 

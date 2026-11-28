@@ -155,16 +155,55 @@ function winsLatest(t, id, pos, prev) {
     if (id < prev.id) return false;
     return pos > prev.pos;
 }
+/** Check-run conclusion in a workflow run that has any CANCELLED sibling check-run:
+ * when a GitHub Actions workflow run is cancelled, aggregator gate jobs with
+ * `if: always()` execute after upstream jobs are cancelled and conclude FAILURE
+ * even though no real test failed. Treat FAILURE conclusions in a run that has
+ * cancelled sibling checks as CANCELLED (not a real failure). */
+function runIdFromUrl(r) {
+    var url = (r && (r.details_url || r.detailsUrl || r.html_url || r.htmlUrl)) || '';
+    var m = /\/actions\/runs\/(\d+)/.exec(String(url));
+    return m ? m[1] : null;
+}
+
+function cancelledRunIdSet(rollup) {
+    var out = {};
+    (rollup || []).forEach(function (r) {
+        if (conclusionOf(r) === 'CANCELLED') {
+            var rid = runIdFromUrl(r);
+            if (rid) out[rid] = true;
+        }
+    });
+    return out;
+}
+
+function effectiveConclusionOf(r, cancelledRuns) {
+    var concl = conclusionOf(r);
+    if (concl === 'FAILURE' && cancelledRuns) {
+        var rid = runIdFromUrl(r);
+        if (rid && cancelledRuns[rid]) return 'CANCELLED';
+    }
+    return concl;
+}
+
+function effectiveEntryOf(r, cancelledRuns) {
+    if (effectiveConclusionOf(r, cancelledRuns) !== conclusionOf(r)) {
+        return Object.assign({}, r, { conclusion: 'CANCELLED' });
+    }
+    return r;
+}
+
 
 function latestConclusions(rollup) {
     var latest = {};
+    var cancelledRuns = cancelledRunIdSet(rollup);
     (rollup || []).forEach(function (r, pos) {
         var name = r && (r.name || r.context);
         if (!name) return;
         var t = sortTimeOf(r);
         var id = idOf(r);
         if (!winsLatest(t, id, pos, latest[name])) return;
-        latest[name] = { t: t, id: id, pos: pos, concl: conclusionOf(r) };
+        latest[name] = { t: t, id: id, pos: pos, concl: effectiveConclusionOf(r, cancelledRuns) };
     });
     return latest;
 }
@@ -179,15 +218,17 @@ function latestEntries(rollup) {
     var latest = {};
     var order = [];
     var anon = [];
+    var cancelledRuns = cancelledRunIdSet(rollup);
     (rollup || []).forEach(function (r, pos) {
         var name = r && (r.name || r.context);
-        if (!name) { anon.push(r); return; }
+        var entry = effectiveEntryOf(r, cancelledRuns);
+        if (!name) { anon.push(entry); return; }
         var t = sortTimeOf(r);
         var id = idOf(r);
         var prev = latest[name];
         if (!prev) order.push(name);
         if (winsLatest(t, id, pos, prev)) {
-            latest[name] = { t: t, id: id, pos: pos, entry: r };
+            latest[name] = { t: t, id: id, pos: pos, entry: entry };
         }
     });
     return order.map(function (n) { return latest[n].entry; }).concat(anon);
@@ -269,5 +310,7 @@ module.exports = {
     failingCheckNames: failingCheckNames,
     latestConclusions: latestConclusions,
     latestEntries: latestEntries,
+    cancelledRunIdSet: cancelledRunIdSet,
+    effectiveConclusionOf: effectiveConclusionOf,
     reconcileDecision: reconcileDecision
 };

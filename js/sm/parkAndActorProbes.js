@@ -370,7 +370,8 @@ function executeRefreshHeadSilent(deps, repoInfo, ticket, key, uHead, forkFull) 
   }
   return newHeadMtt;
 }
-function runGuardedSilentRefresh(deps, rule, repoInfo, ticket, key, uHead, forkFull) {
+function runGuardedSilentRefresh(deps, rule, repoInfo, ticket, key, uHead, forkFull, skipRefresh) {
+  if (skipRefresh) return;
   var legWorkflowUb = rule.workflowFile || 'ai-teammate.yml';
   if (uHead) {
     var headRunsUb = deps.headWorkflowRunsSafe(repoInfo, uHead);
@@ -426,7 +427,7 @@ function handleUpdateBranchAction(deps, rule, effectiveConfig, repoInfo, ticket,
     deps.setUpdateBranchPassFlags(unparkedThisPass, parkedRedHeadThisPass);
     var forkGateU = deps.forkSilentUpdateGate();
     if (forkGateU.refresh) {
-      runGuardedSilentRefresh(deps, rule, repoInfo, ticket, key, uHead, forkGateU.forkFull);
+      runGuardedSilentRefresh(deps, rule, repoInfo, ticket, key, uHead, forkGateU.forkFull, !clearedEsc && labelsVf.indexOf(reworkLoopGuardModule.ESCALATION_LABEL) !== -1);
     }
     processedKeys.push(key);
   } catch (e) {

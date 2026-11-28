@@ -198,6 +198,38 @@ function stampRequiredChecks(options) {
     return summary;
 }
 
+function _runIdFromCheckUrl(c) {
+    var url = (c && (c.details_url || c.detailsUrl || c.html_url || c.htmlUrl)) || '';
+    var m = /\/actions\/runs\/(\d+)/.exec(String(url));
+    return m ? m[1] : null;
+}
+
+function _cancelledRunIds(checkRuns) {
+    var ids = {};
+    (checkRuns || []).forEach(function (c) {
+        if (c && String(c.conclusion || '').toLowerCase() === 'cancelled') {
+            var rid = _runIdFromCheckUrl(c);
+            if (rid) ids[rid] = true;
+        }
+    });
+    return ids;
+}
+
+function _isFailedCheckInNonCancelledRun(c, cancelledRunIds) {
+    if (!c || (c.conclusion !== 'failure' && c.conclusion !== 'timed_out')) return false;
+    if (c.conclusion !== 'failure') return true;
+    var rid = _runIdFromCheckUrl(c);
+    return !(rid && cancelledRunIds[rid]);
+}
+
+function filterRealFailedCheckRuns(checkRuns) {
+    var cancelledRunIds = _cancelledRunIds(checkRuns);
+    return (checkRuns || []).filter(function (c) {
+        return _isFailedCheckInNonCancelledRun(c, cancelledRunIds);
+    });
+}
+
+
 module.exports = {
     stampRequiredChecks: stampRequiredChecks,
     // Exported (gh-992) so githubHelpers.detectFailedChecks can reuse the
@@ -209,5 +241,6 @@ module.exports = {
     findLastJobNamed: findLastJobNamed,
     classifyJobOutcome: classifyJobOutcome,
     resolveCheckRunId: resolveCheckRunId,
-    buildCheckRunUpdatePayload: buildCheckRunUpdatePayload
+    buildCheckRunUpdatePayload: buildCheckRunUpdatePayload,
+    filterRealFailedCheckRuns: filterRealFailedCheckRuns
 };
