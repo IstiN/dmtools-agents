@@ -153,16 +153,19 @@ function extractLabelNames(labels) {
     return l && (l.name || l) || l;
   });
 }
-function linkedIssueLabels(deps, repoInfo, issueNumber) {
+function isUsableIssuePayload(obj, openOnly) {
+  if (!obj || typeof obj !== 'object' || obj.message) {
+    return false;
+  }
+  return !(openOnly && prTerminalStateModule.isTerminalPrState(obj.state, false));
+}
+function linkedIssueLabels(deps, repoInfo, issueNumber, openOnly) {
   if (!issueNumber || !deps.hasGetIssue) {
     return null;
   }
   try {
     var obj = validationProbesModule.mcpParse(deps.getIssue(repoInfo, issueNumber));
-    if (!obj || typeof obj !== 'object' || obj.message) {
-      return null;
-    }
-    return extractLabelNames(obj.labels);
+    return isUsableIssuePayload(obj, openOnly) ? extractLabelNames(obj.labels) : null;
   } catch (e) {
     return null;
   }
@@ -263,7 +266,7 @@ function runNakedPrSweep(deps, repoInfo) {
     return nakedPrReconcileModule.sweep(list, {
       bodyLinker: deps.bodyLinker,
       issueLabels: function (n) {
-        return linkedIssueLabels(deps, repoInfo, n);
+        return linkedIssueLabels(deps, repoInfo, n, true);
       },
       prComments: function (n) {
         return deps.fetchPrCommentList(repoInfo, n);
